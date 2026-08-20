@@ -1,0 +1,51 @@
+<Project>
+  <!--
+    宿主/迁移工具共用的内核源文件清单。
+    纯契约与数据（Data POCO、ILlmClient、IMemoryStore、插件契约、平台适配器契约）
+    已移入 TraceSoul2.PluginApi 项目（PluginApiSources.props），这里不再重复编译。
+  -->
+  <ItemGroup>
+    <Compile Include="$(MSBuildThisFileDirectory)../src/TraceSoul2/Manager/SqliteMemoryManager.cs" />
+    <Compile Include="$(MSBuildThisFileDirectory)../src/TraceSoul2/Manager/SqliteVectorManager.cs" />
+    <Compile Include="$(MSBuildThisFileDirectory)../src/TraceSoul2/Manager/CoreVectorOntologyFactory.cs" />
+    <Compile Include="$(MSBuildThisFileDirectory)../src/TraceSoul2/Manager/DeepSeekClientManager.cs" />
+    <Compile Include="$(MSBuildThisFileDirectory)../src/TraceSoul2/Manager/BagOfCharsVectorEncoder.cs" />
+    <Compile Include="$(MSBuildThisFileDirectory)../src/TraceSoul2/Manager/TracePluginManager.cs" />
+    <Compile Include="$(MSBuildThisFileDirectory)../src/TraceSoul2/Plugins/Builtin/DialogueTracePlugin.cs" />
+    <Compile Include="$(MSBuildThisFileDirectory)../src/TraceSoul2/Plugins/Builtin/IdentityFacetPlugin.cs" />
+    <Compile Include="$(MSBuildThisFileDirectory)../src/TraceSoul2/Plugins/Builtin/InnerLifePlugin.cs" />
+    <Compile Include="$(MSBuildThisFileDirectory)../src/TraceSoul2/Plugins/Builtin/MemoryNervePlugin.cs" />
+    <Compile Include="$(MSBuildThisFileDirectory)../src/TraceSoul2/Plugins/Builtin/SensesCatalogPlugin.cs" />
+    <Compile Include="$(MSBuildThisFileDirectory)../src/TraceSoul2/Plugins/Builtin/OneBotPlatformPlugin.cs" />
+    <Compile Include="$(MSBuildThisFileDirectory)../src/TraceSoul2/Plugins/Builtin/OneBotPlatformAdapter.cs" />
+    <Compile Include="$(MSBuildThisFileDirectory)../src/TraceSoul2/Plugins/Builtin/TimeSchedulerPlugin.cs" />
+    <Compile Include="$(MSBuildThisFileDirectory)../src/TraceSoul2/Logic/InnerLifeLogic.cs" />
+    <Compile Include="$(MSBuildThisFileDirectory)../src/TraceSoul2/Logic/MemoryLiveWriteLogic.cs" />
+    <Compile Include="$(MSBuildThisFileDirectory)../src/TraceSoul2/Logic/CognitionLiveWriteLogic.cs" />
+    <Compile Include="$(MSBuildThisFileDirectory)../src/TraceSoul2/Logic/LeaveNerveLogic.cs" />
+    <Compile Include="$(MSBuildThisFileDirectory)../src/TraceSoul2/Logic/IdentityCardLogic.cs" />
+    <Compile Include="$(MSBuildThisFileDirectory)../src/TraceSoul2/Logic/IdentityReviewLogic.cs" />
+    <Compile Include="$(MSBuildThisFileDirectory)../src/TraceSoul2/Logic/LifeTagVectorLogic.cs" />
+    <Compile Include="$(MSBuildThisFileDirectory)../src/TraceSoul2/Logic/DeepSeekStructuredOutputLogic.cs" />
+    <Compile Include="$(MSBuildThisFileDirectory)../src/TraceSoul2/Logic/MemoryNeighborhoodLogic.cs" />
+    <Compile Include="$(MSBuildThisFileDirectory)../src/TraceSoul2/Logic/MemoryObservationLogic.cs" />
+    <Compile Include="$(MSBuildThisFileDirectory)../src/TraceSoul2/Logic/ExpressorLogic.cs" />
+    <Compile Include="$(MSBuildThisFileDirectory)../src/TraceSoul2/Logic/MindLogic.cs" />
+    <Compile Include="$(MSBuildThisFileDirectory)../src/TraceSoul2/Logic/MindTemplateLogic.cs" />
+    <Compile Include="$(MSBuildThisFileDirectory)../src/TraceSoul2/Logic/LadderRecallLogic.cs" />
+    <Compile Include="$(MSBuildThisFileDirectory)../src/TraceSoul2/Logic/MemoryRecallLogic.cs" />
+    <Compile Include="$(MSBuildThisFileDirectory)../src/TraceSoul2/Logic/MouthLogic.cs" />
+    <Compile Include="$(MSBuildThisFileDirectory)../src/TraceSoul2/Logic/KernelLogic.cs" />
+    <Compile Include="$(MSBuildThisFileDirectory)../src/TraceSoul2/Logic/KernelWakeLogic.cs" />
+    <Compile Include="$(MSBuildThisFileDirectory)../src/TraceSoul2/Logic/HierarchicalVectorRouterLogic.cs" />
+    <Compile Include="$(MSBuildThisFileDirectory)../src/TraceSoul2/Logic/VectorActivationContextLogic.cs" />
+    <Compile Include="$(MSBuildThisFileDirectory)../src/TraceSoul2/Util/ActivationScoreUtil.cs" />
+    <Compile Include="$(MSBuildThisFileDirectory)../src/TraceSoul2/Util/BertWordPieceTokenizer.cs" />
+    <Compile Include="$(MSBuildThisFileDirectory)../src/TraceSoul2/Util/TimeLanguageUtil.cs" />
+    <Compile Include="$(MSBuildThisFileDirectory)../src/TraceSoul2/Util/TraceJson.cs" />
+    <Compile Include="$(MSBuildThisFileDirectory)../src/TraceSoul2/Util/VectorMathUtil.cs" />
+    <Compile Include="$(MSBuildThisFileDirectory)../src/TraceSoul2/Memory/OnnxBgeEncoder.cs" />
+    <Compile Include="$(MSBuildThisFileDirectory)../src/TraceSoul2/Memory/MemoryRecallEngine.cs" />
+    <Compile Include="$(MSBuildThisFileDirectory)../src/TraceSoul2/Memory/EntryEmbedder.cs" />
+  </ItemGroup>
+</Project>

@@ -1,0 +1,257 @@
+using System;
+using System.Collections.Generic;
+using SQLite;
+
+namespace TraceSoul2.Data
+{
+    [Table("moments")]
+    public sealed class MomentRecord
+    {
+        [PrimaryKey]
+        public string Id { get; set; }
+        [Indexed]
+        public string ConversationId { get; set; }
+        public string Role { get; set; }
+        public string Content { get; set; }
+        public string Realm { get; set; }
+        public string EvidenceType { get; set; }
+        [Indexed]
+        public string SourcePluginId { get; set; }
+        public string SourceEventId { get; set; }
+        public string PayloadJson { get; set; }
+
+        /// <summary>记忆落库标记：live=已保存未构筑；built=已归档进多维索引/条目。</summary>
+        public string MemoryStatus { get; set; }
+        [Indexed]
+        public long CreatedUnixMs { get; set; }
+    }
+
+    /// <summary>只保存 Brain 中枢的公开运行摘要，不保存领域插件私有结构。</summary>
+    [Table("turn_reviews")]
+    public sealed class TurnReviewRecord
+    {
+        [PrimaryKey]
+        public string Id { get; set; }
+        [Indexed]
+        public string ConversationId { get; set; }
+        [Indexed]
+        public string TriggerMomentId { get; set; }
+        public string BrainMode { get; set; }
+        public string BrainIntent { get; set; }
+        public string DecisionSummary { get; set; }
+        public string CapabilitySummary { get; set; }
+        public string FacetSummary { get; set; }
+
+        /// <summary>整轮链路快照（挂载块 + 回调结果含召回证据），便于重启后仍可回看。</summary>
+        public string PayloadJson { get; set; }
+        public long CreatedUnixMs { get; set; }
+    }
+
+    /// <summary>
+    /// 今天我们的轨迹：当天两人共同经历的滚动摘要（约200字内），
+    /// 实时对话中由 Brain 维护，新的一天（复盘边界）清空。按记忆日键一行。
+    /// </summary>
+    [Table("day_trajectory")]
+    public sealed class DayTrajectoryRecord
+    {
+        [PrimaryKey]
+        public string DayKey { get; set; }
+        public string Text { get; set; }
+        public long UpdatedUnixMs { get; set; }
+    }
+
+    /// <summary>
+    /// 今日新识：实时对话中「今天刚知道的」最小便签（每条一句话、带证据），
+    /// 当天每轮注入 Brain 上下文；日复盘（04:00 边界）再把它加工成正式记忆。
+    /// </summary>
+    [Table("today_new_items")]
+    public sealed class TodayNewItemRecord
+    {
+        [PrimaryKey]
+        public string Id { get; set; }
+
+        [Indexed]
+        public string ConversationId { get; set; }
+
+        public string Content { get; set; }
+
+        [Indexed]
+        public string SourceMomentId { get; set; }
+
+        /// <summary>所属记忆日键（yyyy-MM-dd，04:00 前归前一天）。</summary>
+        [Indexed]
+        public string DayKey { get; set; }
+
+        public long CreatedUnixMs { get; set; }
+    }
+
+    public sealed class ChatTurnResultData
+    {
+        public string Reply { get; private set; }
+        public string BrainMode { get; private set; }
+        public string BrainIntent { get; private set; }
+        public string DecisionSummary { get; private set; }
+        public IReadOnlyList<TraceContextBlockData> ContextBlocks { get; private set; }
+        public IReadOnlyList<BrainFacetOutputData> FacetOutputs { get; private set; }
+        public IReadOnlyList<TraceCapabilityResultData> ContributionResults { get; private set; }
+
+        public ChatTurnResultData(
+            string reply,
+            string brainMode,
+            string brainIntent,
+            string decisionSummary,
+            List<TraceContextBlockData> contextBlocks,
+            List<BrainFacetOutputData> facetOutputs,
+            List<TraceCapabilityResultData> contributionResults)
+        {
+            Reply = reply ?? string.Empty;
+            BrainMode = brainMode ?? string.Empty;
+            BrainIntent = brainIntent ?? string.Empty;
+            DecisionSummary = decisionSummary ?? string.Empty;
+            ContextBlocks = contextBlocks ?? new List<TraceContextBlockData>();
+            FacetOutputs = facetOutputs ?? new List<BrainFacetOutputData>();
+            ContributionResults = contributionResults ?? new List<TraceCapabilityResultData>();
+        }
+    }
+
+    [Serializable]
+    public sealed class DeepSeekMessageData
+    {
+        public string role;
+        public string content;
+        public DeepSeekMessageData() { }
+        public DeepSeekMessageData(string role, string content)
+        {
+            this.role = role;
+            this.content = content;
+        }
+    }
+
+    [Serializable]
+    public sealed class DeepSeekResponseMessageData
+    {
+        public string role;
+        public string content;
+        public string reasoning_content;
+    }
+
+    [Serializable]
+    public sealed class DeepSeekResponseFormatData
+    {
+        public string type = "json_object";
+    }
+
+    [Serializable]
+    public sealed class DeepSeekThinkingData
+    {
+        public string type = "disabled";
+    }
+
+    [Serializable]
+    public sealed class DeepSeekChatRequestData
+    {
+        public string model;
+        public List<DeepSeekMessageData> messages;
+        public DeepSeekResponseFormatData response_format;
+        public DeepSeekThinkingData thinking;
+        public string reasoning_effort;
+        public float temperature;
+        public float top_p;
+        public int max_tokens;
+    }
+
+    /// <summary>非 DeepSeek 的 OpenAI 兼容口：不带 thinking / reasoning_effort，避免 Gemini 等中转站拒收。</summary>
+    [Serializable]
+    public sealed class OpenAiChatRequestData
+    {
+        public string model;
+        public List<DeepSeekMessageData> messages;
+        public float temperature;
+        public float top_p;
+        public int max_tokens;
+    }
+
+    [Serializable]
+    public sealed class DeepSeekChoiceData
+    {
+        public DeepSeekResponseMessageData message;
+        public string finish_reason;
+    }
+
+    [Serializable]
+    public sealed class DeepSeekErrorData
+    {
+        public string message;
+        public string type;
+    }
+
+    [Serializable]
+    public sealed class DeepSeekUsageData
+    {
+        public int prompt_tokens;
+        public int completion_tokens;
+        public int total_tokens;
+        public int prompt_cache_hit_tokens;
+        public int prompt_cache_miss_tokens;
+    }
+
+    [Serializable]
+    public sealed class DeepSeekChatResponseData
+    {
+        public List<DeepSeekChoiceData> choices;
+        public DeepSeekErrorData error;
+        public DeepSeekUsageData usage;
+    }
+
+    [Serializable]
+    public sealed class OpenAiModelListData
+    {
+        public List<OpenAiModelItemData> data = new List<OpenAiModelItemData>();
+    }
+
+    [Serializable]
+    public sealed class OpenAiModelItemData
+    {
+        public string id;
+    }
+
+    /// <summary>一轮链路的持久化快照（写入 turn_reviews.PayloadJson，重启后可回看）。</summary>
+    [Serializable]
+    public sealed class TurnPayloadSnapshotData
+    {
+        public List<TurnBlockSnapshotData> blocks = new List<TurnBlockSnapshotData>();
+        public List<TurnResultSnapshotData> results = new List<TurnResultSnapshotData>();
+    }
+
+    [Serializable]
+    public sealed class TurnBlockSnapshotData
+    {
+        public string facet_id;
+        public string title;
+        public string content;
+    }
+
+    [Serializable]
+    public sealed class TurnResultSnapshotData
+    {
+        public string capability_id;
+        public string status;
+        public string summary;
+        public string payload;
+    }
+
+    public sealed class DeepSeekConfigData
+    {
+        public string ProviderId { get; set; } = "default";
+        public string Type { get; set; } = "openai_chat_completion";
+        public string ApiKey { get; set; }
+        public string BaseUrl { get; set; } = "https://api.deepseek.com";
+        public string Model { get; set; } = "deepseek-v4-flash";
+        public float Temperature { get; set; } = 0.3f;
+        public float TopP { get; set; } = 1f;
+        public int MaxTokens { get; set; } = 8192;
+        public bool ThinkingEnabled { get; set; }
+        public string ReasoningEffort { get; set; } = "high";
+        public int EmptyContentRetries { get; set; } = 1;
+    }
+}

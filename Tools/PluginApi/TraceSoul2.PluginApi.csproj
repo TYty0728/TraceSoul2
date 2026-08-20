@@ -1,0 +1,23 @@
+<Project Sdk="Microsoft.NET.Sdk">
+  <PropertyGroup>
+    <TargetFramework>net8.0</TargetFramework>
+    <ImplicitUsings>disable</ImplicitUsings>
+    <Nullable>disable</Nullable>
+    <RootNamespace>TraceSoul2.PluginApi</RootNamespace>
+    <AssemblyName>TraceSoul2.PluginApi</AssemblyName>
+    <Version>1.0.0</Version>
+    <PackageId>TraceSoul2.PluginApi</PackageId>
+    <Title>TraceSoul2 Plugin API</Title>
+    <Description>Stable contracts for runtime-loadable TraceSoul2 plugins.</Description>
+    <Authors>TraceSoul2</Authors>
+    <PackageTags>TraceSoul2;plugin;api</PackageTags>
+    <PackageReadmeFile>README.md</PackageReadmeFile>
+    <GeneratePackageOnBuild>false</GeneratePackageOnBuild>
+  </PropertyGroup>
+  <Import Project="PluginApiSources.props" />
+  <ItemGroup>
+    <!-- 仅用于 Data POCO 上的 SQLite 特性；运行时外部插件通过宿主解析，不重复加载。 -->
+    <PackageReference Include="sqlite-net-pcl" Version="1.9.172" />
+    <None Include="README.md" Pack="true" PackagePath="\" />
+  </ItemGroup>
+</Project>

@@ -1,0 +1,52 @@
+# Build and IDE output
+**/bin/
+**/obj/
+.vs/
+.vscode/
+.idea/
+artifacts/
+publish/
+TestResults/
+*.user
+*.suo
+
+# Runtime data must never enter the source repository
+*.sqlite
+*.sqlite3
+*.sqlite3-*
+*.db
+*.db-*
+**/llm-providers.json
+!Tools/Host/llm-providers.example.json
+**/onebot.json
+**/home.json
+**/bodies.json
+**/memory-nerve.json
+**/debug-mode.json
+**/plugin-data/
+**/plugins-uninstalled/
+**/updates/
+
+# Secrets and machine-local configuration
+.env
+.env.*
+!.env.example
+*.pem
+*.pfx
+*.p12
+*.key
+*.secrets.json
+secrets.json
+appsettings.Development.json
+
+# Local work notes and diagnostics
+docs/NEXT_SESSION.md
+*.log
+_llmdump/
+*.bak
+*.tmp
+
+# Release staging
+.release/
+*.zip
+*.sha256

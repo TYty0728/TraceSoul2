@@ -1,0 +1,22 @@
+<Project Sdk="Microsoft.NET.Sdk">
+  <PropertyGroup>
+    <OutputType>Exe</OutputType>
+    <TargetFramework>net8.0</TargetFramework>
+    <ImplicitUsings>disable</ImplicitUsings>
+    <Nullable>disable</Nullable>
+    <RootNamespace>TraceSoul2.Migrate</RootNamespace>
+    <AssemblyName>TraceSoul2.Migrate</AssemblyName>
+  </PropertyGroup>
+  <Import Project="../KernelSources.props" />
+  <ItemGroup>
+    <ProjectReference Include="../PluginApi/TraceSoul2.PluginApi.csproj" />
+    <PackageReference Include="sqlite-net-pcl" Version="1.9.172" />
+    <PackageReference Include="Microsoft.ML.OnnxRuntime" Version="1.19.2" />
+    <Compile Include="../Host/LlmProviderStore.cs" />
+    <Compile Include="../Host/LlmProviderCatalog.cs" />
+    <Compile Include="../Host/GeminiClientManager.cs" />
+    <Compile Include="../Host/TraceHome.cs" />
+    <Content Include="../../models/BgeSmallZh/bge-small-zh-v1.5.onnx" CopyToOutputDirectory="PreserveNewest" Link="Models/BgeSmallZh/bge-small-zh-v1.5.onnx" />
+    <Content Include="../../models/BgeSmallZh/vocab.txt" CopyToOutputDirectory="PreserveNewest" Link="Models/BgeSmallZh/vocab.txt" />
+  </ItemGroup>
+</Project>

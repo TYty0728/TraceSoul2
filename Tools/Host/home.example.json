@@ -1,0 +1,6 @@
+{
+  "activeSoul": "default",
+  "urls": "http://127.0.0.1:5080",
+  "pluginsDirectory": "../Plugins",
+  "updateRepository": "owner/TraceSoul2"
+}

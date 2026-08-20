@@ -1,0 +1,61 @@
+name: Release
+
+on:
+  push:
+    tags:
+      - "v*"
+  workflow_dispatch:
+    inputs:
+      tag:
+        description: "Existing v* tag to publish"
+        required: true
+
+permissions:
+  contents: write
+
+jobs:
+  windows-x64:
+    runs-on: windows-latest
+    steps:
+      - name: Resolve tag
+        id: version
+        shell: pwsh
+        run: |
+          $tag = if ('${{ github.event_name }}' -eq 'workflow_dispatch') { '${{ inputs.tag }}' } else { '${{ github.ref_name }}' }
+          if ($tag -notmatch '^v\d+\.\d+\.\d+$') { throw "Release tag must be vMAJOR.MINOR.PATCH: $tag" }
+          "tag=$tag" >> $env:GITHUB_OUTPUT
+          "version=$($tag.TrimStart('v'))" >> $env:GITHUB_OUTPUT
+
+      - uses: actions/checkout@v4
+        with:
+          ref: ${{ steps.version.outputs.tag }}
+          lfs: true
+          fetch-depth: 0
+
+      - uses: actions/setup-dotnet@v4
+        with:
+          dotnet-version: "8.0.x"
+
+      - name: Restore and test
+        shell: pwsh
+        run: |
+          dotnet restore TraceSoul2.sln
+          dotnet build TraceSoul2.sln -c Release --no-restore
+          dotnet Tools/CoreCheck/bin/Release/net8.0/CoreCheck.dll
+          dotnet Tools/ChatCheck/bin/Release/net8.0/ChatCheck.dll
+          dotnet Tools/ChatCheck/bin/Release/net8.0/ChatCheck.dll --prompt-layout
+
+      - name: Build signed-by-hash release payload
+        shell: pwsh
+        run: pwsh scripts/Publish-Release.ps1 -ExpectedVersion '${{ steps.version.outputs.version }}'
+
+      - name: Create GitHub Release
+        shell: pwsh
+        env:
+          GH_TOKEN: ${{ github.token }}
+        run: |
+          $tag = '${{ steps.version.outputs.tag }}'
+          $version = '${{ steps.version.outputs.version }}'
+          $assets = @(Get-ChildItem -LiteralPath "artifacts/$version" -File | Select-Object -ExpandProperty FullName)
+          if ($assets.Count -lt 2) { throw 'Release assets are missing.' }
+          gh release create $tag @assets --verify-tag --generate-notes --title "TraceSoul2 $tag"

@@ -1,0 +1,1901 @@
+<!DOCTYPE html>
+<html lang="zh-CN">
+<head>
+  <meta charset="utf-8" />
+  <meta name="viewport" content="width=device-width, initial-scale=1" />
+  <meta name="theme-color" content="#20263a" />
+  <title>TraceSoul2 控制台</title>
+  <style>
+    :root {
+      --bg: #f4f6fb;
+      --panel: #ffffff;
+      --border: #e4e8f1;
+      --text: #202539;
+      --muted: #7c8499;
+      --accent: #5b67f1;
+      --accent-strong: #4450db;
+      --accent-soft: #eef0ff;
+      --side-bg: #20263a;
+      --side-text: #b4bdd3;
+      --danger: #d64545;
+      --shadow: 0 8px 28px rgba(37, 45, 78, .07);
+      --shadow-soft: 0 3px 12px rgba(37, 45, 78, .05);
+    }
+    * { box-sizing: border-box; }
+    html, body { height: 100%; }
+    body {
+      font-family: "Microsoft YaHei", "Segoe UI", sans-serif;
+      margin: 0; background: var(--bg); color: var(--text); font-size: 13px;
+    }
+    .app { display: flex; flex-direction: column; height: 100vh; }
+
+    /* ---------- 顶部快捷操作栏 ---------- */
+    .topbar {
+      flex: 0 0 auto;
+      display: flex; align-items: center; gap: 12px; flex-wrap: wrap;
+      padding: 0 14px; min-height: 52px;
+      background: var(--panel); border-bottom: 1px solid var(--border);
+    }
+    .brand { display: flex; align-items: center; gap: 8px; font-size: 15px; font-weight: 700; white-space: nowrap; }
+    .brand .logo { font-size: 18px; }
+    .db-switch { display: flex; align-items: center; gap: 6px; }
+    .db-switch select { max-width: 220px; }
+    .db-info { font-size: 11px; color: var(--muted); white-space: nowrap; overflow: hidden; text-overflow: ellipsis; max-width: 420px; }
+    .topbar .spacer { flex: 1; }
+    .qbtn {
+      margin: 0; padding: 6px 10px; border: 1px solid #c9cfdd; border-radius: 6px;
+      background: #f6f7fa; cursor: pointer; font: inherit; font-size: 12px; white-space: nowrap;
+    }
+    .qbtn:hover { background: #e9ecf3; }
+    .qbtn.primary { background: var(--accent-soft); border-color: #b6c4f7; color: #3351c8; }
+
+    /* ---------- 主体：左导航 + 右内容 ---------- */
+    .body { display: flex; flex: 1; min-height: 0; }
+    .sidebar {
+      width: 188px; flex: 0 0 auto; background: var(--side-bg);
+      padding: 10px 8px; overflow-y: auto;
+    }
+    .nav-group { font-size: 11px; color: #67708d; padding: 12px 12px 4px; }
+    .nav-item {
+      display: flex; align-items: center; gap: 9px; width: 100%;
+      padding: 9px 12px; margin-bottom: 2px; border: none; border-radius: 8px;
+      background: transparent; color: var(--side-text); font: inherit; font-size: 13px;
+      text-align: left; cursor: pointer;
+    }
+    .nav-item .ic { width: 18px; text-align: center; }
+    .nav-item:hover { background: rgba(255,255,255,.07); color: #e6eaf5; }
+    .nav-item.active { background: var(--accent); color: #fff; }
+    .sidebar .foot { font-size: 11px; color: #67708d; padding: 14px 12px 6px; line-height: 1.6; }
+
+    .content { flex: 1; min-width: 0; overflow-y: auto; padding: 14px 16px 40px; }
+    section.panel-section { display: none; }
+    section.panel-section.active { display: block; }
+    .section-head { display: flex; align-items: baseline; gap: 8px; margin: 2px 0 10px; }
+    .section-head h1 { font-size: 17px; margin: 0; }
+    .section-head .muted { font-size: 12px; }
+
+    /* ---------- 面板与表单（沿用原版风格） ---------- */
+    h2 { font-size: 14px; margin: 14px 0 6px; color: #555; }
+    .box h2:first-child { margin-top: 0; }
+    .muted { color: #888; font-size: 12px; }
+    .box { background: var(--panel); border: 1px solid var(--border); border-radius: 10px; padding: 12px 14px; margin-bottom: 12px; }
+    label { display: block; margin: 8px 0 4px; font-size: 12px; color: #666; }
+    input:not([type]), input[type=text], input[type=password], input[type=number], textarea, select {
+      width: 100%; padding: 6px 8px; border: 1px solid #ccd1dc; border-radius: 6px; font: inherit; font-size: 13px;
+    }
+    textarea { resize: vertical; }
+    button { margin: 8px 8px 0 0; padding: 6px 12px; border: 1px solid #b9c0c8; border-radius: 6px;
+      background: #f6f7f9; cursor: pointer; font: inherit; font-size: 13px; }
+    button:hover { background: #e8ebef; }
+    button.primary { background: var(--accent-soft); border-color: #b6c4f7; color: #3351c8; }
+    button:disabled { opacity: .5; cursor: not-allowed; }
+    .row { display: flex; gap: 10px; align-items: center; }
+    .row > * { flex: 1; }
+    .row > .grow2 { flex: 2; }
+    .row > .nogrow { flex: 0 0 auto; }
+    .grid2 { display: grid; grid-template-columns: 1fr 1fr; gap: 12px; align-items: start; }
+    @media (max-width: 1000px) { .grid2 { grid-template-columns: 1fr; } .sidebar { width: 150px; } .db-info { max-width: 180px; } }
+
+    pre { background: #15161a; color: #d6d8dd; padding: 10px; overflow: auto; max-height: 260px;
+      font-size: 12px; border-radius: 6px; white-space: pre-wrap; word-break: break-all; }
+    #log { background: #15161a; color: #c8cbd1; padding: 10px; overflow: auto; height: 66vh;
+      font-size: 12px; border-radius: 6px; }
+    .logline { white-space: pre-wrap; word-break: break-all; padding: 1px 0; }
+    .logline.memory { color: #9ec9ff; }
+    .logline.moment { color: #d8e0c8; }
+    .logline.error { color: #ff9e9e; }
+    .logline.sys { color: #8f97a3; font-style: italic; }
+    .turn-sec { margin-bottom: 8px; }
+    .turn-head { font-size: 12px; font-weight: bold; color: #8fb3e8; padding: 2px 0; }
+    .turn-head.memory { color: #9ec9ff; }
+    .turn-body { white-space: pre-wrap; word-break: break-all; font-size: 12px; color: #d6d8dd;
+      background: #15161a; border-radius: 6px; padding: 8px; max-height: 380px; overflow: auto; }
+    .transcript { height: 420px; overflow-y: auto; background: #fff; border: 1px solid #dcdce0;
+      border-radius: 8px; padding: 10px; font-size: 13px; }
+    .msg { margin: 0 0 8px; padding: 6px 8px; border-radius: 6px; background: #f7f7f9; line-height: 1.5;
+      white-space: pre-wrap; word-break: break-word; }
+    .msg.me { background: #eaf2ff; }
+    .msg b { color: #456; }
+    .plugin { border-bottom: 1px dashed #e3e3e8; padding: 6px 0; }
+    .plugin:last-child { border-bottom: none; }
+    .plugin .head { display: flex; align-items: center; gap: 6px; font-size: 13px; }
+    .plugin .desc { font-size: 11px; color: #999; margin: 2px 0 0 22px; }
+    .plugin .err { color: #c33; font-size: 11px; margin-left: 22px; }
+    .plugin .warn { color: #a56a00; font-size: 11px; margin-left: 22px; }
+    .plugin-toolbar { display: flex; align-items: center; gap: 8px; margin-bottom: 10px; }
+    .plugin-toolbar input[type=text] { max-width: 280px; margin: 0; }
+    .plugin-grid { display: grid; grid-template-columns: 1fr 1fr; gap: 10px; }
+    @media (max-width: 900px) { .plugin-grid { grid-template-columns: 1fr; } }
+    .p-card {
+      background: #fff; border: 1px solid var(--border); border-radius: 10px; padding: 12px 14px;
+      display: flex; flex-direction: column; gap: 8px; min-height: 118px;
+    }
+    .p-card .top { display: flex; align-items: flex-start; gap: 10px; }
+    .p-card .ico {
+      width: 36px; height: 36px; border-radius: 10px; background: var(--accent-soft); color: #3351c8;
+      display: flex; align-items: center; justify-content: center; font-size: 18px; flex: 0 0 auto;
+    }
+    .p-card .meta { flex: 1; min-width: 0; }
+    .p-card .title { font-weight: 700; font-size: 14px; }
+    .p-card .ver { color: var(--muted); font-weight: 400; font-size: 12px; margin-left: 6px; }
+    .p-card .about { color: #666; font-size: 12px; line-height: 1.5; min-height: 36px; }
+    .p-card .foot { display: flex; align-items: center; gap: 4px; justify-content: flex-end; margin-top: auto; }
+    .icon-btn {
+      width: 30px; height: 30px; margin: 0; padding: 0; border: none; border-radius: 8px;
+      background: transparent; color: #5b7cfa; cursor: pointer; font-size: 15px;
+    }
+    .icon-btn:hover { background: var(--accent-soft); }
+    .icon-btn.danger { color: var(--danger); }
+    .sw { position: relative; width: 40px; height: 22px; flex: 0 0 auto; }
+    .sw input { opacity: 0; width: 0; height: 0; }
+    .sw i {
+      position: absolute; inset: 0; background: #d5d8e2; border-radius: 11px; cursor: pointer;
+      transition: background .15s;
+    }
+    .sw i:before {
+      content: ""; position: absolute; width: 16px; height: 16px; left: 3px; top: 3px;
+      background: #fff; border-radius: 50%; transition: transform .15s;
+    }
+    .sw input:checked + i { background: #3dd68c; }
+    .sw input:checked + i:before { transform: translateX(18px); }
+    .modal {
+      position: fixed; inset: 0; background: rgba(20, 24, 36, .45); z-index: 50;
+      display: none; align-items: flex-start; justify-content: center; padding: 48px 16px 24px;
+      overflow: auto;
+    }
+    .modal.show { display: flex; }
+    .modal-card {
+      width: min(720px, 100%); background: #fff; border-radius: 12px; padding: 18px 20px 16px;
+      box-shadow: 0 18px 50px rgba(20, 24, 36, .2);
+    }
+    .modal-card h2 { margin: 0; font-size: 16px; color: var(--text); }
+    .cfg-row {
+      display: grid; grid-template-columns: 1fr minmax(220px, 42%); gap: 16px;
+      align-items: center; padding: 14px 0; border-bottom: 1px solid #eef0f5;
+    }
+    .cfg-row:last-of-type { border-bottom: none; }
+    .cfg-row .lab { font-weight: 700; font-size: 13px; }
+    .cfg-row .hint { color: var(--muted); font-size: 12px; line-height: 1.5; margin-top: 4px; }
+    .cfg-row input, .cfg-row select, .cfg-row textarea { margin: 0; }
+    .modal-foot { display: flex; justify-content: flex-end; gap: 8px; margin-top: 12px; }
+    .modal-foot button { margin: 0; }
+    .platform-group { border: 1px solid var(--border); border-radius: 8px; padding: 10px 12px; margin-bottom: 10px; background: #fafbfe; }
+    .platform-group h3 { margin: 0 0 6px; font-size: 14px; }
+    .platform-group .plugin:last-child { border-bottom: none; }
+    .card-block { margin-bottom: 10px; }
+    .pill { display: inline-block; padding: 1px 8px; border-radius: 10px; font-size: 11px; background: #eee; }
+    .pill.on { background: #d8f0d8; color: #276e27; }
+    .pill.off { background: #f6dcdc; color: #8a3a3a; }
+    .pill.warn { background: #fdf0d8; color: #8a6420; }
+    .slider { flex: 2; }
+    .slider-val { flex: 0 0 52px; text-align: right; font-size: 12px; color: #555; }
+    .db-list { font-size: 12px; }
+    .db-list .db-row { display: flex; align-items: center; gap: 8px; padding: 6px 2px; border-bottom: 1px dashed #e6e8f0; }
+    .db-list .db-row:last-child { border-bottom: none; }
+    .prov-layout { display: grid; grid-template-columns: 250px 1fr; gap: 12px; align-items: start; }
+    @media (max-width: 900px) { .prov-layout { grid-template-columns: 1fr; } }
+    .prov-list { border: 1px solid var(--border); border-radius: 8px; background: #fafbfe; max-height: 560px; overflow: auto; }
+    .prov-item { display: block; width: 100%; text-align: left; border: none; border-bottom: 1px solid #eef0f5;
+      background: transparent; padding: 10px 12px; cursor: pointer; font: inherit; border-radius: 0; margin: 0; }
+    .prov-item:hover { background: #eef1ff; }
+    .prov-item.active { background: var(--accent-soft); }
+    .prov-item .pid { font-weight: 600; }
+    .prov-item .purl { font-size: 11px; color: var(--muted); word-break: break-all; margin-top: 2px; }
+    .prov-item .now { font-size: 11px; color: #3351c8; margin-top: 2px; }
+    .prov-add { display: flex; gap: 6px; margin-bottom: 8px; }
+    .prov-head { font-size: 12px; color: #666; padding: 0 2px 6px; }
+    .prov-title { display: flex; align-items: flex-start; justify-content: space-between; gap: 12px; margin-bottom: 8px; }
+    .prov-title .pid { font-weight: 700; font-size: 16px; }
+    .slot-grid { display: grid; grid-template-columns: repeat(auto-fill, minmax(200px, 1fr)); gap: 10px; align-items: end; }
+    .slot-grid select { margin: 0; }
+    details.adv { margin: 10px 0 14px; border: 1px solid var(--border); border-radius: 8px; padding: 8px 12px; background: #fafbfe; }
+    details.adv > summary { cursor: pointer; color: #555; font-weight: 600; }
+    .model-bar { display: flex; gap: 8px; align-items: center; flex-wrap: wrap; margin: 8px 0; }
+    .model-bar input { flex: 1; min-width: 180px; margin: 0; }
+    .model-bar button { margin: 0; }
+    .role-filter { display: flex; gap: 6px; flex-wrap: wrap; margin-bottom: 8px; }
+    .role-chip, .filter-chip {
+      font-size: 11px; padding: 2px 8px; border-radius: 10px; border: 1px solid #ccd1dc;
+      cursor: pointer; background: #f6f7fa; color: #555; font: inherit;
+    }
+    .role-chip.on, .filter-chip.on { background: var(--accent-soft); border-color: #b6c4f7; color: #3351c8; }
+    .model-row {
+      display: flex; align-items: center; gap: 8px; padding: 8px 4px;
+      border-bottom: 1px solid #eef0f5; flex-wrap: wrap;
+    }
+    .model-row .mid { flex: 1; min-width: 140px; font-family: Consolas, monospace; font-size: 12px; word-break: break-all; }
+    .model-row .roles { display: flex; gap: 4px; flex-wrap: wrap; }
+    .model-empty { color: var(--muted); padding: 16px 4px; font-size: 12px; }
+
+    /* ---------- 视觉与响应式优化 ---------- */
+    body {
+      background:
+        radial-gradient(circle at 82% 0, rgba(91, 103, 241, .07), transparent 30%),
+        var(--bg);
+      letter-spacing: .01em;
+    }
+    .app { overflow: hidden; }
+    .topbar {
+      min-height: 64px; padding: 9px 18px; gap: 14px; flex-wrap: nowrap;
+      box-shadow: 0 1px 0 rgba(22, 29, 54, .03), 0 6px 22px rgba(31, 39, 72, .04);
+      position: relative; z-index: 10;
+    }
+    .brand { gap: 9px; color: #1d2335; }
+    .brand .logo {
+      display: inline-grid; place-items: center; width: 34px; height: 34px;
+      border-radius: 11px; color: #fff; font-size: 18px; line-height: 1;
+      background: linear-gradient(145deg, #6673f5, #4954dc);
+      box-shadow: 0 6px 16px rgba(77, 89, 224, .25);
+    }
+    .brand-name { font-size: 15px; font-weight: 800; }
+    .top-status { display: flex; align-items: center; gap: 7px; }
+    .top-actions { display: flex; align-items: center; justify-content: flex-end; gap: 7px; min-width: 0; }
+    .top-actions .qbtn { margin: 0; }
+    .db-info { max-width: 300px; }
+    .qbtn, button {
+      min-height: 34px; border-color: #d4d9e5; border-radius: 9px;
+      background: #fff; color: #4b5368;
+      transition: transform .15s ease, box-shadow .15s ease, border-color .15s ease, background .15s ease;
+    }
+    .qbtn:hover, button:hover {
+      background: #f7f8fc; border-color: #bcc4d5; box-shadow: 0 3px 10px rgba(37, 45, 78, .08);
+      transform: translateY(-1px);
+    }
+    .qbtn:active, button:active { transform: translateY(0); box-shadow: none; }
+    .qbtn.primary, button.primary {
+      color: #fff; border-color: var(--accent); background: linear-gradient(135deg, #6673f5, var(--accent-strong));
+      box-shadow: 0 4px 12px rgba(78, 89, 222, .18);
+    }
+    .qbtn.primary:hover, button.primary:hover { background: linear-gradient(135deg, #5d6af0, #3f49cc); border-color: #3f49cc; }
+    button:focus-visible, input:focus-visible, textarea:focus-visible, select:focus-visible, summary:focus-visible {
+      outline: 3px solid rgba(91, 103, 241, .18); outline-offset: 1px;
+    }
+    .pill { border: 1px solid transparent; font-weight: 600; }
+    .pill.on { background: #e8f8f0; border-color: #c8ead9; color: #267552; }
+    .pill.off { background: #fff0f0; border-color: #f1d2d2; color: #a54242; }
+    .pill.warn { background: #fff7e7; border-color: #f3dfb3; color: #946b1e; }
+
+    .sidebar {
+      width: 208px; padding: 15px 10px;
+      background: linear-gradient(180deg, #20263a 0%, #1b2031 100%);
+      box-shadow: inset -1px 0 rgba(255,255,255,.04);
+      overflow-x: hidden;
+    }
+    .nav-group { padding: 13px 13px 6px; color: #75809c; letter-spacing: .12em; }
+    .nav-item { padding: 10px 13px; margin-bottom: 4px; border-radius: 10px; transition: background .15s, color .15s, transform .15s; }
+    .nav-item:hover { transform: translateX(2px); }
+    .nav-item.active {
+      background: linear-gradient(135deg, #6673f5, #4d58df); color: #fff;
+      box-shadow: 0 7px 18px rgba(45, 54, 145, .34);
+    }
+    .nav-item .ic { filter: saturate(.85); }
+    .sidebar .foot { color: #78829b; border-top: 1px solid rgba(255,255,255,.06); margin-top: 10px; padding-top: 14px; }
+
+    .content { padding: 26px clamp(18px, 2.6vw, 40px) 52px; overflow-x: hidden; scroll-behavior: smooth; }
+    section.panel-section { max-width: 1480px; margin: 0 auto; }
+    .section-head { align-items: center; gap: 12px; margin: 1px 0 18px; }
+    .section-head h1 { font-size: 23px; line-height: 1.2; letter-spacing: -.02em; }
+    .section-head .muted { padding-top: 3px; color: var(--muted); }
+    h2 { color: #3b4257; margin: 16px 0 8px; }
+    .muted { color: var(--muted); }
+    .box, .p-card {
+      border-color: var(--border); border-radius: 14px; box-shadow: var(--shadow-soft);
+    }
+    .box { padding: 18px 20px; margin-bottom: 16px; }
+    .p-card { padding: 16px; }
+    .box:hover, .p-card:hover { border-color: #d9deea; }
+    label { color: #697186; font-weight: 600; margin-top: 10px; }
+    input:not([type]), input[type=text], input[type=password], input[type=number], textarea, select {
+      min-height: 36px; padding: 8px 10px; border-color: #d5dae6; border-radius: 9px;
+      background: #fff; color: var(--text); transition: border-color .15s, box-shadow .15s, background .15s;
+    }
+    input:hover, textarea:hover, select:hover { border-color: #bfc6d7; }
+    input:focus, textarea:focus, select:focus { border-color: var(--accent); box-shadow: 0 0 0 3px rgba(91, 103, 241, .1); }
+    .transcript {
+      height: min(52vh, 520px); min-height: 300px; border-color: #e0e4ed; border-radius: 12px;
+      padding: 14px; background: linear-gradient(180deg, #fbfcff, #fff);
+    }
+    .msg { max-width: 88%; padding: 9px 11px; border: 1px solid #edf0f5; border-radius: 11px; background: #f7f8fb; }
+    .msg.me { margin-left: auto; background: #eef1ff; border-color: #dde2ff; }
+    pre, #log, .turn-body { border-radius: 10px; background: #171b27; }
+    code { word-break: break-all; }
+    .platform-group, details.adv, .prov-list { border-radius: 11px; background: #fafbfe; }
+    .modal { backdrop-filter: blur(4px); }
+    .modal-card { border: 1px solid rgba(255,255,255,.7); border-radius: 16px; box-shadow: 0 24px 70px rgba(20,24,36,.24); }
+    * { scrollbar-width: thin; scrollbar-color: #b9c0d1 transparent; }
+    ::-webkit-scrollbar { width: 8px; height: 8px; }
+    ::-webkit-scrollbar-thumb { background: #b9c0d1; border-radius: 10px; }
+    ::-webkit-scrollbar-track { background: transparent; }
+
+    @media (max-width: 1320px) {
+      .db-info { display: none; }
+      .topbar { gap: 10px; }
+      .top-actions { gap: 5px; }
+    }
+    @media (max-width: 1040px) {
+      .topbar { flex-wrap: wrap; }
+      .brand { flex: 1 1 auto; }
+      .db-switch { order: 3; flex: 1 1 100%; }
+      .db-switch select { max-width: none; }
+      .top-actions { margin-left: auto; }
+      .sidebar { width: 176px; }
+      .row { flex-wrap: wrap; align-items: flex-end; }
+      .row > * { min-width: 180px; }
+      .row > .nogrow { min-width: auto; }
+    }
+    @media (max-width: 760px) {
+      .app { min-height: 100dvh; height: 100dvh; }
+      .topbar { padding: 9px 12px; gap: 8px; }
+      .brand { width: 100%; }
+      .brand-name { font-size: 14px; }
+      .top-status { margin-left: auto; }
+      #modeLabel { display: none; }
+      .db-switch { order: 2; }
+      .top-actions {
+        order: 3; width: 100%; justify-content: space-between; overflow-x: auto; padding-bottom: 2px;
+        scrollbar-width: none;
+      }
+      .top-actions::-webkit-scrollbar { display: none; }
+      .body { flex-direction: column; }
+      .sidebar {
+        width: 100%; padding: 8px 10px; display: flex; gap: 6px; overflow-x: auto; overflow-y: hidden;
+        flex: 0 0 auto; box-shadow: 0 5px 18px rgba(26,31,49,.14);
+        scrollbar-width: none;
+      }
+      .sidebar::-webkit-scrollbar { display: none; }
+      .nav-group, .sidebar .foot { display: none; }
+      .nav-item { width: auto; flex: 0 0 auto; margin: 0; padding: 8px 11px; border-radius: 9px; }
+      .nav-item:hover { transform: none; }
+      .content { padding: 20px 12px 36px; }
+      .section-head { align-items: flex-start; flex-direction: column; gap: 5px; margin-bottom: 14px; }
+      .section-head h1 { font-size: 21px; }
+      .box { padding: 15px; border-radius: 12px; }
+      .grid2, .plugin-grid { gap: 12px; }
+      .row { display: flex; flex-wrap: wrap; gap: 6px; }
+      .row > * { flex: 1 1 100%; min-width: 0; width: 100%; }
+      .row > .nogrow { flex: 0 1 auto; min-width: 0; width: auto; }
+      .row > .nogrow label:has(+ button) { display: none; }
+      .row > .nogrow button { margin-top: 4px; }
+      .transcript { min-height: 250px; height: 42vh; }
+      .msg { max-width: 96%; }
+      .cfg-row { grid-template-columns: 1fr; gap: 8px; }
+      .modal { padding: 18px 10px; }
+      .modal-card { padding: 16px; }
+    }
+    @media (prefers-reduced-motion: reduce) {
+      *, *::before, *::after { scroll-behavior: auto !important; transition: none !important; }
+    }
+  </style>
+</head>
+<body>
+<div class="app">
+  <!-- ================= 顶部快捷操作栏 ================= -->
+  <header class="topbar">
+    <div class="brand">
+      <span class="logo">∞</span><span class="brand-name">TraceSoul2 控制台</span>
+      <span class="top-status">
+        <span id="hostVersion" class="muted" style="font-size:12px"></span>
+        <span id="statusDot" class="pill">● 就绪</span>
+        <span id="modeLabel" class="muted" style="font-size:12px">模式：加载中…</span>
+      </span>
+    </div>
+    <div class="db-switch">
+      <select id="dbSelect" title="角色（souls 目录）"></select>
+      <button id="dbSwitchBtn" class="qbtn primary" onclick="switchDatabase()">切换</button>
+      <button class="qbtn" onclick="createDatabase()">＋ 新建</button>
+    </div>
+    <div class="spacer"></div>
+    <div class="top-actions">
+      <span id="dbInfo" class="db-info"></span>
+      <button class="qbtn primary" onclick="runDaily()" title="立即执行日构建">🌅 日构建</button>
+      <button class="qbtn" onclick="enterDebug()" title="进入调试分支">🔧 调试</button>
+      <button class="qbtn" onclick="exitDebug()" title="切回正式主线">🌿 主线</button>
+      <button class="qbtn" onclick="reloadPanels()" title="刷新当前页面数据">↻ 刷新</button>
+    </div>
+  </header>
+
+  <div class="body">
+    <!-- ================= 左侧导航 ================= -->
+    <aside class="sidebar">
+      <div class="nav-group">日常</div>
+      <button class="nav-item" data-section="chat" onclick="showSection('chat')"><span class="ic">💬</span>对话</button>
+      <button class="nav-item" data-section="identity" onclick="showSection('identity')"><span class="ic">👤</span>身份</button>
+      <button class="nav-item" data-section="memory" onclick="showSection('memory')"><span class="ic">🧭</span>记忆</button>
+      <div class="nav-group">系统</div>
+      <button class="nav-item" data-section="brain" onclick="showSection('brain')"><span class="ic">🧠</span>大脑 · LLM</button>
+      <button class="nav-item" data-section="platform" onclick="showSection('platform')"><span class="ic">🔌</span>平台 · QQ</button>
+      <button class="nav-item" data-section="plugins" onclick="showSection('plugins')"><span class="ic">🧩</span>插件</button>
+      <button class="nav-item" data-section="update" onclick="showSection('update')"><span class="ic">⬆️</span>系统更新</button>
+      <button class="nav-item" data-section="log" onclick="showSection('log')"><span class="ic">📜</span>日志</button>
+      <div class="foot">数据目录切换在顶部；切换后宿主自动重启（约 2 秒）。</div>
+    </aside>
+
+    <!-- ================= 右侧内容区 ================= -->
+    <main class="content">
+
+      <!-- 对话 -->
+      <section id="sec-chat" class="panel-section">
+        <div class="section-head"><h1>对话</h1><span class="muted">Moment → Brain → 表达（一次一轮）</span></div>
+        <div class="box">
+          <div class="transcript" id="transcript"></div>
+          <label>发送内容</label>
+          <textarea id="content" rows="3"></textarea>
+          <button id="sendBtn" class="primary" onclick="sendMoment()">发送一个 Moment</button>
+          <span id="sendState" class="muted"></span>
+        </div>
+        <div class="box">
+          <h2>最近一轮（链路 / 决策）</h2>
+          <div id="turnBox"></div>
+        </div>
+      </section>
+
+      <!-- 身份 -->
+      <section id="sec-identity" class="panel-section">
+        <div class="section-head"><h1>身份</h1><span class="muted">名字 + 六张身份短卡 + 内心</span></div>
+        <div class="box">
+          <h2>两人名字</h2>
+          <div class="row">
+            <div><label>用户（正式名）</label><input id="username" /></div>
+            <div><label>我是（助手名）</label><input id="assname" /></div>
+            <div><label>用户的小名（旧日志里的称呼，只用于日志角色识别）</label><input id="callName" placeholder="循" /></div>
+            <div class="nogrow"><label>&nbsp;</label><button class="primary" onclick="savePair()">保存名字</button></div>
+          </div>
+        </div>
+        <div class="box">
+          <h2>身份短卡（常驻 / 每日复盘维护）</h2>
+          <p class="muted">「用户的档案」由本人填写，AI 复盘绝不修改；其余几张由日终复盘生长，也可以直接改。</p>
+          <div id="cardsBox"></div>
+        </div>
+        <div class="box">
+          <h2>内心 Runtime</h2>
+          <pre id="inner"></pre>
+        </div>
+      </section>
+
+      <!-- 记忆 -->
+      <section id="sec-memory" class="panel-section">
+        <div class="section-head"><h1>记忆</h1><span class="muted">记忆神经 · 日构建 · 阶梯榜 · 当天轨迹</span></div>
+        <div class="box">
+          <h2>记忆神经（回忆召回）</h2>
+          <p id="nerveStatus" class="muted">加载中…</p>
+          <div class="row">
+            <div class="nogrow"><label>向量拼装条数 top_k（1-10，默认 3）</label>
+              <input id="nerveTopK" type="number" min="1" max="10" style="width:90px" /></div>
+            <div><label>子代理小模型槽（空=当前提供商低温 0.1）</label>
+              <select id="nerveProvider"></select></div>
+            <div class="nogrow"><label>&nbsp;</label><button class="primary" onclick="saveNerve()">保存记忆神经设置</button></div>
+          </div>
+          <div class="row">
+            <div class="nogrow"><label>日构建（每天 04:00 自动跑；也可手动）</label>
+              <input id="dailyDay" type="text" placeholder="留空=刚结束的记忆日" style="width:170px" /></div>
+            <div class="nogrow"><label>&nbsp;</label><button onclick="runDaily()">立即跑日构建</button></div>
+            <div class="muted" style="align-self:flex-end">把未归档的 Moment 构筑成事件并复盘；LLM 调用到 5090 监视台看。</div>
+          </div>
+          <p class="muted">召回流程：Brain 判定回忆类问题 → 子代理读各层关键词列表定位（域/维度/概念/时间/地点/人物/心情）→ ONNX bge-small-zh 语义向量在定位范围内拼装 top_k 条细节 → 找不到就如实告诉 Brain。</p>
+        </div>
+        <div class="grid2">
+          <div class="box">
+            <h2>时间阶梯榜单（日 → 周 → 月 → 年 → 永久）</h2>
+            <div id="ladderBox" class="muted">加载中…</div>
+          </div>
+          <div class="box">
+            <h2>今天我们的轨迹（实时维护，新的一天清空）</h2>
+            <div id="trajectory" class="muted">加载中…</div>
+          </div>
+        </div>
+      </section>
+
+      <!-- 大脑 · LLM -->
+      <section id="sec-brain" class="panel-section">
+        <div class="section-head"><h1>大脑 · LLM</h1><span class="muted">多种供应商同时在线；用途槽给灵魂和器官用</span></div>
+        <div class="box">
+          <h2>默认用途槽</h2>
+          <p class="muted">对话开口是灵魂说话用的。开口勾了「开启思考」时，改走思考槽（可换供应商/模型）。语音、生图器官可跟对应槽，也可在插件齿轮里指定供应商。</p>
+          <div class="slot-grid">
+            <div><label>对话开口</label><select id="slotChat"></select></div>
+            <div><label>默认思考</label><select id="slotThinking"></select></div>
+            <div><label>多模态</label><select id="slotMultimodal"></select></div>
+            <div><label>语音</label><select id="slotSpeech"></select></div>
+            <div><label>生图</label><select id="slotImage"></select></div>
+            <div><label>&nbsp;</label><button class="primary" onclick="saveSlots()">保存槽位</button></div>
+          </div>
+        </div>
+        <div class="box">
+          <div class="prov-add">
+            <select id="providerTemplate"></select>
+            <button class="primary" onclick="addProvider()">＋ 新增供应商</button>
+          </div>
+          <div class="prov-layout">
+            <div>
+              <div class="prov-head">提供商源</div>
+              <div class="prov-list" id="providerList"></div>
+            </div>
+            <div id="llmBox">
+              <div class="prov-title">
+                <div>
+                  <div class="pid" id="provTitle">—</div>
+                  <div class="purl" id="provSub">—</div>
+                </div>
+                <div class="nogrow">
+                  <button class="primary" onclick="saveProvider()">保存配置</button>
+                  <button onclick="deleteProvider()">删除</button>
+                </div>
+              </div>
+              <div class="row">
+                <div><label>ID</label><input id="providerId" readonly /></div>
+                <div><label>类型</label><input id="providerType" readonly /></div>
+                <div><label>显示名</label><input id="displayName" /></div>
+              </div>
+              <div class="row">
+                <div><label>API Key（留空=不修改）<span id="hasKey" class="muted"></span></label>
+                  <input id="apiKey" type="password" placeholder="留空则保持已保存的 Key" /></div>
+                <div><label>API Base URL</label><input id="baseUrl" /></div>
+              </div>
+              <details class="adv">
+                <summary>高级配置</summary>
+                <div class="row">
+                  <div class="nogrow"><label>超时（秒）</label>
+                    <input id="timeout" type="number" min="10" max="600" style="width:90px" /></div>
+                  <div><label>代理地址（暂存，HTTP 客户端稍后接入）</label>
+                    <input id="proxy" placeholder="http://127.0.0.1:7890" /></div>
+                </div>
+                <div class="row">
+                  <div class="slider">
+                    <label>冷暖（温度）<span id="tempVal" class="slider-val"></span></label>
+                    <input id="tempSlider" type="range" min="0" max="2" step="0.05" oninput="tempVal.textContent=this.value" />
+                  </div>
+                  <div class="slider">
+                    <label>Top-P <span id="topPVal" class="slider-val"></span></label>
+                    <input id="topPSlider" type="range" min="0.01" max="1" step="0.01" oninput="topPVal.textContent=this.value" />
+                  </div>
+                  <div><label>最大输出</label><input id="maxTokens" type="number" min="128" max="384000" /></div>
+                </div>
+                <div class="row">
+                  <div class="nogrow"><label>&nbsp;</label>
+                    <label style="margin:0"><input type="checkbox" id="thinking" /> 开口走思考槽</label></div>
+                  <div class="nogrow"><label>思考强度</label>
+                    <select id="effort" style="width:100px">
+                      <option value="low">low</option>
+                      <option value="high">high</option>
+                      <option value="max">max</option>
+                    </select></div>
+                  <div class="nogrow"><label>原始上下文（0-100）</label>
+                    <input id="ctxLimit" type="number" min="0" max="100" style="width:90px" /></div>
+                  <div class="nogrow"><label>&nbsp;</label>
+                    <button onclick="saveContextLimit()">应用上下文</button></div>
+                </div>
+              </details>
+              <h2>已配置的模型</h2>
+              <div class="model-bar">
+                <input id="modelSearch" placeholder="搜索模型或 ID" oninput="renderModelList()" />
+                <button class="primary" onclick="fetchModels()">获取模型列表</button>
+                <button onclick="addCustomModel()">自定义模型</button>
+              </div>
+              <div class="role-filter" id="roleFilter"></div>
+              <div id="modelBox"></div>
+              <p class="muted" style="margin-top:8px">点「获取模型列表」会打供应商的 /models。给模型打上对话 / 思考 / 多模态 / 语音 / 生图，再在上方用途槽里选默认。Google Gemini 走原生 generateContent；其余走 OpenAI 兼容。</p>
+            </div>
+          </div>
+        </div>
+      </section>
+
+      <!-- 平台 · QQ -->
+      <section id="sec-platform" class="panel-section">
+        <div class="section-head"><h1>平台 · QQ</h1><span class="muted">平台连接状态 + OneBot v11 / NapCat 配置</span></div>
+        <div class="box">
+          <h2>平台连接</h2>
+          <div id="platforms" class="muted">加载中…</div>
+        </div>
+        <div class="box">
+          <h2>身体路由</h2>
+          <p class="muted">近的压过远的：物理身体 → 你们自己的软件 → 文字聊天软件 → 控制台（最低的文字壳，不算自己的软件）。同层才打分。说话才改激活的身体；发图/视频只是那只器官下滑，不会把整段对话搬走。</p>
+          <div class="row">
+            <div class="nogrow"><label>情境</label>
+              <select id="bodyScene"><option value="home">在家</option><option value="out">出门</option></select></div>
+            <div class="nogrow"><label>当前激活</label>
+              <div id="activeBodyLabel" class="muted">—</div></div>
+          </div>
+          <div id="mouthsBox" class="muted">加载中…</div>
+          <button class="primary" onclick="saveMouths()">保存同层分数与情境</button>
+        </div>
+        <div class="box">
+          <h2>QQ 平台（OneBot v11 / NapCat）配置</h2>
+          <p id="onebotHint" class="muted">加载中…</p>
+          <div class="row">
+            <div><label>启用</label>
+              <select id="obEnabled"><option value="1">启用</option><option value="0">停用</option></select></div>
+            <div><label>连接模式</label>
+              <select id="obMode">
+                <option value="reverse">反向：NapCat 连我们（推荐，AstrBot aiocqhttp 同款）</option>
+                <option value="forward">正向：我们连 NapCat</option>
+              </select></div>
+            <div><label>反向监听端口（NapCat 连 ws://127.0.0.1:此端口/ws）</label>
+              <input id="obPort" type="number" min="1" max="65535" /></div>
+          </div>
+          <div class="row">
+            <div><label>正向 WS 地址（forward 模式用）</label><input id="obWs" /></div>
+            <div><label>HTTP 动作地址（forward 模式用；reverse 模式动作走同一根连接）</label><input id="obHttp" /></div>
+          </div>
+          <div class="row">
+            <div><label>Access Token（可填多个，逗号/分号/换行分隔；对应 NapCat websocketClients 的 token）</label>
+              <input id="obToken" /></div>
+            <div><label>只收这个 QQ（self_id，留空 = 都收）</label><input id="obSelf" /></div>
+            <div class="nogrow"><label>回发</label>
+              <label style="margin:0"><input type="checkbox" id="obReply" checked /> 文字回复自动发回 QQ（关=只收不回，回复留在控制台）</label></div>
+            <div class="nogrow"><label>&nbsp;</label>
+              <button class="primary" onclick="saveOnebotConfig()">保存并重启应用</button></div>
+          </div>
+          <p class="muted">反向模式（默认）：NapCat 网络配置里用 websocketClients 连 <b>ws://127.0.0.1:9021/ws</b>（你现有 NapCat 已指向这里），token 填上面；消息收发与 API 动作都走这一根连接，无需 httpServers。修改端口或模式保存后宿主会自动重启，约 2 秒生效。</p>
+        </div>
+      </section>
+
+      <!-- 插件 -->
+      <section id="sec-plugins" class="panel-section">
+        <div class="section-head"><h1>插件</h1><span class="muted">平台 → 器官 · 齿轮里填写配置</span></div>
+        <div class="box">
+          <div class="plugin-toolbar">
+            <input id="pluginSearch" type="text" placeholder="搜索插件…" oninput="filterPluginCards()" />
+            <span id="externalDir" class="muted"></span>
+            <span class="spacer"></span>
+            <button class="primary" onclick="rescanExternal()">重新扫描</button>
+          </div>
+          <p class="muted" style="margin-top:0">上层是平台（QQ），下面是器官包。点齿轮填写 api_key 等；开关键在卡片右上角。身份 / 内心 / 记忆 / 时间不是插件。</p>
+          <div id="pluginsBox"></div>
+        </div>
+      </section>
+
+      <!-- 系统更新 -->
+      <section id="sec-update" class="panel-section">
+        <div class="section-head"><h1>系统更新</h1><span class="muted">只安装正式 GitHub Release；角色与插件不参与替换</span></div>
+        <div class="box">
+          <h2>版本</h2>
+          <p id="updateStatus" class="muted">加载中…</p>
+          <div class="row">
+            <div><label>GitHub 仓库（owner/repository）</label>
+              <input id="updateRepository" placeholder="例如 owner/TraceSoul2" /></div>
+            <div class="nogrow"><label>&nbsp;</label><button onclick="saveUpdateRepository()">保存仓库</button></div>
+            <div class="nogrow"><label>&nbsp;</label><button class="primary" onclick="checkUpdate()">检查更新</button></div>
+            <div class="nogrow"><label>&nbsp;</label><button id="installUpdateBtn" class="primary" onclick="installUpdate()" disabled>下载并安装</button></div>
+          </div>
+          <p class="muted">更新包必须同时带有 SHA-256 文件。安装时旧应用会保留为可回滚目录；日常 Git 提交不会出现在这里，只有创建正式 Release 才会提示更新。</p>
+        </div>
+        <div class="box">
+          <h2>可迁移目录</h2>
+          <p class="muted">复制家目录即可迁移角色和设置；插件目录独立维护，可单独复制、替换或挂载。</p>
+          <div><label>家目录</label><code id="updateHomeDir">—</code></div>
+          <div style="margin-top:10px"><label>当前角色目录</label><code id="updateSoulDir">—</code></div>
+          <div style="margin-top:10px"><label>插件目录</label><code id="updatePluginDir">—</code></div>
+        </div>
+      </section>
+
+      <!-- 日志 -->
+      <section id="sec-log" class="panel-section">
+        <div class="section-head"><h1>日志</h1><span class="muted">实时事件流（SSE），最近 300 条</span></div>
+        <div class="box">
+          <div id="log"></div>
+        </div>
+      </section>
+
+    </main>
+  </div>
+</div>
+
+<div id="pluginModal" class="modal" onclick="if(event.target===this)closePluginModal()">
+  <div class="modal-card">
+    <h2>插件配置</h2>
+    <p id="pluginModalSub" class="muted" style="margin:6px 0 8px"></p>
+    <p id="pluginModalHint" class="muted"></p>
+    <div id="pluginModalFields"></div>
+    <div class="modal-foot">
+      <button class="primary" id="pluginModalSave" onclick="savePluginConfig()">保存并关闭</button>
+      <button onclick="closePluginModal()">关闭</button>
+    </div>
+  </div>
+</div>
+
+<script>
+  const $ = id => document.getElementById(id);
+  const logEl = $("log");
+  let sending = false;
+  let dbData = null;
+  let currentUsername = "";
+
+  function classify(text) {
+    if (text.indexOf("记忆神经") >= 0) return "memory";
+    if (text.indexOf("moment") >= 0 || text.indexOf("已发送") >= 0) return "moment";
+    if (text.indexOf("失败") >= 0 || text.indexOf("错误") >= 0) return "error";
+    if (text.indexOf("host") >= 0) return "sys";
+    return "";
+  }
+  function addLog(text, cls) {
+    const div = document.createElement("div");
+    div.className = "logline " + (cls || classify(text));
+    div.textContent = text;
+    logEl.prepend(div);
+    while (logEl.childElementCount > 300) logEl.removeChild(logEl.lastChild);
+  }
+  function logLine(text) {
+    const time = new Date().toTimeString().slice(0, 8);
+    addLog(time + " " + text);
+  }
+  function esc(s) { return (s || "").replace(/[&<>"]/g, c => ({ "&": "&amp;", "<": "&lt;", ">": "&gt;", '"': "&quot;" }[c])); }
+  function fmtSize(bytes) {
+    if (!bytes && bytes !== 0) return "—";
+    if (bytes < 1024) return bytes + " B";
+    if (bytes < 1048576) return (bytes / 1024).toFixed(1) + " KB";
+    return (bytes / 1048576).toFixed(1) + " MB";
+  }
+
+  async function api(path, method, body) {
+    const res = await fetch(path, {
+      method: method || "GET",
+      headers: body ? { "Content-Type": "application/json" } : {},
+      body: body ? JSON.stringify(body) : undefined
+    });
+    const data = await res.json();
+    if (!res.ok) throw new Error(data.error || res.statusText);
+    return data;
+  }
+
+  /* ================= 左侧导航切换（懒加载） ================= */
+  const sectionLoaders = {
+    chat: loadChat, identity: loadIdentity, memory: loadMemory,
+    brain: loadBrain, platform: loadPlatform, plugins: loadPlugins,
+    update: loadUpdate, log: null
+  };
+  const sectionLoaded = {};
+  async function showSection(id) {
+    document.querySelectorAll("section.panel-section")
+      .forEach(s => s.classList.toggle("active", s.id === "sec-" + id));
+    document.querySelectorAll(".nav-item")
+      .forEach(n => n.classList.toggle("active", n.dataset.section === id));
+    if (!sectionLoaded[id] && sectionLoaders[id]) {
+      sectionLoaded[id] = true;
+      try { await sectionLoaders[id](); }
+      catch (e) { sectionLoaded[id] = false; logLine("「" + id + "」面板加载失败：" + e.message); }
+    }
+  }
+
+  /* ================= 模式 / 调试分支 ================= */
+  async function refreshMode() {
+    try {
+      const m = await api("/debug/mode");
+      $("modeLabel").textContent = m.mode === "debug"
+        ? "🔧 调试模式（测试侧，切回后清空）"
+        : "🌿 主线模式（正式数据）";
+    } catch (e) { $("modeLabel").textContent = "模式：不可用"; }
+  }
+  function reloadSoon() { setTimeout(() => location.reload(), 900); }
+  async function enterDebug() {
+    if (!confirm("切到调试模式：当前全部数据将平移到调试分支。确定？")) return;
+    await api("/debug/enter", "POST").catch(e => alert(e.message));
+    reloadSoon();
+  }
+  async function exitDebug() {
+    if (!confirm("切回主线：测试侧所有数据将被清空。确定？")) return;
+    await api("/debug/exit", "POST").catch(e => alert(e.message));
+    reloadSoon();
+  }
+
+  /* ================= 数据库切换 ================= */
+  async function loadDatabases() {
+    try {
+      const d = await api("/databases");
+      dbData = d;
+      const sel = $("dbSelect");
+      sel.innerHTML = (d.databases || []).map(x =>
+        `<option value="${esc(x.path)}" ${x.isCurrent ? "selected" : ""}>` +
+        esc(x.name) + (x.isCurrent ? "（当前）" : "") + (x.blocked ? "（🔒已保护）" : "") +
+        `</option>`).join("");
+      const cur = (d.databases || []).find(x => x.isCurrent);
+      $("dbInfo").textContent = cur
+        ? `当前：${esc(cur.name)}｜脑库 ${fmtSize(cur.brainBytes)}｜最后写入 ${esc((cur.lastWrite || "").replace("T", " ").slice(0, 16))}` +
+          (cur.hasOnebot ? "｜QQ 已配置" : "｜QQ 未配置") + (cur.hasApiKey ? "｜有 API Key" : "｜无 API Key")
+        : "未识别到角色";
+      $("dbSwitchBtn").disabled = !!cur && cur.blocked;
+    } catch (e) {
+      $("dbInfo").textContent = "角色列表不可用：" + e.message;
+    }
+  }
+  async function switchDatabase() {
+    const path = $("dbSelect").value;
+    const entry = (dbData && dbData.databases || []).find(x => x.path === path);
+    if (entry && entry.blocked) { alert("已保护：" + entry.blockedReason); return; }
+    if (entry && entry.isCurrent) return;
+    if (!confirm("切换到角色「" + (entry ? entry.name : path) + "」？\n宿主将自动重启（约 2 秒），当前页面的未保存填写会丢失。")) return;
+    try {
+      const r = await api("/databases/switch", "POST", { nameOrPath: path });
+      if (!r.switching) { logLine(r.message); return; }
+      $("dbInfo").textContent = "正在切换宿主到「" + (entry ? entry.name : path) + "」…";
+      await waitHostBack();
+      location.reload();
+    } catch (e) { alert("切换失败：" + e.message); }
+  }
+  async function createDatabase() {
+    const name = prompt("新角色文件夹名（例如：xiaoxi）\n将在家目录 souls/ 下创建空白角色并立即切换，不复制任何旧配置。", "");
+    if (!name || !name.trim()) return;
+    try {
+      const r = await api("/databases/create", "POST", { name: name.trim() });
+      $("dbInfo").textContent = "正在创建并切换…";
+      await waitHostBack();
+      location.reload();
+    } catch (e) { alert("新建失败：" + e.message); }
+  }
+
+  /* ================= 对话 ================= */
+  async function loadChat() {
+    await refreshTranscript();
+    const turn = await api("/turns/last");
+    renderTurn(turn);
+  }
+  async function refreshTranscript() {
+    const moments = await api("/moments?take=100");
+    const box = $("transcript");
+    box.innerHTML = "";
+    for (const m of moments) {
+      const div = document.createElement("div");
+      div.className = "msg" + (m.role && currentUsername && m.role === currentUsername ? " me" : "");
+      div.innerHTML = "<b>" + esc(m.role || "?") + "</b>：" + esc(m.content);
+      box.append(div);
+    }
+    box.scrollTop = box.scrollHeight;
+  }
+  async function sendMoment() {
+    const text = $("content").value.trim();
+    if (!text || sending) return;
+    sending = true;
+    $("sendBtn").disabled = true;
+    $("sendState").textContent = "● Brain 思考中……";
+    try {
+      const turn = await api("/moments", "POST", { content: text });
+      $("content").value = "";
+      logLine("已发送并收到回复：" + (turn.reply || "").slice(0, 40));
+      await refreshTranscript();
+      const full = await api("/turns/last");
+      renderTurn(full);
+      $("sendState").textContent = "";
+    } catch (e) {
+      logLine("发送失败：" + e.message);
+      $("sendState").textContent = "发送失败：" + e.message;
+    } finally {
+      sending = false;
+      $("sendBtn").disabled = false;
+    }
+  }
+
+  /* ---------- 最近一轮渲染 ---------- */
+  function addTurnSection(box, title, body, cls) {
+    const sec = document.createElement("div");
+    sec.className = "turn-sec";
+    const head = document.createElement("div");
+    head.className = "turn-head" + (cls === "memory" ? " memory" : "");
+    head.textContent = title;
+    const b = document.createElement("div");
+    b.className = "turn-body";
+    b.textContent = body || "";
+    sec.append(head, b);
+    box.append(sec);
+  }
+  function renderTurn(turn) {
+    const box = $("turnBox");
+    box.innerHTML = "";
+    const results = turn && turn.results || [];
+    const blocks = turn && turn.blocks || [];
+    const facets = turn && turn.facetOutputs || [];
+    if (!turn || (!turn.brainMode && !turn.decisionSummary && results.length === 0 && blocks.length === 0)) {
+      addTurnSection(box, "尚无最近一轮", "");
+      return;
+    }
+    const head = (turn.brainMode ? "模式 " + turn.brainMode : "") +
+      (turn.brainIntent ? "｜意图 " + turn.brainIntent : "");
+    addTurnSection(box, "决策", head + (turn.decisionSummary ? "\n" + turn.decisionSummary : ""));
+    if (turn.reply) addTurnSection(box, "表达", turn.reply);
+    for (const r of results) {
+      addTurnSection(box, (r.capabilityId || r.CapabilityId || "?") + " · " + (r.status || r.Status || ""),
+        (r.summary || r.Summary || "") + ((r.payload || r.Payload) ? "\n\n" + (r.payload || r.Payload) : ""),
+        (r.capabilityId || r.CapabilityId) === "memory.activate" ? "memory" : "");
+    }
+    if (facets.length)
+      addTurnSection(box, "Facet 写回", facets.map(f => (f.facet_id || "") + " changed=" + (f.changed || "") + " " + (f.summary || "")).join("\n"));
+    if (blocks.length)
+      addTurnSection(box, "BrainFrame 挂载（实际注入 LLM 的原文）", blocks.map(b =>
+        (b.title || "") + "\n" + (b.content || "")).join("\n\n"));
+  }
+
+  /* ================= 身份 ================= */
+  async function loadIdentity() {
+    const st = await api("/status");
+    $("username").value = st.username || "";
+    $("assname").value = st.assname || "";
+    $("callName").value = st.callName || "";
+    renderCards(await api("/identity/cards"));
+    const inner = await api("/inner");
+    const att = (inner.attention || []).map(a => "[" + esc(a.kind) + "] " + esc(a.content)).join("；") || "（无）";
+    $("inner").textContent = "revision " + inner.revision +
+      "\n此刻：" + (inner.narrative || "—") +
+      "\n心情：" + (inner.mood || "—") +
+      "\n关系视角：" + (inner.relationshipLens || "—") +
+      "\n进行中：" + (inner.ongoingActivity || "—") +
+      "\n未完成意图：" + (inner.unfinishedIntent || "—") +
+      "\n注意：" + att +
+      "\nsnapshot：" + (inner.snapshotId || "—") + " · 来源moment：" + (inner.sourceMomentId || "无");
+  }
+  async function savePair() {
+    await api("/identity/pair", "PUT", {
+      username: $("username").value, assname: $("assname").value, callName: $("callName").value
+    });
+    logLine("名字已保存");
+    await reloadPanels();
+  }
+  function renderCards(cards) {
+    const box = $("cardsBox");
+    box.innerHTML = "";
+    for (const c of cards) {
+      const wrap = document.createElement("div");
+      wrap.className = "card-block";
+      const label = document.createElement("label");
+      label.textContent = c.title + "（rev " + c.revision + "）";
+      const ta = document.createElement("textarea");
+      ta.id = "card-" + c.slot;
+      const unfilled = !c.body || c.body.indexOf("还没有填写") >= 0;
+      ta.value = (unfilled && c.template) ? c.template : (c.body || "");
+      ta.rows = c.slot === "personality" ? 10 : 4;
+      const btn = document.createElement("button");
+      btn.textContent = "保存「" + c.title + "」";
+      btn.onclick = () => saveCard(c.slot);
+      wrap.append(label, ta, btn);
+      box.append(wrap);
+    }
+  }
+  async function saveCard(slot) {
+    try {
+      await api("/identity/cards/" + slot, "PUT", { body: $("card-" + slot).value });
+      logLine("短卡已保存：" + slot);
+      sectionLoaded.identity = false;
+      await showSection("identity");
+    } catch (e) { alert("保存失败：" + e.message); }
+  }
+
+  /* ================= 大脑 · LLM ================= */
+  const ROLE_LABELS = { chat: "对话", thinking: "思考", multimodal: "多模态", speech: "语音", image: "生图" };
+  const ROLE_KEYS = ["chat", "thinking", "multimodal", "speech", "image"];
+  let providerCache = [];
+  let slotCache = {};
+  let selectedProviderId = "";
+  let modelRoleFilter = "";
+  function slotValue(providerId, model) {
+    return (providerId || "") + "||" + (model || "");
+  }
+  function parseSlotValue(value) {
+    const text = value || "";
+    const i = text.indexOf("||");
+    if (i < 0) return { providerId: text, model: "" };
+    return { providerId: text.slice(0, i), model: text.slice(i + 2) };
+  }
+  function allModelOptions(role) {
+    const rows = [];
+    (providerCache || []).forEach(p => {
+      const models = p.models && p.models.length ? p.models : (p.model ? [{ id: p.model, enabled: true, roles: ["chat"] }] : []);
+      models.forEach(m => {
+        if (!m || !m.id || m.enabled === false) return;
+        if (role && !(m.roles || []).includes(role) && role !== "chat") return;
+        if (role === "chat" && (m.roles || []).length && !(m.roles || []).includes("chat") &&
+            ((m.roles || []).includes("speech") || (m.roles || []).includes("image"))) return;
+        rows.push({
+          value: slotValue(p.id, m.id),
+          label: (p.displayName || p.id) + " / " + m.id
+        });
+      });
+    });
+    return rows;
+  }
+  function fillSlotSelect(el, role, current, allowEmpty) {
+    if (!el) return;
+    const opts = allowEmpty ? [{ value: "", label: "（未指定）" }] : [];
+    allModelOptions(role).forEach(o => opts.push(o));
+    const cur = current && current.providerId ? slotValue(current.providerId, current.model) : "";
+    if (cur && !opts.some(o => o.value === cur))
+      opts.push({ value: cur, label: current.providerId + " / " + (current.model || "") });
+    el.innerHTML = opts.map(o => `<option value="${esc(o.value)}">${esc(o.label)}</option>`).join("");
+    el.value = cur;
+  }
+  function renderSlots() {
+    fillSlotSelect($("slotChat"), "chat", slotCache.chat, false);
+    fillSlotSelect($("slotThinking"), "thinking", slotCache.thinking, true);
+    fillSlotSelect($("slotMultimodal"), "multimodal", slotCache.multimodal, true);
+    fillSlotSelect($("slotSpeech"), "speech", slotCache.speech, true);
+    fillSlotSelect($("slotImage"), "image", slotCache.image, true);
+  }
+  async function loadBrain() {
+    const st = await api("/status");
+    $("ctxLimit").value = st.contextInjectionCount || 0;
+    const templates = await api("/providers/templates");
+    $("providerTemplate").innerHTML = (templates || []).map(t =>
+      `<option value="${esc(t.key)}">${esc(t.key)} · ${esc(t.id)}</option>`).join("");
+    await refreshProviders();
+  }
+  async function refreshProviders(preferId) {
+    providerCache = await api("/providers");
+    try { slotCache = await api("/providers/slots"); } catch (e) { slotCache = {}; }
+    const cur = providerCache.find(p => p.current) || providerCache[0];
+    selectedProviderId = preferId || selectedProviderId || (cur && cur.id) || "";
+    if (!providerCache.some(p => p.id === selectedProviderId) && cur)
+      selectedProviderId = cur.id;
+    $("providerList").innerHTML = providerCache.map(p => {
+      const n = (p.models || []).filter(m => m.enabled !== false).length;
+      return `<button class="prov-item ${p.id === selectedProviderId ? "active" : ""}" onclick="selectProvider('${esc(p.id)}')">` +
+        `<div class="pid">${esc(p.displayName || p.id)}</div>` +
+        `<div class="purl">${esc(p.baseUrl || "")}</div>` +
+        (p.current ? `<div class="now">对话开口 · ${esc(p.model || "")}</div>`
+          : `<div class="purl">${n} 个模型${p.model ? " · " + esc(p.model) : ""}</div>`);
+    }).join("");
+    fillProviderForm(providerCache.find(p => p.id === selectedProviderId) || cur);
+    renderSlots();
+  }
+  function selectProvider(id) {
+    selectedProviderId = id;
+    refreshProviders(id);
+  }
+  function fillProviderForm(cur) {
+    if (!cur) return;
+    $("providerId").value = cur.id || "";
+    $("providerType").value = cur.type || "";
+    $("displayName").value = cur.displayName || "";
+    $("baseUrl").value = cur.baseUrl || "";
+    $("timeout").value = cur.timeout > 0 ? cur.timeout : 120;
+    $("proxy").value = cur.proxy || "";
+    const t = cur.temperature > 0 ? cur.temperature : 0.3;
+    $("tempSlider").value = t; $("tempVal").textContent = t;
+    const tp = cur.topP > 0 ? cur.topP : 1;
+    $("topPSlider").value = tp; $("topPVal").textContent = tp;
+    $("maxTokens").value = cur.maxTokens > 0 ? cur.maxTokens : 8192;
+    $("thinking").checked = !!cur.thinkingEnabled;
+    $("effort").value = cur.reasoningEffort || "high";
+    $("hasKey").textContent = cur.hasApiKey ? "（已保存）" : "（未保存）";
+    $("apiKey").value = "";
+    $("provTitle").textContent = cur.displayName || cur.id || "—";
+    $("provSub").textContent = (cur.baseUrl || "") + (cur.model ? " · " + cur.model : "");
+    renderRoleFilter();
+    renderModelList();
+  }
+  function renderRoleFilter() {
+    const box = $("roleFilter");
+    if (!box) return;
+    const keys = [""].concat(ROLE_KEYS);
+    box.innerHTML = keys.map(k =>
+      `<button class="filter-chip ${modelRoleFilter === k ? "on" : ""}" onclick="setRoleFilter('${k}')">${k ? ROLE_LABELS[k] : "全部"}</button>`
+    ).join("");
+  }
+  function setRoleFilter(role) {
+    modelRoleFilter = role || "";
+    renderRoleFilter();
+    renderModelList();
+  }
+  function selectedProvider() {
+    return (providerCache || []).find(p => p.id === selectedProviderId);
+  }
+  function renderModelList() {
+    const box = $("modelBox");
+    if (!box) return;
+    const cur = selectedProvider();
+    const q = (($("modelSearch") && $("modelSearch").value) || "").trim().toLowerCase();
+    const models = ((cur && cur.models) || []).filter(m => {
+      if (!m || !m.id) return false;
+      if (q && m.id.toLowerCase().indexOf(q) < 0) return false;
+      if (modelRoleFilter && !(m.roles || []).includes(modelRoleFilter)) return false;
+      return true;
+    });
+    if (!models.length) {
+      box.innerHTML = "<div class='model-empty'>还没有模型。点「获取模型列表」从接口拉，或「自定义模型」手填。</div>";
+      return;
+    }
+    box.innerHTML = models.map(m => {
+      const on = m.enabled !== false;
+      const roles = ROLE_KEYS.map(r =>
+        `<button class="role-chip ${(m.roles || []).includes(r) ? "on" : ""}" onclick="toggleModelRole('${esc(m.id)}','${r}')">${ROLE_LABELS[r]}</button>`
+      ).join("");
+      return `<div class="model-row">` +
+        `<label class="sw" title="启用"><input type="checkbox" ${on ? "checked" : ""} onchange="toggleModelEnabled('${esc(m.id)}', this.checked)" /><i></i></label>` +
+        `<div class="mid">${esc(m.id)}${cur && cur.model === m.id ? " · 该源对话默认" : ""}</div>` +
+        `<div class="roles">${roles}</div>` +
+        `<button class="icon-btn" title="设为对话开口" onclick="useModel('${esc(m.id)}')">⤴</button>` +
+        `<button class="icon-btn danger" title="删除" onclick="deleteModel('${esc(m.id)}')">🗑</button>` +
+        `</div>`;
+    }).join("");
+  }
+  async function addProvider() {
+    const saved = await api("/providers", "POST", { templateKey: $("providerTemplate").value });
+    logLine("已新增供应商：" + saved.id);
+    await refreshProviders(saved.id);
+  }
+  async function saveProvider() {
+    try {
+    const id = $("providerId").value;
+    const key = ($("apiKey").value || "").trim();
+    const cur = (providerCache || []).find(p => p.id === id);
+    if (!key && !(cur && cur.hasApiKey))
+      throw new Error("这条供应商还没有 API Key，请先填写再保存。");
+    await api("/providers/" + encodeURIComponent(id), "PUT", {
+      type: $("providerType").value,
+      displayName: $("displayName").value,
+      baseUrl: $("baseUrl").value,
+      model: cur && cur.model ? cur.model : "",
+      apiKey: key,
+      temperature: parseFloat($("tempSlider").value),
+      topP: parseFloat($("topPSlider").value),
+      maxTokens: parseInt($("maxTokens").value) || 0,
+      timeout: parseInt($("timeout").value) || 120,
+      proxy: $("proxy").value,
+      thinkingEnabled: $("thinking").checked,
+      reasoningEffort: $("effort").value
+    });
+    logLine("供应商已保存：" + id);
+    $("apiKey").value = "";
+    await refreshProviders(id);
+    } catch (e) {
+      logLine("保存供应商失败：" + e.message);
+      alert("保存失败：" + e.message);
+      throw e;
+    }
+  }
+  async function saveSlots() {
+    try {
+      await api("/providers/slots", "PUT", {
+        chat: parseSlotValue($("slotChat").value),
+        thinking: parseSlotValue($("slotThinking").value),
+        multimodal: parseSlotValue($("slotMultimodal").value),
+        speech: parseSlotValue($("slotSpeech").value),
+        image: parseSlotValue($("slotImage").value)
+      });
+      logLine("用途槽已保存");
+      await refreshProviders(selectedProviderId);
+    } catch (e) { alert("保存槽位失败：" + e.message); }
+  }
+  async function useModel(modelId) {
+    try {
+      await saveProvider().catch(() => {});
+      await api("/providers/current", "PUT", { id: $("providerId").value, model: modelId });
+      logLine("当前开口：" + $("providerId").value + " / " + modelId);
+      await refreshProviders($("providerId").value);
+    } catch (e) {
+      logLine("设为开口失败：" + e.message);
+    }
+  }
+  async function deleteProvider() {
+    const id = $("providerId").value;
+    if (!confirm("删除供应商「" + id + "」？")) return;
+    await api("/providers/" + encodeURIComponent(id), "DELETE");
+    selectedProviderId = "";
+    logLine("已删除供应商：" + id);
+    await refreshProviders();
+  }
+  async function fetchModels() {
+    const id = $("providerId").value;
+    try {
+      await saveProvider().catch(() => {});
+      const data = await api("/providers/" + encodeURIComponent(id) + "/models", "POST");
+      logLine("已获取 " + (data.models || []).length + " 个模型");
+      await refreshProviders(id);
+    } catch (e) {
+      logLine("获取模型失败：" + e.message);
+      alert("获取模型失败：" + e.message);
+    }
+  }
+  async function addCustomModel() {
+    const id = prompt("自定义模型 id（接口里的名字，不是显示名）");
+    if (!id || !id.trim()) return;
+    await api("/providers/" + encodeURIComponent($("providerId").value) + "/models", "PUT", {
+      id: id.trim(), enabled: true, roles: ["chat"]
+    });
+    logLine("已添加模型：" + id.trim());
+    await refreshProviders($("providerId").value);
+  }
+  async function toggleModelEnabled(modelId, enabled) {
+    const cur = selectedProvider();
+    const m = ((cur && cur.models) || []).find(x => x.id === modelId) || { roles: ["chat"] };
+    await api("/providers/" + encodeURIComponent($("providerId").value) + "/models", "PUT", {
+      id: modelId, enabled: !!enabled, roles: m.roles || ["chat"]
+    });
+    await refreshProviders($("providerId").value);
+  }
+  async function toggleModelRole(modelId, role) {
+    const cur = selectedProvider();
+    const m = ((cur && cur.models) || []).find(x => x.id === modelId);
+    if (!m) return;
+    const roles = (m.roles || []).slice();
+    const i = roles.indexOf(role);
+    if (i >= 0) roles.splice(i, 1); else roles.push(role);
+    await api("/providers/" + encodeURIComponent($("providerId").value) + "/models", "PUT", {
+      id: modelId, enabled: m.enabled !== false, roles
+    });
+    await refreshProviders($("providerId").value);
+  }
+  async function deleteModel(modelId) {
+    if (!confirm("从清单里去掉「" + modelId + "」？")) return;
+    await api("/providers/" + encodeURIComponent($("providerId").value) + "/models?model=" + encodeURIComponent(modelId), "DELETE");
+    logLine("已删除模型：" + modelId);
+    await refreshProviders($("providerId").value);
+  }
+  async function saveContextLimit() {
+    const r = await api("/settings/context-limit", "PUT", { limit: parseInt($("ctxLimit").value) || 0 });
+    $("ctxLimit").value = r.limit;
+    logLine("原始上下文 = " + r.limit);
+  }
+
+  /* ================= 记忆 ================= */
+  async function loadMemory() {
+    await loadNerve();
+    await loadLadder();
+    await loadTrajectory();
+  }
+  async function loadNerve() {
+    try {
+      const n = await api("/memory/nerve");
+      $("nerveTopK").value = n.top_k || 3;
+      const provs = await api("/providers");
+      $("nerveProvider").innerHTML =
+        `<option value="">（当前提供商，低温 0.1）</option>` +
+        provs.map(p => `<option value="${esc(p.id)}">${esc(p.id)} / ${esc(p.model || "")}</option>`).join("");
+      $("nerveProvider").value = n.provider_id || "";
+      $("nerveStatus").textContent =
+        `子代理：${esc(n.effective_provider_id)} / ${esc(n.effective_model)}｜` +
+        `向量模型：${esc(n.vector_model)}｜条目向量：${n.vectors_count} 条｜` +
+        (n.ready ? "就绪（子代理定位 + 语义拼装）" : "未就绪（退回字符路由）");
+    } catch (e) { $("nerveStatus").textContent = "状态不可用：" + e.message; }
+  }
+  async function saveNerve() {
+    try {
+      await api("/memory/nerve", "PUT", {
+        top_k: parseInt($("nerveTopK").value) || 3,
+        provider_id: $("nerveProvider").value
+      });
+      logLine("记忆神经设置已保存");
+      await loadNerve();
+    } catch (e) { alert("保存失败：" + e.message); }
+  }
+  async function runDaily() {
+    try {
+      const r = await api("/memory/daily-run", "POST", { day: ($("dailyDay") ? $("dailyDay").value.trim() : "") });
+      logLine("日构建已启动：" + r.day + "｜" + r.message);
+    } catch (e) { alert("启动失败：" + e.message); }
+  }
+  async function loadLadder() {
+    try {
+      const tiers = await api("/memory/ladder");
+      const box = $("ladderBox");
+      box.innerHTML = "";
+      for (const t of tiers) {
+        const head = document.createElement("div");
+        head.style.cssText = "font-weight:bold;color:#8fb3e8;margin:6px 0 2px";
+        head.textContent = t.name + (t.period ? "（" + t.period + "）" : "（暂无）");
+        box.append(head);
+        for (const item of t.items) {
+          const line = document.createElement("div");
+          line.style.cssText = "font-size:12px;color:#d6d8dd;padding-left:10px;white-space:pre-wrap";
+          line.textContent = item.rank + ". " + item.label + "（" + item.reason + "）";
+          box.append(line);
+        }
+      }
+    } catch (e) { $("ladderBox").textContent = "榜单不可用：" + e.message; }
+  }
+  async function loadTrajectory() {
+    try {
+      const t = await api("/memory/day-trajectory");
+      $("trajectory").textContent = t.text || "（今天还没有轨迹，聊起来就有了。）";
+    } catch (e) { $("trajectory").textContent = "不可用：" + e.message; }
+  }
+
+  /* ================= 平台 · QQ ================= */
+  async function loadPlatform() { await loadPlatforms(); }
+  async function loadPlatforms() {
+    try {
+      const list = await api("/platforms");
+      const box = $("platforms");
+      box.innerHTML = list.map(p => {
+        const d = p.details || {};
+        let extra = "";
+        if (p.id === "onebot" && d.mode) {
+          const waiting = !p.connected && d.waitingReconnect;
+          extra = `<div class="muted">模式：${esc(d.mode === "forward" ? "正向（我们连 NapCat）" : "反向（NapCat 连我们，AstrBot aiocqhttp 同款）")}` +
+            (d.mode === "reverse" ? `｜NapCat 连：${esc(d.napcatUrl)}｜在线连接：${d.socketCount || 0}｜已学到的 QQ：${(d.learnedSelfIds || []).join(", ") || "—"}` : `｜正向 WS：${esc(d.wsUrl || "")}`) +
+            (d.hint ? `｜${esc(d.hint)}` : "") +
+            (d.lastError ? `｜最近错误：${esc(d.lastError)}` : "") + `</div>`;
+          return `<div style="padding:3px 0"><b>${esc(p.displayName)}</b>&nbsp;<span class="pill ${p.connected ? "on" : "off"}">${p.connected ? "已连接" : (waiting ? ("等待重连 " + (d.waitingSeconds || 0) + "s") : "未连接")}</span>${extra}</div>`;
+        }
+        return `<div style="padding:3px 0"><b>${esc(p.displayName)}</b>&nbsp;<span class="pill ${p.connected ? "on" : "off"}">${p.connected ? "已连接" : "未连接"}</span>${extra}</div>`;
+      }).join("");
+      if (list.some(p => p.id === "onebot")) await loadOnebotConfig();
+      await loadMouths();
+    } catch (e) { $("platforms").textContent = "不可用：" + e.message; }
+  }
+  async function loadMouths() {
+    try {
+      const data = await api("/mouths");
+      const bodies = data.bodies || data || [];
+      if ($("bodyScene")) $("bodyScene").value = data.scene === "out" ? "out" : "home";
+      if ($("activeBodyLabel")) {
+        const active = (bodies || []).find(m => m.active);
+        $("activeBodyLabel").textContent = active
+          ? ((active.displayName || active.id) + "（" + tierLabel(active.tier) + "）")
+          : "尚未激活（下一句说话会定）";
+      }
+      const box = $("mouthsBox");
+      box.innerHTML = "";
+      bodies.forEach(m => {
+        const wrap = document.createElement("div");
+        wrap.style.marginBottom = "10px";
+        const row = document.createElement("div");
+        row.className = "row";
+        row.style.marginBottom = "4px";
+        row.innerHTML = "<div class='nogrow' style='min-width:220px'><b>" + esc(m.displayName || m.id) + "</b> " +
+          "<span class='pill'>" + esc(tierLabel(m.tier)) + "</span> " +
+          "<span class='pill " + (m.connected ? "on" : "off") + "'>" + (m.connected ? "已连接" : "未连接") + "</span>" +
+          (m.active ? " <span class='pill on'>激活</span>" : "") + "</div>";
+        const input = document.createElement("input");
+        input.type = "number";
+        input.min = "0";
+        input.max = "100";
+        input.value = String(m.score != null ? m.score : m.priority);
+        input.dataset.mouthId = m.id;
+        input.title = "同层分数";
+        row.appendChild(input);
+        wrap.appendChild(row);
+        const organs = m.organs || [];
+        const organLine = document.createElement("div");
+        organLine.className = "muted";
+        organLine.style.marginLeft = "2px";
+        organLine.textContent = organs.length
+          ? ("器官：" + organs.map(o => {
+              const label = organLabel(o.organ, o.displayName);
+              return o.ready === false ? (label + "（未就绪）") : label;
+            }).join(" · "))
+          : "还没有器官";
+        wrap.appendChild(organLine);
+        box.appendChild(wrap);
+      });
+    } catch (e) { $("mouthsBox").textContent = "不可用：" + e.message; }
+  }
+  function organLabel(organ, displayName) {
+    if (organ === "text") return "文字";
+    if (organ === "image") return "图";
+    if (organ === "sticker") return "表情";
+    if (organ === "voice") return "语音";
+    if (organ === "video") return "视频";
+    if (organ === "qzone") return "说说";
+    return displayName || organ || "";
+  }
+  function tierLabel(tier) {
+    if (tier === "physical") return "物理身体";
+    if (tier === "app") return "自己的软件";
+    if (tier === "chat") return "文字聊天";
+    if (tier === "shell") return "控制台壳";
+    return tier || "";
+  }
+  async function saveMouths() {
+    try {
+      const items = Array.from(document.querySelectorAll("#mouthsBox input[data-mouth-id]")).map(el => ({
+        id: el.dataset.mouthId,
+        score: parseInt(el.value, 10) || 0
+      }));
+      await api("/mouths", "PUT", {
+        scene: $("bodyScene") ? $("bodyScene").value : "home",
+        items
+      });
+      logLine("身体路由已保存");
+      await loadMouths();
+    } catch (e) { alert("保存失败：" + e.message); }
+  }
+  async function loadOnebotConfig() {
+    try {
+      const c = await api("/platforms/onebot/config");
+      $("obEnabled").value = c.enabled ? "1" : "0";
+      $("obMode").value = c.mode === "forward" ? "forward" : "reverse";
+      $("obPort").value = c.listen_port || 9021;
+      $("obWs").value = c.ws_url || "";
+      $("obHttp").value = c.http_url || "";
+      $("obToken").value = c.access_token || "";
+      $("obSelf").value = c.self_id || "";
+      $("obReply").checked = c.reply_enabled !== false;
+      $("onebotHint").textContent = "NapCat 反向连：ws://127.0.0.1:" + (c.listen_port || 9021) + "/ws（你的 NapCat 已指向这里）｜配置落盘在数据目录 onebot.json。";
+    } catch (e) { $("onebotHint").textContent = "配置不可用：" + e.message; }
+  }
+  async function saveOnebotConfig() {
+    try {
+      await api("/platforms/onebot/config", "PUT", {
+        enabled: $("obEnabled").value === "1",
+        mode: $("obMode").value,
+        listen_port: parseInt($("obPort").value) || 9021,
+        ws_url: $("obWs").value.trim(),
+        http_url: $("obHttp").value.trim(),
+        access_token: $("obToken").value.trim(),
+        self_id: $("obSelf").value.trim(),
+        reply_enabled: $("obReply").checked
+      });
+      logLine("OneBot 配置已保存，宿主正在重启…");
+    } catch (e) { /* 重启导致连接中断也算正常 */ }
+    $("onebotHint").textContent = "宿主重启中（约 2 秒）…";
+    try {
+      await waitHostBack();
+      location.reload();
+    } catch (e) { $("onebotHint").textContent = "等待宿主重启超时：" + e.message; }
+  }
+  async function waitHostBack() {
+    for (let i = 0; i < 25; i++) {
+      await new Promise(r => setTimeout(r, 1000));
+      try {
+        const res = await fetch("/status");
+        if (res.ok) return;
+      } catch (e) { /* 还没起来 */ }
+    }
+    throw new Error("宿主重启超时");
+  }
+
+  /* ================= 插件 ================= */
+  let pluginModalId = "";
+  let pluginModalRestart = false;
+  async function loadPlugins() {
+    const plugins = await api("/plugins");
+    let packages = [];
+    try {
+      const s = await api("/plugins/external");
+      packages = s.packages || [];
+      if ($("externalDir")) $("externalDir").textContent = s.directory ? ("目录：" + s.directory) : "";
+    } catch (e) {
+      if ($("externalDir")) $("externalDir").textContent = "外部目录不可用：" + e.message;
+    }
+    renderPlugins(plugins || [], packages);
+    filterPluginCards();
+  }
+  function platformLabel(id, displayName) {
+    if (id === "onebot" || id === "builtin.onebot") return "QQ";
+    return displayName || id || "未归类";
+  }
+  function pluginIcon(p) {
+    const organ = ((p.contributions || [])[0] || {}).organ;
+    if (organ === "sticker") return "😊";
+    if (organ === "voice") return "🎙️";
+    if (organ === "image") return "🖼️";
+    if (organ === "qzone") return "📝";
+    if (p.role === "platform" || p.id === "builtin.onebot") return "🔌";
+    return "🧩";
+  }
+  function renderPlugins(plugins, packages) {
+    const box = $("pluginsBox");
+    box.innerHTML = "";
+    const byId = {};
+    (packages || []).forEach(p => { if (p && p.id) byId[p.id] = p; });
+    const organs = (plugins || []).filter(p => p.role === "organ");
+    const platforms = (plugins || []).filter(p => p.role === "platform" || p.role === "body");
+    const groups = [];
+    const index = {};
+    platforms.forEach(p => {
+      const key = p.platformId || p.id;
+      index[key] = groups.length;
+      groups.push({ key, platform: p, organs: [] });
+    });
+    organs.forEach(p => {
+      const key = p.platformId || "other";
+      if (index[key] == null) {
+        index[key] = groups.length;
+        groups.push({ key, platform: { id: key, displayName: platformLabel(key), platformId: key }, organs: [] });
+      }
+      groups[index[key]].organs.push(p);
+    });
+    if (!groups.length) {
+      box.innerHTML = "<span class='muted'>还没有平台或器官包。把文件夹丢进插件目录后点重新扫描。</span>";
+      return;
+    }
+    groups.forEach(g => {
+      const wrap = document.createElement("div");
+      wrap.className = "platform-group";
+      const title = document.createElement("h3");
+      title.style.display = "flex";
+      title.style.alignItems = "center";
+      title.style.gap = "8px";
+      const plat = g.platform || {};
+      title.innerHTML = "平台 · " + esc(platformLabel(g.key, plat.displayName)) +
+        (plat.enabled === false ? " <span class='pill off'>未启用</span>" : " <span class='pill on'>平台</span>");
+      if (plat.configurable || plat.id === "builtin.onebot") {
+        const gear = document.createElement("button");
+        gear.className = "icon-btn";
+        gear.title = "平台配置";
+        gear.textContent = "⚙️";
+        gear.onclick = () => openPluginModal(plat.id || "builtin.onebot");
+        title.appendChild(gear);
+      }
+      wrap.appendChild(title);
+      const grid = document.createElement("div");
+      grid.className = "plugin-grid";
+      if (!g.organs.length) {
+        const empty = document.createElement("div");
+        empty.className = "muted";
+        empty.textContent = "还没有器官包";
+        wrap.appendChild(empty);
+      } else {
+        g.organs.forEach(p => grid.appendChild(renderOrganCard(p, byId[p.id])));
+        wrap.appendChild(grid);
+      }
+      box.appendChild(wrap);
+    });
+  }
+  function renderOrganCard(p, pack) {
+    const card = document.createElement("div");
+    card.className = "p-card";
+    card.dataset.q = ((p.displayName || "") + " " + (p.id || "") + " " + (p.description || "")).toLowerCase();
+    const top = document.createElement("div");
+    top.className = "top";
+    const ico = document.createElement("div");
+    ico.className = "ico";
+    ico.textContent = pluginIcon(p);
+    const meta = document.createElement("div");
+    meta.className = "meta";
+    meta.innerHTML = "<div class='title'>" + esc(p.displayName || p.id) +
+      "<span class='ver'>v" + esc(String(p.version || "")) + "</span></div>" +
+      "<div class='muted' style='font-size:11px'>" + esc(p.id) + "</div>";
+    const sw = document.createElement("label");
+    sw.className = "sw";
+    sw.title = p.enabled ? "已开启" : "已关闭";
+    const cb = document.createElement("input");
+    cb.type = "checkbox";
+    cb.checked = !!p.enabled;
+    cb.onchange = async () => {
+      try {
+        await api("/plugins/" + p.id + "/enabled", "PUT", { enabled: cb.checked });
+        logLine((cb.checked ? "开启 " : "关闭 ") + p.id);
+        await loadMouths().catch(() => {});
+      } catch (e) { alert(e.message); cb.checked = !cb.checked; }
+    };
+    const knob = document.createElement("i");
+    sw.append(cb, knob);
+    top.append(ico, meta, sw);
+    card.appendChild(top);
+    const about = document.createElement("div");
+    about.className = "about";
+    const organs = (p.contributions || []).map(c => organLabel(c.organ, c.displayName)).filter(Boolean);
+    about.textContent = p.note || p.description ||
+      (organs.length ? ("器官：" + organs.join(" · ")) : "");
+    if (p.note) about.style.color = "#a56a00";
+    card.appendChild(about);
+    if (p.loadError) {
+      const err = document.createElement("div");
+      err.className = "err";
+      err.style.marginLeft = "0";
+      err.textContent = "加载失败：" + p.loadError;
+      card.appendChild(err);
+    }
+    const foot = document.createElement("div");
+    foot.className = "foot";
+    if (p.configurable) {
+      const gear = document.createElement("button");
+      gear.className = "icon-btn";
+      gear.title = "配置";
+      gear.textContent = "⚙️";
+      gear.onclick = () => openPluginModal(p.id);
+      foot.appendChild(gear);
+    }
+    const refresh = document.createElement("button");
+    refresh.className = "icon-btn";
+    refresh.title = "重新扫描";
+    refresh.textContent = "🔄";
+    refresh.onclick = rescanExternal;
+    foot.appendChild(refresh);
+    if (pack && pack.folder) {
+      const del = document.createElement("button");
+      del.className = "icon-btn danger";
+      del.title = "卸载此包（可恢复）";
+      del.textContent = "🗑";
+      del.onclick = async () => {
+        if (!confirm("卸载器官包「" + (p.displayName || p.id) + "」？\n插件会移入 plugins-uninstalled，可手动恢复。")) return;
+        const result = await api("/plugins/external/" + pack.folder, "DELETE");
+        logLine("已卸载 " + pack.folder + (result.backupPath ? "；可恢复于 " + result.backupPath : ""));
+        await loadPlugins();
+        await loadMouths().catch(() => {});
+      };
+      foot.appendChild(del);
+    }
+    card.appendChild(foot);
+    return card;
+  }
+  function filterPluginCards() {
+    const q = (($("pluginSearch") && $("pluginSearch").value) || "").trim().toLowerCase();
+    document.querySelectorAll(".p-card").forEach(card => {
+      card.style.display = !q || (card.dataset.q || "").indexOf(q) >= 0 ? "" : "none";
+    });
+  }
+  function optionLabel(key, value) {
+    if (key === "mode") {
+      if (value === "reverse") return "反向：NapCat 连我们";
+      if (value === "forward") return "正向：我们连 NapCat";
+    }
+    return value;
+  }
+  let pluginProviderCache = [];
+  async function openPluginModal(id) {
+    const data = await api("/plugins/" + encodeURIComponent(id) + "/config");
+    try { pluginProviderCache = await api("/providers"); } catch (e) { pluginProviderCache = []; }
+    pluginModalId = data.id || id;
+    const form = data.form || data;
+    pluginModalRestart = !!form.restartRequired;
+    $("pluginModalSub").textContent = (data.displayName || pluginModalId) + " 配置";
+    $("pluginModalHint").textContent = form.hint || "";
+    const box = $("pluginModalFields");
+    box.innerHTML = "";
+    const fields = form.fields || [];
+    if (!fields.length && !form.hint) {
+      box.innerHTML = "<div class='muted'>这个插件没有可填字段。</div>";
+    }
+    fields.forEach(field => box.appendChild(renderConfigField(field)));
+    refreshProviderModelFields();
+    $("pluginModalSave").style.display = fields.length ? "" : "none";
+    $("pluginModal").classList.add("show");
+  }
+  function renderConfigField(field) {
+    const row = document.createElement("div");
+    row.className = "cfg-row";
+    const left = document.createElement("div");
+    left.innerHTML = "<div class='lab'>" + esc(field.label || field.key) + "</div>" +
+      (field.description ? "<div class='hint'>" + esc(field.description) + "</div>" : "");
+    const right = document.createElement("div");
+    let input;
+    const type = field.type || "string";
+    if (type === "bool") {
+      const sw = document.createElement("label");
+      sw.className = "sw";
+      input = document.createElement("input");
+      input.type = "checkbox";
+      input.checked = field.value === true || field.value === "true";
+      sw.append(input, document.createElement("i"));
+      right.appendChild(sw);
+    } else if (type === "select" || type === "provider" || type === "provider_model") {
+      input = document.createElement("select");
+      const options = type === "provider"
+        ? [{ value: "", label: "（用默认槽 / 或下方自填密钥）" }].concat(
+            (pluginProviderCache || []).map(p => ({
+              value: p.id,
+              label: (p.displayName || p.id) + (p.hasApiKey ? "" : "（无 Key）")
+            })))
+        : type === "provider_model"
+          ? providerModelOptions(field)
+          : (field.options || []).map(opt => ({ value: opt, label: optionLabel(field.key, opt) }));
+      options.forEach(opt => {
+        const o = document.createElement("option");
+        o.value = opt.value != null ? opt.value : opt;
+        o.textContent = opt.label != null ? opt.label : optionLabel(field.key, opt);
+        if (String(field.value) === String(o.value)) o.selected = true;
+        input.appendChild(o);
+      });
+      if (type === "provider") {
+        input.addEventListener("change", () => refreshProviderModelFields());
+      }
+      right.appendChild(input);
+    } else if (type === "text") {
+      input = document.createElement("textarea");
+      input.rows = 3;
+      input.value = field.value == null ? "" : String(field.value);
+      input.placeholder = field.placeholder || "";
+      right.appendChild(input);
+    } else {
+      input = document.createElement("input");
+      input.type = type === "password" ? "password" : (type === "number" ? "number" : "text");
+      input.value = field.value == null ? "" : String(field.value);
+      input.placeholder = field.placeholder || "";
+      if (type === "number") {
+        if (field.min != null) input.min = field.min;
+        if (field.max != null) input.max = field.max;
+        if (field.step != null) input.step = field.step;
+      }
+      right.appendChild(input);
+    }
+    input.dataset.key = field.key;
+    input.dataset.type = type;
+    if (field.role) input.dataset.role = field.role;
+    if (field.provider_key) input.dataset.providerKey = field.provider_key;
+    row.append(left, right);
+    return row;
+  }
+  function providerModelOptions(field) {
+    const providerKey = field.provider_key || "provider_id";
+    const box = $("pluginModalFields");
+    const provEl = box ? box.querySelector('[data-key="' + providerKey + '"]') : null;
+    const providerId = provEl ? provEl.value : "";
+    const role = field.role || "";
+    const rows = [{ value: "", label: "（跟供应商默认 / 用途槽）" }];
+    (pluginProviderCache || []).forEach(p => {
+      if (providerId && p.id !== providerId) return;
+      ((p.models || []).length ? p.models : (p.model ? [{ id: p.model, enabled: true, roles: [] }] : [])).forEach(m => {
+        if (!m || !m.id || m.enabled === false) return;
+        if (role && (m.roles || []).length && !(m.roles || []).includes(role)) return;
+        rows.push({
+          value: m.id,
+          label: (providerId ? m.id : ((p.displayName || p.id) + " / " + m.id))
+        });
+      });
+    });
+    return rows;
+  }
+  function refreshProviderModelFields() {
+    const box = $("pluginModalFields");
+    if (!box) return;
+    box.querySelectorAll('select[data-type="provider_model"]').forEach(el => {
+      const current = el.value;
+      const field = { provider_key: el.dataset.providerKey, role: el.dataset.role, value: current };
+      const options = providerModelOptions(field);
+      el.innerHTML = "";
+      options.forEach(opt => {
+        const o = document.createElement("option");
+        o.value = opt.value;
+        o.textContent = opt.label;
+        if (String(current) === String(opt.value)) o.selected = true;
+        el.appendChild(o);
+      });
+    });
+  }
+  function closePluginModal() {
+    $("pluginModal").classList.remove("show");
+    pluginModalId = "";
+  }
+  async function savePluginConfig() {
+    if (!pluginModalId) return;
+    const values = {};
+    $("pluginModalFields").querySelectorAll("[data-key]").forEach(el => {
+      const key = el.dataset.key;
+      const type = el.dataset.type;
+      if (type === "bool") values[key] = !!el.checked;
+      else if (type === "number") values[key] = el.value === "" ? 0 : Number(el.value);
+      else values[key] = el.value;
+    });
+    try {
+      const r = await api("/plugins/" + encodeURIComponent(pluginModalId) + "/config", "PUT", { values });
+      logLine(r.message || ("已保存 " + pluginModalId));
+      closePluginModal();
+      if (r.restart || pluginModalRestart) {
+        $("pluginModalHint").textContent = "宿主重启中…";
+        await waitHostBack();
+        location.reload();
+        return;
+      }
+      await loadPlugins();
+      await loadMouths().catch(() => {});
+      await loadPlatforms().catch(() => {});
+    } catch (e) { alert("保存失败：" + e.message); }
+  }
+  async function rescanExternal() {
+    try {
+      await api("/plugins/external/rescan", "POST");
+      logLine("已重新扫描外部插件目录");
+      await loadPlugins();
+      await loadPlatforms().catch(() => {});
+    } catch (e) { alert("重扫失败：" + e.message); }
+  }
+
+  /* ================= 系统更新 ================= */
+  let updateData = null;
+  async function loadUpdate() {
+    const pair = await Promise.all([api("/updates"), api("/status")]);
+    updateData = pair[0];
+    const st = pair[1];
+    $("updateRepository").value = updateData.repository || "";
+    $("updateHomeDir").textContent = st.home || "—";
+    $("updateSoulDir").textContent = st.dataDirectory || "—";
+    $("updatePluginDir").textContent = st.pluginsDirectory || "—";
+    renderUpdateStatus(updateData);
+  }
+  function renderUpdateStatus(data) {
+    updateData = data || {};
+    const latest = updateData.latest;
+    let text = "当前 v" + (updateData.currentVersion || "—");
+    if (!updateData.configured) text += "；请先填写 GitHub 仓库";
+    else if (!latest) text += "；尚未检查正式版本";
+    else if (latest.updateAvailable) text += "；发现 v" + latest.version;
+    else text += "；已是最新正式版";
+    if (!updateData.installable) text += "；当前是开发目录，只能检查，不能原地安装";
+    if (updateData.error) text += "；" + updateData.error;
+    $("updateStatus").textContent = text;
+    const install = $("installUpdateBtn");
+    install.disabled = !(latest && latest.updateAvailable && updateData.installable);
+    install.textContent = latest && latest.updateAvailable
+      ? ("安装 v" + latest.version)
+      : "下载并安装";
+  }
+  async function saveUpdateRepository() {
+    try {
+      const repository = ($("updateRepository").value || "").trim();
+      const data = await api("/updates/config", "PUT", { repository });
+      renderUpdateStatus(data);
+      logLine(repository ? ("更新仓库已保存：" + repository) : "已清空更新仓库");
+    } catch (e) { alert("保存失败：" + e.message); }
+  }
+  async function checkUpdate() {
+    try {
+      $("updateStatus").textContent = "正在读取最新正式 Release…";
+      const data = await api("/updates/check", "POST");
+      renderUpdateStatus(data);
+    } catch (e) {
+      $("updateStatus").textContent = "检查失败：" + e.message;
+    }
+  }
+  async function installUpdate() {
+    const latest = updateData && updateData.latest;
+    if (!latest || !latest.updateAvailable) return;
+    if (!confirm("安装 TraceSoul2 v" + latest.version + "？\n应用会自动退出、整体替换并重启；角色数据和插件不会被覆盖。")) return;
+    const button = $("installUpdateBtn");
+    button.disabled = true;
+    try {
+      const result = await api("/updates/install", "POST");
+      $("updateStatus").textContent = result.message || "更新器已启动，等待宿主重启…";
+      await waitHostBack();
+      location.reload();
+    } catch (e) {
+      button.disabled = false;
+      $("updateStatus").textContent = "安装失败：" + e.message;
+    }
+  }
+
+  /* ================= 顶栏与整体刷新 ================= */
+  async function loadTopBar() {
+    try {
+      const st = await api("/status");
+      currentUsername = st.username || "";
+      $("statusDot").textContent = "● 就绪";
+      $("statusDot").className = "pill on";
+      if ($("hostVersion")) {
+        var label = st.version ? ("v" + st.version) : "";
+        if (st.soulId) label += (label ? " · " : "") + st.soulId;
+        $("hostVersion").textContent = label;
+      }
+    } catch (e) {
+      $("statusDot").textContent = "● 宿主不可达";
+      $("statusDot").className = "pill off";
+    }
+    await refreshMode();
+    await loadDatabases();
+  }
+  async function reloadPanels() {
+    const active = document.querySelector(".nav-item.active");
+    const id = active ? active.dataset.section : "chat";
+    sectionLoaded[id] = false;
+    await loadTopBar();
+    await showSection(id);
+  }
+
+  /* ================= 实时日志流 ================= */
+  const es = new EventSource("/events");
+  es.onmessage = e => {
+    try {
+      const obj = JSON.parse(e.data);
+      if (!obj) return;
+      if (obj.hello) { addLog("已连接实时日志流", "sys"); return; }
+      if (obj.message) addLog(obj.message);
+    } catch (err) {
+      addLog(e.data);
+    }
+  };
+
+  /* ================= 启动 ================= */
+  (async () => {
+    await loadTopBar();
+    await showSection("chat");
+  })();
+</script>
+</body>
+</html>

@@ -1,0 +1,17 @@
+<Project Sdk="Microsoft.NET.Sdk">
+  <PropertyGroup>
+    <OutputType>Exe</OutputType>
+    <TargetFramework>net8.0</TargetFramework>
+    <ImplicitUsings>disable</ImplicitUsings>
+    <Nullable>disable</Nullable>
+    <EnableDefaultCompileItems>false</EnableDefaultCompileItems>
+  </PropertyGroup>
+  <Import Project="../KernelSources.props" />
+  <ItemGroup>
+    <PackageReference Include="sqlite-net-pcl" Version="1.9.172" />
+    <PackageReference Include="Microsoft.ML.OnnxRuntime" Version="1.19.2" />
+    <ProjectReference Include="../PluginApi/TraceSoul2.PluginApi.csproj" />
+    <Compile Include="Program.cs" />
+    <Content Include="../../resources/identity_cards.json" CopyToOutputDirectory="PreserveNewest" Link="identity_cards.json" />
+  </ItemGroup>
+</Project>

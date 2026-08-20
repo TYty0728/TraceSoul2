@@ -1,0 +1,200 @@
+using System;
+using System.Collections.Generic;
+using System.Net.WebSockets;
+using System.Threading;
+using System.Threading.Tasks;
+using TraceSoul2.Data;
+using TraceSoul2.Manager;
+
+namespace TraceSoul2.Plugins
+{
+    /// <summary>宿主提供给插件注册贡献的入口（由插件管理器实现）。</summary>
+    public interface ITracePluginRegistrar
+    {
+        void RegisterCallable(string pluginId, ITraceCallableContribution contribution);
+        void RegisterMountedFacet(string pluginId, ITraceMountedFacet facet);
+        void RegisterMomentSource(string pluginId, ITraceMomentSource source);
+        void RegisterBackgroundService(string pluginId, ITraceBackgroundService service);
+    }
+    /// <summary>
+    /// 插件声明的 WebSocket 入口：平台插件（如 OneBot 反向 WS）把自己的端点挂到宿主 HTTP 服务器上。
+    /// 客户端（NapCat 等）主动连进来，宿主只负责完成握手并把连接交给插件。
+    /// </summary>
+    public interface ITraceWebSocketEndpoint
+    {
+        /// <summary>端点在宿主 HTTP 服务器上的路径，如 "/ws"。</summary>
+        string Path { get; }
+
+        /// <summary>握手前的鉴权：返回 false 时宿主回 401 并拒绝连接。</summary>
+        bool Accept(string authorizationHeader, string queryString);
+
+        /// <summary>连接已建立；持有该连接直到关闭或取消。</summary>
+        Task OnConnectedAsync(WebSocket socket, CancellationToken token);
+    }
+
+    /// <summary>宿主提供的基础设施。它不提供“调用另一个插件”的入口。</summary>
+    public sealed class TracePluginServices
+    {
+        public IMemoryStore Storage { get; private set; }
+        public IHierarchicalVectorRouter Router { get; private set; }
+        public ILlmClient Llm { get; set; }
+
+        /// <summary>模型供应商目录（宿主注入；插件按 id 或用途槽解析密钥，为 null 时只能用自己的 plugin.json）。</summary>
+        public ILlmProviderDirectory Providers { get; set; }
+
+        /// <summary>文本语义向量编码服务（宿主注入；为 null 时插件自行兜底）。</summary>
+        public IEmbeddingService Embedding { get; set; }
+
+        /// <summary>记忆神经子代理专用小模型（宿主注入；为 null 时退回字符路由）。</summary>
+        public ILlmClient NerveLlm { get; set; }
+
+        /// <summary>语义向量拼装引擎（宿主注入；为 null 时退回 n-gram 打分）。</summary>
+        public IMemoryRecallEngine Recall { get; set; }
+
+        /// <summary>平台注册表：平台插件注册自己，感官目录与控制台读取。</summary>
+        public PlatformRegistry Platforms { get; set; }
+
+        /// <summary>插件声明的 WebSocket 入口（宿主启动 HTTP 服务器后逐个挂载）。</summary>
+        public List<ITraceWebSocketEndpoint> WebSocketEndpoints { get; } = new List<ITraceWebSocketEndpoint>();
+
+        /// <summary>平台适配器注册表：平台插件把适配器挂进来，感官插件据此把表达发到对应平台。</summary>
+        public List<ITracePlatformAdapter> PlatformAdapters { get; } = new List<ITracePlatformAdapter>();
+
+        /// <summary>启用插件的贡献目录提供者（由插件管理器注入，供感官目录等基础设施读取）。</summary>
+        public Func<List<TraceContributionDescriptorData>> EnabledCatalogProvider { get; set; }
+
+        /// <summary>按当前轮可用性过滤的贡献目录提供者（与 Brain 可调用的目录一致）。</summary>
+        public Func<TraceTurnContext, List<TraceContributionDescriptorData>> AvailableCatalogProvider { get; set; }
+
+        /// <summary>整轮表达结束后的收尾钩子（平台插件用来把暂存文字与表情合并成一条消息发送等）。</summary>
+        public List<Func<TraceTurnContext, Task>> TurnCompleteHooks { get; } =
+            new List<Func<TraceTurnContext, Task>>();
+
+        /// <summary>数据目录（宿主注入；平台插件读自己的配置文件用）。</summary>
+        public string DataDirectory { get; set; }
+
+        public TracePluginServices(IMemoryStore storage, IHierarchicalVectorRouter router)
+        {
+            Storage = storage ?? throw new ArgumentNullException("storage");
+            Router = router ?? throw new ArgumentNullException("router");
+            Platforms = new PlatformRegistry();
+        }
+
+        public void SetRouter(IHierarchicalVectorRouter router)
+        {
+            Router = router ?? throw new ArgumentNullException("router");
+        }
+    }
+
+    /// <summary>每轮通用工作区；领域插件只能在自己的 State 槽中保存私有运行态。</summary>
+    public sealed class TraceTurnWorkspace
+    {
+        private readonly Dictionary<string, object> pluginStates =
+            new Dictionary<string, object>(StringComparer.OrdinalIgnoreCase);
+        private readonly Dictionary<string, TraceContextBlockData> facetCache =
+            new Dictionary<string, TraceContextBlockData>(StringComparer.OrdinalIgnoreCase);
+
+        public List<TraceCapabilityResultData> Results { get; private set; } =
+            new List<TraceCapabilityResultData>();
+        public List<TraceContextBlockData> ContextBlocks { get; private set; } =
+            new List<TraceContextBlockData>();
+        public List<BrainFacetOutputData> FacetOutputs { get; private set; } =
+            new List<BrainFacetOutputData>();
+
+        public T GetOrCreateState<T>(string pluginId, Func<T> factory) where T : class
+        {
+            object existing;
+            if (pluginStates.TryGetValue(pluginId, out existing)) return existing as T;
+            var created = factory == null ? null : factory();
+            pluginStates[pluginId] = created;
+            return created;
+        }
+
+        public bool TryGetFacetCache(string id, out TraceContextBlockData value)
+        {
+            return facetCache.TryGetValue(id, out value);
+        }
+
+        public void SetFacetCache(string id, TraceContextBlockData value)
+        {
+            facetCache[id] = value;
+        }
+    }
+
+    public sealed class TraceTurnContext
+    {
+        public string ConversationId { get; private set; }
+        public MomentRecord Moment { get; private set; }
+        public IReadOnlyList<MomentRecord> RecentMoments { get; private set; }
+        public int RawHistoryLimit { get; private set; }
+        public bool RequiresExpression { get; private set; }
+        /// <summary>本轮中枢轨道：dialogue / mind / subconscious。</summary>
+        public string Wake { get; private set; }
+        public TracePluginServices Services { get; private set; }
+        public TraceTurnWorkspace Workspace { get; private set; }
+
+        public TraceTurnContext(
+            string conversationId,
+            MomentRecord moment,
+            List<MomentRecord> recentMoments,
+            int rawHistoryLimit,
+            bool requiresExpression,
+            TracePluginServices services,
+            string wake = null)
+        {
+            ConversationId = conversationId;
+            Moment = moment;
+            RecentMoments = recentMoments ?? new List<MomentRecord>();
+            RawHistoryLimit = Math.Max(0, rawHistoryLimit);
+            RequiresExpression = requiresExpression;
+            Wake = KernelWakeValues.Normalize(wake);
+            if (string.IsNullOrEmpty(Wake))
+                Wake = requiresExpression ? KernelWakeValues.Dialogue : KernelWakeValues.Mind;
+            Services = services;
+            Workspace = new TraceTurnWorkspace();
+        }
+    }
+
+    public sealed class TracePluginContext
+    {
+        private readonly ITracePluginRegistrar registrar;
+
+        public TracePluginServices Services { get; private set; }
+        public TracePluginMetadataData Plugin { get; private set; }
+
+        /// <summary>外部插件包的所在文件夹（内置插件为 null）；插件在这里读自己的库文件与配置。</summary>
+        public string PackageDirectory { get; private set; }
+
+        public TracePluginContext(
+            ITracePluginRegistrar registrar,
+            TracePluginServices services,
+            TracePluginMetadataData plugin,
+            string packageDirectory = null)
+        {
+            this.registrar = registrar;
+            Services = services;
+            Plugin = plugin;
+            PackageDirectory = packageDirectory;
+        }
+
+        public void AddCallable(ITraceCallableContribution contribution)
+        {
+            registrar.RegisterCallable(Plugin.Id, contribution);
+        }
+
+        public void AddMountedFacet(ITraceMountedFacet facet)
+        {
+            registrar.RegisterMountedFacet(Plugin.Id, facet);
+        }
+
+        public void AddMomentSource(ITraceMomentSource source)
+        {
+            registrar.RegisterMomentSource(Plugin.Id, source);
+        }
+
+        public void AddBackgroundService(ITraceBackgroundService service)
+        {
+            registrar.RegisterBackgroundService(Plugin.Id, service);
+        }
+    }
+}

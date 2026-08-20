@@ -1,0 +1,10 @@
+<Project>
+  <!-- Host / Migrate / ChatCheck 的产品版本。日常 commit 不改这里；你说「集成」时才涨。PluginApi 在自己的 csproj 里单独编号。 -->
+  <PropertyGroup>
+    <TraceSoul2Version>0.1.0</TraceSoul2Version>
+    <Version Condition="'$(MSBuildProjectName)' != 'TraceSoul2.PluginApi'">$(TraceSoul2Version)</Version>
+    <InformationalVersion Condition="'$(MSBuildProjectName)' != 'TraceSoul2.PluginApi'">$(TraceSoul2Version)</InformationalVersion>
+    <!-- sqlite-net 的原生包保留旧发行版 RID；Windows 构建选用 win-* 资产，不受 NETSDK1206 影响。 -->
+    <NoWarn>$(NoWarn);NETSDK1206</NoWarn>
+  </PropertyGroup>
+</Project>

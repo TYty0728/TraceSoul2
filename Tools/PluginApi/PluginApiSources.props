@@ -1,0 +1,28 @@
+<Project>
+  <!--
+    PluginApi 共享契约的源文件清单：外部插件与宿主共同编译同一批源文件，
+    保证 TraceSoul2.PluginApi 程序集中的类型在两边完全一致。
+    只放纯数据与接口（Data POCO、ILlmClient、IMemoryStore、插件契约、平台适配器契约）。
+  -->
+  <ItemGroup>
+    <Compile Include="$(MSBuildThisFileDirectory)../../src/TraceSoul2/Data/AgentArchitectureData.cs" />
+    <Compile Include="$(MSBuildThisFileDirectory)../../src/TraceSoul2/Data/ChatMemoryData.cs" />
+    <Compile Include="$(MSBuildThisFileDirectory)../../src/TraceSoul2/Data/IdentityCardData.cs" />
+    <Compile Include="$(MSBuildThisFileDirectory)../../src/TraceSoul2/Data/InnerLifeData.cs" />
+    <Compile Include="$(MSBuildThisFileDirectory)../../src/TraceSoul2/Data/PairIdentityData.cs" />
+    <Compile Include="$(MSBuildThisFileDirectory)../../src/TraceSoul2/Data/PluginData.cs" />
+    <Compile Include="$(MSBuildThisFileDirectory)../../src/TraceSoul2/Data/VectorMemoryData.cs" />
+    <Compile Include="$(MSBuildThisFileDirectory)../../src/TraceSoul2/Data/VectorStorageData.cs" />
+    <Compile Include="$(MSBuildThisFileDirectory)../../src/TraceSoul2/Manager/ILlmClient.cs" />
+    <Compile Include="$(MSBuildThisFileDirectory)../../src/TraceSoul2/Manager/ILlmProviderDirectory.cs" />
+    <Compile Include="$(MSBuildThisFileDirectory)../../src/TraceSoul2/Manager/IMemoryStore.cs" />
+    <Compile Include="$(MSBuildThisFileDirectory)../../src/TraceSoul2/Manager/IHierarchicalVectorRouter.cs" />
+    <Compile Include="$(MSBuildThisFileDirectory)../../src/TraceSoul2/Manager/IEmbeddingService.cs" />
+    <Compile Include="$(MSBuildThisFileDirectory)../../src/TraceSoul2/Manager/IVectorEncoder.cs" />
+    <Compile Include="$(MSBuildThisFileDirectory)../../src/TraceSoul2/Plugins/ITracePlugin.cs" />
+    <Compile Include="$(MSBuildThisFileDirectory)../../src/TraceSoul2/Plugins/TracePluginContext.cs" />
+    <Compile Include="$(MSBuildThisFileDirectory)../../src/TraceSoul2/Plugins/PlatformRegistry.cs" />
+    <Compile Include="$(MSBuildThisFileDirectory)../../src/TraceSoul2/Plugins/Platform/ITracePlatformAdapter.cs" />
+    <Compile Include="$(MSBuildThisFileDirectory)../../src/TraceSoul2/Plugins/IMemoryRecallEngine.cs" />
+  </ItemGroup>
+</Project>
