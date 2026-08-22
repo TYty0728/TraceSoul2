@@ -7,6 +7,7 @@ using System.Threading.Tasks;
 using TraceSoul2.Data;
 using TraceSoul2.Manager;
 using TraceSoul2.Plugins;
+using TraceSoul2.Prompts;
 using TraceSoul2.Util;
 
 namespace TraceSoul2.Logic
@@ -28,6 +29,16 @@ namespace TraceSoul2.Logic
             bool alreadyLeft,
             CancellationToken cancellationToken)
         {
+            return await DecideAsync(turn, leaveResult, alreadyLeft, string.Empty, cancellationToken);
+        }
+
+        public async Task<MindDecisionData> DecideAsync(
+            TraceTurnContext turn,
+            string leaveResult,
+            bool alreadyLeft,
+            string naturallyAwakenedPast,
+            CancellationToken cancellationToken)
+        {
             var query = turn.Moment == null ? string.Empty : turn.Moment.Content;
             var embedding = turn.Services == null ? null : turn.Services.Embedding;
             var templates = await MindTemplateLogic.SelectAsync(
@@ -35,14 +46,15 @@ namespace TraceSoul2.Logic
             var messages = new List<DeepSeekMessageData>
             {
                 new DeepSeekMessageData("system", BuildFoundationPrompt(turn)),
-                new DeepSeekMessageData("system", BuildTurnPrompt(turn, leaveResult, alreadyLeft, templates)),
+                new DeepSeekMessageData("system", BuildTurnPrompt(
+                    turn, leaveResult, alreadyLeft, templates, naturallyAwakenedPast)),
                 new DeepSeekMessageData("user", query)
             };
             var decided = await DeepSeekStructuredOutputLogic.CompleteAsync<MindDecisionData>(
                 llm,
                 messages,
                 x => x != null && !string.IsNullOrWhiteSpace(Normalize(x).beat),
-                "心智决策卡缺少 beat。",
+                CorePrompts.Mind.MissingBeat,
                 cancellationToken);
             return Normalize(decided, alreadyLeft);
         }
@@ -58,12 +70,12 @@ namespace TraceSoul2.Logic
             }
             output.tags = string.Join("、", output.ParseTags());
             output.query = Limit((output.query ?? string.Empty).Trim(), 80);
-            output.mood = Limit((output.mood ?? string.Empty).Trim(), 12);
+            output.mood = OneLine(output.mood);
             output.new_fact = Limit((output.new_fact ?? string.Empty).Trim(), 40);
             output.leave = Limit((output.leave ?? string.Empty).Trim(), 80);
-            output.note = Limit((output.note ?? string.Empty).Trim(), 160);
+            output.note = (output.note ?? string.Empty).Trim();
             output.today = Limit((output.today ?? string.Empty).Trim(), 200);
-            output.inner = Limit(OneLine(output.inner), 160);
+            output.inner = OneLine(output.inner);
             output.cognition = Limit(OneLine(output.cognition), 19);
             if (output.ClearsAttention())
                 output.attention = "无";
@@ -79,6 +91,16 @@ namespace TraceSoul2.Logic
                 output.tags = string.Empty;
                 output.query = string.Empty;
             }
+            output.next_heartbeat_minutes = HeartbeatLogic.ClampMinutes(output.next_heartbeat_minutes);
+            if (output.sleep) output.next_heartbeat_minutes = 0;
+            output.sticker = output.StickerValue();
+            output.image = output.ImageValue();
+            if (output.sleep || output.BeatValue() == MindBeatValues.Leave)
+            {
+                output.image = MindAtmosphereValues.None;
+                output.sticker = MindAtmosphereValues.None;
+            }
+            if (output.WantsImage()) output.sticker = MindAtmosphereValues.None;
             return output;
         }
 
@@ -89,18 +111,8 @@ namespace TraceSoul2.Logic
             var builder = new StringBuilder();
             builder.AppendLine(IdentityCardLogic.FormatForMind(cards, pair));
             builder.AppendLine();
-            builder.AppendLine("【这一拍怎么想】");
-            builder.AppendLine("我先把这一拍想清楚。只写下决定，不写对她说的话，不用动作旁白，不发表情。");
-            builder.AppendLine("inner 是这一拍的现在时：一句比较理性的现在进行时，可以带一点温度。换题就写新的；没变就留空，不要把上一句原样抄回。");
-            builder.AppendLine("attention 是这一拍还搁在手里的一两件事。换题就换手，不要把上一拍原样抄回；不要把刚结束的事改写成另一件继续捏着。放下后没有了写「无」。");
-            builder.AppendLine("cognition 是这一拍真的改了的看法，一句第一人称理解，不超过19字；没改留空。短卡仍不由我改。");
-            builder.AppendLine("beat 只填：当下、旧事、出门。出门只填 leave，具体怎么出门由后面按事由去办。");
-            builder.AppendLine("一段从手上拿开、坐标变了：review=true 派出复盘，我自己不改短卡。定点复盘不用我派。");
-            builder.AppendLine("标签从下面候选里原样勾 0-3 个。候选已按这一句的相近程度排过，越靠前越像。用得上才勾，出门不要勾。有新看法时同时勾相关标签。");
-            builder.AppendLine("note 是我给自己开口用的决定，不是台词。today 只有真要往当天轨迹补一句才填，不要填日期。");
-            builder.AppendLine();
-            builder.AppendLine("只输出一个 JSON 对象：");
-            builder.AppendLine("{\"beat\":\"当下|旧事|出门\",\"tags\":\"\",\"query\":\"\",\"mood\":\"\",\"mood_changed\":false,\"archive\":false,\"new_fact\":\"\",\"leave\":\"\",\"note\":\"\",\"today\":\"\",\"inner\":\"\",\"attention\":\"\",\"review\":false,\"cognition\":\"\"}");
+            builder.AppendLine(CorePrompts.Mind.HowToThinkHeader);
+            CorePrompts.Write(builder, CorePrompts.Mind.Foundation);
             return builder.ToString();
         }
 
@@ -108,32 +120,44 @@ namespace TraceSoul2.Logic
             TraceTurnContext turn,
             string leaveResult,
             bool alreadyLeft,
-            IReadOnlyList<MindTemplate> templates)
+            IReadOnlyList<MindTemplate> templates,
+            string naturallyAwakenedPast)
         {
             var pair = turn.Services.Storage.LoadPairIdentity();
             var storage = turn.Services.Storage;
             var builder = new StringBuilder();
-            builder.AppendLine("现在是 " + TimeLanguageUtil.NaturalNow(DateTimeOffset.Now) + "。");
+            builder.AppendLine(CorePrompts.Mind.NowPrefix + TimeLanguageUtil.NaturalNow(DateTimeOffset.Now) + "。");
             builder.AppendLine();
+            var recentDialogue = FormatRecentDialogue(turn);
+            if (!string.IsNullOrWhiteSpace(recentDialogue))
+            {
+                builder.AppendLine(recentDialogue);
+                builder.AppendLine();
+            }
             var runtime = storage.LoadOrCreateInnerRuntime(turn.ConversationId);
             builder.AppendLine(InnerLifeLogic.FormatForMind(runtime));
-            builder.AppendLine("这一拍变了才写进 inner；还搁着的才写进 attention。换题就换，不要照抄。");
+            builder.AppendLine(CorePrompts.Mind.InnerAttentionRule);
             var todayItems = storage.GetTodayNewItems(
                 turn.ConversationId, TodayBoundary(DateTimeOffset.Now).ToUnixTimeMilliseconds(), 10);
             if (todayItems != null && todayItems.Count > 0)
             {
-                builder.AppendLine("今天刚知道的：");
+                builder.AppendLine(CorePrompts.Mind.TodayNewHeader);
                 foreach (var item in todayItems)
                     builder.AppendLine("- " + item.Content);
             }
             var trajectory = storage.LoadDayTrajectory(MemoryDayKey(DateTimeOffset.Now));
             if (trajectory != null && !string.IsNullOrWhiteSpace(trajectory.Text))
-                builder.AppendLine("今天我们的轨迹：" + trajectory.Text.Trim());
+                builder.AppendLine(CorePrompts.Mind.TrajectoryPrefix + trajectory.Text.Trim());
+            if (!string.IsNullOrWhiteSpace(naturallyAwakenedPast))
+            {
+                builder.AppendLine();
+                builder.AppendLine(naturallyAwakenedPast.Trim());
+            }
             builder.AppendLine();
-            builder.AppendLine("【可选生命标签】");
+            builder.AppendLine(CorePrompts.Mind.TagCandidatesHeader);
             var tags = MemoryRecallLogic.ListTagCandidates(turn, TagCandidateCap);
             if (tags.Count == 0)
-                builder.AppendLine("（这一句没有足够接近的标签。）");
+                builder.AppendLine(CorePrompts.Mind.NoCloseTags);
             else
             {
                 foreach (var tag in tags)
@@ -142,11 +166,11 @@ namespace TraceSoul2.Logic
             if (!string.IsNullOrWhiteSpace(leaveResult))
             {
                 builder.AppendLine();
-                builder.AppendLine("【外出结果】");
+                builder.AppendLine(CorePrompts.Mind.LeaveResultHeader);
                 builder.AppendLine(leaveResult.Trim());
             }
             if (alreadyLeft)
-                builder.AppendLine("我已经出门过了，beat 只能是 当下 或 旧事，不要再出门。");
+                builder.AppendLine(CorePrompts.Mind.AlreadyLeft);
             var organized = MindTemplateLogic.Format(templates);
             if (!string.IsNullOrWhiteSpace(organized))
             {
@@ -154,18 +178,51 @@ namespace TraceSoul2.Logic
                 builder.AppendLine(organized);
             }
             builder.AppendLine();
-            builder.AppendLine("【此刻】");
-            if (turn.Wake == KernelWakeValues.Mind)
-            {
-                builder.AppendLine("时间把我叫醒。先看上一拍手上还在不在，再看当前时；没有要对她说的就静默，不要硬找话说。");
-            }
+            builder.AppendLine(CorePrompts.Mind.NowHeader);
+            var momentContent = turn.Moment == null ? string.Empty : turn.Moment.Content;
+            if (HeartbeatLogic.IsHeartbeatContent(momentContent))
+                CorePrompts.Write(builder, CorePrompts.Mind.Heartbeat);
+            else if (turn.Wake == KernelWakeValues.Mind)
+                builder.AppendLine(CorePrompts.Mind.MindWake);
             else
             {
                 builder.AppendLine(turn.RequiresExpression
-                    ? pair.Apply("这是 {username} 正在对我说话。我想好这一拍，不要写台词。")
-                    : "这是后台感知。可以静默；没有要说的就 beat=当下，note 写静默。");
+                    ? pair.Apply(CorePrompts.Mind.HumanSpeak)
+                    : CorePrompts.Mind.Background);
             }
             return builder.ToString();
+        }
+
+        /// <summary>WebUI 控制的原文拼接；只拼两个人的真实 Moment，不把时间事件混成对话。</summary>
+        internal static string FormatRecentDialogue(TraceTurnContext turn)
+        {
+            if (turn == null || turn.RawHistoryLimit <= 0 || turn.RecentMoments == null ||
+                turn.RecentMoments.Count == 0 || turn.Services == null || turn.Services.Storage == null)
+                return string.Empty;
+            var pair = turn.Services.Storage.LoadPairIdentity();
+            var lines = turn.RecentMoments
+                .Where(x => x != null &&
+                            (pair.IsHumanMoment(x.Role) || pair.IsCompanionMoment(x.Role)) &&
+                            !string.IsNullOrWhiteSpace(x.Content) &&
+                            !IsOutboundProtocolMoment(x.Content))
+                .TakeLast(turn.RawHistoryLimit)
+                .ToList();
+            if (lines.Count == 0) return string.Empty;
+            var builder = new StringBuilder();
+            builder.AppendLine(CorePrompts.Mind.RecentDialogueHeader);
+            builder.AppendLine(CorePrompts.Mind.RecentDialogueHint);
+            foreach (var item in lines)
+                builder.AppendLine(pair.LabelForRole(item.Role) + "：" + item.Content.Trim());
+            return builder.ToString().TrimEnd();
+        }
+
+        /// <summary>出站入库的系统占位，不是对她说的话，不能进最近对话原文。</summary>
+        internal static bool IsOutboundProtocolMoment(string content)
+        {
+            var text = (content ?? string.Empty).Trim();
+            if (text.Length < 4 || text[0] != '[') return false;
+            return text.StartsWith("[QQ ", StringComparison.Ordinal) ||
+                   text.StartsWith("[CQ:", StringComparison.OrdinalIgnoreCase);
         }
 
         private static DateTimeOffset TodayBoundary(DateTimeOffset now)

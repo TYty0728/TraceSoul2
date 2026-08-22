@@ -2,11 +2,12 @@ using System.Collections.Generic;
 
 namespace TraceSoul2.Manager
 {
-    /// <summary>用途槽：对话开口 / 思考 / 多模态 / 生图 / 语音。插件按槽或按供应商 id 解析，不必各存一份 Key。</summary>
+    /// <summary>用途槽：对话开口 / 思考 / 复盘 / 多模态 / 生图 / 语音。插件按槽或按供应商 id 解析，不必各存一份 Key。</summary>
     public static class LlmSlotNames
     {
         public const string Chat = "chat";
         public const string Thinking = "thinking";
+        public const string Review = "review";
         public const string Multimodal = "multimodal";
         public const string Image = "image";
         public const string Speech = "speech";
@@ -48,5 +49,7 @@ namespace TraceSoul2.Manager
         LlmEndpointData Resolve(string providerId, string model = null);
         LlmEndpointData ResolveSlot(string slot);
         IReadOnlyList<LlmProviderBriefData> ListBrief();
+        /// <summary>复盘槽客户端（关闭思考）。槽未指定时用对话开口关思考。无 Key 返回 null。</summary>
+        ILlmClient CreateReviewClient();
     }
 }

@@ -4,6 +4,7 @@ using System.IO;
 using System.Linq;
 using System.Text.Json;
 using SQLite;
+using TraceSoul2.Logic;
 
 namespace TraceSoul2.Host
 {
@@ -62,6 +63,7 @@ namespace TraceSoul2.Host
                 var providersSource = Path.Combine(mainDataDirectory, "llm-providers.json");
                 if (File.Exists(providersSource))
                     File.Copy(providersSource, Path.Combine(branchDir, "llm-providers.json"));
+                CopyRoleFile(mainDataDirectory, branchDir, IdentityCardLogic.SeedFileName);
 
                 var record = new DebugBranchRecord
                 {
@@ -124,6 +126,14 @@ namespace TraceSoul2.Host
             var providersSource = Path.Combine(mainDir, "llm-providers.json");
             if (File.Exists(providersSource))
                 File.Copy(providersSource, Path.Combine(targetDir, "llm-providers.json"), overwrite: true);
+            CopyRoleFile(mainDir, targetDir, IdentityCardLogic.SeedFileName);
+        }
+
+        private static void CopyRoleFile(string sourceDirectory, string targetDirectory, string fileName)
+        {
+            var source = Path.Combine(sourceDirectory, fileName);
+            if (File.Exists(source))
+                File.Copy(source, Path.Combine(targetDirectory, fileName), overwrite: true);
         }
 
         private static void VacuumInto(string sourcePath, string targetPath)

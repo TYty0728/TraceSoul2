@@ -1,7 +1,11 @@
 using System;
 using System.Collections.Generic;
+using System.Diagnostics;
 using System.Globalization;
+using System.Linq;
 using System.Text;
+using System.Text.Json;
+using System.Text.RegularExpressions;
 using System.Threading;
 using System.Threading.Tasks;
 using TraceSoul2.Data;
@@ -69,10 +73,60 @@ namespace TraceSoul2.Plugins.Builtin
                 {
                     session_type = sessionType,
                     session_id = sessionId,
-                    nickname = nickname
+                    nickname = nickname,
+                    image_urls = ExtractImageLocations(platformPayload)
                 }),
+                Breaking = true,
                 OccurredUnixMs = DateTimeOffset.UtcNow.ToUnixTimeMilliseconds()
             };
+        }
+
+        /// <summary>
+        /// 保留消息段中的原图位置，供相机/视觉插件做改图和看图。文本仍只显示 [图片]，
+        /// 原始 URL 或本地路径只进入本轮结构化载荷，不混进对话正文。
+        /// </summary>
+        private static List<string> ExtractImageLocations(string json)
+        {
+            var result = new List<string>();
+            try
+            {
+                using (var document = JsonDocument.Parse(json))
+                {
+                    if (document.RootElement.TryGetProperty("message", out var message) &&
+                        message.ValueKind == JsonValueKind.Array)
+                    {
+                        foreach (var segment in message.EnumerateArray())
+                        {
+                            if (segment.ValueKind != JsonValueKind.Object ||
+                                !segment.TryGetProperty("type", out var type) ||
+                                !string.Equals(type.GetString(), "image", StringComparison.OrdinalIgnoreCase) ||
+                                !segment.TryGetProperty("data", out var data) ||
+                                data.ValueKind != JsonValueKind.Object) continue;
+                            foreach (var key in new[] { "url", "file", "path" })
+                            {
+                                if (!data.TryGetProperty(key, out var value) || value.ValueKind != JsonValueKind.String)
+                                    continue;
+                                var location = (value.GetString() ?? string.Empty).Trim();
+                                if (location.Length > 0 && !result.Contains(location, StringComparer.OrdinalIgnoreCase))
+                                    result.Add(location);
+                            }
+                        }
+                    }
+                    else if (document.RootElement.TryGetProperty("raw_message", out var raw) &&
+                             raw.ValueKind == JsonValueKind.String)
+                    {
+                        foreach (Match match in Regex.Matches(raw.GetString() ?? string.Empty,
+                                     @"\[CQ:image,[^\]]*(?:url|file)=([^,\]]+)", RegexOptions.IgnoreCase))
+                        {
+                            var location = Uri.UnescapeDataString(match.Groups[1].Value).Trim();
+                            if (location.Length > 0 && !result.Contains(location, StringComparer.OrdinalIgnoreCase))
+                                result.Add(location);
+                        }
+                    }
+                }
+            }
+            catch { /* 入站载荷异常时不影响正常文字消息。 */ }
+            return result;
         }
 
         /// <summary>
@@ -154,10 +208,15 @@ namespace TraceSoul2.Plugins.Builtin
             CancellationToken cancellationToken)
         {
             if (message == null) throw new ArgumentNullException("message");
-            var sessionType = string.IsNullOrWhiteSpace(message.SessionType) ? owner.LastSessionType : message.SessionType;
-            var sessionId = string.IsNullOrWhiteSpace(message.SessionId) ? owner.LastSessionId : message.SessionId;
+            var timer = Stopwatch.StartNew();
+            context?.Services?.LogTiming(context.TraceId, "QQ 出站适配开始",
+                detail: "kind=" + (message.Kind ?? string.Empty));
+            var sessionType = message.SessionType;
+            var sessionId = message.SessionId;
             if (string.IsNullOrWhiteSpace(sessionId))
-                throw new InvalidOperationException("当前没有待回复的 QQ 会话（收过 QQ 消息后才会自动回复到该会话）。");
+                owner.TryResolveSession(context, out sessionType, out sessionId);
+            if (string.IsNullOrWhiteSpace(sessionId))
+                throw new InvalidOperationException("还没有记住 QQ 会话。先从 QQ 发一条过来，之后心跳也会发回那里。");
 
             string payload = null;
             string canonicalContent;
@@ -178,14 +237,7 @@ namespace TraceSoul2.Plugins.Builtin
                     var file = (message.File ?? string.Empty).Trim();
                     if (file.Length == 0) throw new InvalidOperationException("QQ 图片表达需要 file。");
                     payload = "[CQ:image,file=" + file.Replace(",", "%2C") + "]";
-                    if (owner.TryAppendSegment(payload))
-                    {
-                        canonicalContent = "[QQ 图片：附在文字结尾]";
-                        summary = "已把图片追加到 QQ 文字消息结尾。";
-                        deferred = true;
-                        break;
-                    }
-                    canonicalContent = "[QQ 发送图片：" + file + "]";
+                    canonicalContent = OneBotPlatformPrompts.SendImageMoment;
                     summary = "已通过 QQ 发送图片。";
                     break;
                 case TraceOutboundKinds.Sticker:
@@ -194,7 +246,7 @@ namespace TraceSoul2.Plugins.Builtin
                     payload = "[CQ:face,id=" + faceId + "]";
                     if (owner.TryAppendSegment(payload))
                     {
-                        canonicalContent = "[QQ 表情：附在文字结尾]";
+                        canonicalContent = OneBotPlatformPrompts.SendStickerMoment;
                         summary = "已把表情追加到 QQ 文字消息结尾。";
                         deferred = true;
                         break;
@@ -206,7 +258,7 @@ namespace TraceSoul2.Plugins.Builtin
                     var voiceFile = (message.File ?? string.Empty).Trim();
                     if (voiceFile.Length == 0) throw new InvalidOperationException("QQ 语音需要音频文件路径。");
                     payload = "[CQ:record,file=" + voiceFile.Replace(",", "%2C") + "]";
-                    canonicalContent = "[QQ 发送语音]";
+                    canonicalContent = OneBotPlatformPrompts.SendVoiceMoment;
                     summary = "已通过 QQ 发送语音。";
                     break;
                 default:
@@ -222,6 +274,10 @@ namespace TraceSoul2.Plugins.Builtin
                         { "message", payload }
                     });
             }
+
+            context?.Services?.LogTiming(context.TraceId,
+                deferred ? "QQ 出站已暂存" : "QQ 出站动作完成",
+                timer.ElapsedMilliseconds, "kind=" + message.Kind);
 
             // 规范「已发送」事件：平台适配器契约，中枢据此把回复 Moment 完整入库。
             var pair = context.Services.Storage.LoadPairIdentity();

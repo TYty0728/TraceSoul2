@@ -2,11 +2,13 @@ using System;
 using System.Collections.Generic;
 using System.Linq;
 using System.Text;
+using System.Text.RegularExpressions;
 using System.Threading;
 using System.Threading.Tasks;
 using TraceSoul2.Data;
 using TraceSoul2.Manager;
 using TraceSoul2.Plugins;
+using TraceSoul2.Prompts;
 
 namespace TraceSoul2.Logic
 {
@@ -34,26 +36,227 @@ namespace TraceSoul2.Logic
             var needsReply = waitOnly || turn.RequiresExpression;
             var messages = new List<DeepSeekMessageData>
             {
-                new DeepSeekMessageData("system", BuildFoundationPrompt(turn, contextBlocks, catalog)),
+                new DeepSeekMessageData("system", BuildFoundationPrompt(turn, contextBlocks)),
                 new DeepSeekMessageData("system", BuildTurnPrompt(
                     turn, plugins, contextBlocks, mind, memoryFlesh, waitOnly, leaveResult)),
                 new DeepSeekMessageData("user", turn.Moment.Content)
             };
-            var expressed = await DeepSeekStructuredOutputLogic.CompleteAsync<ExpressorOutputData>(
+            var raw = await DeepSeekStructuredOutputLogic.CompletePlainAsync(
                 llm,
                 messages,
-                x => x != null && (!needsReply || !string.IsNullOrWhiteSpace(x.reply)),
-                waitOnly ? "外显还没说出等一下。" : "外显完成时缺少 reply。",
+                text => ReplyCarriesMind(ParseSpoken(text), mind, needsReply),
+                waitOnly ? CorePrompts.Expressor.MissingWait
+                    : CorePrompts.Expressor.MissingSpeak,
                 cancellationToken);
-            return MapExpressor(expressed, catalog, needsReply);
+            var expressed = ParseSpoken(raw);
+            ApplyMindAtmosphere(expressed, mind, turn, waitOnly);
+            EnsureExplicitImageRequest(expressed, turn, catalog);
+            var mapped = MapExpressor(expressed, catalog, needsReply, waitOnly ? new MindDecisionData() : mind);
+            var imageCalls = (mapped.expressions ?? new List<BrainCapabilityCallData>())
+                .Where(x => x != null && string.Equals(x.purpose, BodyOrganValues.Image, StringComparison.Ordinal))
+                .ToList();
+            if (imageCalls.Count > 0)
+                turn.Services?.LogTiming(turn.TraceId, "TA的相机 外显图片路由", detail:
+                    "calls=" + imageCalls.Count + "｜capability=" +
+                    string.Join(",", imageCalls.Select(x => x.capability_id)));
+            return mapped;
+        }
+
+        /// <summary>要开口时，至少得真的说出话来。长短冷热由他自己按这一拍判断。</summary>
+        public static bool ReplyCarriesMind(ExpressorOutputData expressed, MindDecisionData mind, bool needsReply)
+        {
+            if (expressed == null) return false;
+            if (!needsReply) return true;
+            return !string.IsNullOrWhiteSpace(expressed.reply);
+        }
+
+        /// <summary>
+        /// 开口应是人话。若模型仍吐 {"reply":"..."}，拆出来说的那句，别把 JSON 发给她。
+        /// </summary>
+        public static ExpressorOutputData ParseSpoken(string raw)
+        {
+            var text = UnwrapWholeFence((raw ?? string.Empty).Trim());
+            ExpressorOutputData parsed;
+            if (TryReadReplyJson(text, out parsed))
+            {
+                parsed.reply = StripProtocolSpeak(parsed.reply);
+                return parsed;
+            }
+            return new ExpressorOutputData { reply = StripProtocolSpeak(text) };
+        }
+
+        /// <summary>开口不能把出站占位当成台词念出来。</summary>
+        internal static string StripProtocolSpeak(string source)
+        {
+            var text = source ?? string.Empty;
+            if (text.IndexOf('[') < 0) return text.Trim();
+            text = Regex.Replace(text, @"\[QQ[^\]]*\]", " ", RegexOptions.IgnoreCase);
+            text = Regex.Replace(text, @"\[CQ:[^\]]*\]", " ", RegexOptions.IgnoreCase);
+            text = Regex.Replace(text, @"[ \t]+\n", "\n");
+            text = Regex.Replace(text, @"\n{3,}", "\n\n");
+            return text.Trim();
+        }
+
+        /// <summary>
+        /// 氛围向的出图只听心智的固定短答。开口人话里即使残留旧字段也不算数。
+        /// 出门等一下、心跳未在对话里说话、睡着，都不由心智自己按快门。
+        /// </summary>
+        internal static void ApplyMindAtmosphere(
+            ExpressorOutputData expressed,
+            MindDecisionData mind,
+            TraceTurnContext turn,
+            bool waitOnly)
+        {
+            if (expressed == null) return;
+            mind = MindLogic.Normalize(mind);
+            if (waitOnly) return;
+            if (HasImageExpression(expressed)) return;
+            if (!mind.WantsImage()) return;
+            var heartbeatQuiet = turn != null &&
+                                 string.Equals(turn.Wake, KernelWakeValues.Mind, StringComparison.Ordinal) &&
+                                 !turn.RequiresExpression;
+            if (heartbeatQuiet) return;
+            if (mind.ImageValue() == MindAtmosphereValues.Selfie)
+            {
+                expressed.image_mode = "selfie";
+                expressed.image = SceneFromMind(mind,
+                    "在此刻自然生活场景中面向镜头拍下的一张自拍，神情与当前对话氛围一致");
+            }
+            else if (mind.ImageValue() == MindAtmosphereValues.Draw)
+            {
+                expressed.image_mode = "draw";
+                expressed.image = SceneFromMind(mind, "根据当前气氛生成一张画");
+            }
+        }
+
+        private static string SceneFromMind(MindDecisionData mind, string fallback)
+        {
+            var note = mind == null ? string.Empty : (mind.note ?? string.Empty).Trim();
+            if (note.Length > 0) return Limit(note, 500);
+            var inner = mind == null ? string.Empty : (mind.inner ?? string.Empty).Trim();
+            if (inner.Length > 0) return Limit(inner, 500);
+            return fallback;
+        }
+
+        private static string UnwrapWholeFence(string text)
+        {
+            if (text.Length < 6 || !text.StartsWith("```", StringComparison.Ordinal)) return text;
+            var firstLine = text.IndexOf('\n');
+            if (firstLine < 0) return text;
+            var body = text.Substring(firstLine + 1);
+            var close = body.LastIndexOf("```", StringComparison.Ordinal);
+            if (close < 0) return text;
+            return body.Substring(0, close).Trim();
+        }
+
+        private static bool TryReadReplyJson(string text, out ExpressorOutputData parsed)
+        {
+            parsed = null;
+            var trimmed = (text ?? string.Empty).Trim();
+            if (trimmed.Length < 8 || trimmed[0] != '{') return false;
+            if (trimmed.IndexOf("\"reply\"", StringComparison.OrdinalIgnoreCase) < 0) return false;
+            try
+            {
+                parsed = TraceSoul2.Util.TraceJson.FromJson<ExpressorOutputData>(
+                    DeepSeekStructuredOutputLogic.EscapeRawControlsInJsonStrings(trimmed));
+                return parsed != null && parsed.reply != null;
+            }
+            catch
+            {
+                return false;
+            }
+        }
+
+        /// <summary>
+        /// 明确索要照片/画图时，外显不能只用文字或语音敷衍过去。模型正常填写图片字段时不干预；
+        /// 只有它漏填且真正的相机/生图器可用时，才补成同一套结构化图片动作。
+        /// </summary>
+        internal static void EnsureExplicitImageRequest(
+            ExpressorOutputData expressed,
+            TraceTurnContext turn,
+            IEnumerable<TraceContributionDescriptorData> catalog)
+        {
+            if (expressed == null || turn == null || turn.Moment == null) return;
+            var text = (turn.Moment.Content ?? string.Empty).Trim();
+            if (text.Length == 0) return;
+            var asksForImage = Regex.IsMatch(text,
+                    @"(?:发|给|来|拍|看看|想看|试试|画|生成|做).{0,12}(?:照片|自拍|图片|图)",
+                    RegexOptions.IgnoreCase) ||
+                Regex.IsMatch(text,
+                    @"(?:照片|自拍|图片|图).{0,12}(?:发|给|来|拍|看|试试|画|生成|做|没发)",
+                    RegexOptions.IgnoreCase);
+            if (!asksForImage) return;
+
+            if (HasImageExpression(expressed))
+            {
+                turn.Services?.LogTiming(turn.TraceId, "TA的相机 明确请求已由外显填写", detail:
+                    "mode=" + (expressed.image_mode ?? string.Empty) + "｜prompt=" +
+                    Limit(expressed.image ?? string.Empty, 240));
+                return;
+            }
+            var imageEffector = FindImageEffector(catalog);
+            if (imageEffector == null)
+            {
+                turn.Services?.LogTiming(turn.TraceId, "TA的相机 明确请求无法路由", detail:
+                    "可用目录中没有接收 prompt/url 的图片器官");
+                return;
+            }
+
+            var drawing = Regex.IsMatch(text, @"(?:画|生成|做).{0,12}(?:图片|图)", RegexOptions.IgnoreCase) &&
+                          text.IndexOf("照片", StringComparison.Ordinal) < 0 &&
+                          text.IndexOf("自拍", StringComparison.Ordinal) < 0;
+            expressed.image = drawing
+                ? "根据当前请求生成画面：" + Limit(text, 500)
+                : "在此刻自然生活场景中面向镜头拍下的一张自拍，神情与当前对话氛围一致";
+            expressed.image_mode = drawing ? "draw" : "selfie";
+            turn.Services?.LogTiming(turn.TraceId, "TA的相机 明确请求兜底补图", detail:
+                "capability=" + imageEffector.Id + "｜mode=" + expressed.image_mode +
+                "｜prompt=" + Limit(expressed.image, 240));
+        }
+
+        private static bool HasImageExpression(ExpressorOutputData expressed)
+        {
+            if (!string.IsNullOrWhiteSpace(expressed.image)) return true;
+            return (expressed.images ?? new List<ExpressorImageOutputData>()).Any(x =>
+                x != null && (!string.IsNullOrWhiteSpace(x.prompt) || !string.IsNullOrWhiteSpace(x.url)));
+        }
+
+        /// <summary>生图走后台：先把话说出去，图成功后再单独发。</summary>
+        internal static bool IsImageExpression(BrainCapabilityCallData extra)
+        {
+            if (extra == null || string.IsNullOrWhiteSpace(extra.capability_id)) return false;
+            if (string.Equals(extra.purpose, BodyOrganValues.Image, StringComparison.Ordinal)) return true;
+            var id = extra.capability_id;
+            return id.IndexOf("imagegen", StringComparison.OrdinalIgnoreCase) >= 0 ||
+                   (id.IndexOf("image", StringComparison.OrdinalIgnoreCase) >= 0 &&
+                    id.IndexOf("send", StringComparison.OrdinalIgnoreCase) >= 0);
+        }
+
+        internal static void PartitionExpressions(
+            IEnumerable<BrainCapabilityCallData> expressions,
+            out List<BrainCapabilityCallData> immediate,
+            out List<BrainCapabilityCallData> images)
+        {
+            immediate = new List<BrainCapabilityCallData>();
+            images = new List<BrainCapabilityCallData>();
+            foreach (var extra in expressions ?? Enumerable.Empty<BrainCapabilityCallData>())
+            {
+                if (extra == null || string.IsNullOrWhiteSpace(extra.capability_id)) continue;
+                if (IsImageExpression(extra)) images.Add(extra);
+                else immediate.Add(extra);
+            }
         }
 
         public static BrainStructuredOutputData MapExpressor(
             ExpressorOutputData expressed,
             IEnumerable<TraceContributionDescriptorData> catalog,
-            bool requiresExpression)
+            bool requiresExpression,
+            MindDecisionData mind = null)
         {
             expressed = expressed ?? new ExpressorOutputData();
+            var legacyVoices = new List<ExpressorVoiceOutputData>();
+            var legacyImages = new List<ExpressorImageOutputData>();
+            var cleanedReply = ParseLegacyMarkers(expressed.reply, legacyVoices, legacyImages);
             var effectors = (catalog ?? Enumerable.Empty<TraceContributionDescriptorData>())
                 .Where(x => x != null && x.Kind == TraceContributionKindValues.Effector)
                 .ToList();
@@ -64,29 +267,207 @@ namespace TraceSoul2.Logic
                 intent = string.Empty,
                 decision_summary = string.Empty,
                 calls = new List<BrainCapabilityCallData>(),
-                should_express = requiresExpression || !string.IsNullOrWhiteSpace(expressed.reply),
-                reply = (expressed.reply ?? string.Empty).Trim(),
+                should_express = requiresExpression || !string.IsNullOrWhiteSpace(cleanedReply) ||
+                                 legacyVoices.Count > 0 || legacyImages.Count > 0,
+                reply = cleanedReply,
                 expressions = new List<BrainCapabilityCallData>(),
                 facet_outputs = new List<BrainFacetOutputData>()
             };
-            if (!string.IsNullOrWhiteSpace(expressed.mood))
-            {
-                output.facet_outputs.Add(new BrainFacetOutputData
-                {
-                    facet_id = "inner.snapshot",
-                    changed = true,
-                    summary = expressed.mood.Trim(),
-                    fields = new List<BrainFacetFieldData>
-                    {
-                        new BrainFacetFieldData { name = "mood", value = Limit(expressed.mood.Trim(), 12) }
-                    }
-                });
-            }
-            AddExtra(output.expressions, effectors, BodyOrganValues.Sticker, "emotion", expressed.sticker);
+            mind = MindLogic.Normalize(mind);
+            var sticker = mind.WantsSticker() ? (mind.mood ?? string.Empty).Trim() : string.Empty;
+            AddExtra(output.expressions, effectors, BodyOrganValues.Sticker, "emotion", sticker);
             AddExtra(output.expressions, effectors, BodyOrganValues.Qzone, "content", expressed.qzone);
-            AddExtra(output.expressions, effectors, BodyOrganValues.Voice, "text", expressed.voice);
-            AddExtra(output.expressions, effectors, BodyOrganValues.Image, "prompt", expressed.image);
+            AddVoice(output.expressions, effectors, expressed.voice, expressed.voice_emotion);
+            foreach (var voice in expressed.voices ?? new List<ExpressorVoiceOutputData>())
+                if (voice != null) AddVoice(output.expressions, effectors, voice.text, voice.emotion);
+            foreach (var voice in legacyVoices)
+                AddVoice(output.expressions, effectors, voice.text, voice.emotion);
+            AddImage(output.expressions, effectors, expressed.image, expressed.image_mode,
+                expressed.image_refs, expressed.image_aspect_ratio, null);
+            foreach (var image in expressed.images ?? new List<ExpressorImageOutputData>())
+                if (image != null) AddImage(output.expressions, effectors, image.prompt, image.mode,
+                    image.refs, image.aspect_ratio, image.url);
+            foreach (var image in legacyImages)
+                AddImage(output.expressions, effectors, image.prompt, image.mode,
+                    image.refs, image.aspect_ratio, image.url);
             return output;
+        }
+
+        /// <summary>
+        /// 兼容老 AstrBot 插件留下的输出习惯。新结构使用 voice/images 字段，旧标签只作为迁移兜底，
+        /// 命中后会从可见文字中剥离并转换为同一套器官调用，避免把控制标记裸发给用户。
+        /// </summary>
+        private static string ParseLegacyMarkers(
+            string source,
+            List<ExpressorVoiceOutputData> voices,
+            List<ExpressorImageOutputData> images)
+        {
+            var text = source ?? string.Empty;
+            text = Regex.Replace(text,
+                @"<\s*voice(?:\s+emotion\s*=\s*[\""'](?<emotion>[^\""']+)[\""'])?\s*>(?<text>[\s\S]*?)<\s*/\s*voice\s*>",
+                match =>
+                {
+                    var content = match.Groups["text"].Value.Trim();
+                    if (content.Length > 0) voices.Add(new ExpressorVoiceOutputData
+                    {
+                        text = content,
+                        emotion = match.Groups["emotion"].Success ? match.Groups["emotion"].Value.Trim() : string.Empty
+                    });
+                    return "\n";
+                }, RegexOptions.IgnoreCase);
+
+            text = Regex.Replace(text,
+                @"\[\s*(?<kind>photo|selfie|draw|edit)\s*:(?<prompt>(?:[^\[\]]*|\[[^\]]*\])*)\s*\]",
+                match =>
+                {
+                    var kind = match.Groups["kind"].Value.ToLowerInvariant();
+                    var prompt = match.Groups["prompt"].Value.Trim();
+                    var refs = new List<string>();
+                    foreach (Match refMatch in Regex.Matches(prompt, @"\[\s*ref\s*:\s*(?<name>.*?)\s*\]",
+                                 RegexOptions.IgnoreCase))
+                    {
+                        var name = refMatch.Groups["name"].Value.Trim();
+                        if (name.Length > 0) refs.Add(name);
+                    }
+                    var useUserRef = Regex.IsMatch(prompt, @"\[\s*use_user_ref\s*\]", RegexOptions.IgnoreCase);
+                    prompt = Regex.Replace(prompt, @"\[\s*ref\s*:\s*.*?\s*\]", string.Empty,
+                        RegexOptions.IgnoreCase);
+                    prompt = Regex.Replace(prompt, @"\[\s*use_user_ref\s*\]", string.Empty,
+                        RegexOptions.IgnoreCase).Trim();
+                    if (useUserRef) refs.Insert(0, "当前消息");
+                    if (prompt.Length > 0) images.Add(new ExpressorImageOutputData
+                    {
+                        prompt = prompt,
+                        mode = kind == "photo" || kind == "selfie" ? "selfie" : kind,
+                        refs = string.Join(",", refs.Distinct(StringComparer.OrdinalIgnoreCase))
+                    });
+                    return "\n";
+                }, RegexOptions.IgnoreCase);
+
+            text = Regex.Replace(text, @"\[\s*img\s*:\s*(?<url>https?://[^\s\]]+)\s*\]",
+                match =>
+                {
+                    images.Add(new ExpressorImageOutputData
+                    {
+                        prompt = "发送指定图片",
+                        mode = "url",
+                        url = match.Groups["url"].Value.Trim()
+                    });
+                    return "\n";
+                }, RegexOptions.IgnoreCase);
+            text = Regex.Replace(text, @"\n{3,}", "\n\n");
+            return text.Trim();
+        }
+
+        private static void AddVoice(
+            List<BrainCapabilityCallData> expressions,
+            List<TraceContributionDescriptorData> effectors,
+            string text,
+            string emotion)
+        {
+            text = (text ?? string.Empty).Trim();
+            if (text.Length == 0) return;
+            var match = FindEffector(effectors, BodyOrganValues.Voice);
+            if (match == null) return;
+            var arguments = new List<BrainCallArgumentData>
+            {
+                new BrainCallArgumentData { name = "text", value = Limit(text, 4000) }
+            };
+            if (!string.IsNullOrWhiteSpace(emotion))
+                arguments.Add(new BrainCallArgumentData { name = "emotion", value = Limit(emotion.Trim(), 40) });
+            expressions.Add(NewExpression(match.Id, BodyOrganValues.Voice, arguments));
+        }
+
+        private static void AddImage(
+            List<BrainCapabilityCallData> expressions,
+            List<TraceContributionDescriptorData> effectors,
+            string prompt,
+            string mode,
+            string refs,
+            string aspectRatio,
+            string url)
+        {
+            prompt = (prompt ?? string.Empty).Trim();
+            url = (url ?? string.Empty).Trim();
+            if (prompt.Length == 0 && url.Length == 0) return;
+            var match = FindImageEffector(effectors);
+            if (match == null) return;
+            var arguments = new List<BrainCallArgumentData>();
+            if (prompt.Length > 0)
+                arguments.Add(new BrainCallArgumentData { name = "prompt", value = Limit(prompt, 4000) });
+            if (!string.IsNullOrWhiteSpace(mode))
+                arguments.Add(new BrainCallArgumentData { name = "mode", value = Limit(mode.Trim(), 20) });
+            if (!string.IsNullOrWhiteSpace(refs))
+                arguments.Add(new BrainCallArgumentData { name = "refs", value = Limit(refs.Trim(), 500) });
+            if (!string.IsNullOrWhiteSpace(aspectRatio))
+                arguments.Add(new BrainCallArgumentData { name = "aspect_ratio", value = Limit(aspectRatio.Trim(), 20) });
+            if (url.Length > 0)
+                arguments.Add(new BrainCallArgumentData { name = "url", value = Limit(url, 3000) });
+            expressions.Add(NewExpression(match.Id, BodyOrganValues.Image, arguments));
+        }
+
+        private static TraceContributionDescriptorData FindEffector(
+            IEnumerable<TraceContributionDescriptorData> effectors,
+            string organ)
+        {
+            return (effectors ?? Enumerable.Empty<TraceContributionDescriptorData>()).FirstOrDefault(x =>
+                string.Equals(MouthLogic.OrganOf(x), organ, StringComparison.Ordinal) ||
+                (x.Id ?? string.Empty).IndexOf(organ, StringComparison.OrdinalIgnoreCase) >= 0 ||
+                (x.Provides ?? string.Empty).IndexOf(organ, StringComparison.OrdinalIgnoreCase) >= 0);
+        }
+
+        /// <summary>
+        /// 图片器官里既有“把已经存在的 file 发到 QQ”的底层直发器，也有真正接收 prompt/url
+        /// 的相机/生图器。外显产出的结构是后者，不能因为程序集加载顺序让 qq.image.send 抢走。
+        /// </summary>
+        private static TraceContributionDescriptorData FindImageEffector(
+            IEnumerable<TraceContributionDescriptorData> effectors)
+        {
+            return (effectors ?? Enumerable.Empty<TraceContributionDescriptorData>())
+                .Where(x => x != null &&
+                            (string.Equals(MouthLogic.OrganOf(x), BodyOrganValues.Image, StringComparison.Ordinal) ||
+                             (x.Id ?? string.Empty).IndexOf("image", StringComparison.OrdinalIgnoreCase) >= 0 ||
+                             (x.Provides ?? string.Empty).IndexOf("image", StringComparison.OrdinalIgnoreCase) >= 0))
+                .Where(CanAcceptExpressorImage)
+                .OrderByDescending(ImageEffectorScore)
+                .ThenBy(x => x.Id, StringComparer.Ordinal)
+                .FirstOrDefault();
+        }
+
+        private static bool CanAcceptExpressorImage(TraceContributionDescriptorData descriptor)
+        {
+            var schema = descriptor.ParametersJsonSchema ?? string.Empty;
+            return schema.IndexOf("prompt", StringComparison.OrdinalIgnoreCase) >= 0 ||
+                   schema.IndexOf("url", StringComparison.OrdinalIgnoreCase) >= 0 ||
+                   (descriptor.Id ?? string.Empty).IndexOf("imagegen", StringComparison.OrdinalIgnoreCase) >= 0 ||
+                   (descriptor.Provides ?? string.Empty).IndexOf("imagegen", StringComparison.OrdinalIgnoreCase) >= 0;
+        }
+
+        private static int ImageEffectorScore(TraceContributionDescriptorData descriptor)
+        {
+            var score = 0;
+            var id = descriptor.Id ?? string.Empty;
+            var provides = descriptor.Provides ?? string.Empty;
+            var schema = descriptor.ParametersJsonSchema ?? string.Empty;
+            if (id.IndexOf("imagegen", StringComparison.OrdinalIgnoreCase) >= 0) score += 100;
+            if (provides.IndexOf("imagegen", StringComparison.OrdinalIgnoreCase) >= 0) score += 100;
+            if (schema.IndexOf("prompt", StringComparison.OrdinalIgnoreCase) >= 0) score += 20;
+            if (schema.IndexOf("url", StringComparison.OrdinalIgnoreCase) >= 0) score += 10;
+            return score;
+        }
+
+        private static BrainCapabilityCallData NewExpression(
+            string capabilityId,
+            string purpose,
+            List<BrainCallArgumentData> arguments)
+        {
+            return new BrainCapabilityCallData
+            {
+                call_id = "expr-" + purpose + "-" + Guid.NewGuid().ToString("N"),
+                capability_id = capabilityId,
+                purpose = purpose,
+                arguments = arguments ?? new List<BrainCallArgumentData>()
+            };
         }
 
         private static void AddExtra(
@@ -207,8 +588,7 @@ namespace TraceSoul2.Logic
         /// </summary>
         private static string BuildFoundationPrompt(
             TraceTurnContext turn,
-            IEnumerable<TraceContextBlockData> contextBlocks,
-            IEnumerable<TraceContributionDescriptorData> catalog)
+            IEnumerable<TraceContextBlockData> contextBlocks)
         {
             var pair = turn.Services.Storage.LoadPairIdentity();
             var blocks = (contextBlocks ?? Enumerable.Empty<TraceContextBlockData>())
@@ -224,14 +604,14 @@ namespace TraceSoul2.Logic
             if (identity != null && !string.IsNullOrWhiteSpace(identity.Content))
                 builder.AppendLine(identity.Content.Trim());
             else
-                builder.AppendLine(pair.IsComplete ? "我是" + pair.Assname + "。" : "我是我自己。");
+                builder.AppendLine(pair.IsComplete ? "我是" + pair.Assname + "。" : CorePrompts.Expressor.SelfFallback);
             builder.AppendLine();
 
             var continuing = blocks.Where(x => !ReferenceEquals(x, identity)).ToList();
             if (continuing.Count > 0)
             {
-                builder.AppendLine("【持续陪伴我的重要信息】");
-                builder.AppendLine("这些内容直接融入我的理解，不向她解释来源。");
+                builder.AppendLine(CorePrompts.Expressor.ContinuingHeader);
+                builder.AppendLine(CorePrompts.Expressor.ContinuingHint);
                 foreach (var block in continuing)
                 {
                     builder.AppendLine(block.Content);
@@ -240,7 +620,7 @@ namespace TraceSoul2.Logic
             }
 
             builder.AppendLine();
-            AppendOutputFormat(builder, catalog);
+            AppendOutputFormat(builder);
             return builder.ToString();
         }
 
@@ -264,35 +644,45 @@ namespace TraceSoul2.Logic
                 builder.AppendLine(time.Content.Trim());
                 builder.AppendLine();
             }
-            builder.AppendLine("【我刚才想过】");
+            var recentDialogue = MindLogic.FormatRecentDialogue(turn);
+            if (!string.IsNullOrWhiteSpace(recentDialogue))
+            {
+                builder.AppendLine(recentDialogue);
+                builder.AppendLine();
+            }
+            builder.AppendLine(CorePrompts.Expressor.ThoughtHeader);
             builder.AppendLine(FormatMind(mind));
             if (!string.IsNullOrWhiteSpace(memoryFlesh))
             {
                 builder.AppendLine();
                 builder.AppendLine(memoryFlesh.Trim());
-                builder.AppendLine("这些材料帮我开口就好，不要讲成一段关于她的叙述。");
+                builder.AppendLine(pair.Apply(CorePrompts.Expressor.MemoryFlesh));
             }
             if (!string.IsNullOrWhiteSpace(leaveResult))
             {
                 builder.AppendLine();
-                builder.AppendLine("【外出结果】");
+                builder.AppendLine(CorePrompts.Expressor.LeaveResultHeader);
                 builder.AppendLine(leaveResult.Trim());
             }
             builder.AppendLine();
-            builder.AppendLine("【此刻】");
+            builder.AppendLine(CorePrompts.Expressor.NowHeader);
             if (waitOnly)
             {
-                builder.AppendLine("我要出门办事。先开口告诉她我去干什么，短，像人离开座位。不要假装已经办完。");
+                builder.AppendLine(CorePrompts.Expressor.LeaveWait);
             }
             else if (turn.RequiresExpression)
             {
-                builder.AppendLine(pair.Apply("{username}正在对我说话。对着她开口，叫她你。"));
+                builder.AppendLine(pair.Apply(CorePrompts.Expressor.PrivateChat));
+            }
+            else if (mind != null && mind.speak)
+            {
+                builder.AppendLine(CorePrompts.Expressor.Proactive);
             }
             else
             {
-                builder.AppendLine("这是后台感知；没有要说出口的话可以静默，reply 留空。");
+                builder.AppendLine(CorePrompts.Expressor.Silent);
             }
-            builder.AppendLine("只输出 JSON，不解释。");
+            builder.AppendLine(CorePrompts.Expressor.SpeakPlain);
             return builder.ToString();
         }
 
@@ -301,60 +691,32 @@ namespace TraceSoul2.Logic
             mind = MindLogic.Normalize(mind);
             var builder = new StringBuilder();
             if (mind.ParseTags().Count > 0)
-                builder.AppendLine("我要翻这些旧事：" + string.Join("、", mind.ParseTags()));
+                builder.AppendLine(CorePrompts.Expressor.MindTagsPrefix + string.Join("、", mind.ParseTags()));
             if (!string.IsNullOrWhiteSpace(mind.mood))
-                builder.AppendLine("心情：" + mind.mood + (mind.mood_changed ? "（变了）" : string.Empty));
-            if (mind.archive) builder.AppendLine("这段可以归档。");
+                builder.AppendLine(CorePrompts.Expressor.MindMoodPrefix + mind.mood + (mind.mood_changed ? CorePrompts.Expressor.MindMoodChanged : string.Empty));
+            if (!string.IsNullOrWhiteSpace(mind.inner))
+                builder.AppendLine(CorePrompts.Expressor.MindInnerPrefix + mind.inner);
+            if (mind.archive) builder.AppendLine(CorePrompts.Expressor.MindArchive);
             if (!string.IsNullOrWhiteSpace(mind.new_fact))
-                builder.AppendLine("今天新知道：" + mind.new_fact);
+                builder.AppendLine(CorePrompts.Expressor.MindNewFactPrefix + mind.new_fact);
             if (!string.IsNullOrWhiteSpace(mind.leave))
-                builder.AppendLine("我要出门去做：" + mind.leave);
+                builder.AppendLine(CorePrompts.Expressor.MindLeavePrefix + mind.leave);
             if (!string.IsNullOrWhiteSpace(mind.note))
-                builder.AppendLine("我决定要这样做：" + mind.note);
+                builder.AppendLine(CorePrompts.Expressor.MindNotePrefix + mind.note);
+            if (!string.IsNullOrWhiteSpace(mind.cognition))
+                builder.AppendLine(CorePrompts.Expressor.MindCognitionPrefix + mind.cognition);
+            if (mind.WantsSticker())
+                builder.AppendLine(CorePrompts.Expressor.MindSticker);
+            if (mind.ImageValue() == MindAtmosphereValues.Selfie)
+                builder.AppendLine(CorePrompts.Expressor.MindSelfie);
+            else if (mind.ImageValue() == MindAtmosphereValues.Draw)
+                builder.AppendLine(CorePrompts.Expressor.MindDraw);
             return builder.ToString().TrimEnd();
         }
 
-        private static void AppendOutputFormat(
-            StringBuilder builder,
-            IEnumerable<TraceContributionDescriptorData> catalog)
+        private static void AppendOutputFormat(StringBuilder builder)
         {
-            var extras = MouthLogic.ExtraModalities(catalog);
-            builder.AppendLine("【输出格式】");
-            builder.AppendLine("reply 是这一回合说给她听的话和身体。开口叫她你，不要写「她问」「她把选择递过来」这种旁白。");
-            builder.AppendLine("刚才想好的事要去做，不要把决定念给她听。旧事用来帮我开口，不要改写成关于她的叙述。");
-            builder.AppendLine("她问了具体的事，就要真的接住那件事。寒暄和商量可以短。");
-            builder.AppendLine("只输出一个 JSON 对象，不解释，不用 Markdown：");
-            var fields = new List<string>
-            {
-                "\"should_express\":true",
-                "\"reply\":\"\""
-            };
-            var hints = new List<string>();
-            if (extras.Contains(BodyOrganValues.Sticker))
-            {
-                fields.Add("\"sticker\":\"\"");
-                hints.Add("sticker 只写情绪词");
-            }
-            if (extras.Contains(BodyOrganValues.Qzone))
-            {
-                fields.Add("\"qzone\":\"\"");
-                hints.Add("qzone 写说说全文");
-            }
-            if (extras.Contains(BodyOrganValues.Voice)) fields.Add("\"voice\":\"\"");
-            if (extras.Contains(BodyOrganValues.Image)) fields.Add("\"image\":\"\"");
-            fields.Add("\"mood\":\"\"");
-            builder.AppendLine("{" + string.Join(",", fields) + "}");
-            if (hints.Count > 0)
-                builder.AppendLine(string.Join("；", hints) + "；没有就留空。不要写能力 ID。");
-            else
-                builder.AppendLine("不要写能力 ID。");
-        }
-
-        private static bool IsPrimaryTextEffector(TraceContributionDescriptorData item)
-        {
-            var provides = item == null ? string.Empty : item.Provides ?? string.Empty;
-            return provides.EndsWith(".text", StringComparison.OrdinalIgnoreCase) ||
-                   provides.EndsWith(".text.send", StringComparison.OrdinalIgnoreCase);
+            CorePrompts.Write(builder, CorePrompts.Expressor.OutputFormat);
         }
 
         private static bool IsRedundantProtocolFacet(string facetId)

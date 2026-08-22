@@ -242,7 +242,7 @@ namespace TraceSoul2.Migrate
             }
             builder.AppendLine();
             var mood = (inner.Mood ?? string.Empty).Trim();
-            builder.Append("我此刻的内心：").Append(inner.Narrative)
+            builder.Append("我此刻：").Append(inner.Narrative)
                 .AppendLine(mood.Length == 0 ? string.Empty : "（情绪：" + mood + "）");
             var timeText = BuildTimeText();
             builder.AppendLine();

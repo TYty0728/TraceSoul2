@@ -7,13 +7,14 @@ using System.Threading.Tasks;
 using TraceSoul2.Data;
 using TraceSoul2.Logic;
 using TraceSoul2.Manager;
+using TraceSoul2.Prompts;
 using TraceSoul2.Util;
 
 namespace TraceSoul2.Plugins.Builtin
 {
     /// <summary>
     /// 记忆神经：只读地检索第四层多维索引（时间×地点×人物×事件×心情）里的共同经历切片。
-    /// 当场观察会把新标签与事实写入生命网；本神经只读召回。话题结束时实时归档。
+    /// Mind 明确给出的新事实会写入生命网；本神经只读召回。话题积累到门槛后做批量小复盘。
     /// 日构建继续只做浸染和阶梯，不抢活体写入。
     /// </summary>
     public sealed class MemoryNervePlugin : ITracePlugin
@@ -24,10 +25,10 @@ namespace TraceSoul2.Plugins.Builtin
         {
             Id = PluginId,
             DisplayName = "人生记忆神经",
-            Version = "3.1.0",
+            Version = "3.3.0",
             Author = "TraceSoul2",
             Role = PluginRoleValues.Kernel,
-            Description = "子代理沿四层记忆定位，语义向量在定位范围内拼装最相近的细节；话题结束时实时归档，只读召回不写历史。"
+            Description = "子代理沿四层记忆定位，语义向量在定位范围内拼装最相近的细节；累计几十条对话后做批量小复盘，只读召回不写历史。"
         };
 
         public void Register(TracePluginContext context)
@@ -74,7 +75,7 @@ namespace TraceSoul2.Plugins.Builtin
                 if (items == null || items.Count == 0)
                     return Task.FromResult<TraceContextBlockData>(null);
                 var builder = new StringBuilder();
-                builder.AppendLine("今天刚知道的：");
+                builder.AppendLine(MemoryNervePrompts.TodayNewHeader);
                 foreach (var item in items)
                     builder.AppendLine("- " + item.Content);
                 return Task.FromResult(new TraceContextBlockData
@@ -157,8 +158,8 @@ namespace TraceSoul2.Plugins.Builtin
                 DisplayName = "归档刚结束的话题事件",
                 Description = "把刚刚结束的话题/事件直接构筑成多维索引与条目并标记已入库；被归档的 Moment 不再进入日复盘。",
                 Provides = "personal_memory.archive",
-                WhenToUse = "话题明显转变、上一个话题或事件已经结束时，把刚才这段对话归档成一条事件切片；对方明确说『记一下』『帮我记住』时也调用。",
-                WhenNotToUse = "话题还在进行中、只有零散寒暄、没有成块内容时。",
+                WhenToUse = MemoryNervePrompts.ArchiveWhenToUse,
+                WhenNotToUse = MemoryNervePrompts.ArchiveWhenNotToUse,
                 ParametersJsonSchema = "{summary:string,detail?:string,mood?:string,place?:string}",
                 HasInternalMutation = true
             };
@@ -185,17 +186,34 @@ namespace TraceSoul2.Plugins.Builtin
                 var storage = context.Services.Storage;
                 var pair = storage.LoadPairIdentity();
 
-                // 未归档窗口：最近 25 条（一个话题的合理长度），超出部分留给日复盘兜底。
-                var window = storage.GetRecentMoments(context.ConversationId, 60)
-                    .Where(x => x.MemoryStatus != "built")
-                    .TakeLast(25)
-                    .ToList();
+                // 小复盘窗口：约 20-30 轮双方对话。普通调用不足 40 条时拒绝，
+                // 只有对方明确要求“记住”才允许立即归档较短窗口。
+                var recent = storage.GetRecentMoments(context.ConversationId, 200);
+                var archiveCursor = MemoryArchivePolicyLogic.LoadArchiveCursor(
+                    storage, context.ConversationId);
+                var window = MemoryArchivePolicyLogic.SelectArchiveWindow(
+                    recent, context.Moment, pair,
+                    MemoryArchivePolicyLogic.HardDialogueMomentThreshold,
+                    archiveCursor);
                 if (window.Count == 0)
                 {
                     return new TraceCapabilityResultData
                     {
                         Status = "empty",
                         Summary = "没有未归档的 Moment，无需重复归档。",
+                        Payload = string.Empty
+                    };
+                }
+                if (window.Count < MemoryArchivePolicyLogic.SoftDialogueMomentThreshold &&
+                    !MemoryArchivePolicyLogic.IsExplicitMemoryRequest(context.Moment == null
+                        ? string.Empty
+                        : context.Moment.Content))
+                {
+                    return new TraceCapabilityResultData
+                    {
+                        Status = "deferred",
+                        Summary = "小复盘暂缓：当前只有 " + window.Count + " 条未归档对话 Moment，需要累计到 " +
+                                  MemoryArchivePolicyLogic.SoftDialogueMomentThreshold + " 条。",
                         Payload = string.Empty
                     };
                 }
@@ -210,16 +228,17 @@ namespace TraceSoul2.Plugins.Builtin
                     try
                     {
                         var text = string.Join("\n", window.Select(x =>
-                            pair.LabelForRole(x.Role) + "：" + (x.Content ?? string.Empty).Replace('\n', ' ')));
+                            pair.LabelForRole(x.Role) + "：" +
+                            Limit((x.Content ?? string.Empty).Replace('\n', ' '), 400)));
                         var messages = new List<DeepSeekMessageData>
                         {
-                            new DeepSeekMessageData("system", BuildArchivePrompt(pair)),
-                            new DeepSeekMessageData("user", "刚结束的话题对话记录：\n" + text)
+                            new DeepSeekMessageData("system", MemoryNervePrompts.ArchiveSystem(pair)),
+                            new DeepSeekMessageData("user", MemoryNervePrompts.ArchiveUserPrefix + text)
                         };
                         var output = await DeepSeekStructuredOutputLogic.CompleteAsync<ArchiveSummaryOutputData>(
                             llm, messages,
                             x => x != null && !string.IsNullOrWhiteSpace(x.summary),
-                            "归档总结输出缺少 summary。", cancellationToken);
+                            MemoryNervePrompts.MissingArchiveSummary, cancellationToken);
                         summary = (output.summary ?? string.Empty).Trim();
                         detail = LimitSentence(output.detail ?? string.Empty, 200);
                         if (!string.IsNullOrWhiteSpace(output.mood)) mood = output.mood.Trim();
@@ -262,6 +281,8 @@ namespace TraceSoul2.Plugins.Builtin
                 storage.SaveEventIndex(index);
                 storage.AppendEventEntry(entry);
                 var marked = storage.MarkMomentsBuilt(window.Select(x => x.Id));
+                MemoryArchivePolicyLogic.SaveArchiveCursor(
+                    storage, context.ConversationId, window.Max(x => x.CreatedUnixMs));
                 var recall = context.Services.Recall;
                 if (recall != null && recall.IsAvailable)
                 {
@@ -281,16 +302,6 @@ namespace TraceSoul2.Plugins.Builtin
                 };
             }
 
-            private static string BuildArchivePrompt(PairIdentity pair)
-            {
-                var builder = new System.Text.StringBuilder();
-                builder.AppendLine(pair.Apply("你是 {assname} 的记忆整理助手。下面是一段刚结束的话题的对话记录。请："));
-                builder.AppendLine("1. summary：一句客观、事实化的话题总结（谁做了什么/发生了什么，不超过80字）；");
-                builder.AppendLine("2. detail：用第一人称（我）写这段话题的细节，自然、不超过200字、不截断半句；没有可写的就留空；");
-                builder.AppendLine(pair.Apply("3. mood：这段对话里她的心情词（如 轻松、开心、平静、难过），读不出就留空。指代她一律按档案性别。"));
-                builder.AppendLine("只输出 JSON：{\"summary\":\"一句总结\",\"detail\":\"第一人称细节\",\"mood\":\"心情词\"}");
-                return builder.ToString();
-            }
         }
 
         private sealed class ActivateMemoryNerve : ITraceCallableContribution
@@ -304,8 +315,8 @@ namespace TraceSoul2.Plugins.Builtin
                 DisplayName = "激活并唤醒人生记忆",
                 Description = "子代理沿生命标签与多维维度列表定位（1-4 层），再由语义向量在定位范围内拼装最相近的细节切片；只向 Brain 返回证据，不写新记忆。",
                 Provides = "personal_memory.recall",
-                WhenToUse = "对方问你是否记得、问起一起经历过的具体事情，或你回答前需要共同记忆佐证。先 activate，再 finish。",
-                WhenNotToUse = "天气、问候、嗯嗯哈哈，或当前对话原文已经足够回答、不需要翻找过往经历时。",
+                WhenToUse = MemoryNervePrompts.ActivateWhenToUse,
+                WhenNotToUse = MemoryNervePrompts.ActivateWhenNotToUse,
                 ParametersJsonSchema = "{query:string}",
                 HasInternalMutation = false
             };
@@ -491,7 +502,7 @@ namespace TraceSoul2.Plugins.Builtin
             {
                 if (cognitions == null || cognitions.Count == 0) return string.Empty;
                 var builder = new StringBuilder();
-                builder.AppendLine("相关认知（我的第一人称理解）：");
+                builder.AppendLine(MemoryNervePrompts.CognitionHeader);
                 foreach (var c in cognitions)
                     builder.AppendLine("- " + c.Summary + "（置信 " + c.Confidence.ToString("0.00") + "）");
                 return builder.ToString().TrimEnd();
@@ -526,13 +537,13 @@ namespace TraceSoul2.Plugins.Builtin
                 var messages = new List<DeepSeekMessageData>
                 {
                     new DeepSeekMessageData("system", prompt),
-                    new DeepSeekMessageData("user", "需要定位的回忆：" + query)
+                    new DeepSeekMessageData("user", MemoryNervePrompts.RouteUserPrefix + query)
                 };
                 var selected = await DeepSeekStructuredOutputLogic.CompleteAsync<MemoryRouteSelectionData>(
                     nerve,
                     messages,
                     x => x != null && (x.has_memory || !string.IsNullOrWhiteSpace(x.reason)),
-                    "记忆神经子代理没有给出有效定位。",
+                    MemoryNervePrompts.MissingRoute,
                     cancellationToken);
                 var idByLabel = shownTags
                     .GroupBy(x => x.Label ?? string.Empty, StringComparer.Ordinal)
@@ -584,33 +595,22 @@ namespace TraceSoul2.Plugins.Builtin
                 bool fullCatalog)
             {
                 var builder = new StringBuilder();
-                builder.AppendLine("你是记忆定位器，只负责圈定检索范围，不回答对方、不写回记忆，也不解释数据库结构。");
-                builder.AppendLine("内部的域与维度关系已经由存储层维护；你只选择可读概念和明确提到的交叉条件。");
-                builder.AppendLine();
-                builder.AppendLine("规则：");
-                builder.AppendLine("1. has_memory=false 只用于问题明显描述从未经历的事；措辞不同或概念名不完全一致时，仍应先选最接近范围。");
-                builder.AppendLine("2. concept_labels 选 0-3 个最贴切的概念名，必须从下方原样复制；不要输出任何内部 ID。");
-                builder.AppendLine("3. 时段、地点、人物、心情只在问题明确提及时选择；年份月份或『第一次/最初/去年/某月』放 month_buckets。");
-                builder.AppendLine("4. 指向开端时选择最早日期桶，并结合命名、形象、身份等初识概念；refined_query 改写成 10-30 字事实检索句。");
-                builder.AppendLine();
-                builder.AppendLine("只输出 JSON：");
-                builder.AppendLine("{\"has_memory\":true,\"concept_labels\":[],\"time_labels\":[],\"month_buckets\":[],\"place_labels\":[],\"person_labels\":[],\"mood_labels\":[],\"refined_query\":\"\",\"reason\":\"\"}");
+                CorePrompts.Write(builder, MemoryNervePrompts.RouteRules);
                 builder.AppendLine();
                 var truncated = !fullCatalog && totalTagCount > shownTags.Count;
-                builder.AppendLine("可选概念名" +
-                    (truncated ? "（按活跃度选取 " + shownTags.Count + " 个，其余 " +
-                                 (totalTagCount - shownTags.Count) + " 个本次未列出）" : string.Empty) + "：");
+                builder.AppendLine(MemoryNervePrompts.OptionalConceptsHeader(
+                    truncated, shownTags.Count, totalTagCount - shownTags.Count));
                 foreach (var tag in shownTags)
                     builder.AppendLine("- " + tag.Label + "：" + Limit(tag.Definition, 40));
                 builder.AppendLine();
-                builder.AppendLine("可选交叉条件（只能原样复制）：");
+                builder.AppendLine(MemoryNervePrompts.CrossConditionsHeader);
                 var dims = storage.GetEventIndexDimensionValues();
-                builder.AppendLine("时间时段：" + FormatList(dims.TimeLabels));
-                builder.AppendLine("日期桶(yyyy-MM)：" + FormatList(dims.MonthBuckets));
-                builder.AppendLine("地点：" + FormatList(dims.PlaceLabels));
-                builder.AppendLine("人物：" + FormatList(dims.PersonLabels));
-                builder.AppendLine("心情：" + FormatList(dims.MoodLabels));
-                builder.AppendLine("（当前共 " + dims.TotalIndexes + " 个多维索引。）");
+                builder.AppendLine(MemoryNervePrompts.TimeLabelsPrefix + FormatList(dims.TimeLabels));
+                builder.AppendLine(MemoryNervePrompts.MonthBucketsPrefix + FormatList(dims.MonthBuckets));
+                builder.AppendLine(MemoryNervePrompts.PlacePrefix + FormatList(dims.PlaceLabels));
+                builder.AppendLine(MemoryNervePrompts.PersonPrefix + FormatList(dims.PersonLabels));
+                builder.AppendLine(MemoryNervePrompts.MoodPrefix + FormatList(dims.MoodLabels));
+                builder.AppendLine(MemoryNervePrompts.IndexCountFooter(dims.TotalIndexes));
                 return builder.ToString();
             }
 
@@ -631,7 +631,7 @@ namespace TraceSoul2.Plugins.Builtin
                 Dictionary<string, EventIndexRecord> indexById)
             {
                 var builder = new StringBuilder();
-                builder.AppendLine("此刻唤醒的共同记忆：");
+                builder.AppendLine(MemoryNervePrompts.AwakenedHeader);
                 foreach (var hit in hits)
                 {
                     EventEntryRecord entry;
@@ -649,14 +649,14 @@ namespace TraceSoul2.Plugins.Builtin
                     builder.AppendLine("  - " + Limit(entry.Summary, 60) + "｜" + Limit(entry.Detail, 200));
                 }
                 if (hits.Count == 0)
-                    builder.AppendLine("（候选范围内没有足够相近的细节。）");
+                    builder.AppendLine(MemoryNervePrompts.EmptyHits);
                 return builder.ToString().TrimEnd();
             }
 
             private static string FormatList(List<string> values)
             {
                 var list = values ?? new List<string>();
-                return list.Count == 0 ? "（空）" : string.Join("、", list.Take(60));
+                return list.Count == 0 ? MemoryNervePrompts.EmptyList : string.Join("、", list.Take(60));
             }
 
             private static int ParseInt(string value, int fallback)
@@ -876,14 +876,12 @@ namespace TraceSoul2.Plugins.Builtin
                 var shown = picked.Sum(x => x.Entries.Count);
                 if (route != null && route.Used)
                 {
-                    builder.AppendLine("生命标签路由点亮概念：" + string.Join("、", route.Concepts) +
-                                       "。以下共同经历切片（共 " + totalEntries + " 条条目，取 " + shown + " 条，★=路由命中）：");
+                    builder.AppendLine(MemoryNervePrompts.RoutedSlices(
+                        string.Join("、", route.Concepts), totalEntries, shown));
                 }
                 else
                 {
-                    builder.AppendLine(strong
-                        ? "路由未命中概念，已全量检索人生切片（共 " + totalEntries + " 条条目，取最相关 " + shown + " 条）："
-                        : "没有强相关切片，以下是时间最近的共同经历切片（共 " + totalEntries + " 条条目，取最近 " + shown + " 条）：");
+                    builder.AppendLine(MemoryNervePrompts.UnroutedSlices(strong, totalEntries, shown));
                 }
                 foreach (var group in picked)
                 {

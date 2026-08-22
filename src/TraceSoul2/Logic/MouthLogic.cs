@@ -197,14 +197,16 @@ namespace TraceSoul2.Logic
             var state = LoadState(turn == null || turn.Services == null ? null : turn.Services.DataDirectory);
             var active = (state.active_body ?? string.Empty).Trim();
             var onActive = live.Where(x => string.Equals(BodyOf(x), active, StringComparison.Ordinal)).ToList();
-            if (onActive.Count > 0) return PickSameBody(onActive);
-            return live
+            if (onActive.Count > 0) return PickSameBody(onActive, organ);
+            var winningBody = live
                 .OrderByDescending(x => BodyTierValues.Nearness(TierOf(x)))
                 .ThenByDescending(x => ScaleBias(x, state.scene))
                 .ThenByDescending(x => ScoreOf(BodyOf(x), state))
                 .ThenBy(x => BodyOf(x), StringComparer.Ordinal)
                 .ThenBy(x => x.Id, StringComparer.Ordinal)
+                .Select(BodyOf)
                 .First();
+            return PickSameBody(live.Where(x => string.Equals(BodyOf(x), winningBody, StringComparison.Ordinal)), organ);
         }
 
         public static IReadOnlyCollection<string> ExtraModalities(
@@ -307,9 +309,31 @@ namespace TraceSoul2.Logic
         }
 
         private static TraceContributionDescriptorData PickSameBody(
-            List<TraceContributionDescriptorData> items)
+            IEnumerable<TraceContributionDescriptorData> items,
+            string organ)
         {
-            return items.OrderBy(x => x.Id, StringComparer.Ordinal).First();
+            var values = (items ?? Enumerable.Empty<TraceContributionDescriptorData>()).ToList();
+            if (string.Equals(organ, BodyOrganValues.Image, StringComparison.Ordinal))
+            {
+                var producer = values
+                    .Where(IsPromptImageEffector)
+                    .OrderByDescending(x =>
+                        (x.Id ?? string.Empty).IndexOf("imagegen", StringComparison.OrdinalIgnoreCase) >= 0)
+                    .ThenBy(x => x.Id, StringComparer.Ordinal)
+                    .FirstOrDefault();
+                if (producer != null) return producer;
+            }
+            return values.OrderBy(x => x.Id, StringComparer.Ordinal).First();
+        }
+
+        private static bool IsPromptImageEffector(TraceContributionDescriptorData item)
+        {
+            if (item == null) return false;
+            var schema = item.ParametersJsonSchema ?? string.Empty;
+            return schema.IndexOf("prompt", StringComparison.OrdinalIgnoreCase) >= 0 ||
+                   schema.IndexOf("url", StringComparison.OrdinalIgnoreCase) >= 0 ||
+                   (item.Id ?? string.Empty).IndexOf("imagegen", StringComparison.OrdinalIgnoreCase) >= 0 ||
+                   (item.Provides ?? string.Empty).IndexOf("imagegen", StringComparison.OrdinalIgnoreCase) >= 0;
         }
 
         private static int ScaleBias(TraceContributionDescriptorData item, string scene)
@@ -420,7 +444,7 @@ namespace TraceSoul2.Logic
                 .OrderBy(g => g.Key, StringComparer.Ordinal)
                 .Select(g =>
                 {
-                    var item = g.OrderBy(x => x.Id, StringComparer.Ordinal).First();
+                    var item = PickSameBody(g, g.Key);
                     var ready = availableIds != null &&
                                 g.Any(x => x != null && availableIds.Contains(x.Id));
                     return new

@@ -4,6 +4,7 @@ using System.Linq;
 using System.Text;
 using TraceSoul2.Data;
 using TraceSoul2.Manager;
+using TraceSoul2.Prompts;
 
 namespace TraceSoul2.Logic
 {
@@ -69,13 +70,13 @@ namespace TraceSoul2.Logic
             var builder = new StringBuilder();
             if (data == null || !HasLitNodes(data))
             {
-                builder.AppendLine("此刻没有点亮任何人生节点。其余记忆保持沉寂。");
-                builder.AppendLine("不要把这理解成没有过去；只是当前 Moment 没有唤醒共同到达过的维度。");
+                builder.AppendLine(CorePrompts.MemoryNeighborhood.EmptyNodes);
+                builder.AppendLine(CorePrompts.MemoryNeighborhood.EmptyHint);
                 AppendObservation(builder, data);
                 return builder.ToString().TrimEnd();
             }
 
-            builder.AppendLine("此刻点亮的人生切片（未出现的节点保持沉寂，不要补成档案）：");
+            builder.AppendLine(CorePrompts.MemoryNeighborhood.LitHeader);
             var newIds = new HashSet<string>((data.NewFacts ?? new List<FactSliceRecord>()).Select(x => x.Id));
             var awakenedIds = new HashSet<string>((data.AwakenedFacts ?? new List<FactSliceRecord>()).Select(x => x.Id));
             var placedFacts = new HashSet<string>(StringComparer.OrdinalIgnoreCase);
@@ -130,7 +131,7 @@ namespace TraceSoul2.Logic
                 .ToList();
             if (traceOnly.Count > 0)
             {
-                builder.AppendLine("痕迹唤醒（未经当前 Tag 导航，由私人 cue 点亮）：");
+                builder.AppendLine(CorePrompts.MemoryNeighborhood.TraceWakeHeader);
                 foreach (var hit in traceOnly)
                     builder.Append("- 认知 ").Append(hit.Cognition.Id).Append("：")
                         .Append(hit.Cognition.Summary)

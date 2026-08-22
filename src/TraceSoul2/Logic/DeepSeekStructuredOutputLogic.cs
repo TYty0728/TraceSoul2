@@ -1,9 +1,11 @@
 using System;
 using System.Collections.Generic;
+using System.Text;
 using System.Threading;
 using System.Threading.Tasks;
 using TraceSoul2.Data;
 using TraceSoul2.Manager;
+using TraceSoul2.Prompts;
 using TraceSoul2.Util;
 
 namespace TraceSoul2.Logic
@@ -37,9 +39,7 @@ namespace TraceSoul2.Logic
                 new DeepSeekMessageData("assistant", Limit(raw, 16000)),
                 new DeepSeekMessageData(
                     "user",
-                    "上一条不满足要求：" + (missingMessage ?? "不是完整合法的 JSON，或缺少必填字段") +
-                    "。这不是新输入。请保持原任务语义，重新输出一个完整 JSON 对象；" +
-                    "不要解释，不要 Markdown，并闭合全部字符串与数组。")
+                    CorePrompts.Retry.JsonRepairUser(missingMessage))
             };
             var repairedRaw = await client.CompleteJsonAsync(repair, cancellationToken);
             try
@@ -54,6 +54,30 @@ namespace TraceSoul2.Logic
                     "语言模型连续两次返回不可用的结构化输出。首次错误：" + firstError.Message,
                     secondError);
             }
+        }
+
+        /// <summary>开口：收自然语言。校验失败再请它重说一次，不要求 JSON。</summary>
+        public static async Task<string> CompletePlainAsync(
+            ILlmClient client,
+            List<DeepSeekMessageData> messages,
+            Func<string, bool> validator,
+            string missingMessage,
+            CancellationToken cancellationToken)
+        {
+            var raw = await client.CompleteTextAsync(messages, cancellationToken);
+            if (validator == null || validator(raw)) return raw ?? string.Empty;
+
+            var repair = new List<DeepSeekMessageData>(messages)
+            {
+                new DeepSeekMessageData("assistant", Limit(raw, 16000)),
+                new DeepSeekMessageData(
+                    "user",
+                    CorePrompts.Retry.SpeakRepairUser(missingMessage))
+            };
+            var repaired = await client.CompleteTextAsync(repair, cancellationToken);
+            if (validator == null || validator(repaired)) return repaired ?? string.Empty;
+            throw new InvalidOperationException(
+                "语言模型连续两次没有把话说出来。首次：" + missingMessage);
         }
 
         /// <summary>finish_reason 表示输出被长度截断。</summary>
@@ -95,7 +119,60 @@ namespace TraceSoul2.Logic
 
         private static T Parse<T>(string raw) where T : class
         {
-                return TraceJson.FromJson<T>(StripCodeFence(raw));
+            return TraceJson.FromJson<T>(EscapeRawControlsInJsonStrings(StripCodeFence(raw)));
+        }
+
+        /// <summary>
+        /// GLM 等模型常在 JSON 字符串里直接断行（未转义 0x0A）。
+        /// 解析前把字符串内的裸控制符改成 \\n / \\r / \\t，合法 JSON 不受影响。
+        /// </summary>
+        public static string EscapeRawControlsInJsonStrings(string json)
+        {
+            var text = json ?? string.Empty;
+            if (text.IndexOf('\n') < 0 && text.IndexOf('\r') < 0 && text.IndexOf('\t') < 0)
+                return text;
+            var builder = new StringBuilder(text.Length + 16);
+            var inString = false;
+            var escape = false;
+            for (var i = 0; i < text.Length; i++)
+            {
+                var c = text[i];
+                if (!inString)
+                {
+                    if (c == '"') inString = true;
+                    builder.Append(c);
+                    continue;
+                }
+                if (escape)
+                {
+                    builder.Append(c);
+                    escape = false;
+                    continue;
+                }
+                if (c == '\\')
+                {
+                    builder.Append(c);
+                    escape = true;
+                    continue;
+                }
+                if (c == '"')
+                {
+                    inString = false;
+                    builder.Append(c);
+                    continue;
+                }
+                if (c == '\n') { builder.Append("\\n"); continue; }
+                if (c == '\r') { builder.Append("\\r"); continue; }
+                if (c == '\t') { builder.Append("\\t"); continue; }
+                if (c < ' ')
+                {
+                    builder.Append("\\u");
+                    builder.Append(((int)c).ToString("x4"));
+                    continue;
+                }
+                builder.Append(c);
+            }
+            return builder.ToString();
         }
 
         private static string StripCodeFence(string value)

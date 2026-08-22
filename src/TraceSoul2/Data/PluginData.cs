@@ -325,10 +325,21 @@ namespace TraceSoul2.Data
         public string attention;
         /// <summary>这一拍真的改了的看法；空则不写认知切片。短卡仍不由心智改。</summary>
         public string cognition;
+        /// <summary>心跳时：要对她说。普通对话由入口强制表达，此字段可忽略。</summary>
+        public bool speak;
+        /// <summary>要睡下。睡着后心跳停，直到打破性 Moment 才醒来。</summary>
+        public bool sleep;
+        /// <summary>心跳想完后：多少分钟后再跳一次。0 表示不再跳，等下一个入站。</summary>
+        public int next_heartbeat_minutes;
+        /// <summary>无 / 贴。贴则按 mood 丢一张表情。</summary>
+        public string sticker;
+        /// <summary>无 / 自拍 / 画。真的把图发到对话里，不是描写。</summary>
+        public string image;
 
         public bool WantsMemory()
         {
-            return BeatValue() == MindBeatValues.Memory || ParseTags().Count > 0;
+            return BeatValue() == MindBeatValues.Memory || ParseTags().Count > 0 ||
+                   !string.IsNullOrWhiteSpace(query);
         }
 
         public bool WantsLeave()
@@ -339,6 +350,41 @@ namespace TraceSoul2.Data
         public bool WantsReview()
         {
             return review;
+        }
+
+        public bool WantsSticker()
+        {
+            return StickerValue() == MindAtmosphereValues.Stick;
+        }
+
+        public bool WantsImage()
+        {
+            var value = ImageValue();
+            return value == MindAtmosphereValues.Selfie || value == MindAtmosphereValues.Draw;
+        }
+
+        public string StickerValue()
+        {
+            var value = (sticker ?? string.Empty).Trim();
+            if (value == "贴" || value == "要" || value == "发" ||
+                string.Equals(value, "true", StringComparison.OrdinalIgnoreCase) ||
+                string.Equals(value, "sticker", StringComparison.OrdinalIgnoreCase) ||
+                string.Equals(value, "yes", StringComparison.OrdinalIgnoreCase))
+                return MindAtmosphereValues.Stick;
+            return MindAtmosphereValues.None;
+        }
+
+        public string ImageValue()
+        {
+            var value = (image ?? string.Empty).Trim();
+            if (value == "自拍" || value == "照片" ||
+                string.Equals(value, "selfie", StringComparison.OrdinalIgnoreCase) ||
+                string.Equals(value, "photo", StringComparison.OrdinalIgnoreCase))
+                return MindAtmosphereValues.Selfie;
+            if (value == "画" || value == "生图" ||
+                string.Equals(value, "draw", StringComparison.OrdinalIgnoreCase))
+                return MindAtmosphereValues.Draw;
+            return MindAtmosphereValues.None;
         }
 
         public bool ClearsAttention()
@@ -388,6 +434,14 @@ namespace TraceSoul2.Data
         public const string Leave = "出门";
     }
 
+    public static class MindAtmosphereValues
+    {
+        public const string None = "无";
+        public const string Stick = "贴";
+        public const string Selfie = "自拍";
+        public const string Draw = "画";
+    }
+
     /// <summary>中枢按入口换轨：叫醒心智、叫醒潜意识、或她正在说话。</summary>
     public static class KernelWakeValues
     {
@@ -424,14 +478,43 @@ namespace TraceSoul2.Data
 
     /// <summary>外显输出：只决定怎么说，不决定调哪些内部神经。</summary>
     [Serializable]
+    public sealed class ExpressorVoiceOutputData
+    {
+        public string text;
+        public string emotion;
+    }
+
+    [Serializable]
+    public sealed class ExpressorImageOutputData
+    {
+        public string prompt;
+        /// <summary>photo / selfie / draw / edit / url；空时由相机器官判断。</summary>
+        public string mode;
+        /// <summary>逗号分隔的参考图分类名；空时由相机器官按自拍/人物规则自动选择。</summary>
+        public string refs;
+        public string aspect_ratio;
+        public string url;
+    }
+
+    [Serializable]
     public sealed class ExpressorOutputData
     {
         public bool should_express = true;
         public string reply;
         public string sticker;
         public string qzone;
+        /// <summary>旧兼容：单段语音文字。</summary>
         public string voice;
+        public string voice_emotion;
+        /// <summary>需要多段声音时使用；每段独立合成并按顺序发送。</summary>
+        public List<ExpressorVoiceOutputData> voices = new List<ExpressorVoiceOutputData>();
+        /// <summary>旧兼容：单张图片提示词。</summary>
         public string image;
+        public string image_mode;
+        public string image_refs;
+        public string image_aspect_ratio;
+        /// <summary>需要多张图或不同相机动作时使用。</summary>
+        public List<ExpressorImageOutputData> images = new List<ExpressorImageOutputData>();
         public string mood;
     }
 }

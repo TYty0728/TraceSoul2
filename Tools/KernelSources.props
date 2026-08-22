@@ -19,8 +19,18 @@
     <Compile Include="$(MSBuildThisFileDirectory)../src/TraceSoul2/Plugins/Builtin/OneBotPlatformPlugin.cs" />
     <Compile Include="$(MSBuildThisFileDirectory)../src/TraceSoul2/Plugins/Builtin/OneBotPlatformAdapter.cs" />
     <Compile Include="$(MSBuildThisFileDirectory)../src/TraceSoul2/Plugins/Builtin/TimeSchedulerPlugin.cs" />
+    <Compile Include="$(MSBuildThisFileDirectory)../src/TraceSoul2/Prompts/CorePrompts.cs" />
+    <Compile Include="$(MSBuildThisFileDirectory)../src/TraceSoul2/Plugins/Builtin/IdentityFacetPrompts.cs" />
+    <Compile Include="$(MSBuildThisFileDirectory)../src/TraceSoul2/Plugins/Builtin/InnerLifePrompts.cs" />
+    <Compile Include="$(MSBuildThisFileDirectory)../src/TraceSoul2/Plugins/Builtin/TimeSchedulerPrompts.cs" />
+    <Compile Include="$(MSBuildThisFileDirectory)../src/TraceSoul2/Plugins/Builtin/MemoryNervePrompts.cs" />
+    <Compile Include="$(MSBuildThisFileDirectory)../src/TraceSoul2/Plugins/Builtin/DialogueTracePrompts.cs" />
+    <Compile Include="$(MSBuildThisFileDirectory)../src/TraceSoul2/Plugins/Builtin/OneBotPlatformPrompts.cs" />
+    <Compile Include="$(MSBuildThisFileDirectory)../src/TraceSoul2/Plugins/Builtin/SensesCatalogPrompts.cs" />
     <Compile Include="$(MSBuildThisFileDirectory)../src/TraceSoul2/Logic/InnerLifeLogic.cs" />
+    <Compile Include="$(MSBuildThisFileDirectory)../src/TraceSoul2/Logic/HeartbeatLogic.cs" />
     <Compile Include="$(MSBuildThisFileDirectory)../src/TraceSoul2/Logic/MemoryLiveWriteLogic.cs" />
+    <Compile Include="$(MSBuildThisFileDirectory)../src/TraceSoul2/Logic/MemoryArchivePolicyLogic.cs" />
     <Compile Include="$(MSBuildThisFileDirectory)../src/TraceSoul2/Logic/CognitionLiveWriteLogic.cs" />
     <Compile Include="$(MSBuildThisFileDirectory)../src/TraceSoul2/Logic/LeaveNerveLogic.cs" />
     <Compile Include="$(MSBuildThisFileDirectory)../src/TraceSoul2/Logic/IdentityCardLogic.cs" />
@@ -30,6 +40,7 @@
     <Compile Include="$(MSBuildThisFileDirectory)../src/TraceSoul2/Logic/MemoryNeighborhoodLogic.cs" />
     <Compile Include="$(MSBuildThisFileDirectory)../src/TraceSoul2/Logic/MemoryObservationLogic.cs" />
     <Compile Include="$(MSBuildThisFileDirectory)../src/TraceSoul2/Logic/ExpressorLogic.cs" />
+    <Compile Include="$(MSBuildThisFileDirectory)../src/TraceSoul2/Logic/MemoryDayLogic.cs" />
     <Compile Include="$(MSBuildThisFileDirectory)../src/TraceSoul2/Logic/MindLogic.cs" />
     <Compile Include="$(MSBuildThisFileDirectory)../src/TraceSoul2/Logic/MindTemplateLogic.cs" />
     <Compile Include="$(MSBuildThisFileDirectory)../src/TraceSoul2/Logic/LadderRecallLogic.cs" />

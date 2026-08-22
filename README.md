@@ -48,7 +48,8 @@ TraceSoul2\
     home.json
     souls\<角色>\
     updates\
-  Plugins\               ← TRACESOUL2_PLUGINS：独立插件包
+  Plugins\               ← TRACESOUL2_PLUGINS：独立插件代码包
+  plugins_data\          ← TRACESOUL2_PLUGINS_DATA：插件配置与持久数据
 ```
 
 发布包里的 `Start-TraceSoul2.cmd` 默认按这个布局启动：`App`、`Data`、`Plugins` 可以一起迁移，但软件更新只替换 `App`。
@@ -61,11 +62,12 @@ TraceSoul2\
   souls\
     xun\                 ← 循：两套 sqlite、短卡、供应商、OneBot、plugin-data
     xiaoxi\              ← 小汐，结构相同
-  plugins\               ← 已装器官包（dll + 资源），覆盖后控制台重扫即可
+  plugins\               ← 已装器官代码包（dll + 默认资源）
+  plugins_data\          ← 按包名分目录保存配置与运行数据
   updates\               ← 更新下载、校验与临时运行器
 ```
 
-拷走 `Data` 即可迁移全部角色和设置；只拷 `souls/<角色>` 可以迁移单个角色。未设置环境变量时落到 `%LOCALAPPDATA%\TraceSoul2`。插件目录默认是家目录的 `plugins/`，也可通过 `home.json` 的 `pluginsDirectory`（相对路径按家目录解析）或 `TRACESOUL2_PLUGINS` 指向独立的 `Plugins`。
+拷走 `Data` 即可迁移全部角色和设置；只拷 `souls/<角色>` 可以迁移单个角色。未设置环境变量时落到 `%LOCALAPPDATA%\TraceSoul2`。插件代码目录默认是家目录的 `plugins/`，也可用 `pluginsDirectory` / `TRACESOUL2_PLUGINS` 指向别处；数据目录默认为它的同级 `plugins_data/`，可用 `pluginsDataDirectory` / `TRACESOUL2_PLUGINS_DATA` 覆盖。
 
 版本号在 `Tools/Directory.Build.props` 的 `TraceSoul2Version`。日常 commit 不改；决定集成一版时才运行 `scripts/Set-Version.ps1`、创建 `v*` 标签并生成 GitHub Release。已安装电脑可在 WebUI 检查并一键更新，详见 [版本与发布](docs/RELEASES.md)。PluginApi 在自己的 csproj 里单独编号。
 
@@ -78,13 +80,13 @@ $env:TRACESOUL2_HOME = "$env:USERPROFILE\TraceSoul2Data"
 dotnet Tools\Host\bin\Debug\net8.0\TraceSoul2.Host.dll
 ```
 
-环境变量：`TRACESOUL2_HOME`（家目录）、`TRACESOUL2_DATA`（可选，覆盖当前角色路径，调试用）、`TRACESOUL2_URLS`、`TRACESOUL2_PLUGINS`（可选，默认家目录 `plugins`）、`TRACESOUL2_MIGRATE_DLL`。
+环境变量：`TRACESOUL2_HOME`（家目录）、`TRACESOUL2_DATA`（可选，覆盖当前角色路径，调试用）、`TRACESOUL2_URLS`、`TRACESOUL2_PLUGINS`（代码包）、`TRACESOUL2_PLUGINS_DATA`（配置与持久数据）、`TRACESOUL2_MIGRATE_DLL`。
 
 控制台只接受本机回环连接和同源浏览器请求；不要把它反向代理到公网。
 
 生产运行时让启动脚本或服务设置 `TRACESOUL2_HOME`；不要把机器绝对路径写进仓库。
 
-每个角色目录内：`tracesoul2-brainframe.sqlite3`、`tracesoul2-vectors.sqlite3`、`llm-providers.json`、`onebot.json`、`bodies.json`、`memory-nerve.json`、`identity_cards.json`（种子）、`plugin-data/`。供应商模板见 `Tools/Host/llm-providers.example.json`，不要把带 Key 的文件推进 Git。
+每个角色目录内：`tracesoul2-brainframe.sqlite3`、`tracesoul2-vectors.sqlite3`、`llm-providers.json`、`onebot.json`、`bodies.json`、`memory-nerve.json`、`identity_cards.json`（种子）。插件数据不再混入角色目录，统一位于 `plugins_data/<包名>/`。
 
 ## 控制台（http://127.0.0.1:5080）
 
@@ -94,7 +96,7 @@ dotnet Tools\Host\bin\Debug\net8.0\TraceSoul2.Host.dll
 
 - 反向 WS 为主（AstrBot aiocqhttp 同款）：宿主监听 `ws://127.0.0.1:9021/ws`，NapCat 主动连入，事件与 API 动作共用一根连接。
 - NapCat 登录账号与启动脚本属于机器私有配置，不要写进仓库；这里只要求它连接本机 OneBot WebSocket。
-- 配置在数据目录 `onebot.json`（WebUI「QQ 平台配置」保存即重启生效）：`enabled / mode(reverse|forward) / listen_port / ws_url / http_url / access_token(可多个) / self_id / reply_enabled(回发开关)`。
+- 配置在数据目录 `onebot.json`（WebUI「QQ 平台配置」保存即重启生效）：`enabled / mode(reverse|forward) / listen_port / ws_url / http_url / access_token(可多个) / self_id / reply_enabled(回发开关) / napcat_path(本机启动路径)`。保存本地 NapCat 的 `.exe/.bat/.cmd` 或安装目录后，可直接在 WebUI 点击“启动 NapCat”；Host 重启不会自动重复拉起。
 
 ## 外部插件
 

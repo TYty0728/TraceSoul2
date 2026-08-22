@@ -1,6 +1,7 @@
 using System.Collections.Generic;
 using System.Text;
 using TraceSoul2.Data;
+using TraceSoul2.Prompts;
 
 namespace TraceSoul2.Logic
 {
@@ -8,11 +9,11 @@ namespace TraceSoul2.Logic
     {
         public static string FormatForLlm(VectorRouteResult route)
         {
-            if (route == null) return "（没有向量激活）";
+            if (route == null) return CorePrompts.VectorActivation.None;
             var builder = new StringBuilder();
-            Append(builder, "域", route.Domains);
-            Append(builder, "维度", route.Dimensions);
-            Append(builder, "概念入口", route.Concepts);
+            Append(builder, CorePrompts.VectorActivation.DomainTitle, route.Domains);
+            Append(builder, CorePrompts.VectorActivation.DimensionTitle, route.Dimensions);
+            Append(builder, CorePrompts.VectorActivation.ConceptTitle, route.Concepts);
             return builder.ToString().TrimEnd();
         }
 
@@ -21,9 +22,9 @@ namespace TraceSoul2.Logic
             builder.Append(title).Append("：");
             if (hits == null || hits.Count == 0)
             {
-                builder.AppendLine(title == "概念入口"
-                    ? "（没有达到可靠阈值的已有概念；不要从弱候选推断记忆）"
-                    : "（未点亮，保持沉寂）");
+                builder.AppendLine(title == CorePrompts.VectorActivation.ConceptTitle
+                    ? CorePrompts.VectorActivation.WeakConcepts
+                    : CorePrompts.VectorActivation.Silent);
                 return;
             }
 

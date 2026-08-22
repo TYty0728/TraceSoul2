@@ -45,13 +45,25 @@ namespace TraceSoul2.Migrate
             context.Vectors = new SqliteVectorManager(
                 Path.Combine(dataDir, "tracesoul2-vectors.sqlite3"));
             context.Providers = new LlmProviderStore(Path.Combine(dataDir, "llm-providers.json"));
-            // 迁移任务要求短而稳定的结构化 JSON；允许用独立提供商，且不要继承对话槽的
-            // 深度思考开关，否则强制推理模型可能把输出额度全部耗在 reasoning。
+            // 日构建 / 复盘要短而稳定的结构化 JSON。优先环境变量，其次复盘槽，最后对话开口；一律关思考。
             context.MigrationProviderId = Environment.GetEnvironmentVariable("TRACESOUL2_MIGRATION_PROVIDER");
-            if (string.IsNullOrWhiteSpace(context.MigrationProviderId))
-                context.MigrationProviderId = context.Providers.CurrentId;
             context.MigrationModel = Environment.GetEnvironmentVariable("TRACESOUL2_MIGRATION_MODEL");
-            context.Llm = context.CreateLlmClient();
+            if (!string.IsNullOrWhiteSpace(context.MigrationProviderId))
+            {
+                context.Llm = context.Providers.CreateClient(
+                    context.MigrationProviderId, context.MigrationModel, false);
+            }
+            else
+            {
+                context.Llm = context.Providers.CreateReviewClient();
+                if (context.Llm != null)
+                {
+                    context.MigrationProviderId = context.Llm.ProviderId;
+                    context.MigrationModel = context.Llm.Model;
+                }
+                else
+                    context.MigrationProviderId = context.Providers.CurrentId;
+            }
             return context;
         }
 

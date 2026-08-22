@@ -1,5 +1,6 @@
 using System;
 using System.Collections.Generic;
+using System.Diagnostics;
 using System.Globalization;
 using System.IO;
 using System.Linq;
@@ -24,6 +25,7 @@ namespace TraceSoul2.Plugins.Builtin
     public sealed class OneBotPlatformPlugin : ITracePlugin
     {
         private const string PluginId = "builtin.onebot";
+        private const string LastSessionDocumentKey = "last_session";
 
         private readonly object gate = new object();
         private readonly object socketGate = new object();
@@ -44,10 +46,12 @@ namespace TraceSoul2.Plugins.Builtin
         private string lastSessionType = string.Empty;
         private string lastSessionId = string.Empty;
         private WebSocket lastSessionSocket;
-        // 暂存消息：文字先暂存，表情/图片追加到结尾，整轮收尾钩子里合并成一条发出。
+        // 暂存消息：文字先暂存，表情追加到结尾，整轮收尾钩子里合并成一条发出。
+        // 图片不往文字上拼，生图成功后单独发。
         private string stagedText;
         private string stagedSessionType;
         private string stagedSessionId;
+        private TracePluginServices services;
         private long nextEcho;
         private volatile string lastError = string.Empty;
 
@@ -65,6 +69,79 @@ namespace TraceSoul2.Plugins.Builtin
         // ---------- 适配器/表达器可见的运行态 ----------
 
         internal OneBotConfig Config { get { return config; } }
+        internal bool TryResolveSession(TraceTurnContext context, out string sessionType, out string sessionId)
+        {
+            lock (gate)
+            {
+                sessionType = lastSessionType;
+                sessionId = lastSessionId;
+            }
+            if (!string.IsNullOrWhiteSpace(sessionId)) return true;
+            LoadLastSession();
+            lock (gate)
+            {
+                sessionType = lastSessionType;
+                sessionId = lastSessionId;
+            }
+            if (!string.IsNullOrWhiteSpace(sessionId)) return true;
+            var moments = context == null || context.Services == null || context.Services.Storage == null
+                ? null
+                : context.Services.Storage.GetRecentMoments(context.ConversationId, 80);
+            if (!OneBotSessionMemory.TryFind(moments, out sessionType, out sessionId))
+                return false;
+            lock (gate)
+            {
+                lastSessionType = sessionType;
+                lastSessionId = sessionId;
+            }
+            SaveLastSession();
+            return true;
+        }
+
+        private void LoadLastSession()
+        {
+            try
+            {
+                var json = services == null || services.Storage == null
+                    ? null
+                    : services.Storage.LoadPluginDocument(PluginId, LastSessionDocumentKey);
+                if (string.IsNullOrWhiteSpace(json)) return;
+                var saved = TraceJson.FromJson<OneBotSessionPayload>(json);
+                if (saved == null || string.IsNullOrWhiteSpace(saved.session_id)) return;
+                lock (gate)
+                {
+                    if (!string.IsNullOrWhiteSpace(lastSessionId)) return;
+                    lastSessionType = saved.session_type ?? string.Empty;
+                    lastSessionId = saved.session_id;
+                }
+            }
+            catch { /* 会话记忆损坏时等下一条入站再记 */ }
+        }
+
+        private void SaveLastSession()
+        {
+            string type;
+            string id;
+            lock (gate)
+            {
+                type = lastSessionType;
+                id = lastSessionId;
+            }
+            if (string.IsNullOrWhiteSpace(id) || services == null || services.Storage == null) return;
+            try
+            {
+                services.Storage.SavePluginDocument(
+                    PluginId,
+                    LastSessionDocumentKey,
+                    TraceJson.ToJson(new OneBotSessionPayload
+                    {
+                        session_type = type,
+                        session_id = id
+                    }));
+            }
+            catch { /* 会话记忆写失败不阻断收发 */ }
+        }
+
         internal string LastSessionType { get { lock (gate) return lastSessionType; } }
         internal string LastSessionId { get { lock (gate) return lastSessionId; } }
 
@@ -72,6 +149,7 @@ namespace TraceSoul2.Plugins.Builtin
 
         public void Register(TracePluginContext context)
         {
+            services = context.Services;
             context.Services.Platforms.Register(new PlatformHandle
             {
                 Id = "onebot",
@@ -90,6 +168,7 @@ namespace TraceSoul2.Plugins.Builtin
             context.AddBackgroundService(new OneBotInboxService(this));
             // 整轮收尾：把暂存的文字（可能带结尾表情）合并成一条 QQ 消息发出。
             context.Services.TurnCompleteHooks.Add(FlushStagedAsync);
+            LoadLastSession();
             if (!config.enabled) return;
             waitingSinceUnixMs = DateTimeOffset.UtcNow.ToUnixTimeMilliseconds();
             if (IsReverseMode)
@@ -121,7 +200,7 @@ namespace TraceSoul2.Plugins.Builtin
             }
         }
 
-        /// <summary>把表情/图片段追加到暂存文字结尾；没有暂存文字返回 false（走单独发送）。</summary>
+        /// <summary>把表情段追加到暂存文字结尾；没有暂存文字返回 false（走单独发送）。图片不要走这里。</summary>
         internal bool TryAppendSegment(string segment)
         {
             lock (gate)
@@ -144,12 +223,17 @@ namespace TraceSoul2.Plugins.Builtin
                 stagedText = null;
             }
             if (string.IsNullOrWhiteSpace(sessionId)) return;
+            var timer = Stopwatch.StartNew();
+            services?.LogTiming(turn == null ? null : turn.TraceId, "QQ 合并文字发送开始",
+                detail: "session=" + sessionType);
             await CallActionAsync(sessionType == "group" ? "send_group_msg" : "send_private_msg",
                 new Dictionary<string, object>
                 {
                     { sessionType == "group" ? "group_id" : "user_id", long.Parse(sessionId) },
                     { "message", text }
                 });
+            services?.LogTiming(turn == null ? null : turn.TraceId, "QQ 合并文字发送完成",
+                timer.ElapsedMilliseconds);
         }
 
         public void Shutdown()
@@ -175,6 +259,8 @@ namespace TraceSoul2.Plugins.Builtin
             lock (gate) learned = learnedSelfIds.ToArray();
             lock (socketGate) sockets = reverseSockets.Count;
             var waiting = config.enabled && !connected;
+            var selfIdMismatch = !string.IsNullOrWhiteSpace(config.self_id) && learned.Length > 0 &&
+                !learned.Any(x => string.Equals(x, config.self_id.Trim(), StringComparison.Ordinal));
             var waitingSeconds = waiting && waitingSinceUnixMs > 0
                 ? Math.Max(0, (DateTimeOffset.UtcNow.ToUnixTimeMilliseconds() - waitingSinceUnixMs) / 1000)
                 : 0;
@@ -194,7 +280,11 @@ namespace TraceSoul2.Plugins.Builtin
                 lastError = lastError,
                 waitingReconnect = waiting,
                 waitingSeconds,
-                hint = waiting
+                hint = selfIdMismatch
+                    ? "self_id 配置为 " + config.self_id.Trim() +
+                      "，但 NapCat 上报的机器人 QQ 是 " + string.Join(", ", learned) +
+                      "。请填机器人自身 QQ 或留空，否则入站消息会被过滤。"
+                    : waiting
                     ? "等待 NapCat 重连（已等 " + waitingSeconds + " 秒，通常约 30 秒内连上）"
                     : string.Empty
             };
@@ -381,21 +471,31 @@ namespace TraceSoul2.Plugins.Builtin
 
         private void HandleInbound(string json, WebSocket sourceSocket)
         {
+            var timer = Stopwatch.StartNew();
             var moment = adapter.ConvertInbound(json);
             if (moment == null) return;
+            if (string.IsNullOrWhiteSpace(moment.TraceId))
+                moment.TraceId = Guid.NewGuid().ToString("N").Substring(0, 8);
+            services?.LogTiming(moment.TraceId, "QQ WebSocket 消息解析完成",
+                timer.ElapsedMilliseconds,
+                "event=" + (moment.ExternalEventId ?? string.Empty) + "｜organ=" + (moment.Organ ?? string.Empty));
             OneBotSessionPayload session = null;
             try { session = TraceJson.FromJson<OneBotSessionPayload>(moment.PayloadJson ?? string.Empty); }
             catch { session = null; }
+            var remembered = false;
             lock (gate)
             {
                 if (session != null && !string.IsNullOrWhiteSpace(session.session_id))
                 {
                     lastSessionType = session.session_type ?? string.Empty;
                     lastSessionId = session.session_id;
+                    remembered = true;
                 }
                 lastSessionSocket = sourceSocket;
                 inbound.Enqueue(moment);
             }
+            if (remembered) SaveLastSession();
+            services?.LogTiming(moment.TraceId, "QQ 消息已入后台收件箱");
         }
 
         // ---------- 收件箱（后台服务 → Brain） ----------
@@ -441,7 +541,7 @@ namespace TraceSoul2.Plugins.Builtin
                 Id = "qq.text.send",
                 Kind = TraceContributionKindValues.Effector,
                 DisplayName = "QQ 发文字",
-                Description = "把 Brain 的文字回复发到当前 QQ 会话。",
+                Description = OneBotPlatformPrompts.TextEffectorDescription,
                 Provides = "expression.qq.text",
                 Boundary = "QQ文字｜自由文本（回复当前QQ会话）",
                 BodyId = BodyIds.Qq,
@@ -474,7 +574,7 @@ namespace TraceSoul2.Plugins.Builtin
                 Id = "qq.image.send",
                 Kind = TraceContributionKindValues.Effector,
                 DisplayName = "QQ 发图片",
-                Description = "把一张图片发到当前 QQ 会话（file 为本地路径或 URL）。",
+                Description = OneBotPlatformPrompts.ImageEffectorDescription,
                 Provides = "expression.qq.image",
                 Boundary = "QQ图片｜发一张图（给 file 路径或 URL）",
                 BodyId = BodyIds.Qq,
@@ -615,6 +715,30 @@ namespace TraceSoul2.Plugins.Builtin
         }
     }
 
+    /// <summary>从已入库的 QQ Moment 找回上次会话，Host 重启后心跳仍能发回原处。</summary>
+    public static class OneBotSessionMemory
+    {
+        public static bool TryFind(IEnumerable<MomentRecord> moments, out string sessionType, out string sessionId)
+        {
+            sessionType = string.Empty;
+            sessionId = string.Empty;
+            if (moments == null) return false;
+            foreach (var moment in moments.Reverse())
+            {
+                if (moment == null || string.IsNullOrWhiteSpace(moment.PayloadJson)) continue;
+                OneBotSessionPayload session;
+                try { session = TraceJson.FromJson<OneBotSessionPayload>(moment.PayloadJson); }
+                catch { continue; }
+                if (session == null || string.IsNullOrWhiteSpace(session.session_id) ||
+                    session.session_id == "0") continue;
+                sessionType = string.IsNullOrWhiteSpace(session.session_type) ? "private" : session.session_type;
+                sessionId = session.session_id;
+                return true;
+            }
+            return false;
+        }
+    }
+
     [Serializable]
     public sealed class OneBotConfig
     {
@@ -636,11 +760,14 @@ namespace TraceSoul2.Plugins.Builtin
         /// <summary>Access Token；可填多个（逗号/分号/换行分隔），与 NapCat websocketClients 里的 token 对应。</summary>
         public string access_token = string.Empty;
 
-        /// <summary>只收这个 QQ（self_id）的消息；留空 = 都收。</summary>
+        /// <summary>只收这个机器人账号（事件 self_id）的消息；不是对方 user_id；留空 = 都收。</summary>
         public string self_id = string.Empty;
 
         /// <summary>回发开关：true=Brain 的文字回复自动发回 QQ；false=只收不回（消息照常进 Brain，回复留在控制台）。</summary>
         public bool reply_enabled = true;
+
+        /// <summary>本机 NapCat 启动文件或包含启动文件的目录；仅供 Host WebUI 手动拉起。</summary>
+        public string napcat_path = string.Empty;
 
         public static OneBotConfig Load(string dataDirectory)
         {
@@ -675,5 +802,6 @@ namespace TraceSoul2.Plugins.Builtin
         public string session_type;
         public string session_id;
         public string nickname;
+        public List<string> image_urls = new List<string>();
     }
 }

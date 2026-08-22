@@ -7,6 +7,7 @@ using System.Threading.Tasks;
 using TraceSoul2.Data;
 using TraceSoul2.Logic;
 using TraceSoul2.Manager;
+using TraceSoul2.Prompts;
 using TraceSoul2.Util;
 
 namespace TraceSoul2.Migrate
@@ -255,7 +256,7 @@ namespace TraceSoul2.Migrate
             var messages = new List<DeepSeekMessageData>
             {
                 new DeepSeekMessageData("system", prompt),
-                new DeepSeekMessageData("user", "请输出重要性排序 JSON。")
+                new DeepSeekMessageData("user", CorePrompts.Migration.RankUser)
             };
             var output = await DeepSeekStructuredOutputLogic.CompleteAsync<LadderRankOutputData>(
                 llm, messages,
@@ -347,12 +348,12 @@ namespace TraceSoul2.Migrate
             PairIdentity pair, string periodKey, List<CognitionSliceRecord> ordered)
         {
             var builder = new System.Text.StringBuilder();
-            builder.AppendLine(pair.Apply("你是 {assname} 记忆整理助手。为「认知日榜（" + periodKey + "）」排序以下候选认知："));
+            builder.AppendLine(pair.Apply(CorePrompts.Migration.CognitionRankIntro(periodKey)));
             for (var i = 0; i < ordered.Count; i++)
                 builder.AppendLine("i" + (i + 1) + " | " + ordered[i].Summary + " | 置信 " + ordered[i].Confidence.ToString("0.00"));
             builder.AppendLine();
-            builder.AppendLine("请按「对我理解她/自己/我们的重要性」排序，选出最重要的前 " + LadderSize + " 条（不足则全部），每条给一句上榜理由。");
-            builder.AppendLine("只输出 JSON：{\"items\":[{\"rank\":1,\"index_alias\":\"i3\",\"reason\":\"一句话理由\"}]}");
+            builder.AppendLine(CorePrompts.Migration.CognitionRankAsk(LadderSize));
+            builder.AppendLine(CorePrompts.Migration.RankJsonSchema);
             return builder.ToString();
         }
 
@@ -360,14 +361,14 @@ namespace TraceSoul2.Migrate
             PairIdentity pair, string periodKey, List<EventIndexRecord> ordered, string tierName, int topSize)
         {
             var builder = new System.Text.StringBuilder();
-            builder.AppendLine(pair.Apply("你是 {assname} 记忆整理助手。为「" + tierName + "（" + periodKey + "）」排序以下候选事件："));
+            builder.AppendLine(pair.Apply(CorePrompts.Migration.EventRankIntro(tierName, periodKey)));
             for (var i = 0; i < ordered.Count; i++)
                 builder.AppendLine("i" + (i + 1) + " | " + ordered[i].TimeLabel + "·" +
                     (string.IsNullOrWhiteSpace(ordered[i].MoodLabel) ? "心情未知" : ordered[i].MoodLabel) +
                     " | " + ordered[i].EventSummary);
             builder.AppendLine();
-            builder.AppendLine("请按「对我和她的关系、对她这个人的重要性」排序，选出最重要的前 " + topSize + " 条（不足则全部），每条给一句上榜理由。");
-            builder.AppendLine("只输出 JSON：{\"items\":[{\"rank\":1,\"index_alias\":\"i3\",\"reason\":\"一句话理由\"}]}");
+            builder.AppendLine(CorePrompts.Migration.EventRankAsk(topSize));
+            builder.AppendLine(CorePrompts.Migration.RankJsonSchema);
             return builder.ToString();
         }
 
@@ -375,13 +376,13 @@ namespace TraceSoul2.Migrate
             PairIdentity pair, string periodKey, List<LadderItemRecord> candidates, string tierName, int topSize)
         {
             var builder = new System.Text.StringBuilder();
-            builder.AppendLine(pair.Apply("你是 {assname} 记忆整理助手。为「" + tierName + "（" + periodKey + "）」排序以下候选事件："));
+            builder.AppendLine(pair.Apply(CorePrompts.Migration.EventRankIntro(tierName, periodKey)));
             for (var i = 0; i < candidates.Count; i++)
                 builder.AppendLine("i" + (i + 1) + " | " + candidates[i].Label +
                     (string.IsNullOrWhiteSpace(candidates[i].Reason) ? string.Empty : " | " + candidates[i].Reason));
             builder.AppendLine();
-            builder.AppendLine("请按「对我和她的关系、对她这个人的重要性」排序，选出最重要的前 " + topSize + " 条（不足则全部），每条给一句上榜理由。");
-            builder.AppendLine("只输出 JSON：{\"items\":[{\"rank\":1,\"index_alias\":\"i3\",\"reason\":\"一句话理由\"}]}");
+            builder.AppendLine(CorePrompts.Migration.EventRankAsk(topSize));
+            builder.AppendLine(CorePrompts.Migration.RankJsonSchema);
             return builder.ToString();
         }
 

@@ -789,6 +789,8 @@ UpdatedUnixMs
 - 完整字段只有 `inner.inspect` 时读取。
 - 确实变化时才创建下一 revision。
 - 没有变化时不为了形式机械改写。
+- 普通对话固定只跑 Mind + Expressor；逐句事实观察不得擅自增加第三次 LLM。
+- 小复盘按批次运行：40 条双方 Moment 且话题结束时触发，60 条兜底；明确记忆指令可立即触发。
 
 ## 17. DynamicMem 与复盘思想的最终演化
 

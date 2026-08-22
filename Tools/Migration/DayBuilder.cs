@@ -9,6 +9,7 @@ using System.Threading.Tasks;
 using TraceSoul2.Data;
 using TraceSoul2.Logic;
 using TraceSoul2.Manager;
+using TraceSoul2.Prompts;
 using TraceSoul2.Tools.Memory;
 using TraceSoul2.Util;
 
@@ -72,7 +73,7 @@ namespace TraceSoul2.Migrate
                 var messages = new List<DeepSeekMessageData>
                 {
                     new DeepSeekMessageData("system", prompt),
-                    new DeepSeekMessageData("user", "请观察这一段连续记录并输出 JSON。")
+                    new DeepSeekMessageData("user", CorePrompts.Migration.ObserveUser)
                 };
                 var output = await DeepSeekStructuredOutputLogic.CompleteAsync<ReplayPrompts.DayEventOutputData>(
                     llm, messages,
@@ -199,7 +200,7 @@ namespace TraceSoul2.Migrate
                     var messages = new List<DeepSeekMessageData>
                     {
                         new DeepSeekMessageData("system", prompt),
-                        new DeepSeekMessageData("user", "请写出细节 JSON。")
+                        new DeepSeekMessageData("user", CorePrompts.Migration.DetailUser)
                     };
                     var detailOutput = await DeepSeekStructuredOutputLogic.CompleteAsync<ReplayPrompts.DetailOutputData>(
                         llm, messages, x => x != null && !string.IsNullOrWhiteSpace(x.detail),
@@ -238,7 +239,7 @@ namespace TraceSoul2.Migrate
             var cardsNow = context.Store.LoadIdentityCards(MigrationContext.ConversationId);
             var reviewOutput = await RunDayReviewAsync(
                 context, pair, llm, dayKey, cardsNow, userProfileCard, dayIndexes, dayEntries);
-            var changed = ApplyReviewOutput(context, pair, reviewOutput, cardsNow, lastMomentId);
+            var changed = ApplyReviewOutput(context, pair, reviewOutput, cardsNow, lastMomentId, false);
             Console.WriteLine();
             Console.WriteLine("三卡与内心变化：" + (changed.Count == 0 ? "（无变化）" : string.Join("；", changed)));
 
@@ -260,11 +261,11 @@ namespace TraceSoul2.Migrate
             return 0;
         }
 
-        /// <summary>空天循环：无新 Moment，仍走复盘（卡片按规则保持原样）与榜单（无事件跳过）。</summary>
+        /// <summary>空天仍是真实的一天：短卡保持原样，内心写下这一天的时间感；手上没结束的事不清掉。</summary>
         private static async Task<int> EmptyDayCycleAsync(
             MigrationContext context, PairIdentity pair, ILlmClient llm, string dayKey)
         {
-            Console.WriteLine("空天循环：" + dayKey + " 没有已导入的 Moment——只跑当天复盘与排序。");
+            Console.WriteLine("空天循环：" + dayKey + " 没有 Moment——仍复盘这一天的时间感。");
             var cardsNow = context.Store.LoadIdentityCards(MigrationContext.ConversationId);
             var profile = Card(cardsNow, IdentityCardSlotValues.UserProfile);
             var userProfileCard = IdentityCardLogic.ResolveBody(
@@ -272,7 +273,7 @@ namespace TraceSoul2.Migrate
             var reviewOutput = await RunDayReviewAsync(
                 context, pair, llm, dayKey, cardsNow, userProfileCard,
                 new List<EventIndexRecord>(), new List<EventEntryRecord>());
-            var changed = ApplyReviewOutput(context, pair, reviewOutput, cardsNow, string.Empty);
+            var changed = ApplyReviewOutput(context, pair, reviewOutput, cardsNow, string.Empty, true);
             Console.WriteLine("三卡与内心变化：" + (changed.Count == 0 ? "（无变化）" : string.Join("；", changed)));
             var day = DateTime.ParseExact(dayKey, "yyyy-MM-dd", CultureInfo.InvariantCulture);
             var range = DateRange.Parse(new[] { "--from", dayKey, "--to", dayKey });
@@ -306,7 +307,7 @@ namespace TraceSoul2.Migrate
             var reviewMessages = new List<DeepSeekMessageData>
             {
                 new DeepSeekMessageData("system", reviewPrompt),
-                new DeepSeekMessageData("user", "请输出三张卡的新版本与内心状态 JSON。")
+                new DeepSeekMessageData("user", CorePrompts.Migration.DayCardUser)
             };
             var output = await DeepSeekStructuredOutputLogic.CompleteAsync<ReplayPrompts.DayCardReviewOutputData>(
                 llm, reviewMessages,
@@ -317,13 +318,14 @@ namespace TraceSoul2.Migrate
             return output;
         }
 
-        /// <summary>应用复盘输出：三卡只写真正变化的；内心全字段经 Reduce 同步（空字段=保留现状）。</summary>
+        /// <summary>应用复盘输出：三卡只写真正变化的；内心全字段经 Reduce 同步（空字段=保留现状）。空天不清手上未结束的事。</summary>
         private static List<string> ApplyReviewOutput(
             MigrationContext context,
             PairIdentity pair,
             ReplayPrompts.DayCardReviewOutputData reviewOutput,
             List<IdentityCardRecord> cardsNow,
-            string lastMomentId)
+            string lastMomentId,
+            bool emptyDay)
         {
             var changed = new List<string>();
             foreach (var card in reviewOutput.cards ?? new List<ReplayPrompts.CardUpdateData>())
@@ -341,17 +343,19 @@ namespace TraceSoul2.Migrate
                 changed.Add(IdentityCardSlotValues.Title(card.slot, pair) + "：" + Limit(card.reason, 40));
             }
 
-            // 内心全字段：attention 只在复盘明确给出时替换；ongoing/unfinished 支持显式清除。
+            // 内心：attention 空数组=不改；ongoing/unfinished 空字符串在有相处的日子表示清除，空天表示保留。
             var attention = (reviewOutput.inner_attention == null || reviewOutput.inner_attention.Count == 0)
                 ? null
                 : reviewOutput.inner_attention;
+            var ongoing = (reviewOutput.inner_ongoing_activity ?? string.Empty).Trim();
+            var unfinished = (reviewOutput.inner_unfinished_intent ?? string.Empty).Trim();
             var proposed = new InnerRuntimeWriteData
             {
                 narrative = pair.RewriteRecordedText((reviewOutput.inner_narrative ?? string.Empty).Trim()),
                 mood = (reviewOutput.inner_mood ?? string.Empty).Trim(),
                 relationship_update = (reviewOutput.inner_relationship_lens ?? string.Empty).Trim(),
-                ongoing_activity = (reviewOutput.inner_ongoing_activity ?? string.Empty).Trim(),
-                unfinished_intent = (reviewOutput.inner_unfinished_intent ?? string.Empty).Trim(),
+                ongoing_activity = emptyDay && ongoing.Length == 0 ? null : ongoing,
+                unfinished_intent = emptyDay && unfinished.Length == 0 ? null : unfinished,
                 attention = attention
             };
             var hasInner = proposed.narrative.Length > 0 || proposed.mood.Length > 0 ||
@@ -393,7 +397,7 @@ namespace TraceSoul2.Migrate
             var messages = new List<DeepSeekMessageData>
             {
                 new DeepSeekMessageData("system", prompt),
-                new DeepSeekMessageData("user", "请输出今天的认知变化 JSON。")
+                new DeepSeekMessageData("user", CorePrompts.Migration.CognitionUser)
             };
             var output = await DeepSeekStructuredOutputLogic.CompleteAsync<ReplayPrompts.CognitionFormationOutputData>(
                 llm, messages, x => x != null, "认知复盘输出无效。", CancellationToken.None);

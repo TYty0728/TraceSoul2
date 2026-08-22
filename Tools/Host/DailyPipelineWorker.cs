@@ -4,6 +4,7 @@ using System.IO;
 using System.Threading;
 using System.Threading.Tasks;
 using Microsoft.Extensions.Hosting;
+using TraceSoul2.Logic;
 
 namespace TraceSoul2.Host
 {
@@ -14,9 +15,6 @@ namespace TraceSoul2.Host
     /// </summary>
     public sealed class DailyPipelineWorker : BackgroundService
     {
-        private static readonly TimeSpan ChinaOffset = TimeSpan.FromHours(8);
-        private const int BoundaryHour = 4;
-
         private readonly SoulRuntime runtime;
         private readonly string migrateDll;
 
@@ -30,9 +28,8 @@ namespace TraceSoul2.Host
         {
             while (!stoppingToken.IsCancellationRequested)
             {
-                var now = DateTimeOffset.Now.ToOffset(ChinaOffset);
-                var nextBoundary = now.Date.AddHours(BoundaryHour);
-                if (nextBoundary <= now) nextBoundary = nextBoundary.AddDays(1);
+                var now = DateTimeOffset.Now.ToOffset(MemoryDayLogic.ChinaOffset);
+                var nextBoundary = MemoryDayLogic.CurrentStart(now).AddDays(1);
                 runtime.Emit("下次自动日构建：" + nextBoundary.ToString("yyyy-MM-dd HH:mm") +
                              "（+08:00 记忆日边界）");
                 var wait = nextBoundary - now;
@@ -44,7 +41,7 @@ namespace TraceSoul2.Host
                 {
                     return;
                 }
-                var dayKey = MemoryDayKey(DateTimeOffset.Now.ToOffset(ChinaOffset).AddHours(-BoundaryHour));
+                var dayKey = MemoryDayLogic.ClosedDayKey(DateTimeOffset.Now);
                 StartDayBuild(dayKey);
                 // 构建本身可能超过一分钟；等下一个边界再跑，不会重复（build 幂等且只消费未归档 Moment）。
             }
@@ -54,7 +51,7 @@ namespace TraceSoul2.Host
         public string Trigger(string dayKey)
         {
             var target = string.IsNullOrWhiteSpace(dayKey)
-                ? MemoryDayKey(DateTimeOffset.Now.ToOffset(ChinaOffset).AddHours(-BoundaryHour))
+                ? MemoryDayLogic.ClosedDayKey(DateTimeOffset.Now)
                 : dayKey.Trim();
             StartDayBuild(target);
             return target;
@@ -89,11 +86,6 @@ namespace TraceSoul2.Host
             {
                 runtime.Emit("日构建启动失败：" + exception.Message);
             }
-        }
-
-        private static string MemoryDayKey(DateTimeOffset shifted)
-        {
-            return shifted.ToString("yyyy-MM-dd");
         }
 
         private static string ResolveMigrateDll()

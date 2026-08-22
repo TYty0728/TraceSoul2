@@ -7,6 +7,7 @@ using System.Threading;
 using System.Threading.Tasks;
 using TraceSoul2.Data;
 using TraceSoul2.Logic;
+using TraceSoul2.Prompts;
 using TraceSoul2.Util;
 
 namespace TraceSoul2.Manager
@@ -19,7 +20,7 @@ namespace TraceSoul2.Manager
     {
         private static readonly HttpClient Http = new HttpClient
         {
-            Timeout = TimeSpan.FromSeconds(300)
+            Timeout = Timeout.InfiniteTimeSpan
         };
 
         private readonly DeepSeekConfigData config;
@@ -51,7 +52,7 @@ namespace TraceSoul2.Manager
             using (var request = new HttpRequestMessage(HttpMethod.Get, endpoint))
             {
                 request.Headers.Authorization = new AuthenticationHeaderValue("Bearer", config.ApiKey);
-                using (var response = await Http.SendAsync(request, cancellationToken))
+                using (var response = await SendWithTimeoutAsync(request, cancellationToken))
                 {
                     var body = await response.Content.ReadAsStringAsync();
                     if (!response.IsSuccessStatusCode)
@@ -77,9 +78,24 @@ namespace TraceSoul2.Manager
             return ids;
         }
 
-        public async Task<string> CompleteJsonAsync(
+        public Task<string> CompleteJsonAsync(
             List<DeepSeekMessageData> messages,
             CancellationToken cancellationToken = default(CancellationToken))
+        {
+            return CompleteCoreAsync(messages, true, cancellationToken);
+        }
+
+        public Task<string> CompleteTextAsync(
+            List<DeepSeekMessageData> messages,
+            CancellationToken cancellationToken = default(CancellationToken))
+        {
+            return CompleteCoreAsync(messages, false, cancellationToken);
+        }
+
+        private async Task<string> CompleteCoreAsync(
+            List<DeepSeekMessageData> messages,
+            bool json,
+            CancellationToken cancellationToken)
         {
             if (string.IsNullOrWhiteSpace(config.ApiKey))
                 throw new InvalidOperationException("语言模型 API Key 尚未填写。");
@@ -91,8 +107,8 @@ namespace TraceSoul2.Manager
             var current = messages;
             for (var attempt = 0; attempt < attempts; attempt++)
             {
-                var result = await SendOnceAsync(current, cancellationToken);
-                var incomplete = DeepSeekStructuredOutputLogic.LooksIncompleteJson(result.Content);
+                var result = await SendOnceAsync(current, json, cancellationToken);
+                var incomplete = json && DeepSeekStructuredOutputLogic.LooksIncompleteJson(result.Content);
                 if (!incomplete && !string.IsNullOrWhiteSpace(result.Content)) return result.Content;
                 diagnostics.Add("第" + (attempt + 1) + "次：" + result.Diagnostic);
                 if (attempt >= attempts - 1)
@@ -100,9 +116,11 @@ namespace TraceSoul2.Manager
                     if (!string.IsNullOrWhiteSpace(result.Content)) return result.Content;
                     break;
                 }
-                current = incomplete || DeepSeekStructuredOutputLogic.LooksLikeTruncatedFinish(result.FinishReason)
-                    ? BuildTruncationRetryMessages(messages)
-                    : BuildEmptyContentRetryMessages(messages);
+                var truncated = incomplete ||
+                                DeepSeekStructuredOutputLogic.LooksLikeTruncatedFinish(result.FinishReason);
+                current = json
+                    ? (truncated ? BuildTruncationRetryMessages(messages) : BuildEmptyContentRetryMessages(messages))
+                    : BuildTextRetryMessages(messages, truncated);
             }
 
             throw new InvalidOperationException(
@@ -112,18 +130,19 @@ namespace TraceSoul2.Manager
 
         private async Task<CompletionAttempt> SendOnceAsync(
             List<DeepSeekMessageData> messages,
+            bool json,
             CancellationToken cancellationToken)
         {
             var temperature = ResolveTemperature();
             try
             {
-                return await PostOnceAsync(messages, temperature, cancellationToken);
+                return await PostOnceAsync(messages, temperature, json, cancellationToken);
             }
             catch (InvalidOperationException exception)
             {
                 if (Math.Abs(temperature - 1f) > 0.001f &&
                     LooksLikeUnitTemperatureOnly(exception.Message))
-                    return await PostOnceAsync(messages, 1f, cancellationToken);
+                    return await PostOnceAsync(messages, 1f, json, cancellationToken);
                 throw;
             }
         }
@@ -131,24 +150,67 @@ namespace TraceSoul2.Manager
         private async Task<CompletionAttempt> PostOnceAsync(
             List<DeepSeekMessageData> messages,
             float temperature,
+            bool json,
             CancellationToken cancellationToken)
         {
-            var json = UsesDeepSeekExtensions()
-                ? TraceJson.ToJson(new DeepSeekChatRequestData
+            string bodyJson;
+            if (UsesDeepSeekExtensions())
+            {
+                if (json)
+                {
+                    bodyJson = TraceJson.ToJson(new DeepSeekChatRequestData
+                    {
+                        model = ResolveModel(),
+                        messages = messages,
+                        response_format = new DeepSeekResponseFormatData(),
+                        thinking = new DeepSeekThinkingData
+                        {
+                            type = config.ThinkingEnabled ? "enabled" : "disabled"
+                        },
+                        reasoning_effort = config.ThinkingEnabled ? config.ReasoningEffort : "none",
+                        temperature = temperature,
+                        top_p = config.TopP,
+                        max_tokens = config.MaxTokens
+                    });
+                }
+                else
+                {
+                    bodyJson = TraceJson.ToJson(new GlmChatRequestData
+                    {
+                        model = ResolveModel(),
+                        messages = messages,
+                        thinking = new DeepSeekThinkingData
+                        {
+                            type = config.ThinkingEnabled ? "enabled" : "disabled"
+                        },
+                        reasoning_effort = config.ThinkingEnabled ? config.ReasoningEffort : "none",
+                        temperature = temperature,
+                        top_p = config.TopP,
+                        max_tokens = config.MaxTokens
+                    });
+                }
+            }
+            else if (UsesGlmExtensions())
+            {
+                // GLM-5.x 默认开启 Thinking。OpenCode Go 也是 OpenAI-compatible 转发，
+                // 必须把该扩展字段真正发出去，不能只在 WebUI 中保存开关。
+                bodyJson = TraceJson.ToJson(new GlmChatRequestData
                 {
                     model = ResolveModel(),
                     messages = messages,
-                    response_format = new DeepSeekResponseFormatData(),
                     thinking = new DeepSeekThinkingData
                     {
                         type = config.ThinkingEnabled ? "enabled" : "disabled"
                     },
-                    reasoning_effort = config.ReasoningEffort,
+                    reasoning_effort = config.ThinkingEnabled ? config.ReasoningEffort : "none",
                     temperature = temperature,
                     top_p = config.TopP,
                     max_tokens = config.MaxTokens
-                })
-                : TraceJson.ToJson(new OpenAiChatRequestData
+                });
+            }
+            else
+            {
+                bodyJson = TraceJson.ToJson(new OpenAiChatRequestData
                 {
                     model = ResolveModel(),
                     messages = messages,
@@ -156,17 +218,18 @@ namespace TraceSoul2.Manager
                     top_p = config.TopP,
                     max_tokens = config.MaxTokens
                 });
+            }
             var endpoint = config.BaseUrl.TrimEnd('/') + "/chat/completions";
 
             using (var request = new HttpRequestMessage(HttpMethod.Post, endpoint))
             {
                 request.Headers.Authorization = new AuthenticationHeaderValue("Bearer", config.ApiKey);
-                request.Content = new StringContent(json, Encoding.UTF8, "application/json");
+                request.Content = new StringContent(bodyJson, Encoding.UTF8, "application/json");
 
-                using (var response = await Http.SendAsync(request, cancellationToken))
+                using (var response = await SendWithTimeoutAsync(request, cancellationToken))
                 {
                     var body = await response.Content.ReadAsStringAsync();
-                    DumpCall(json, body);
+                    DumpCall(bodyJson, body);
                     DeepSeekChatResponseData parsed = null;
                     try
                     {
@@ -301,8 +364,7 @@ namespace TraceSoul2.Manager
             var result = new List<DeepSeekMessageData>(source ?? new DeepSeekMessageData[0]);
             result.Add(new DeepSeekMessageData(
                 "user",
-                "刚才的 JSON 被截断了，不完整。这不是新任务。现在立即输出一个更紧凑、完整、合法的 JSON 对象；" +
-                "第一个字符必须是 {，最后一个字符必须是 }，闭合全部字符串与数组，不要解释，不要 Markdown。"));
+                CorePrompts.Retry.JsonTruncated));
             return result;
         }
 
@@ -312,8 +374,20 @@ namespace TraceSoul2.Manager
             var result = new List<DeepSeekMessageData>(source ?? new DeepSeekMessageData[0]);
             result.Add(new DeepSeekMessageData(
                 "user",
-                "刚才没有产生可读取的 content。这不是新任务。现在立即输出一个紧凑、完整、合法的 JSON 对象；" +
-                "第一个字符必须是 {，最后一个字符必须是 }，不要解释，不要 Markdown，不要只进行内部思考。"));
+                CorePrompts.Retry.JsonEmpty));
+            return result;
+        }
+
+        private static List<DeepSeekMessageData> BuildTextRetryMessages(
+            IEnumerable<DeepSeekMessageData> source,
+            bool truncated)
+        {
+            var result = new List<DeepSeekMessageData>(source ?? new DeepSeekMessageData[0]);
+            result.Add(new DeepSeekMessageData(
+                "user",
+                truncated
+                    ? CorePrompts.Retry.TextTruncated
+                    : CorePrompts.Retry.TextEmpty));
             return result;
         }
 
@@ -394,6 +468,33 @@ namespace TraceSoul2.Manager
             return url.IndexOf("deepseek.com", StringComparison.OrdinalIgnoreCase) >= 0;
         }
 
+        private bool UsesGlmExtensions()
+        {
+            var model = ResolveModel();
+            return model.StartsWith("glm-", StringComparison.OrdinalIgnoreCase);
+        }
+
+        private async Task<HttpResponseMessage> SendWithTimeoutAsync(
+            HttpRequestMessage request,
+            CancellationToken cancellationToken)
+        {
+            using (var timeout = CancellationTokenSource.CreateLinkedTokenSource(cancellationToken))
+            {
+                timeout.CancelAfter(TimeSpan.FromSeconds(config.TimeoutSeconds));
+                try
+                {
+                    return await Http.SendAsync(request, timeout.Token);
+                }
+                catch (OperationCanceledException exception)
+                    when (!cancellationToken.IsCancellationRequested)
+                {
+                    throw new TimeoutException(
+                        "语言模型请求超过 " + config.TimeoutSeconds + " 秒：" +
+                        ProviderId + "/" + Model + "。", exception);
+                }
+            }
+        }
+
         private static void NormalizeConfig(DeepSeekConfigData value)
         {
             value.BaseUrl = string.IsNullOrWhiteSpace(value.BaseUrl)
@@ -403,6 +504,7 @@ namespace TraceSoul2.Manager
             value.Temperature = Math.Max(0f, Math.Min(2f, value.Temperature));
             value.TopP = Math.Max(0.01f, Math.Min(1f, value.TopP));
             value.MaxTokens = Math.Max(128, Math.Min(384000, value.MaxTokens));
+            value.TimeoutSeconds = Math.Max(5, Math.Min(600, value.TimeoutSeconds));
             value.EmptyContentRetries = Math.Max(0, Math.Min(3, value.EmptyContentRetries));
             value.ReasoningEffort = NormalizeReasoningEffort(value.ReasoningEffort);
         }
