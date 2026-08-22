@@ -10,7 +10,8 @@ using TraceSoul2.Plugins;
 namespace TraceSoul2.Logic
 {
     /// <summary>
-    /// 记忆写入活体轨：无人格观察当场选标签、写事实；日构建只做浸染和阶梯。
+    /// 记忆写入活体轨：默认只把 Mind 明确给出的 new_fact 当场写入。
+    /// 无人格观察器保留给迁移/显式工具，不再由普通对话逐句调用。
     /// </summary>
     public static class MemoryLiveWriteLogic
     {
@@ -19,6 +20,28 @@ namespace TraceSoul2.Logic
         public sealed class State
         {
             public MemoryObservationCommitData Commit;
+        }
+
+        /// <summary>
+        /// 在对话锁内取得的只读快照。后续 LLM 分析只使用这些数据，可以安全地在后台队列运行。
+        /// 真正的 SQLite 写入仍由宿主重新取得对话锁后执行。
+        /// </summary>
+        public sealed class PreparedObservation
+        {
+            internal TraceTurnContext Turn;
+            internal IMemoryStore Storage;
+            internal PairIdentity Pair;
+            internal VectorRouteResult Route;
+            internal List<string> Allowed;
+            internal List<FactSliceRecord> Facts;
+            internal List<MomentRecord> Local;
+            internal ILlmClient Llm;
+        }
+
+        public sealed class ObservationAnalysis
+        {
+            internal MemoryObservationOutputData Output;
+            internal Exception Error;
         }
 
         public static bool ShouldObserve(MomentRecord moment, string wake, PairIdentity pair)
@@ -38,12 +61,20 @@ namespace TraceSoul2.Logic
             TraceTurnContext turn,
             CancellationToken cancellationToken)
         {
+            var prepared = PrepareObservation(turn);
+            if (prepared == null) return null;
+            var analysis = await AnalyzePreparedAsync(prepared, cancellationToken);
+            return CommitPrepared(prepared, analysis);
+        }
+
+        public static PreparedObservation PrepareObservation(TraceTurnContext turn)
+        {
             if (turn == null || turn.Services == null || turn.Services.Storage == null)
                 return null;
             var storage = turn.Services.Storage;
             var pair = storage.LoadPairIdentity();
-            var state = turn.Workspace.GetOrCreateState(StateKey, () => new State());
-            if (!ShouldObserve(turn.Moment, turn.Wake, pair) || turn.Services.Llm == null)
+            var llm = turn.Services.Llm;
+            if (!ShouldObserve(turn.Moment, turn.Wake, pair) || llm == null)
                 return null;
 
             VectorRouteResult route = null;
@@ -60,31 +91,73 @@ namespace TraceSoul2.Logic
             var allowed = route == null || route.Concepts == null
                 ? new List<string>()
                 : route.Concepts.Where(x => x != null && x.Node != null).Select(x => x.Node.Id).ToList();
-            var facts = storage.GetFactCandidates(allowed, 12);
-            var local = (turn.RecentMoments ?? new List<MomentRecord>()).Take(6).ToList();
-            MemoryObservationOutputData output;
+            return new PreparedObservation
+            {
+                Turn = turn,
+                Storage = storage,
+                Pair = pair,
+                Route = route,
+                Allowed = allowed,
+                Facts = storage.GetFactCandidates(allowed, 12),
+                Local = (turn.RecentMoments ?? new List<MomentRecord>()).Take(6).ToList(),
+                Llm = llm
+            };
+        }
+
+        /// <summary>纯 LLM 阶段：不访问共享 SQLite，不修改轮次工作区。</summary>
+        public static async Task<ObservationAnalysis> AnalyzePreparedAsync(
+            PreparedObservation prepared,
+            CancellationToken cancellationToken)
+        {
+            if (prepared == null) return new ObservationAnalysis();
             try
             {
-                var observer = new MemoryObservationLogic(turn.Services.Llm);
-                output = await observer.AnalyzeAsync(
-                    turn.Moment, route, facts, local, pair, cancellationToken);
+                var observer = new MemoryObservationLogic(prepared.Llm);
+                var output = await observer.AnalyzeAsync(
+                    prepared.Turn.Moment,
+                    prepared.Route,
+                    prepared.Facts,
+                    prepared.Local,
+                    prepared.Pair,
+                    cancellationToken);
+                return new ObservationAnalysis
+                {
+                    Output = MemoryObservationLogic.Normalize(
+                        output, prepared.Route, prepared.Facts, prepared.Pair)
+                };
             }
             catch (Exception exception)
+            {
+                return new ObservationAnalysis { Error = exception };
+            }
+        }
+
+        /// <summary>快速提交阶段：宿主必须在重新取得对话锁后调用。</summary>
+        public static MemoryObservationCommitData CommitPrepared(
+            PreparedObservation prepared,
+            ObservationAnalysis analysis)
+        {
+            if (prepared == null) return null;
+            var turn = prepared.Turn;
+            if (analysis == null || analysis.Error != null || analysis.Output == null)
             {
                 turn.Workspace.Results.Add(new TraceCapabilityResultData
                 {
                     CallId = "memory-observe",
                     CapabilityId = "memory.observe",
                     Status = "failed",
-                    Summary = "当场观察失败：" + exception.Message,
+                    Summary = "当场观察失败：" +
+                              (analysis == null || analysis.Error == null
+                                  ? "没有返回观察结果。" : analysis.Error.Message),
                     Payload = string.Empty
                 });
                 return null;
             }
 
-            output = MemoryObservationLogic.Normalize(output, route, facts, pair);
-            var commit = storage.CommitMemoryObservation(
-                turn.Moment, MemoryObservationLogic.ObserverId, output, allowed);
+            var state = turn.Workspace.GetOrCreateState(StateKey, () => new State());
+            var output = analysis.Output;
+            var commit = prepared.Storage.CommitMemoryObservation(
+                turn.Moment, MemoryObservationLogic.ObserverId, output, prepared.Allowed);
             state.Commit = commit;
             if (commit != null && commit.OntologyChanged)
                 RebuildRouter(turn);

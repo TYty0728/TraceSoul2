@@ -42,7 +42,7 @@ namespace TraceSoul2.Plugins.Builtin
             {
                 Id = "dialogue.receive",
                 DisplayName = "文字输入",
-                Description = "当前 {username} 可以通过本地文字界面向 {assname} 说话；这是外部感官入口，不可由 Brain 主动调用。",
+                Description = DialogueTracePrompts.SourceDescription,
                 Provides = "moment.dialogue.text",
                 Boundary = "控制台文字",
                 BodyId = BodyIds.Console,
@@ -67,6 +67,7 @@ namespace TraceSoul2.Plugins.Builtin
                     EvidenceType = EvidenceTypeValues.DialogueExplicit,
                     Organ = BodyOrganValues.Text,
                     PayloadJson = payloadJson ?? string.Empty,
+                    Breaking = true,
                     OccurredUnixMs = DateTimeOffset.UtcNow.ToUnixTimeMilliseconds()
                 };
             }
@@ -79,10 +80,10 @@ namespace TraceSoul2.Plugins.Builtin
                 Id = "dialogue.recent_history",
                 Kind = TraceContributionKindValues.CallableNerve,
                 DisplayName = "定向读取近期原文",
-                Description = "当当前话语依赖刚才说过的话时，读取允许数量内的近期原文。原始上下文上限为0时不可用。",
+                Description = DialogueTracePrompts.HistoryDescription,
                 Provides = "conversation.recent_history.read",
-                WhenToUse = "当前话语包含‘刚才、那个、继续’等指代，且仅靠当前 Moment 无法理解时。",
-                WhenNotToUse = "普通寒暄，或人生记忆召回。",
+                WhenToUse = DialogueTracePrompts.HistoryWhenToUse,
+                WhenNotToUse = DialogueTracePrompts.HistoryWhenNotToUse,
                 ParametersJsonSchema = "{limit:int(1..20),reason:string}",
                 HasExternalSideEffect = false
             };
@@ -122,7 +123,7 @@ namespace TraceSoul2.Plugins.Builtin
                 Id = "dialogue.send",
                 Kind = TraceContributionKindValues.Effector,
                 DisplayName = "发送文字",
-                Description = "通过当前本地对话界面对 {username} 表达一段文字。",
+                Description = DialogueTracePrompts.EffectorDescription,
                 Provides = "expression.text.send",
                 Boundary = "控制台文字｜自由文本",
                 BodyId = BodyIds.Console,

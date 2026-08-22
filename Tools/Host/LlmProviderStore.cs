@@ -64,6 +64,7 @@ namespace TraceSoul2.Host
                         ? new LlmSlotRef()
                         : new LlmSlotRef { providerId = chat.id, model = chat.model ?? string.Empty },
                     [LlmSlotNames.Thinking] = CloneSlot(data.thinking),
+                    [LlmSlotNames.Review] = CloneSlot(data.review),
                     [LlmSlotNames.Multimodal] = CloneSlot(data.multimodal),
                     [LlmSlotNames.Image] = CloneSlot(data.image),
                     [LlmSlotNames.Speech] = CloneSlot(data.speech)
@@ -154,6 +155,7 @@ namespace TraceSoul2.Host
                 if (string.Equals(data.currentId, item.id, StringComparison.OrdinalIgnoreCase))
                     data.currentId = data.providers[0].id;
                 ClearSlotIf(data.thinking, item.id);
+                ClearSlotIf(data.review, item.id);
                 ClearSlotIf(data.multimodal, item.id);
                 ClearSlotIf(data.image, item.id);
                 ClearSlotIf(data.speech, item.id);
@@ -276,6 +278,7 @@ namespace TraceSoul2.Host
                     item.model = next == null ? string.Empty : next.id;
                 }
                 DropSlotModel(data.thinking, id, modelId);
+                DropSlotModel(data.review, id, modelId);
                 DropSlotModel(data.multimodal, id, modelId);
                 DropSlotModel(data.image, id, modelId);
                 DropSlotModel(data.speech, id, modelId);
@@ -320,6 +323,28 @@ namespace TraceSoul2.Host
                 if (client != null) return client;
             }
             return CreateClient(chatId, null, null);
+        }
+
+        /// <summary>复盘：指定槽则用该模型并关思考；未指定则用对话开口关思考，避免推理模型把额度耗在 reasoning。</summary>
+        public ILlmClient CreateReviewClient()
+        {
+            string providerId;
+            string model;
+            lock (gate)
+            {
+                var refer = data.review;
+                if (refer != null && !string.IsNullOrWhiteSpace(refer.providerId))
+                {
+                    providerId = refer.providerId;
+                    model = string.IsNullOrWhiteSpace(refer.model) ? null : refer.model;
+                }
+                else
+                {
+                    providerId = data.currentId;
+                    model = null;
+                }
+            }
+            return CreateClient(providerId, model, false);
         }
 
         public DeepSeekConfigData CurrentConfig()
@@ -488,6 +513,7 @@ namespace TraceSoul2.Host
         private LlmSlotRef SlotOf(string slot)
         {
             if (string.Equals(slot, LlmSlotNames.Thinking, StringComparison.OrdinalIgnoreCase)) return data.thinking;
+            if (string.Equals(slot, LlmSlotNames.Review, StringComparison.OrdinalIgnoreCase)) return data.review;
             if (string.Equals(slot, LlmSlotNames.Multimodal, StringComparison.OrdinalIgnoreCase)) return data.multimodal;
             if (string.Equals(slot, LlmSlotNames.Image, StringComparison.OrdinalIgnoreCase)) return data.image;
             if (string.Equals(slot, LlmSlotNames.Speech, StringComparison.OrdinalIgnoreCase)) return data.speech;
@@ -497,6 +523,7 @@ namespace TraceSoul2.Host
         private void AssignSlot(string slot, LlmSlotRef value)
         {
             if (string.Equals(slot, LlmSlotNames.Thinking, StringComparison.OrdinalIgnoreCase)) data.thinking = value;
+            else if (string.Equals(slot, LlmSlotNames.Review, StringComparison.OrdinalIgnoreCase)) data.review = value;
             else if (string.Equals(slot, LlmSlotNames.Multimodal, StringComparison.OrdinalIgnoreCase)) data.multimodal = value;
             else if (string.Equals(slot, LlmSlotNames.Image, StringComparison.OrdinalIgnoreCase)) data.image = value;
             else if (string.Equals(slot, LlmSlotNames.Speech, StringComparison.OrdinalIgnoreCase)) data.speech = value;
@@ -527,7 +554,7 @@ namespace TraceSoul2.Host
         private static string NormalizeSlot(string slot)
         {
             slot = (slot ?? string.Empty).Trim().ToLowerInvariant();
-            if (slot == "chat" || slot == "thinking" || slot == "multimodal" ||
+            if (slot == "chat" || slot == "thinking" || slot == "review" || slot == "multimodal" ||
                 slot == "image" || slot == "speech")
                 return slot;
             if (slot == "vision") return LlmSlotNames.Multimodal;
@@ -620,6 +647,7 @@ namespace TraceSoul2.Host
                     : item.temperature,
                 TopP = item.topP <= 0 ? 1f : item.topP,
                 MaxTokens = item.maxTokens <= 0 ? 8192 : item.maxTokens,
+                TimeoutSeconds = item.timeout <= 0 ? 120 : item.timeout,
                 ThinkingEnabled = thinkingOverride ?? item.thinkingEnabled,
                 ReasoningEffort = item.reasoningEffort,
                 EmptyContentRetries = 1
@@ -630,6 +658,7 @@ namespace TraceSoul2.Host
         {
             public string currentId { get; set; }
             public LlmSlotRef thinking { get; set; }
+            public LlmSlotRef review { get; set; }
             public LlmSlotRef multimodal { get; set; }
             public LlmSlotRef image { get; set; }
             public LlmSlotRef speech { get; set; }

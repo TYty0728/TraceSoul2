@@ -6,13 +6,14 @@ namespace TraceSoul2.Host
 {
     /// <summary>
     /// 家目录：软件安装目录之外的整合文件夹。
-    /// 角色库在 souls/&lt;id&gt;/，已装器官在 plugins/，机器设置在 home.json。
+    /// 角色库在 souls/&lt;id&gt;/，器官代码在 plugins/，持久数据在 plugins_data/，机器设置在 home.json。
     /// </summary>
     public sealed class TraceHomeLayout
     {
         public string Root { get; set; }
         public string SoulsDirectory { get; set; }
         public string PluginsDirectory { get; set; }
+        public string PluginsDataDirectory { get; set; }
         public string SoulId { get; set; }
         public string SoulDirectory { get; set; }
         public string UpdatesDirectory { get; set; }
@@ -27,6 +28,7 @@ namespace TraceSoul2.Host
         public const string EnvHome = "TRACESOUL2_HOME";
         public const string EnvData = "TRACESOUL2_DATA";
         public const string EnvPlugins = "TRACESOUL2_PLUGINS";
+        public const string EnvPluginsData = "TRACESOUL2_PLUGINS_DATA";
         public const string EnvUrls = "TRACESOUL2_URLS";
         public const string EnvUpdateRepository = "TRACESOUL2_UPDATE_REPOSITORY";
         public const string FileName = "home.json";
@@ -53,6 +55,7 @@ namespace TraceSoul2.Host
             var homeEnv = ReadEnv(EnvHome);
             var dataEnv = ReadEnv(EnvData);
             var pluginsEnv = ReadEnv(EnvPlugins);
+            var pluginsDataEnv = ReadEnv(EnvPluginsData);
             var urlsEnv = ReadEnv(EnvUrls);
             var updateRepositoryEnv = ReadEnv(EnvUpdateRepository);
 
@@ -66,6 +69,9 @@ namespace TraceSoul2.Host
                 layout.PluginsDirectory = ResolveDirectory(
                     layout.Root, FirstNonEmpty(pluginsEnv, file.pluginsDirectory), "plugins");
                 Directory.CreateDirectory(layout.PluginsDirectory);
+                layout.PluginsDataDirectory = ResolvePluginsDataDirectory(
+                    layout.Root, FirstNonEmpty(pluginsDataEnv, file.pluginsDataDirectory), layout.PluginsDirectory);
+                Directory.CreateDirectory(layout.PluginsDataDirectory);
                 if (!string.IsNullOrWhiteSpace(dataEnv))
                 {
                     layout.SoulDirectory = Path.GetFullPath(dataEnv);
@@ -95,6 +101,9 @@ namespace TraceSoul2.Host
                     ? Path.Combine(DefaultRoot(), "plugins")
                     : Path.GetFullPath(pluginsEnv);
                 Directory.CreateDirectory(layout.PluginsDirectory);
+                layout.PluginsDataDirectory = ResolvePluginsDataDirectory(
+                    layout.Root, pluginsDataEnv, layout.PluginsDirectory);
+                Directory.CreateDirectory(layout.PluginsDataDirectory);
                 layout.Urls = FirstNonEmpty(urlsEnv, DefaultUrls);
                 layout.UpdateRepository = updateRepositoryEnv;
             }
@@ -107,6 +116,9 @@ namespace TraceSoul2.Host
                 layout.PluginsDirectory = ResolveDirectory(
                     layout.Root, FirstNonEmpty(pluginsEnv, file.pluginsDirectory), "plugins");
                 Directory.CreateDirectory(layout.PluginsDirectory);
+                layout.PluginsDataDirectory = ResolvePluginsDataDirectory(
+                    layout.Root, FirstNonEmpty(pluginsDataEnv, file.pluginsDataDirectory), layout.PluginsDirectory);
+                Directory.CreateDirectory(layout.PluginsDataDirectory);
                 layout.SoulId = PickSoulId(layout.SoulsDirectory, file.activeSoul);
                 layout.SoulDirectory = Path.Combine(layout.SoulsDirectory, layout.SoulId);
                 Directory.CreateDirectory(layout.SoulDirectory);
@@ -176,6 +188,7 @@ namespace TraceSoul2.Host
                 Environment.SetEnvironmentVariable(EnvHome, layout.Root);
             Environment.SetEnvironmentVariable(EnvData, layout.SoulDirectory);
             Environment.SetEnvironmentVariable(EnvPlugins, layout.PluginsDirectory);
+            Environment.SetEnvironmentVariable(EnvPluginsData, layout.PluginsDataDirectory);
             if (string.IsNullOrWhiteSpace(ReadEnv(EnvUrls)) && !string.IsNullOrWhiteSpace(layout.Urls))
                 Environment.SetEnvironmentVariable(EnvUrls, layout.Urls);
         }
@@ -185,9 +198,11 @@ namespace TraceSoul2.Host
             Directory.CreateDirectory(root);
             Directory.CreateDirectory(Path.Combine(root, "souls"));
             Directory.CreateDirectory(Path.Combine(root, "plugins"));
+            Directory.CreateDirectory(Path.Combine(root, "plugins_data"));
             var path = Path.Combine(root, FileName);
             if (!File.Exists(path))
-                WriteFile(root, "", DefaultUrls, pluginsDirectory: "plugins", updateRepository: "");
+                WriteFile(root, "", DefaultUrls, pluginsDirectory: "plugins",
+                    pluginsDataDirectory: "plugins_data", updateRepository: "");
         }
 
         private static string PickSoulId(string soulsDirectory, string preferred)
@@ -245,6 +260,7 @@ namespace TraceSoul2.Host
             string activeSoul,
             string urls,
             string pluginsDirectory = null,
+            string pluginsDataDirectory = null,
             string updateRepository = null)
         {
             Directory.CreateDirectory(root);
@@ -254,6 +270,7 @@ namespace TraceSoul2.Host
             data.activeSoul = activeSoul ?? "";
             data.urls = string.IsNullOrWhiteSpace(urls) ? DefaultUrls : urls;
             if (pluginsDirectory != null) data.pluginsDirectory = pluginsDirectory.Trim();
+            if (pluginsDataDirectory != null) data.pluginsDataDirectory = pluginsDataDirectory.Trim();
             if (updateRepository != null) data.updateRepository = updateRepository.Trim();
             File.WriteAllText(Path.Combine(root, FileName), JsonSerializer.Serialize(data, JsonOptions));
         }
@@ -265,6 +282,19 @@ namespace TraceSoul2.Host
             return Path.GetFullPath(Path.IsPathRooted(expanded)
                 ? expanded
                 : Path.Combine(root, expanded));
+        }
+
+        private static string ResolvePluginsDataDirectory(
+            string root, string configured, string pluginsDirectory)
+        {
+            if (!string.IsNullOrWhiteSpace(configured))
+                return ResolveDirectory(root, configured, "plugins_data");
+            var parent = Path.GetDirectoryName(
+                (pluginsDirectory ?? string.Empty).TrimEnd(
+                    Path.DirectorySeparatorChar, Path.AltDirectorySeparatorChar));
+            return Path.GetFullPath(Path.Combine(
+                string.IsNullOrWhiteSpace(parent) ? root : parent,
+                "plugins_data"));
         }
 
         private static string ReadEnv(string name)
@@ -288,6 +318,7 @@ namespace TraceSoul2.Host
             public string activeSoul { get; set; }
             public string urls { get; set; }
             public string pluginsDirectory { get; set; }
+            public string pluginsDataDirectory { get; set; }
             public string updateRepository { get; set; }
         }
     }

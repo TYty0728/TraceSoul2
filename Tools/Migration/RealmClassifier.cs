@@ -7,6 +7,7 @@ using System.Threading.Tasks;
 using TraceSoul2.Data;
 using TraceSoul2.Logic;
 using TraceSoul2.Manager;
+using TraceSoul2.Prompts;
 
 namespace TraceSoul2.Migrate
 {
@@ -100,20 +101,10 @@ namespace TraceSoul2.Migrate
             MigrationContext context, ILlmClient llm, PairIdentity pair, List<MomentRecord> batch)
         {
             var system = new StringBuilder();
-            system.AppendLine(pair.Apply("你是 TraceSoul2 记忆导入器的现实层分类算法，不是 {assname} 本人。"));
-            system.AppendLine("把每条文字 Moment 分到四层现实之一：");
-            system.AppendLine("- external_world：她在外部真实世界的生活自述与客观外部事实（上班、吃饭、天气、身体、新闻）。");
-            system.AppendLine("- shared_scene：两人在共享文字场景中的互动（摸头、拥抱、亲吻、光点、一起听歌、一起做的事）。");
-            system.AppendLine("- meta：关于 AI、系统、记忆、角色设定本身的讨论。");
-            system.AppendLine("- explicit_fiction：明确的创作、小说、虚构故事。");
-            system.AppendLine("- unclassified：实在无法判断时保留。");
+            system.AppendLine(pair.Apply(CorePrompts.Migration.RealmRole));
+            CorePrompts.Write(system, pair.Apply(CorePrompts.Migration.RealmBody));
             system.AppendLine();
-            system.AppendLine("硬规则：");
-            system.AppendLine(pair.Apply("1. 文字互动一律算 shared_scene；只判断层次，不判断真假。'{username} 我上班啦'是 external_world 的自述。"));
-            system.AppendLine("2. 讨论记忆怎么存、插件怎么工作、提示词是什么，属于 meta。");
-            system.AppendLine("3. 只输出 JSON：{\"items\":[{\"event_id\":\"#后面的编号\",\"realm\":\"external_world\"}]}，覆盖下面每一条，event_id 只填编号数字。");
-            system.AppendLine();
-            system.AppendLine("待分类 Moment：");
+            system.AppendLine(CorePrompts.Migration.RealmMomentsHeader);
             foreach (var moment in batch)
             {
                 var preview = (moment.Content ?? string.Empty).Replace('\n', ' ');
@@ -124,7 +115,7 @@ namespace TraceSoul2.Migrate
             var messages = new List<DeepSeekMessageData>
             {
                 new DeepSeekMessageData("system", system.ToString()),
-                new DeepSeekMessageData("user", "请输出 JSON。")
+                new DeepSeekMessageData("user", CorePrompts.Migration.RealmUser)
             };
             var output = await DeepSeekStructuredOutputLogic.CompleteAsync<RealmBatchOutputData>(
                 llm, messages, x => x != null && x.items != null && x.items.Count > 0,

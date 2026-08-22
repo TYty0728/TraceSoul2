@@ -8,6 +8,7 @@ using System.Threading.Tasks;
 using TraceSoul2.Data;
 using TraceSoul2.Logic;
 using TraceSoul2.Manager;
+using TraceSoul2.Prompts;
 
 namespace TraceSoul2.Host
 {
@@ -64,9 +65,24 @@ namespace TraceSoul2.Host
             }
         }
 
-        public async Task<string> CompleteJsonAsync(
+        public Task<string> CompleteJsonAsync(
             List<DeepSeekMessageData> messages,
             CancellationToken cancellationToken = default(CancellationToken))
+        {
+            return CompleteCoreAsync(messages, true, cancellationToken);
+        }
+
+        public Task<string> CompleteTextAsync(
+            List<DeepSeekMessageData> messages,
+            CancellationToken cancellationToken = default(CancellationToken))
+        {
+            return CompleteCoreAsync(messages, false, cancellationToken);
+        }
+
+        private async Task<string> CompleteCoreAsync(
+            List<DeepSeekMessageData> messages,
+            bool json,
+            CancellationToken cancellationToken)
         {
             RequireKey();
             var diagnostics = new List<string>();
@@ -76,7 +92,7 @@ namespace TraceSoul2.Host
             var current = messages;
             for (var attempt = 0; attempt < attempts; )
             {
-                var result = await SendOnceAsync(current, temperature, cancellationToken);
+                var result = await SendOnceAsync(current, temperature, json, cancellationToken);
                 if (string.Equals(result.FinishReason, "RECITATION", StringComparison.OrdinalIgnoreCase))
                 {
                     recitationTries++;
@@ -86,7 +102,7 @@ namespace TraceSoul2.Host
                     diagnostics.Add("recitation，温度提到 " + temperature.ToString("0.0"));
                     continue;
                 }
-                var incomplete = DeepSeekStructuredOutputLogic.LooksIncompleteJson(result.Content);
+                var incomplete = json && DeepSeekStructuredOutputLogic.LooksIncompleteJson(result.Content);
                 if (!incomplete && !string.IsNullOrWhiteSpace(result.Content)) return result.Content;
                 diagnostics.Add("第" + (attempt + 1) + "次：" + result.Diagnostic);
                 if (attempt >= attempts - 1)
@@ -94,9 +110,15 @@ namespace TraceSoul2.Host
                     if (!string.IsNullOrWhiteSpace(result.Content)) return result.Content;
                     break;
                 }
-                current = incomplete || DeepSeekStructuredOutputLogic.LooksLikeTruncatedFinish(result.FinishReason)
-                    ? AppendRetry(messages, "刚才的 JSON 被截断了，不完整。这不是新任务。现在立即输出一个更紧凑、完整、合法的 JSON 对象；第一个字符必须是 {，最后一个字符必须是 }，闭合全部字符串与数组，不要解释。")
-                    : AppendRetry(messages, "刚才没有产生可读取的 JSON。这不是新任务。现在立即输出一个紧凑、完整、合法的 JSON 对象；第一个字符必须是 {，最后一个字符必须是 }，不要解释。");
+                var truncated = incomplete ||
+                                DeepSeekStructuredOutputLogic.LooksLikeTruncatedFinish(result.FinishReason);
+                current = json
+                    ? AppendRetry(messages, truncated
+                        ? CorePrompts.Retry.GeminiJsonTruncated
+                        : CorePrompts.Retry.GeminiJsonEmpty)
+                    : AppendRetry(messages, truncated
+                        ? CorePrompts.Retry.TextTruncated
+                        : CorePrompts.Retry.TextEmpty);
                 attempt++;
             }
             throw new InvalidOperationException(
@@ -106,9 +128,10 @@ namespace TraceSoul2.Host
         private async Task<GeminiAttempt> SendOnceAsync(
             List<DeepSeekMessageData> messages,
             float temperature,
+            bool json,
             CancellationToken cancellationToken)
         {
-            var payload = BuildPayload(messages, temperature);
+            var payload = BuildPayload(messages, temperature, json);
             var model = StripModelsPrefix(config.Model);
             var url = GeminiRoot(config.BaseUrl) + "/models/" + Uri.EscapeDataString(model) +
                       ":generateContent?key=" + Uri.EscapeDataString(config.ApiKey);
@@ -127,7 +150,7 @@ namespace TraceSoul2.Host
             }
         }
 
-        private string BuildPayload(List<DeepSeekMessageData> messages, float temperature)
+        private string BuildPayload(List<DeepSeekMessageData> messages, float temperature, bool json)
         {
             var systems = new List<string>();
             var contents = new List<object>();
@@ -153,9 +176,9 @@ namespace TraceSoul2.Host
             {
                 { "temperature", temperature },
                 { "topP", config.TopP },
-                { "maxOutputTokens", config.MaxTokens },
-                { "responseMimeType", "application/json" }
+                { "maxOutputTokens", config.MaxTokens }
             };
+            if (json) generation["responseMimeType"] = "application/json";
             if (config.ThinkingEnabled)
                 generation["thinkingConfig"] = new { thinkingBudget = 1024 };
 

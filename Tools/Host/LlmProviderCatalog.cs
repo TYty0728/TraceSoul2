@@ -18,6 +18,8 @@ namespace TraceSoul2.Host
             {
                 T("OpenAI Compatible", "openai", OpenAiChat, "https://api.openai.com/v1", "gpt-4o", 0.6f),
                 T("DeepSeek", "deepseek", OpenAiChat, "https://api.deepseek.com/v1", "deepseek-v4-flash", 0.3f),
+                T("智谱 GLM 官方", "zhipu-glm", OpenAiChat,
+                    "https://open.bigmodel.cn/api/paas/v4", "glm-5.2", 0.6f),
                 T("Google Gemini", "google_gemini", GoogleGenAi, "https://generativelanguage.googleapis.com/", "gemini-2.5-flash", 0.7f),
                 T("Gemini_OpenAI_API", "google_gemini_openai", OpenAiChat,
                     "https://generativelanguage.googleapis.com/v1beta/openai/", "gemini-2.5-flash", 0.7f),

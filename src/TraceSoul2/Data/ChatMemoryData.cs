@@ -171,6 +171,22 @@ namespace TraceSoul2.Data
         public int max_tokens;
     }
 
+    /// <summary>
+    /// GLM 的 OpenAI 兼容请求仍需要显式 thinking；省略时 GLM-5.x 默认开启深度思考。
+    /// 与普通兼容口分开，避免向不认识该字段的供应商发送扩展参数。
+    /// </summary>
+    [Serializable]
+    public sealed class GlmChatRequestData
+    {
+        public string model;
+        public List<DeepSeekMessageData> messages;
+        public DeepSeekThinkingData thinking;
+        public string reasoning_effort;
+        public float temperature;
+        public float top_p;
+        public int max_tokens;
+    }
+
     [Serializable]
     public sealed class DeepSeekChoiceData
     {
@@ -250,6 +266,7 @@ namespace TraceSoul2.Data
         public float Temperature { get; set; } = 0.3f;
         public float TopP { get; set; } = 1f;
         public int MaxTokens { get; set; } = 8192;
+        public int TimeoutSeconds { get; set; } = 120;
         public bool ThinkingEnabled { get; set; }
         public string ReasoningEffort { get; set; } = "high";
         public int EmptyContentRetries { get; set; } = 1;

@@ -1,0 +1,14 @@
+<Project Sdk="Microsoft.NET.Sdk">
+  <PropertyGroup>
+    <TargetFramework>net8.0</TargetFramework>
+    <ImplicitUsings>disable</ImplicitUsings>
+    <NoWarn>$(NoWarn);NETSDK1206</NoWarn>
+    <Nullable>disable</Nullable>
+    <AssemblyName>TraceSoul2.Plugin.QqTts</AssemblyName>
+    <RootNamespace>TraceSoul2.ExternalPlugins</RootNamespace>
+  </PropertyGroup>
+  <ItemGroup>
+    <ProjectReference Include="..\..\Tools\PluginApi\TraceSoul2.PluginApi.csproj"
+                      Private="false" PrivateAssets="all" />
+  </ItemGroup>
+</Project>

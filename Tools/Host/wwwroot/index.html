@@ -457,7 +457,6 @@
           <div class="row">
             <div><label>用户（正式名）</label><input id="username" /></div>
             <div><label>我是（助手名）</label><input id="assname" /></div>
-            <div><label>用户的小名（旧日志里的称呼，只用于日志角色识别）</label><input id="callName" placeholder="循" /></div>
             <div class="nogrow"><label>&nbsp;</label><button class="primary" onclick="savePair()">保存名字</button></div>
           </div>
         </div>
@@ -510,10 +509,11 @@
         <div class="section-head"><h1>大脑 · LLM</h1><span class="muted">多种供应商同时在线；用途槽给灵魂和器官用</span></div>
         <div class="box">
           <h2>默认用途槽</h2>
-          <p class="muted">对话开口是灵魂说话用的。开口勾了「开启思考」时，改走思考槽（可换供应商/模型）。语音、生图器官可跟对应槽，也可在插件齿轮里指定供应商。</p>
+          <p class="muted">对话开口是灵魂说话用的。开口勾了「开启思考」时，改走思考槽（可换供应商/模型）。<b>复盘</b>给每日身份复盘和日构建用（关思考、稳 JSON）；留空则跟对话开口但关掉思考。语音、生图器官可跟对应槽，也可在插件齿轮里指定供应商。</p>
           <div class="slot-grid">
             <div><label>对话开口</label><select id="slotChat"></select></div>
             <div><label>默认思考</label><select id="slotThinking"></select></div>
+            <div><label>复盘</label><select id="slotReview"></select></div>
             <div><label>多模态</label><select id="slotMultimodal"></select></div>
             <div><label>语音</label><select id="slotSpeech"></select></div>
             <div><label>生图</label><select id="slotImage"></select></div>
@@ -579,12 +579,22 @@
                       <option value="high">high</option>
                       <option value="max">max</option>
                     </select></div>
-                  <div class="nogrow"><label>原始上下文（0-100）</label>
-                    <input id="ctxLimit" type="number" min="0" max="100" style="width:90px" /></div>
-                  <div class="nogrow"><label>&nbsp;</label>
-                    <button onclick="saveContextLimit()">应用上下文</button></div>
                 </div>
               </details>
+              <div class="row" style="align-items:flex-end;margin-top:12px">
+                <div><label>上下文拼接（最近对话条数，0-100）</label>
+                  <input id="ctxLimit" type="number" min="0" max="100" /></div>
+                <div class="nogrow"><button onclick="saveContextLimit()">保存上下文拼接</button></div>
+              </div>
+              <p class="muted" style="margin-top:4px">按时间顺序把当前消息之前的真实对话原文同时交给心智层和表达层；0 为关闭。设置保存在当前角色/调试分支，重启后仍保留。</p>
+              <div class="row" style="align-items:flex-end;margin-top:8px">
+                <div class="nogrow"><label>心跳最短（分钟）</label>
+                  <input id="hbMin" type="number" min="0" max="180" style="width:90px" /></div>
+                <div class="nogrow"><label>心跳最长（分钟）</label>
+                  <input id="hbMax" type="number" min="0" max="180" style="width:90px" /></div>
+                <div class="nogrow"><label>&nbsp;</label><button class="primary" onclick="saveHeartbeat()">保存心跳</button></div>
+              </div>
+              <p class="muted" style="margin-top:4px">入站 Moment 处理完后，在此范围内随机排一次心跳。到期他自己想：要不要说、办事、睡下、多久后再跳。两端都填 0 则关闭。睡着后心跳停，直到她再发来才醒来。</p>
               <h2>已配置的模型</h2>
               <div class="model-bar">
                 <input id="modelSearch" placeholder="搜索模型或 ID" oninput="renderModelList()" />
@@ -639,12 +649,20 @@
           <div class="row">
             <div><label>Access Token（可填多个，逗号/分号/换行分隔；对应 NapCat websocketClients 的 token）</label>
               <input id="obToken" /></div>
-            <div><label>只收这个 QQ（self_id，留空 = 都收）</label><input id="obSelf" /></div>
+            <div><label>机器人自身 QQ（self_id，不是对方 QQ）</label><input id="obSelf" placeholder="例如 NapCat 当前登录的 QQ；留空 = 不限制" /></div>
             <div class="nogrow"><label>回发</label>
               <label style="margin:0"><input type="checkbox" id="obReply" checked /> 文字回复自动发回 QQ（关=只收不回，回复留在控制台）</label></div>
             <div class="nogrow"><label>&nbsp;</label>
               <button class="primary" onclick="saveOnebotConfig()">保存并重启应用</button></div>
           </div>
+          <div class="row">
+            <div><label>本机 NapCat 启动文件或目录</label>
+              <input id="obNapcatPath" list="napcatPathOptions" placeholder="例如 D:\\NapCat\\启动NapCat.bat" />
+              <datalist id="napcatPathOptions"></datalist></div>
+            <div class="nogrow"><label>&nbsp;</label>
+              <button onclick="startNapcat()">▶ 启动 NapCat</button></div>
+          </div>
+          <p id="napcatLaunchStatus" class="muted">先保存路径，再点击启动；不会在 Host 重启时重复拉起。</p>
           <p class="muted">反向模式（默认）：NapCat 网络配置里用 websocketClients 连 <b>ws://127.0.0.1:9021/ws</b>（你现有 NapCat 已指向这里），token 填上面；消息收发与 API 动作都走这一根连接，无需 httpServers。修改端口或模式保存后宿主会自动重启，约 2 秒生效。</p>
         </div>
       </section>
@@ -656,10 +674,11 @@
           <div class="plugin-toolbar">
             <input id="pluginSearch" type="text" placeholder="搜索插件…" oninput="filterPluginCards()" />
             <span id="externalDir" class="muted"></span>
+            <span id="externalDataDir" class="muted"></span>
             <span class="spacer"></span>
             <button class="primary" onclick="rescanExternal()">重新扫描</button>
           </div>
-          <p class="muted" style="margin-top:0">上层是平台（QQ），下面是器官包。点齿轮填写 api_key 等；开关键在卡片右上角。身份 / 内心 / 记忆 / 时间不是插件。</p>
+          <p class="muted" style="margin-top:0">上层是平台（QQ），下面是器官包。点齿轮填写配置；配置和运行数据保存在 plugins_data，卸载代码包不会删除。</p>
           <div id="pluginsBox"></div>
         </div>
       </section>
@@ -685,6 +704,7 @@
           <div><label>家目录</label><code id="updateHomeDir">—</code></div>
           <div style="margin-top:10px"><label>当前角色目录</label><code id="updateSoulDir">—</code></div>
           <div style="margin-top:10px"><label>插件目录</label><code id="updatePluginDir">—</code></div>
+          <div style="margin-top:10px"><label>插件数据目录</label><code id="updatePluginDataDir">—</code></div>
         </div>
       </section>
 
@@ -927,11 +947,12 @@
     const st = await api("/status");
     $("username").value = st.username || "";
     $("assname").value = st.assname || "";
-    $("callName").value = st.callName || "";
     renderCards(await api("/identity/cards"));
     const inner = await api("/inner");
     const att = (inner.attention || []).map(a => "[" + esc(a.kind) + "] " + esc(a.content)).join("；") || "（无）";
     $("inner").textContent = "revision " + inner.revision +
+      "\n状态：" + (inner.asleep ? "睡着" : "醒着") +
+      "\n下次心跳：" + formatHeartbeatDue(inner.nextHeartbeatUnixMs) +
       "\n此刻：" + (inner.narrative || "—") +
       "\n心情：" + (inner.mood || "—") +
       "\n关系视角：" + (inner.relationshipLens || "—") +
@@ -942,7 +963,7 @@
   }
   async function savePair() {
     await api("/identity/pair", "PUT", {
-      username: $("username").value, assname: $("assname").value, callName: $("callName").value
+      username: $("username").value, assname: $("assname").value
     });
     logLine("名字已保存");
     await reloadPanels();
@@ -1022,6 +1043,7 @@
   function renderSlots() {
     fillSlotSelect($("slotChat"), "chat", slotCache.chat, false);
     fillSlotSelect($("slotThinking"), "thinking", slotCache.thinking, true);
+    fillSlotSelect($("slotReview"), "chat", slotCache.review, true);
     fillSlotSelect($("slotMultimodal"), "multimodal", slotCache.multimodal, true);
     fillSlotSelect($("slotSpeech"), "speech", slotCache.speech, true);
     fillSlotSelect($("slotImage"), "image", slotCache.image, true);
@@ -1029,6 +1051,8 @@
   async function loadBrain() {
     const st = await api("/status");
     $("ctxLimit").value = st.contextInjectionCount || 0;
+    $("hbMin").value = st.heartbeatMinMinutes == null ? 10 : st.heartbeatMinMinutes;
+    $("hbMax").value = st.heartbeatMaxMinutes == null ? 20 : st.heartbeatMaxMinutes;
     const templates = await api("/providers/templates");
     $("providerTemplate").innerHTML = (templates || []).map(t =>
       `<option value="${esc(t.key)}">${esc(t.key)} · ${esc(t.id)}</option>`).join("");
@@ -1163,6 +1187,7 @@
       await api("/providers/slots", "PUT", {
         chat: parseSlotValue($("slotChat").value),
         thinking: parseSlotValue($("slotThinking").value),
+        review: parseSlotValue($("slotReview").value),
         multimodal: parseSlotValue($("slotMultimodal").value),
         speech: parseSlotValue($("slotSpeech").value),
         image: parseSlotValue($("slotImage").value)
@@ -1239,7 +1264,26 @@
   async function saveContextLimit() {
     const r = await api("/settings/context-limit", "PUT", { limit: parseInt($("ctxLimit").value) || 0 });
     $("ctxLimit").value = r.limit;
-    logLine("原始上下文 = " + r.limit);
+    logLine("上下文拼接 = 最近 " + r.limit + " 条对话");
+  }
+  async function saveHeartbeat() {
+    const r = await api("/settings/heartbeat", "PUT", {
+      minMinutes: parseInt($("hbMin").value) || 0,
+      maxMinutes: parseInt($("hbMax").value) || 0
+    });
+    $("hbMin").value = r.minMinutes;
+    $("hbMax").value = r.maxMinutes;
+    logLine(r.minMinutes === 0 && r.maxMinutes === 0
+      ? "心跳已关闭"
+      : "心跳范围 = " + r.minMinutes + "–" + r.maxMinutes + " 分钟");
+  }
+  function formatHeartbeatDue(unixMs) {
+    if (!unixMs) return "未排";
+    const d = new Date(unixMs);
+    if (isNaN(d.getTime())) return "未排";
+    const pad = n => (n < 10 ? "0" : "") + n;
+    return d.getFullYear() + "-" + pad(d.getMonth() + 1) + "-" + pad(d.getDate()) +
+      " " + pad(d.getHours()) + ":" + pad(d.getMinutes());
   }
 
   /* ================= 记忆 ================= */
@@ -1416,6 +1460,9 @@
       $("obToken").value = c.access_token || "";
       $("obSelf").value = c.self_id || "";
       $("obReply").checked = c.reply_enabled !== false;
+      $("obNapcatPath").value = c.napcat_path || "";
+      $("napcatPathOptions").innerHTML = (c.napcat_candidates || [])
+        .map(path => `<option value="${esc(path)}"></option>`).join("");
       $("onebotHint").textContent = "NapCat 反向连：ws://127.0.0.1:" + (c.listen_port || 9021) + "/ws（你的 NapCat 已指向这里）｜配置落盘在数据目录 onebot.json。";
     } catch (e) { $("onebotHint").textContent = "配置不可用：" + e.message; }
   }
@@ -1429,7 +1476,8 @@
         http_url: $("obHttp").value.trim(),
         access_token: $("obToken").value.trim(),
         self_id: $("obSelf").value.trim(),
-        reply_enabled: $("obReply").checked
+        reply_enabled: $("obReply").checked,
+        napcat_path: $("obNapcatPath").value.trim()
       });
       logLine("OneBot 配置已保存，宿主正在重启…");
     } catch (e) { /* 重启导致连接中断也算正常 */ }
@@ -1438,6 +1486,18 @@
       await waitHostBack();
       location.reload();
     } catch (e) { $("onebotHint").textContent = "等待宿主重启超时：" + e.message; }
+  }
+  async function startNapcat() {
+    const status = $("napcatLaunchStatus");
+    status.textContent = "正在提交启动请求…";
+    try {
+      const result = await api("/platforms/onebot/napcat/start", "POST");
+      status.textContent = result.message || "已提交 NapCat 启动请求。";
+      logLine(status.textContent);
+      setTimeout(() => loadPlatforms().catch(() => {}), 1500);
+    } catch (e) {
+      status.textContent = "启动失败：" + e.message;
+    }
   }
   async function waitHostBack() {
     for (let i = 0; i < 25; i++) {
@@ -1460,8 +1520,10 @@
       const s = await api("/plugins/external");
       packages = s.packages || [];
       if ($("externalDir")) $("externalDir").textContent = s.directory ? ("目录：" + s.directory) : "";
+      if ($("externalDataDir")) $("externalDataDir").textContent = s.dataDirectory ? ("数据：" + s.dataDirectory) : "";
     } catch (e) {
       if ($("externalDir")) $("externalDir").textContent = "外部目录不可用：" + e.message;
+      if ($("externalDataDir")) $("externalDataDir").textContent = "";
     }
     renderPlugins(plugins || [], packages);
     filterPluginCards();
@@ -1605,7 +1667,7 @@
       del.title = "卸载此包（可恢复）";
       del.textContent = "🗑";
       del.onclick = async () => {
-        if (!confirm("卸载器官包「" + (p.displayName || p.id) + "」？\n插件会移入 plugins-uninstalled，可手动恢复。")) return;
+        if (!confirm("卸载器官包「" + (p.displayName || p.id) + "」？\n代码会移入 plugins-uninstalled；plugins_data 中的配置和数据保留。")) return;
         const result = await api("/plugins/external/" + pack.folder, "DELETE");
         logLine("已卸载 " + pack.folder + (result.backupPath ? "；可恢复于 " + result.backupPath : ""));
         await loadPlugins();
@@ -1798,6 +1860,7 @@
     $("updateHomeDir").textContent = st.home || "—";
     $("updateSoulDir").textContent = st.dataDirectory || "—";
     $("updatePluginDir").textContent = st.pluginsDirectory || "—";
+    $("updatePluginDataDir").textContent = st.pluginsDataDirectory || "—";
     renderUpdateStatus(updateData);
   }
   function renderUpdateStatus(data) {

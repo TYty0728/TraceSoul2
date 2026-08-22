@@ -1,5 +1,6 @@
 using System;
 using System.Collections.Generic;
+using System.Diagnostics;
 using System.Linq;
 using System.Reflection;
 using System.Threading;
@@ -18,6 +19,7 @@ namespace TraceSoul2.Manager
             public ITracePlugin Instance;
             public TracePluginMetadataData Metadata;
             public string PackageDirectory;
+            public string PluginDataDirectory;
         }
 
         private readonly IMemoryStore storage;
@@ -82,7 +84,10 @@ namespace TraceSoul2.Manager
         /// 注册一个外部插件实例（由宿主的外部插件加载器从独立程序集实例化后交进来）。
         /// 启用状态沿用持久化的插件开关；默认启用。
         /// </summary>
-        public void RegisterExternal(ITracePlugin instance, string packageDirectory = null)
+        public void RegisterExternal(
+            ITracePlugin instance,
+            string packageDirectory = null,
+            string pluginDataDirectory = null)
         {
             if (instance == null) throw new ArgumentNullException("instance");
             var metadata = instance.Metadata;
@@ -95,7 +100,8 @@ namespace TraceSoul2.Manager
             {
                 Instance = instance,
                 Metadata = metadata,
-                PackageDirectory = packageDirectory
+                PackageDirectory = packageDirectory,
+                PluginDataDirectory = pluginDataDirectory
             });
             if (!metadata.Enabled) return;
             try { Activate(metadata.Id); }
@@ -245,23 +251,37 @@ namespace TraceSoul2.Manager
                                                            !MouthLogic.IsProtocolFacet(x.Descriptor.Id))
                          .OrderByDescending(x => x.Descriptor.Priority))
             {
+                var timer = Stopwatch.StartNew();
+                services.LogTiming(turn == null ? null : turn.TraceId,
+                    "上下文面开始 " + facet.Descriptor.Id);
                 TraceContextBlockData block;
-                var once = facet.Descriptor.RefreshMode != TraceFacetRefreshValues.EveryBrainStep;
-                if (once && turn.Workspace.TryGetFacetCache(facet.Descriptor.Id, out block))
+                var cached = false;
+                try
                 {
-                    if (block != null) blocks.Add(block);
-                    continue;
+                    var once = facet.Descriptor.RefreshMode != TraceFacetRefreshValues.EveryBrainStep;
+                    if (once && turn.Workspace.TryGetFacetCache(facet.Descriptor.Id, out block))
+                    {
+                        cached = true;
+                        if (block != null) blocks.Add(block);
+                        continue;
+                    }
+                    block = await facet.BuildContextAsync(turn, cancellationToken);
+                    if (block != null)
+                    {
+                        block.FacetId = facet.Descriptor.Id;
+                        block.Priority = facet.Descriptor.Priority;
+                        var cap = facet.Descriptor.MaxContextChars <= 0 ? 2000 : facet.Descriptor.MaxContextChars;
+                        block.Content = TrimToSentence(block.Content, cap);
+                        blocks.Add(block);
+                    }
+                    if (once) turn.Workspace.SetFacetCache(facet.Descriptor.Id, block);
                 }
-                block = await facet.BuildContextAsync(turn, cancellationToken);
-                if (block != null)
+                finally
                 {
-                    block.FacetId = facet.Descriptor.Id;
-                    block.Priority = facet.Descriptor.Priority;
-                    var cap = facet.Descriptor.MaxContextChars <= 0 ? 2000 : facet.Descriptor.MaxContextChars;
-                    block.Content = TrimToSentence(block.Content, cap);
-                    blocks.Add(block);
+                    services.LogTiming(turn == null ? null : turn.TraceId,
+                        "上下文面完成 " + facet.Descriptor.Id,
+                        timer.ElapsedMilliseconds, cached ? "cache" : null);
                 }
-                if (once) turn.Workspace.SetFacetCache(facet.Descriptor.Id, block);
             }
             turn.Workspace.ContextBlocks.Clear();
             turn.Workspace.ContextBlocks.AddRange(blocks);
@@ -281,16 +301,28 @@ namespace TraceSoul2.Manager
             turn.Workspace.FacetOutputs.AddRange(byId.Values);
             foreach (var facet in facets.Values.Where(x => x.IsAvailable(turn)))
             {
+                var timer = Stopwatch.StartNew();
+                services.LogTiming(turn == null ? null : turn.TraceId,
+                    "面输出应用开始 " + facet.Descriptor.Id);
                 BrainFacetOutputData output;
                 byId.TryGetValue(facet.Descriptor.Id, out output);
-                var result = await facet.ApplyOutputAsync(output, turn, cancellationToken);
-                if (result == null) continue;
-                result.CallId = "facet:" + facet.Descriptor.Id;
-                result.CapabilityId = facet.Descriptor.Id;
-                result.Status = string.IsNullOrWhiteSpace(result.Status) ? "success" : result.Status;
-                result.Summary = result.Summary ?? string.Empty;
-                result.Payload = result.Payload ?? string.Empty;
-                turn.Workspace.Results.Add(result);
+                try
+                {
+                    var result = await facet.ApplyOutputAsync(output, turn, cancellationToken);
+                    if (result == null) continue;
+                    result.CallId = "facet:" + facet.Descriptor.Id;
+                    result.CapabilityId = facet.Descriptor.Id;
+                    result.Status = string.IsNullOrWhiteSpace(result.Status) ? "success" : result.Status;
+                    result.Summary = result.Summary ?? string.Empty;
+                    result.Payload = result.Payload ?? string.Empty;
+                    turn.Workspace.Results.Add(result);
+                }
+                finally
+                {
+                    services.LogTiming(turn == null ? null : turn.TraceId,
+                        "面输出应用完成 " + facet.Descriptor.Id,
+                        timer.ElapsedMilliseconds);
+                }
             }
         }
 
@@ -305,6 +337,9 @@ namespace TraceSoul2.Manager
             if (!callables.TryGetValue(call.capability_id ?? string.Empty, out contribution) ||
                 !contribution.IsAvailable(turn))
                 return Failed(call, "能力当前不可用。");
+            var timer = Stopwatch.StartNew();
+            services.LogTiming(turn == null ? null : turn.TraceId,
+                "能力执行开始 " + contribution.Descriptor.Id);
             try
             {
                 var result = await contribution.ExecuteAsync(call, turn, cancellationToken);
@@ -315,10 +350,19 @@ namespace TraceSoul2.Manager
                 result.Summary = result.Summary ?? string.Empty;
                 result.Payload = result.Payload ?? string.Empty;
                 result.EvidenceRefs = result.EvidenceRefs ?? new List<string>();
+                services.LogTiming(turn == null ? null : turn.TraceId,
+                    "能力执行完成 " + contribution.Descriptor.Id,
+                    timer.ElapsedMilliseconds, "status=" + result.Status);
                 return result;
             }
             catch (OperationCanceledException) { throw; }
-            catch (Exception exception) { return Failed(call, exception.Message); }
+            catch (Exception exception)
+            {
+                services.LogTiming(turn == null ? null : turn.TraceId,
+                    "能力执行失败 " + contribution.Descriptor.Id,
+                    timer.ElapsedMilliseconds, exception.Message);
+                return Failed(call, exception.Message);
+            }
         }
 
         public void RegisterCallable(string pluginId, ITraceCallableContribution contribution)
@@ -359,7 +403,8 @@ namespace TraceSoul2.Manager
         private void Activate(string id)
         {
             var loaded = plugins[id];
-            loaded.Instance.Register(new TracePluginContext(this, services, loaded.Metadata, loaded.PackageDirectory));
+            loaded.Instance.Register(new TracePluginContext(
+                this, services, loaded.Metadata, loaded.PackageDirectory, loaded.PluginDataDirectory));
         }
 
         private void Deactivate(string id)

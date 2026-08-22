@@ -1,0 +1,33 @@
+{
+  "hint": "完整迁回老相机：自拍/锁脸、角色与服饰参考图库、画图、来图修改、URL 发图；兼容 OpenAI 异步 videos、images、chat 以及 Gemini 原生接口。参考图放在 plugins_data/qq-imagegen/ref_images。",
+  "fields": [
+    { "key": "provider_id", "label": "生图供应商", "type": "provider", "role": "image", "description": "留空使用默认生图槽。" },
+    { "key": "model", "label": "生图模型", "type": "provider_model", "provider_key": "provider_id", "role": "image" },
+    { "key": "api_key", "label": "API Key（备用）", "type": "password" },
+    { "key": "base_url", "label": "API Base URL（备用）", "type": "string", "placeholder": "https://example.com/v1" },
+    { "key": "image_api_format", "label": "接口格式", "type": "select", "options": ["auto", "openai", "gemini"] },
+    { "key": "api_mode", "label": "OpenAI 接口模式", "type": "select", "options": ["auto", "async", "standard", "sync"], "description": "旧 gpt-image 中转通常选 async；官方 images 选 standard。" },
+    { "key": "selfie_mode", "label": "自拍模式", "type": "select", "options": ["lockface", "normal"], "description": "lockface 会严格使用角色参考图保持同一人。" },
+    { "key": "character_categories", "label": "角色形象类分类名列表", "type": "list", "placeholder": "阿循", "description": "填写参考图库中实际存在、用途为“角色”的分类名；多个分类用逗号分隔。决定脸、发型、瞳色等身份特征。" },
+    { "key": "character_ref_urls", "label": "日常参考服饰（最多4张）", "type": "list", "placeholder": "多个图片 URL 用逗号分隔", "description": "与老插件一致：只参考服饰款式和风格，不参考脸部和体型；仅在人物照片中自动加入。" },
+    { "key": "character_details", "label": "角色气质与拍照风格", "type": "textarea", "description": "填入角色的性格气质、表情习惯、拍照风格等。例如：性格冷淡疏离，表情通常是面无表情或微微皱眉，不会做可爱卖萌的动作，眼神锐利带有距离感，整体氛围偏冷色调。人物照片即使使用角色参考图，也会一并应用这里的设定。" },
+    { "key": "style_prompt", "label": "固定视觉风格", "type": "textarea", "description": "留空即不强制画风。" },
+    { "key": "aspect_ratio", "label": "默认画面比例", "type": "string", "placeholder": "4:3" },
+    { "key": "ai_decide_aspect_ratio", "label": "让模型按场景决定比例", "type": "bool", "default": true },
+    { "key": "image_size", "label": "Gemini 图片尺寸", "type": "select", "options": ["1K", "2K", "4K"] },
+    { "key": "standard_size", "label": "OpenAI images 尺寸", "type": "string", "placeholder": "1024x1024" },
+    { "key": "strict_reference_mode", "label": "严格参考人物身份", "type": "bool", "default": false },
+    { "key": "max_refs_per_category", "label": "每分类最多参考图", "type": "number", "min": 1, "max": 12, "default": 4 },
+    { "key": "max_reference_images", "label": "单次最多参考图", "type": "number", "min": 1, "max": 24, "default": 12 },
+    { "key": "max_retry_attempts", "label": "失败重试次数", "type": "number", "min": 1, "max": 10, "default": 3 },
+    { "key": "poll_interval", "label": "异步轮询间隔（秒）", "type": "number", "min": 2, "max": 30, "default": 5 },
+    { "key": "timeout", "label": "总超时（秒）", "type": "number", "min": 30, "max": 1800, "default": 600 },
+    { "key": "cleanup_delay_seconds", "label": "发送后清理延迟（秒）", "type": "number", "min": 30, "max": 7200, "default": 600 },
+    { "key": "safety_settings", "label": "Gemini 安全阈值", "type": "select", "options": ["BLOCK_NONE", "BLOCK_ONLY_HIGH", "BLOCK_MEDIUM_AND_ABOVE"] },
+    { "key": "enable_thinking", "label": "Gemini 开启思考", "type": "bool", "default": false },
+    { "key": "failure_fallback_text", "label": "失败时明确告知", "type": "bool", "default": true },
+    { "key": "log_request_body", "label": "打印生图请求体到日志", "type": "bool", "default": false, "description": "排查上游问题时开启；图片 base64 会自动截断。排查完建议关闭，避免日志过长。" },
+    { "key": "debug", "label": "调试日志", "type": "bool", "default": false },
+    { "key": "proxy", "label": "代理（可选）", "type": "string", "placeholder": "http://127.0.0.1:7890" }
+  ]
+}

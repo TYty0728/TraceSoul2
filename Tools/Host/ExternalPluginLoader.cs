@@ -15,6 +15,7 @@ namespace TraceSoul2.Host
     {
         public string Folder;
         public string Path;
+        public string DataPath;
         public string Id;
         public string AssemblyFile;
         public bool Loaded;
@@ -27,19 +28,21 @@ namespace TraceSoul2.Host
 
     /// <summary>
     /// 外部插件加载器（AstrBot 式插拔）：
-    /// - 插件包目录在家目录 plugins/（TRACESOUL2_HOME / TRACESOUL2_PLUGINS）；
+    /// - 插件包目录在 plugins/，配置与运行数据在同级 plugins_data/&lt;包名&gt;/；
     /// - 每个包在自己的可回收 AssemblyLoadContext 里加载，卸载即释放，坏插件不影响宿主；
     /// - TraceSoul2.PluginApi 共享契约回落默认上下文，与宿主共用同一份类型；
-    /// - 安装 = 丢一个文件夹进去；卸载 = 移到同级 plugins-uninstalled 以便恢复；重扫即时生效。
+    /// - 安装 = 丢一个文件夹进去；卸载只移动代码到 plugins-uninstalled，plugins_data 原地保留。
     /// </summary>
     public sealed class ExternalPluginLoader : IDisposable
     {
         public const string ApiAssemblyName = "TraceSoul2.PluginApi";
 
         private readonly string directory;
+        private readonly string dataDirectory;
         private readonly List<ExternalPluginPackage> packages = new List<ExternalPluginPackage>();
 
         public string DirectoryPath { get { return directory; } }
+        public string DataDirectoryPath { get { return dataDirectory; } }
         public string UninstalledDirectory
         {
             get
@@ -49,12 +52,18 @@ namespace TraceSoul2.Host
             }
         }
 
-        public ExternalPluginLoader(string directory)
+        public ExternalPluginLoader(string directory, string dataDirectory = null)
         {
             if (directory == null) throw new ArgumentNullException("directory");
             var normalized = directory.TrimEnd(Path.DirectorySeparatorChar, Path.AltDirectorySeparatorChar);
             this.directory = Path.GetFullPath(normalized.Length == 0 ? directory : normalized);
+            var defaultDataDirectory = Path.Combine(
+                Path.GetDirectoryName(this.directory) ?? this.directory,
+                "plugins_data");
+            this.dataDirectory = Path.GetFullPath(
+                string.IsNullOrWhiteSpace(dataDirectory) ? defaultDataDirectory : dataDirectory);
             Directory.CreateDirectory(this.directory);
+            Directory.CreateDirectory(this.dataDirectory);
         }
 
         private sealed class PluginLoadContext : AssemblyLoadContext
@@ -82,13 +91,16 @@ namespace TraceSoul2.Host
                 var package = new ExternalPluginPackage
                 {
                     Folder = Path.GetFileName(folder),
-                    Path = folder
+                    Path = folder,
+                    DataPath = Path.Combine(dataDirectory, Path.GetFileName(folder))
                 };
                 packages.Add(package);
                 PluginLoadContext context = null;
                 var registered = false;
                 try
                 {
+                    Directory.CreateDirectory(package.DataPath);
+                    PluginConfigStore.EnsurePackageConfig(package.Path, package.DataPath);
                     string dllName = null;
                     var manifestPath = Path.Combine(folder, "plugin.json");
                     if (File.Exists(manifestPath))
@@ -120,7 +132,7 @@ namespace TraceSoul2.Host
                     package.Id = instance.Metadata.Id;
                     package.DisplayName = instance.Metadata.DisplayName;
                     package.Version = instance.Metadata.Version;
-                    manager.RegisterExternal(instance, folder);
+                    manager.RegisterExternal(instance, folder, package.DataPath);
                     registered = true;
                     package.Loaded = true;
                     package.Enabled = instance.Metadata.Enabled;
@@ -215,11 +227,13 @@ namespace TraceSoul2.Host
             return new
             {
                 directory,
+                dataDirectory,
                 uninstalledDirectory = UninstalledDirectory,
                 packages = packages.Select(x => new
                 {
                     x.Folder,
                     x.Path,
+                    x.DataPath,
                     x.Id,
                     x.AssemblyFile,
                     x.Loaded,

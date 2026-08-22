@@ -91,6 +91,8 @@ namespace TraceSoul2.Data
     /// </summary>
     public sealed class PluginEventData
     {
+        /// <summary>跨入站、Brain、器官与出站日志的本轮短追踪号；不参与业务语义。</summary>
+        public string TraceId { get; set; }
         public string PluginId { get; set; }
         public string ConversationId { get; set; }
         public string ExternalEventId { get; set; }
@@ -103,6 +105,8 @@ namespace TraceSoul2.Data
         public string Organ { get; set; }
         /// <summary>中枢叫醒谁：dialogue / mind / subconscious。空则由角色与内容推断。</summary>
         public string Wake { get; set; }
+        /// <summary>打破性 Moment：睡着时也能把他叫醒。用户发来的话现在都是。</summary>
+        public bool Breaking { get; set; }
         public long OccurredUnixMs { get; set; }
     }
 

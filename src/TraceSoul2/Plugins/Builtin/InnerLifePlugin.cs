@@ -37,7 +37,7 @@ namespace TraceSoul2.Plugins.Builtin
                 Id = "inner.snapshot",
                 Kind = TraceContributionKindValues.MountedFacet,
                 DisplayName = "当前内心切片",
-                Description = "每轮固定陪伴 Brain 的一句话自我状态；只有确实变化时才写回。",
+                Description = InnerLifePrompts.FacetDescription,
                 Provides = "inner_life.current_snapshot",
                 OutputJsonSchema = "{changed:boolean,summary:string,fields:[narrative,relationship_update,mood,ongoing_activity,unfinished_intent,attention_topic|attention_activity|attention_concern|attention_intention]}",
                 RefreshMode = TraceFacetRefreshValues.OncePerTurn,
@@ -57,13 +57,13 @@ namespace TraceSoul2.Plugins.Builtin
                 var unfinished = (runtime.UnfinishedIntent ?? string.Empty).Trim();
                 var hold = InnerLifeLogic.FormatHold(runtime);
                 var extra = string.Empty;
-                if (unfinished.Length > 0) extra += "；未完成：" + unfinished;
-                else if (hold.Length > 0) extra += "；手上：" + hold;
+                if (unfinished.Length > 0) extra += InnerLifePrompts.UnfinishedPrefix + unfinished;
+                else if (hold.Length > 0) extra += InnerLifePrompts.HoldPrefix + hold;
                 return Task.FromResult(new TraceContextBlockData
                 {
-                    Title = "一句话内心",
-                    Content = "我此刻的内心：" + OneLine(runtime.Narrative) +
-                              (mood.Length == 0 ? string.Empty : "（情绪：" + mood + "）") + extra
+                    Title = InnerLifePrompts.SnapshotTitle,
+                    Content = InnerLifePrompts.SnapshotPrefix + OneLine(runtime.Narrative) +
+                              (mood.Length == 0 ? string.Empty : InnerLifePrompts.MoodWrapPrefix + mood + "）") + extra
                 });
             }
 
@@ -105,7 +105,8 @@ namespace TraceSoul2.Plugins.Builtin
                     unfinished_intent = clearHold
                         ? string.Empty
                         : output.GetField("unfinished_intent", null),
-                    attention = attention
+                    attention = attention,
+                    asleep = ParseAsleepField(output.GetField("asleep", null))
                 };
                 var next = InnerLifeLogic.Reduce(current, proposed, context.Moment.Id,
                     DateTimeOffset.UtcNow.ToUnixTimeMilliseconds());
@@ -127,10 +128,10 @@ namespace TraceSoul2.Plugins.Builtin
                 Id = "inner.inspect",
                 Kind = TraceContributionKindValues.CallableNerve,
                 DisplayName = "完整自省",
-                Description = "读取情绪、关系视角、进行中活动、未完成意图和注意项。",
+                Description = InnerLifePrompts.InspectDescription,
                 Provides = "inner_life.inspect",
-                WhenToUse = "关系冲突、强烈感受、身份连续性或未完成意图会影响当前判断时。",
-                WhenNotToUse = "一句话内心已经足够的普通对话。",
+                WhenToUse = InnerLifePrompts.InspectWhenToUse,
+                WhenNotToUse = InnerLifePrompts.InspectWhenNotToUse,
                 ParametersJsonSchema = "{reason:string}"
             };
 
@@ -151,6 +152,19 @@ namespace TraceSoul2.Plugins.Builtin
                         ? new List<string>() : new List<string> { "moment:" + runtime.SourceMomentId }
                 });
             }
+        }
+
+        private static bool? ParseAsleepField(string value)
+        {
+            var text = (value ?? string.Empty).Trim();
+            if (text.Length == 0) return null;
+            if (string.Equals(text, "true", StringComparison.OrdinalIgnoreCase) ||
+                text == "1" || text == "睡着" || text == "睡下")
+                return true;
+            if (string.Equals(text, "false", StringComparison.OrdinalIgnoreCase) ||
+                text == "0" || text == "醒着")
+                return false;
+            return null;
         }
 
         private static string OneLine(string value)

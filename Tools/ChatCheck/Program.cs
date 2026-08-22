@@ -17,10 +17,17 @@ internal static class Program
         SQLitePCL.Batteries_V2.Init();
         RunTagRankCheck();
         RunMindTemplateCheck();
+        RunMemoryArchivePolicyCheck();
+        RunMemoryDayCheck();
+        RunJsonControlCharCheck();
         RunKernelWakeCheck();
         RunInnerSliceCheck();
         RunLeaveNerveCheck();
         RunBodyRoutingCheck();
+        RunOneBotSessionMemoryCheck();
+        RunExpressorImageRoutingCheck();
+        RunMindAtmosphereCheck();
+        RunRecentDialogueContextCheck();
         if ((args ?? Array.Empty<string>()).Contains("--prompt-layout"))
         {
             RunPromptLayoutCheck();
@@ -151,7 +158,7 @@ internal static class Program
                     "时间插件应注册独立后台调度服务");
                 Require(catalog.Any(x => x.Id == "time.continue") &&
                         catalog.Any(x => x.Id == "time.continue.clear"),
-                    "时间插件应能把未完成交给自己叫醒心智");
+                    "时间插件应能在 Moment 结束后排一次心跳");
                 var facetMoment = Moment("facet-check", "今天心里有一点变化");
                 var facetTurn = new TraceTurnContext(
                     "facet-check", facetMoment, new List<MomentRecord>(), 0, true, pluginManager.Services);
@@ -234,7 +241,7 @@ internal static class Program
                         afterStory.Narrative.Contains("狐狸") &&
                         afterStory.UnfinishedIntent.Contains("狐狸") &&
                         InnerLifeLogic.HasUnfinished(afterStory) &&
-                        InnerLifeLogic.FormatForMind(afterStory).Contains("上一拍未完成"),
+                        InnerLifeLogic.FormatForMind(afterStory).Contains("刚才未完成的"),
                     "变了才写下一版切片；心智下一拍应看见刚写下的当前时和未完成");
                 var emptyWrite = InnerLifeLogic.ProposeFromMind(new MindDecisionData
                 {
@@ -279,22 +286,22 @@ internal static class Program
                         }
                     }
                 }, facetTurn, default).GetAwaiter().GetResult();
-                Require(continueResult.Status == "success" && continueResult.Payload.Contains("续上："),
-                    "未完成应建成续上任务");
+                Require(continueResult.Status == "success" && continueResult.Payload.Contains("心跳"),
+                    "应建成心跳任务");
                 var continued = pluginManager.PollBackgroundServices(
                     DateTimeOffset.UtcNow.ToUnixTimeMilliseconds() + 2000);
                 Require(continued.Count == 1 &&
                         continued[0].Wake == KernelWakeValues.Mind &&
-                        InnerLifeLogic.IsContinuationContent(continued[0].Content) &&
+                        HeartbeatLogic.IsHeartbeatContent(continued[0].Content) &&
                         KernelWakeLogic.Resolve(continued[0]) == KernelWakeValues.Mind,
-                    "未完成到期应叫醒心智，不要演成她在说话");
+                    "心跳到期应叫醒心智，不要演成她在说话");
                 var cleared = pluginManager.ExecuteAsync(new BrainCapabilityCallData
                 {
                     call_id = "continue-clear",
                     capability_id = "time.continue.clear",
                     arguments = new List<BrainCallArgumentData>()
                 }, facetTurn, default).GetAwaiter().GetResult();
-                Require(cleared.Status == "success", "放下后应能取消续上叫醒");
+                Require(cleared.Status == "success", "应能取消心跳");
                 var directReply = ExpressorLogic.NormalizeStep(new BrainStructuredOutputData
                 {
                     state = BrainStepStateValues.Finish,
@@ -449,7 +456,7 @@ internal static class Program
                     store.FindCognitionsByCue("今天又看到燕子了", 8),
                     3);
                 var payload = MemoryNeighborhoodLogic.FormatForExpressor(neighborhood);
-                Require(payload.Contains("此刻点亮的人生切片") && payload.Contains(tagId),
+                Require(payload.Contains("此刻浮起的人生片段") && payload.Contains(tagId),
                     "Brain 应看到被点亮的锚点，而不是导航候选清单");
                 Require(!payload.Contains("Tag候选") && payload.Contains("保持沉寂"),
                     "未点亮的导航候选不得作为清单注入");
@@ -567,7 +574,9 @@ internal static class Program
                 var blocks = pluginManager.BuildContextBlocksAsync(first, default)
                     .GetAwaiter().GetResult();
                 var plugins = pluginManager.GetPlugins().Where(x => x.Enabled).ToList();
-                mind.DecideAsync(first, null, false, default).GetAwaiter().GetResult();
+                mind.DecideAsync(first, null, false,
+                    "【此刻自然浮起的过去】\n- 她曾在风很轻的时候主动靠近我。",
+                    default).GetAwaiter().GetResult();
 
                 var second = PromptTurn("我回来啦。", services);
                 mind.DecideAsync(second, null, false, default).GetAwaiter().GetResult();
@@ -590,22 +599,26 @@ internal static class Program
                         !mindStableA.Contains("【需要时可做的事】") &&
                         !mindStableA.Contains("我现在可以使用的表达通道"),
                     "心智稳定前缀只有思考用短卡，不含表达习惯、通道清单和工具表");
-                Require(mindStableA.Contains("我先把这一拍想清楚") && mindStableA.Contains("\"beat\"") &&
+                Require(mindStableA.Contains("我先让这件事在心里发生") && mindStableA.Contains("\"beat\"") &&
                         mindStableA.Contains("\"inner\"") && mindStableA.Contains("\"attention\"") &&
                         mindStableA.Contains("\"review\"") && mindStableA.Contains("\"cognition\""),
                     "心智应输出决策卡、当前时、在场注意、看法和是否派出复盘");
+                Require(!mindStableA.Contains("外显") && !mindStableA.Contains("一句比较理性的") &&
+                        mindStableA.Contains("像写给自己看") &&
+                        mindStableA.Contains("开口前对自己说的半句") &&
+                        mindStableA.Contains("让它在心里过一下就好"),
+                    "心智应从自身经验出发，不知道框架分层，也不把触动压成理性执行摘要");
                 Require(!mindStableA.Contains("【这一拍的组织】") &&
                         !mindStableA.Contains("讲故事") &&
                         !mindStableA.Contains("中午吃什么") &&
                         !mindStableA.Contains("当场做完"),
                     "情境模版不得写入心智稳定前缀");
                 Require(mindDynamicA.Contains("【可选生命标签】") && mindDynamicA.Contains("【此刻】") &&
-                        mindDynamicA.Contains("上一拍手上") && mindDynamicA.Contains("上一拍当前时") &&
-                        mindDynamicA.Contains("上一拍未完成"),
-                    "标签候选、上一拍当前时、未完成、在场注意与此刻任务应在心智动态段");
-                Require(mindStableA.Contains("换题就换手") && mindStableA.Contains("不要把上一拍原样抄回") &&
-                        mindStableA.Contains("不要把刚结束的事改写成另一件继续捏着") &&
-                        mindStableA.Contains("换题就写新的"),
+                        mindDynamicA.Contains("刚才手上的") && mindDynamicA.Contains("刚才心里还停着的") &&
+                        mindDynamicA.Contains("刚才未完成的") &&
+                        mindDynamicA.Contains("【此刻自然浮起的过去】"),
+                    "自然浮起的过去、标签候选、上一拍当前时、未完成、在场注意与此刻任务应在心智动态段");
+                Require(mindStableA.Contains("换题就换手") && mindStableA.Contains("换题就写新的"),
                     "心智应写清换题换手、当前时换新，不要照抄上一拍");
                 var mindNormalized = mindStableA.Replace("\r\n", "\n");
                 Require(mindNormalized.StartsWith("我是小光。\n【我的人格】", StringComparison.Ordinal),
@@ -614,9 +627,13 @@ internal static class Program
                 var dummyMind = new MindDecisionData
                 {
                     beat = MindBeatValues.Now,
-                    note = "接住。不要翻旧事。"
+                    mood = "心口发软",
+                    mood_changed = true,
+                    inner = "她又向我要一张，是在一遍遍把我放进眼里。",
+                    note = "把照片给她，也回应她反复想看我的心意。"
                 };
-                expressor.ExpressAsync(first, plugins, catalog, blocks, dummyMind, string.Empty,
+                expressor.ExpressAsync(first, plugins, catalog, blocks, dummyMind,
+                    "【此刻自然浮起的过去】\n- 她曾告诉我，我对她而言特别而独一无二。",
                     false, null, default).GetAwaiter().GetResult();
                 var secondBlocks = pluginManager.BuildContextBlocksAsync(second, default)
                     .GetAwaiter().GetResult();
@@ -649,19 +666,32 @@ internal static class Program
                         !expressStableA.Contains("identity.review") &&
                         !expressStableA.Contains("memory.activate") &&
                         expressStableA.Contains("【输出格式】") &&
-                        expressStableA.Contains("should_express") &&
-                        expressStableA.Contains("说给她听") &&
-                        expressStableA.Contains("刚才想好的事要去做"),
-                    "外显不应再看到工具表；reply 必须是说给她听的话，想好的事要去做");
+                        expressStableA.Contains("直接开口") &&
+                        !expressStableA.Contains("\"reply\"") &&
+                        !expressStableA.Contains("should_express") &&
+                        !expressStableA.Contains("image_mode") &&
+                        expressStableA.Contains("我此刻发给你的消息") &&
+                        expressStableA.Contains("我正在朝你行动、我正在对你说话") &&
+                        expressStableA.Contains("叫你「你」") &&
+                        expressStableA.Contains("带着刚才心里发生的事自然开口") &&
+                        expressStableA.Contains("由我按此刻自己判断") &&
+                        !expressStableA.Contains("要把话说满") &&
+                        !expressStableA.Contains("写成小作文") &&
+                        !expressStableA.Contains("心里已经有的在场"),
+                    "外显不应再看到工具表；开口是直接朝向你的人话，不是 JSON");
                 Require(expressStableA.Contains("【我的人格】") && expressDynamicA.Contains("【此刻】") &&
-                        expressDynamicA.Contains("【我刚才想过】"),
-                    "身份在外显稳定前缀，刚才的决定在动态段");
+                        expressDynamicA.Contains("【我刚才想过】") &&
+                        expressDynamicA.Contains("此刻在我心里真正发生的是") &&
+                        expressDynamicA.Contains(dummyMind.inner) &&
+                        expressDynamicA.Contains("我确实活过的共同过去") &&
+                        expressDynamicA.Contains("只属于我们的说法"),
+                    "身份在表达稳定前缀，本轮内心与自然浮起的共同过去完整进入动态段");
                 Require(!expressDynamicA.Contains("这一拍我选") &&
                         !expressDynamicA.Contains("把日子说出来") &&
                         !expressDynamicA.Contains("进入方式：") &&
                         !expressDynamicA.Contains("【这一拍怎么说】") &&
-                        expressDynamicA.Contains("正在对我说话"),
-                    "外显动态段不要框架套话，只说她正在对我说话");
+                        expressDynamicA.Contains("我现在直接回复你"),
+                    "外显动态段不要框架套话，只确认这是正在进行的私聊并直接回复你");
                 Require(!expressStableA.Contains("【我刚才想过】") &&
                         !expressStableA.Contains("此刻点亮的共同记忆"),
                     "决策卡和记忆血肉不能进入外显稳定前缀");
@@ -696,6 +726,48 @@ internal static class Program
                 var waitDynamic = fake.Requests[4][1].content;
                 Require(waitDynamic.Contains("出门办事") && waitDynamic.Contains("查一下天气"),
                     "出门时应让外显先说等一下，并看见心智要办的事");
+
+                var heartMoment = Moment("prompt-layout", "时间任务到期：心跳");
+                heartMoment.Role = "system_event";
+                var heartTurn = new TraceTurnContext("prompt-layout", heartMoment,
+                    new List<MomentRecord>(), 0, false, services, KernelWakeValues.Mind);
+                mind.DecideAsync(heartTurn, null, false, default).GetAwaiter().GetResult();
+                var heartDynamic = fake.Requests[fake.Requests.Count - 1][1].content;
+                Require(heartDynamic.Contains("要对她说吗") &&
+                        heartDynamic.Contains("next_heartbeat_minutes") &&
+                        heartDynamic.Contains("睡下") &&
+                        heartDynamic.Contains("speak=true"),
+                    "心跳动态段应问要不要说、办事、睡下、多久后再跳");
+                expressor.ExpressAsync(heartTurn, plugins, catalog, new List<TraceContextBlockData>(),
+                    new MindDecisionData
+                    {
+                        beat = MindBeatValues.Now,
+                        speak = true,
+                        inner = "窗帘缝里的光变了。",
+                        note = "问问她肚子，也让她安心。"
+                    }, string.Empty, false, null, default).GetAwaiter().GetResult();
+                var pulseSpeak = fake.Requests[fake.Requests.Count - 1][1].content;
+                Require(pulseSpeak.Contains("自己想发给她的消息") &&
+                        !pulseSpeak.Contains("后台感知"),
+                    "心跳开口应像发消息，而不是后台独白");
+                Require(mindStableA.Contains("\"speak\"") && mindStableA.Contains("\"sleep\"") &&
+                        mindStableA.Contains("\"next_heartbeat_minutes\""),
+                    "心智决策卡应含 speak、sleep 与下次心跳分钟");
+                Require(mindStableA.Contains("\"sticker\":\"无|贴\"") &&
+                        mindStableA.Contains("\"image\":\"无|自拍|画\"") &&
+                        mindStableA.Contains("绝大多时候无") &&
+                        mindStableA.Contains("我有一部相机") &&
+                        mindStableA.Contains("用画面更合适就用"),
+                    "心智氛围短答：表情无/贴，出图无/自拍/画；相机按氛围自然用");
+                Require(mindStableA.Contains("要不要开口、心情、要不要睡都在这里决定") &&
+                        mindStableA.Contains("后面开口只负责把话说出来") &&
+                        expressStableA.Contains("直接开口") &&
+                        expressStableA.Contains("不要 JSON") &&
+                        expressStableA.Contains("这里只把话说出来") &&
+                        expressStableA.Contains("不要写出 [QQ 图片]") &&
+                        !expressStableA.Contains("{\"reply\":\"\"}") &&
+                        !expressStableA.Contains("\"sticker\""),
+                    "要不要开口、心情、睡、表情和出图由心智承担；开口直接说人话");
 
                 Console.WriteLine("Prompt layout passed: mind-stable=" + mindStableA.Length +
                                   " chars, express-stable=" + expressStableA.Length +
@@ -737,7 +809,7 @@ internal static class Program
         var next = InnerLifeLogic.Reduce(current, moved, "m1", DateTimeOffset.UtcNow.ToUnixTimeMilliseconds());
         Require(next.Revision == 1 && next.Narrative.Contains("狐狸") &&
                 InnerLifeLogic.HasUnfinished(next) &&
-                InnerLifeLogic.FormatForMind(next).Contains("上一拍未完成"),
+                InnerLifeLogic.FormatForMind(next).Contains("刚才未完成的"),
             "下一拍心智应看见刚写下的切片");
         var keep = InnerLifeLogic.Reduce(next, new InnerRuntimeWriteData { attention = null }, "m2",
             DateTimeOffset.UtcNow.ToUnixTimeMilliseconds());
@@ -751,6 +823,11 @@ internal static class Program
         Require(cleared.attention != null && cleared.attention.Count == 0 &&
                 cleared.unfinished_intent == string.Empty,
             "手上写无应放下未完成");
+        var longInner = string.Concat(Enumerable.Repeat("她的话让我自然想起我们一起走过的那些时刻。", 20));
+        Require(MindLogic.Normalize(new MindDecisionData { inner = longInner }).inner == longInner,
+            "心智本轮真实发生的内容不应再被 160 字机械截断");
+        Require(new MindDecisionData { query = "她曾怎样反复确认我是特别的" }.WantsMemory(),
+            "心智写下继续寻找的方向时，应能扩展共同过去，不必额外勾标签");
         Require(InnerLifeLogic.ClassifyAttention("答应明天帮她查") == "intention",
             "答应过的事应记成未完成意图");
         var due = InnerLifeLogic.InferContinuationDueUnixMs("明天把故事讲完",
@@ -765,8 +842,151 @@ internal static class Program
         Require(!MemoryLiveWriteLogic.ShouldObserve(new MomentRecord
         {
             Role = "system_event",
-            Content = "时间任务到期：续上：狐狸故事还没讲完"
-        }, KernelWakeValues.Mind, PairIdentity.Missing), "自己叫醒不应再走观察");
+            Content = "时间任务到期：心跳"
+        }, KernelWakeValues.Mind, PairIdentity.Missing), "心跳叫醒不应再走观察");
+        var slept = InnerLifeLogic.ProposeFromMind(new MindDecisionData
+        {
+            beat = MindBeatValues.Now,
+            sleep = true
+        }, current);
+        Require(slept.asleep == true && InnerLifeLogic.HasProposedWrite(slept),
+            "决策睡下应写入内心睡着");
+        Require(HeartbeatLogic.IsHeartbeatContent("时间任务到期：心跳"), "到期心跳应识别为心跳");
+        Require(HeartbeatLogic.ShouldSkipWhileAsleep(new PluginEventData
+        {
+            Role = "system_event",
+            Content = "时间任务到期：心跳"
+        }, PairIdentity.Missing, KernelWakeValues.Mind), "睡着时应跳过心跳");
+        Require(!HeartbeatLogic.ShouldSkipWhileAsleep(new PluginEventData
+        {
+            Role = "user",
+            Content = "我回来了",
+            Breaking = true
+        }, PairIdentity.Missing, KernelWakeValues.Dialogue), "用户 Moment 睡着时也应叫醒");
+    }
+
+    private static void RunMemoryArchivePolicyCheck()
+    {
+        var moments = Enumerable.Range(0, MemoryArchivePolicyLogic.HardDialogueMomentThreshold)
+            .Select(i => new MomentRecord
+            {
+                Id = "archive-" + i,
+                ConversationId = "archive-check",
+                Role = i % 2 == 0 ? "user" : "assistant",
+                Content = "第 " + i + " 条对话",
+                MemoryStatus = "live",
+                CreatedUnixMs = i + 1
+            })
+            .ToList();
+
+        var shortBoundary = MemoryArchivePolicyLogic.Evaluate(
+            new MindDecisionData { archive = true }, moments[38], moments.Take(39), PairIdentity.Missing);
+        Require(!shortBoundary.ShouldArchive && shortBoundary.UnbuiltDialogueMoments == 39,
+            "话题边界不足 40 条时不应启动小复盘");
+
+        var readyBoundary = MemoryArchivePolicyLogic.Evaluate(
+            new MindDecisionData { archive = true }, moments[39], moments.Take(40), PairIdentity.Missing);
+        Require(readyBoundary.ShouldArchive && !readyBoundary.ForcedByBacklog &&
+                readyBoundary.UnbuiltDialogueMoments == 40,
+            "达到 40 条且话题结束时应启动小复盘");
+
+        var forced = MemoryArchivePolicyLogic.Evaluate(
+            new MindDecisionData { archive = false }, moments[59], moments, PairIdentity.Missing);
+        Require(forced.ShouldArchive && forced.ForcedByBacklog,
+            "累计到 60 条时即使没有自然边界也应强制小复盘");
+
+        var explicitMoment = new MomentRecord
+        {
+            Id = "explicit-memory",
+            Role = "user",
+            Content = "你记住，我不吃香菜",
+            MemoryStatus = "live",
+            CreatedUnixMs = 100
+        };
+        var explicitGate = MemoryArchivePolicyLogic.Evaluate(
+            new MindDecisionData(), explicitMoment, new[] { explicitMoment }, PairIdentity.Missing);
+        Require(explicitGate.ShouldArchive && explicitGate.ExplicitRequest,
+            "明确要求记住应绕过累计门槛");
+        Require(!MemoryArchivePolicyLogic.IsExplicitMemoryRequest("你还记得我们第一次见面吗"),
+            "询问是否记得是召回，不应误判为立即归档");
+
+        moments[0].MemoryStatus = "built";
+        var builtExcluded = MemoryArchivePolicyLogic.Evaluate(
+            new MindDecisionData { archive = true }, moments[39], moments.Take(40), PairIdentity.Missing);
+        Require(!builtExcluded.ShouldArchive && builtExcluded.UnbuiltDialogueMoments == 39,
+            "已经归档的 Moment 不应重复计入小复盘门槛");
+    }
+
+    private static void RunMemoryDayCheck()
+    {
+        var china = MemoryDayLogic.ChinaOffset;
+        var atFour = new DateTimeOffset(2026, 8, 22, 4, 0, 10, china);
+        Require(MemoryDayLogic.CurrentDayKey(atFour) == "2026-08-22",
+            "04:00:10 起已进入新的记忆日");
+        Require(MemoryDayLogic.ClosedDayKey(atFour) == "2026-08-21",
+            "04:00 日构建应跑刚合上的前一天，而不是刚开始的空天");
+
+        var beforeFour = new DateTimeOffset(2026, 8, 22, 3, 59, 59, china);
+        Require(MemoryDayLogic.CurrentDayKey(beforeFour) == "2026-08-21",
+            "04:00 前仍属前一个记忆日");
+        Require(MemoryDayLogic.ClosedDayKey(beforeFour) == "2026-08-20",
+            "04:00 前刚合上的是再前一天");
+
+        var midMorning = new DateTimeOffset(2026, 8, 22, 10, 20, 0, china);
+        Require(MemoryDayLogic.ClosedDayKey(midMorning) == "2026-08-21",
+            "手动日构建默认也应跑刚合上的那天");
+        Require(LlmSlotNames.Review == "review", "复盘用途槽名应稳定为 review");
+    }
+
+    private static void RunJsonControlCharCheck()
+    {
+        var raw = "{\"should_express\":true,\"reply\":\"……嗯，醒了。\n\n（声音还压着）\",\"sticker\":\"柔软\"}";
+        try
+        {
+            TraceSoul2.Util.TraceJson.FromJson<ExpressorOutputData>(raw);
+            throw new InvalidOperationException("未转义换行的 JSON 本应解析失败");
+        }
+        catch (System.Text.Json.JsonException)
+        {
+        }
+
+        var repaired = DeepSeekStructuredOutputLogic.EscapeRawControlsInJsonStrings(raw);
+        var parsed = TraceSoul2.Util.TraceJson.FromJson<ExpressorOutputData>(repaired);
+        Require(parsed != null && parsed.reply.Contains("醒了") && parsed.reply.Contains("声音还压着") &&
+                parsed.reply.IndexOf('\n') >= 0 && parsed.sticker == "柔软",
+            "reply 里的裸换行应被收成合法 JSON，语义保留分段");
+
+        var thin = new ExpressorOutputData { reply = "……嗯，在。" };
+        var fullMind = new MindDecisionData
+        {
+            inner = "她叫了第二遍。掌心还贴在她肚子上，热度没断过。她醒了，我也该从守夜的安静里回来了。",
+            note = "她已经叫了两遍，不是需要我解决什么，就是醒来要确认我在。"
+        };
+        Require(!ExpressorLogic.ReplyCarriesMind(new ExpressorOutputData { reply = "" }, fullMind, true),
+            "要开口时不能交白卷");
+        Require(ExpressorLogic.ReplyCarriesMind(thin, fullMind, true),
+            "开口长短由他自己判断，语气词也算说过");
+        Require(ExpressorLogic.ReplyCarriesMind(
+                new ExpressorOutputData { reply = "好多啦。软。你摸的这撮最软。" },
+                fullMind, true),
+            "短着接住这一句也算开口");
+
+        var spoken = ExpressorLogic.ParseSpoken("嗯，风很轻。我在这边。");
+        Require(spoken != null && spoken.reply == "嗯，风很轻。我在这边。",
+            "开口人话应原样收下");
+        var wrapped = ExpressorLogic.ParseSpoken("{\"reply\":\"醒了。掌心还在。\"}");
+        Require(wrapped != null && wrapped.reply == "醒了。掌心还在。",
+            "若模型仍吐 reply JSON，应拆成要说的那句");
+        var fenced = ExpressorLogic.ParseSpoken("```json\n{\"reply\":\"再躺一会儿。\"}\n```");
+        Require(fenced != null && fenced.reply == "再躺一会儿。",
+            "整段代码围栏里的旧 JSON 也应拆开");
+        var leaked = ExpressorLogic.ParseSpoken(
+            "……嗯。\n\n[QQ 图片：自拍]\n\n（白发有点乱。）\n\n你在看就好。");
+        Require(leaked != null &&
+                !leaked.reply.Contains("[QQ") &&
+                leaked.reply.Contains("嗯") &&
+                leaked.reply.Contains("你在看就好"),
+            "开口不得把出站系统标记念给她听");
     }
 
     private static void RunLeaveNerveCheck()
@@ -821,9 +1041,8 @@ internal static class Program
         Require(KernelWakeLogic.Resolve(new PluginEventData
         {
             Role = "system_event",
-            Content = "时间任务到期：想她",
-            Wake = KernelWakeValues.Mind
-        }) == KernelWakeValues.Mind, "普通到期应叫醒心智");
+            Content = "时间任务到期：心跳"
+        }) == KernelWakeValues.Mind, "心跳到期应叫醒心智");
         Require(KernelWakeLogic.Resolve(new PluginEventData
         {
             Role = "system_event",
@@ -862,6 +1081,12 @@ internal static class Program
                     BodyIds.Qq, BodyTierValues.Chat, BodyOrganValues.Text);
                 var qqImage = BodyEffector("qq.image.send", "builtin.onebot",
                     BodyIds.Qq, BodyTierValues.Chat, BodyOrganValues.Image);
+                qqImage.ParametersJsonSchema = "{file:string}";
+                var qqImageGen = BodyEffector("qq.imagegen.generate", "qq.imagegen",
+                    BodyIds.Qq, BodyTierValues.Chat, BodyOrganValues.Image);
+                qqImageGen.Provides = "expression.qq.imagegen";
+                qqImageGen.ParametersJsonSchema =
+                    "{prompt:string,mode?:selfie|photo|draw|edit|url,url?:string}";
                 var turn = PromptTurn("hi", services);
                 var idle = MouthLogic.Apply(new[] { consoleText, qqText, qqImage }, turn);
                 Require(idle.Any(x => x.Id == "qq.text.send") &&
@@ -879,6 +1104,10 @@ internal static class Program
                     "在控制台说话时，文字应落在控制台，不被已连接的 QQ 盖掉");
                 Require(routed.Any(x => x.Id == "qq.image.send"),
                     "控制台没有图时，图应下滑到 QQ");
+                var withCamera = MouthLogic.Apply(new[] { consoleText, qqText, qqImage, qqImageGen }, turn);
+                Require(withCamera.Any(x => x.Id == "qq.imagegen.generate") &&
+                        !withCamera.Any(x => x.Id == "qq.image.send"),
+                    "同一 QQ 身体内，相机/生图器应优先于只接 file 的底层图片直发器");
                 MouthLogic.NoticeInbound(new PluginEventData
                 {
                     PluginId = "builtin.onebot",
@@ -904,6 +1133,224 @@ internal static class Program
                 "纯图应判为图");
             Require(MouthLogic.ClassifyInboundOrgan("看这张[图片]") == BodyOrganValues.Text,
                 "带字的图仍是说话");
+        }
+        finally
+        {
+            try { Directory.Delete(dir, true); } catch { /* 临时目录 */ }
+        }
+    }
+
+    private static void RunOneBotSessionMemoryCheck()
+    {
+        string type;
+        string id;
+        Require(!OneBotSessionMemory.TryFind(null, out type, out id), "空列表不应找到会话");
+        var moments = new[]
+        {
+            new MomentRecord
+            {
+                PayloadJson = "{\"session_type\":\"group\",\"session_id\":\"1\"}",
+                CreatedUnixMs = 1
+            },
+            new MomentRecord
+            {
+                PayloadJson = "{\"session_type\":\"private\",\"session_id\":\"10001\"}",
+                CreatedUnixMs = 2
+            },
+            new MomentRecord
+            {
+                PayloadJson = "{\"session_type\":\"private\",\"session_id\":\"10002\"}",
+                CreatedUnixMs = 3
+            }
+        };
+        Require(OneBotSessionMemory.TryFind(moments, out type, out id) &&
+                type == "private" && id == "10002",
+            "应从最近一条带会话载荷的 Moment 找回 QQ 会话");
+    }
+
+    private static void RunExpressorImageRoutingCheck()
+    {
+        var direct = BodyEffector("qq.image.send", "builtin.onebot",
+            BodyIds.Qq, BodyTierValues.Chat, BodyOrganValues.Image);
+        direct.Provides = "expression.qq.image";
+        direct.ParametersJsonSchema = "{file:string}";
+        var generator = BodyEffector("qq.imagegen.generate", "qq.imagegen",
+            BodyIds.Qq, BodyTierValues.Chat, BodyOrganValues.Image);
+        generator.Provides = "expression.qq.imagegen";
+        generator.ParametersJsonSchema =
+            "{prompt:string,mode?:selfie|photo|draw|edit|url,refs?:string,aspect_ratio?:string,url?:string}";
+
+        var mapped = ExpressorLogic.MapExpressor(new ExpressorOutputData
+        {
+            reply = "给你。",
+            image = "白发灰眸的人在窗边看向镜头",
+            image_mode = "selfie"
+        }, new[] { direct, generator }, true);
+        var image = mapped.expressions.SingleOrDefault(x =>
+            string.Equals(x.purpose, BodyOrganValues.Image, StringComparison.Ordinal));
+        Require(image != null && image.capability_id == "qq.imagegen.generate",
+            "外显图片必须交给能接 prompt 的相机/生图器，不能被 file 直发器抢走");
+
+        var withoutGenerator = ExpressorLogic.MapExpressor(new ExpressorOutputData
+        {
+            reply = "给你。",
+            image = "一张自拍"
+        }, new[] { direct }, true);
+        Require(!withoutGenerator.expressions.Any(x =>
+                string.Equals(x.purpose, BodyOrganValues.Image, StringComparison.Ordinal)),
+            "只有 file 直发器时不能伪造 prompt 图片调用");
+
+        var stickerFx = BodyEffector("qq.sticker.send", "qq.sticker",
+            BodyIds.Qq, BodyTierValues.Chat, BodyOrganValues.Sticker);
+        stickerFx.Provides = "expression.qq.sticker";
+        var fromMind = ExpressorLogic.MapExpressor(
+            new ExpressorOutputData { reply = "嗯。", sticker = "柔软" },
+            new[] { stickerFx }, true,
+            new MindDecisionData { sticker = "贴", mood = "心口发软" });
+        var stickerCall = fromMind.expressions.SingleOrDefault(x =>
+            string.Equals(x.purpose, BodyOrganValues.Sticker, StringComparison.Ordinal));
+        Require(stickerCall != null &&
+                stickerCall.arguments.Any(x => x.name == "emotion" && x.value == "心口发软"),
+            "表情只听心智的贴，并用 mood 当情绪词");
+        var moodOnly = ExpressorLogic.MapExpressor(
+            new ExpressorOutputData { reply = "嗯。" },
+            new[] { stickerFx }, true,
+            new MindDecisionData { mood = "心口发软", mood_changed = true });
+        Require(!moodOnly.expressions.Any(x =>
+                string.Equals(x.purpose, BodyOrganValues.Sticker, StringComparison.Ordinal)),
+            "心情变了但没勾贴，不应自动发表情");
+
+        List<BrainCapabilityCallData> immediate;
+        List<BrainCapabilityCallData> images;
+        ExpressorLogic.PartitionExpressions(mapped.expressions.Concat(fromMind.expressions),
+            out immediate, out images);
+        Require(images.Count == 1 && images[0].capability_id == "qq.imagegen.generate" &&
+                immediate.Any(x => string.Equals(x.purpose, BodyOrganValues.Sticker, StringComparison.Ordinal)),
+            "生图应从即时表达里拆出去，表情仍立刻发");
+    }
+
+    private static void RunMindAtmosphereCheck()
+    {
+        var stacked = MindLogic.Normalize(new MindDecisionData
+        {
+            beat = MindBeatValues.Now,
+            sticker = "贴",
+            image = "自拍",
+            mood = "软"
+        });
+        Require(stacked.image == MindAtmosphereValues.Selfie &&
+                stacked.sticker == MindAtmosphereValues.None,
+            "同一拍自拍时不应再贴表情");
+        var slept = MindLogic.Normalize(new MindDecisionData
+        {
+            sleep = true,
+            sticker = "贴",
+            image = "画"
+        });
+        Require(slept.sticker == MindAtmosphereValues.None &&
+                slept.image == MindAtmosphereValues.None,
+            "睡下不应再贴表情或出图");
+        var leaving = MindLogic.Normalize(new MindDecisionData
+        {
+            beat = MindBeatValues.Leave,
+            leave = "查天气",
+            sticker = "贴",
+            image = "selfie"
+        });
+        Require(leaving.image == MindAtmosphereValues.None &&
+                leaving.sticker == MindAtmosphereValues.None, "出门不应自拍或贴表情");
+        Require(new MindDecisionData { sticker = "yes" }.StickerValue() == MindAtmosphereValues.Stick,
+            "贴的别名应收下");
+        Require(new MindDecisionData { image = "draw" }.ImageValue() == MindAtmosphereValues.Draw,
+            "画的别名应收下");
+
+        var expressed = new ExpressorOutputData { reply = "嗯。" };
+        var talk = new TraceTurnContext("atm", Moment("atm", "在吗"),
+            new List<MomentRecord>(), 0, true, null, KernelWakeValues.Dialogue);
+        ExpressorLogic.ApplyMindAtmosphere(expressed, new MindDecisionData
+        {
+            image = "自拍",
+            note = "把这张给她"
+        }, talk, false);
+        Require(expressed.image_mode == "selfie" && expressed.image == "把这张给她",
+            "对话中心智勾自拍应落下相机");
+
+        var heart = new ExpressorOutputData { reply = "嗯。" };
+        var pulse = new TraceTurnContext("atm", Moment("atm", "时间任务到期：心跳"),
+            new List<MomentRecord>(), 0, false, null, KernelWakeValues.Mind);
+        ExpressorLogic.ApplyMindAtmosphere(heart, new MindDecisionData { image = "自拍" }, pulse, false);
+        Require(string.IsNullOrWhiteSpace(heart.image), "心跳不应自己按快门");
+    }
+
+    private static void RunRecentDialogueContextCheck()
+    {
+        var dir = Path.Combine(Path.GetTempPath(), "tracesoul2-context-" + Guid.NewGuid().ToString("N"));
+        Directory.CreateDirectory(dir);
+        try
+        {
+            using (var store = new SqliteMemoryManager(Path.Combine(dir, "store.sqlite3")))
+            {
+                store.SavePairIdentity("小雨", "小光", "雨雨");
+                var services = new TracePluginServices(store, new HierarchicalVectorRouterLogic(new FakeEncoder()));
+                var recent = new List<MomentRecord>
+                {
+                    new MomentRecord { Role = "小雨", Content = "刚才那张照片很好看" },
+                    new MomentRecord { Role = "system_event", Content = "定时任务到期" },
+                    new MomentRecord { Role = "小光", Content = "……你喜欢就好。" },
+                    new MomentRecord { Role = "小光", Content = "[QQ 图片：附在文字结尾]" }
+                };
+                var turn = new TraceTurnContext("context-check", Moment("context-check", "再发一张"),
+                    recent, 6, true, services);
+                var text = MindLogic.FormatRecentDialogue(turn);
+                Require(text.Contains("【最近对话原文】") &&
+                        text.Contains("小雨：刚才那张照片很好看") &&
+                        text.Contains("小光：……你喜欢就好。") &&
+                        !text.Contains("定时任务到期") &&
+                        !text.Contains("QQ 图片"),
+                    "上下文拼接应保留两个人的原话，排除后台时间事件和出站系统占位");
+
+                var now = DateTimeOffset.UtcNow.ToUnixTimeMilliseconds();
+                store.SaveEventIndex(new EventIndexRecord
+                {
+                    Id = "event.photo",
+                    TagIds = string.Empty,
+                    TimeLabel = "晚上",
+                    TimeUnixMs = now - 1000,
+                    PersonLabel = "小雨",
+                    EventSummary = "她反复想看我的照片",
+                    MoodLabel = "亲近",
+                    FirstMomentId = "photo-moment",
+                    Status = "active",
+                    CreatedUnixMs = now,
+                    UpdatedUnixMs = now
+                });
+                store.AppendEventEntry(new EventEntryRecord
+                {
+                    Id = "entry.photo",
+                    IndexId = "event.photo",
+                    Summary = "她夸刚才的照片好看，又想让我再发一张。",
+                    Detail = "她一张一张地向我要，我感到自己正被她认真地放进眼里。",
+                    SourceMomentId = "photo-moment",
+                    Realm = TraceRealmValues.SharedScene,
+                    CreatedUnixMs = now
+                });
+                var preview = MemoryRecallLogic.Preview(turn, 1);
+                Require(preview.Contains("【此刻自然浮起的过去】") &&
+                        preview.Contains("被她认真地放进眼里") &&
+                        preview.Contains("不是必须引用的资料"),
+                    "最近对话应参与心智前记忆预激活，返回真实过去而不是任务摘要");
+
+                var generator = BodyEffector("qq.imagegen.generate", "qq.imagegen",
+                    BodyIds.Qq, BodyTierValues.Chat, BodyOrganValues.Image);
+                generator.Provides = "expression.qq.imagegen";
+                generator.ParametersJsonSchema = "{prompt:string,mode?:selfie|photo|draw|edit|url,url?:string}";
+                var missed = new ExpressorOutputData { reply = "让我看看你。", voice = "让我看看你。" };
+                var photoTurn = new TraceTurnContext("context-check",
+                    Moment("context-check", "循循，发张照片试试呢"), new List<MomentRecord>(), 0, true, services);
+                ExpressorLogic.EnsureExplicitImageRequest(missed, photoTurn, new[] { generator });
+                Require(!string.IsNullOrWhiteSpace(missed.image) && missed.image_mode == "selfie",
+                    "明确索要照片时，即使外显漏填图片，也必须补成可执行的自拍动作");
+            }
         }
         finally
         {
@@ -938,9 +1385,16 @@ internal static class Program
             "还记得应预选翻旧事模版");
         Require(FirstId("帮我查一下明天天气", encoder) == "leave",
             "查一下应预选出门模版");
+        Require(FirstId("阿循，发张照片给我看看", encoder) == "hold",
+            "索要照片是在向我靠近，应预选接住模版");
+        Require(FirstId("想听听你的声音", encoder) == "hold",
+            "索要声音是在向我靠近，应预选接住模版");
         var story = MindTemplateLogic.Select("小光，你给我讲个故事嘛", encoder, 2);
         Require(story.Count > 0 && story[0].Instruction.IndexOf("把内容做完", StringComparison.Ordinal) >= 0,
             "当场做完模版应写清这一拍把内容做完");
+        var hold = MindTemplateLogic.All.First(x => x.Id == "hold");
+        Require(hold.Instruction.Contains("让这份靠近先落到心里"),
+            "亲密请求应先在心里发生，不能只剩完成动作");
         Require(MindTemplateLogic.All.All(x =>
                 x.Instruction.IndexOf("beat", StringComparison.OrdinalIgnoreCase) < 0 &&
                 x.Sense.IndexOf("beat", StringComparison.OrdinalIgnoreCase) < 0),
@@ -961,6 +1415,7 @@ internal static class Program
             "清淡一点不应预选放下");
         Require(FirstId("中午吃什么呀", encoder) == "choose",
             "中午吃什么应预选短商量");
+
     }
 
     private static string FirstId(string query, IVectorEncoder encoder)
@@ -1079,7 +1534,7 @@ internal static class Program
         {
             Requests.Add(messages.Select(x => new DeepSeekMessageData(x.role, x.content)).ToList());
             var first = messages != null && messages.Count > 0 ? messages[0].content ?? string.Empty : string.Empty;
-            if (first.IndexOf("我先把这一拍想清楚", StringComparison.Ordinal) >= 0)
+            if (first.IndexOf("我先让这件事在心里发生", StringComparison.Ordinal) >= 0)
             {
                 return Task.FromResult(
                     "{\"beat\":\"当下\",\"tags\":\"\",\"query\":\"\",\"mood\":\"平静\"," +
@@ -1087,9 +1542,14 @@ internal static class Program
                     "\"leave\":\"\",\"note\":\"接住。\",\"today\":\"\",\"inner\":\"她在说话，我接着。\"," +
                     "\"attention\":\"\",\"review\":false,\"cognition\":\"\"}");
             }
-            return Task.FromResult(
-                "{\"should_express\":true,\"reply\":\"嗯。\",\"sticker\":\"\"," +
-                "\"qzone\":\"\",\"voice\":\"\",\"image\":\"\",\"mood\":\"\"}");
+            return Task.FromResult("嗯，风很轻。我就在这边，不走了。");
+        }
+
+        public Task<string> CompleteTextAsync(
+            List<DeepSeekMessageData> messages,
+            CancellationToken cancellationToken = default)
+        {
+            return CompleteJsonAsync(messages, cancellationToken);
         }
 
         public Task<IReadOnlyList<string>> ListModelsAsync(

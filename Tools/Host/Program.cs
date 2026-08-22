@@ -66,7 +66,8 @@ builder.WebHost.ConfigureKestrel(options =>
     else if (onebotListenPort > 0)
         Console.WriteLine("OneBot 反向监听端口 " + onebotListenPort + " 被占用，已跳过（可在控制台改端口后保存重启）。");
 });
-builder.Services.AddSingleton(new SoulRuntime(dataDir, home.PluginsDirectory));
+builder.Services.AddSingleton(new SoulRuntime(
+    dataDir, home.PluginsDirectory, home.PluginsDataDirectory));
 builder.Services.AddSingleton(new UpdateService(home));
 builder.Services.AddSingleton(new DebugBranchService(dataDir));
 builder.Services.AddHostedService<BackgroundMomentWorker>();
@@ -192,7 +193,8 @@ app.MapGet("/identity/cards", (SoulRuntime runtime) =>
 
 app.MapPut("/identity/pair", (SoulRuntime runtime, PairWrite body) =>
 {
-    var pair = runtime.Store.SavePairIdentity(body.username, body.assname, body.callName);
+    var current = runtime.Store.LoadPairIdentity();
+    var pair = runtime.Store.SavePairIdentity(body.username, body.assname, current.CallName);
     runtime.RebuildOntology();
     runtime.Emit("名字已保存：" + pair.Username + " / " + pair.Assname);
     return Results.Json(new { pair.Username, pair.Assname, pair.CallName });
@@ -216,6 +218,8 @@ app.MapGet("/inner", (SoulRuntime runtime) =>
         inner.RelationshipLens,
         inner.OngoingActivity,
         inner.UnfinishedIntent,
+        inner.Asleep,
+        nextHeartbeatUnixMs = HeartbeatLogic.NextDueUnixMs(runtime.Store, runtime.ConversationId),
         attention = (inner.Attention ?? new List<AttentionItemData>())
             .Take(3)
             .Select(x => new { kind = x.kind ?? string.Empty, content = x.content ?? string.Empty })
@@ -413,6 +417,7 @@ app.MapDelete("/providers/{id}/models", (SoulRuntime runtime, string id, string 
 app.MapPut("/providers/current", (SoulRuntime runtime, SelectWrite body) =>
 {
     var selected = runtime.Providers.Select(body.id, body.model);
+    runtime.RefreshReviewClient();
     runtime.Emit("当前模型：" + selected.model);
     return Results.Json(runtime.PublicProvider(selected));
 });
@@ -421,19 +426,25 @@ app.MapPut("/providers/slots", (SoulRuntime runtime, SlotBundleWrite body) =>
 {
     if (body == null) throw new InvalidOperationException("槽位不能为空。");
     ProviderSlotApi.Apply(runtime, LlmSlotNames.Thinking, body.thinking);
+    ProviderSlotApi.Apply(runtime, LlmSlotNames.Review, body.review);
     ProviderSlotApi.Apply(runtime, LlmSlotNames.Multimodal, body.multimodal);
     ProviderSlotApi.Apply(runtime, LlmSlotNames.Image, body.image);
     ProviderSlotApi.Apply(runtime, LlmSlotNames.Speech, body.speech);
     if (body.chat != null && !string.IsNullOrWhiteSpace(body.chat.providerId))
         runtime.Providers.Select(body.chat.providerId, body.chat.model);
+    runtime.RefreshReviewClient();
     runtime.Emit("已保存默认模型槽");
     return Results.Json(runtime.PublicSlots());
 });
 
 app.MapPut("/settings/context-limit", (SoulRuntime runtime, LimitWrite body) =>
 {
-    runtime.ContextInjectionCount = Math.Max(0, Math.Min(100, body.limit));
-    return Results.Json(new { limit = runtime.ContextInjectionCount });
+    return Results.Json(new { limit = runtime.SetContextInjectionCount(body.limit) });
+});
+
+app.MapPut("/settings/heartbeat", (SoulRuntime runtime, HeartbeatWrite body) =>
+{
+    return Results.Json(runtime.SetHeartbeatRange(body.minMinutes, body.maxMinutes));
 });
 
 app.MapGet("/memory/nerve", (SoulRuntime runtime) => Results.Json(runtime.NerveStatus()));
@@ -473,6 +484,8 @@ app.MapGet("/platforms/onebot/config", (SoulRuntime runtime) =>
         config.access_token,
         config.self_id,
         config.reply_enabled,
+        config.napcat_path,
+        napcat_candidates = NapCatLauncher.Discover(config.napcat_path),
         napcat_url = "ws://127.0.0.1:" + config.listen_port + "/ws",
         note = "NapCat 侧：网络配置用 websocketClients（反向 WS）连上面的地址，token 与此处一致；与 AstrBot aiocqhttp 同款模式。"
     });
@@ -489,13 +502,31 @@ app.MapPut("/platforms/onebot/config", (SoulRuntime runtime, OneBotConfigWrite b
         http_url = string.IsNullOrWhiteSpace(body.http_url) ? "http://127.0.0.1:3000" : body.http_url.Trim(),
         access_token = (body.access_token ?? string.Empty).Trim(),
         self_id = (body.self_id ?? string.Empty).Trim(),
-        reply_enabled = body.reply_enabled
+        reply_enabled = body.reply_enabled,
+        napcat_path = (body.napcat_path ?? string.Empty).Trim()
     };
     File.WriteAllText(Path.Combine(runtime.DataDirectory, "onebot.json"),
         JsonSerializer.Serialize(config, new JsonSerializerOptions { WriteIndented = true, IncludeFields = true }));
     runtime.Emit("OneBot 配置已保存，宿主即将重启应用…");
     RestartHost(runtime.DataDirectory);
     return Results.Json(new { saved = true, message = "配置已保存，宿主正在重启应用（约 2 秒后生效）。" });
+});
+
+app.MapPost("/platforms/onebot/napcat/start", (SoulRuntime runtime) =>
+{
+    try
+    {
+        var config = OneBotConfig.Load(runtime.DataDirectory);
+        var result = NapCatLauncher.Start(config.napcat_path);
+        runtime.Emit(result.message);
+        return Results.Json(result);
+    }
+    catch (FileNotFoundException exception) { return Results.BadRequest(new { error = exception.Message }); }
+    catch (InvalidOperationException exception) { return Results.BadRequest(new { error = exception.Message }); }
+    catch (System.ComponentModel.Win32Exception exception)
+    {
+        return Results.BadRequest(new { error = "启动 NapCat 失败：" + exception.Message });
+    }
 });
 
 // 插件声明的 WebSocket 入口（OneBot 反向 WS 等）。
@@ -546,11 +577,12 @@ app.MapPost("/memory/daily-run", (DailyRunWrite body, [FromServices] DailyPipeli
 app.MapGet("/events", async (HttpContext context, SoulRuntime runtime) =>
 {
     context.Response.Headers.ContentType = "text/event-stream";
+    using var subscription = runtime.SubscribeEvents();
     try
     {
         await context.Response.WriteAsync("data: " + JsonSerializer.Serialize(new { hello = "tracesoul2" }) + "\n\n");
         await context.Response.Body.FlushAsync();
-        var reader = runtime.Events;
+        var reader = subscription.Reader;
         while (!context.RequestAborted.IsCancellationRequested)
         {
             var line = await reader.ReadAsync(context.RequestAborted);
@@ -622,7 +654,8 @@ Console.WriteLine("TraceSoul2 Host  v" + TraceHome.HostVersion() +
                   "  " + urls +
                   "  home=" + (home.Root ?? "(legacy)") +
                   "  soul=" + dataDir +
-                  "  plugins=" + home.PluginsDirectory);
+                  "  plugins=" + home.PluginsDirectory +
+                  "  plugins_data=" + home.PluginsDataDirectory);
 
 // 切回主线后的清理：等旧调试进程完全退出后，删除测试侧全部数据。
 if (File.Exists(Path.Combine(dataDir, "debug-mode.json")))
@@ -664,9 +697,13 @@ static void RestartHost(string targetDataDir)
     startInfo.Environment["TRACESOUL2_URLS"] = urls;
     startInfo.Environment["TRACESOUL2_RESTART_DELAY"] = "1500";
     var plugins = Environment.GetEnvironmentVariable("TRACESOUL2_PLUGINS")
-                  ?? TraceHome.Current?.PluginsDirectory;
+        ?? TraceHome.Current?.PluginsDirectory;
     if (!string.IsNullOrWhiteSpace(plugins))
         startInfo.Environment["TRACESOUL2_PLUGINS"] = plugins;
+    var pluginsData = Environment.GetEnvironmentVariable(TraceHome.EnvPluginsData)
+        ?? TraceHome.Current?.PluginsDataDirectory;
+    if (!string.IsNullOrWhiteSpace(pluginsData))
+        startInfo.Environment[TraceHome.EnvPluginsData] = pluginsData;
     var dump = Environment.GetEnvironmentVariable("TRACESOUL2_LLM_DUMP_DIR");
     if (!string.IsNullOrWhiteSpace(dump))
         startInfo.Environment["TRACESOUL2_LLM_DUMP_DIR"] = dump;
@@ -748,7 +785,6 @@ internal sealed class PairWrite
 {
     public string username { get; set; }
     public string assname { get; set; }
-    public string callName { get; set; }
 }
 
 internal sealed class CardWrite { public string body { get; set; } }
@@ -760,6 +796,7 @@ internal sealed class PluginConfigWrite
 internal sealed class UpdateConfigWrite { public string repository { get; set; } }
 internal sealed class MomentWrite { public string content { get; set; } }
 internal sealed class LimitWrite { public int limit { get; set; } }
+internal sealed class HeartbeatWrite { public int minMinutes { get; set; } public int maxMinutes { get; set; } }
 internal sealed class NerveWrite { public int top_k { get; set; } public string provider_id { get; set; } }
 internal sealed class DailyRunWrite { public string day { get; set; } }
 internal sealed class SelectWrite { public string id { get; set; } public string model { get; set; } }
@@ -790,6 +827,7 @@ internal sealed class OneBotConfigWrite
     public string access_token { get; set; }
     public string self_id { get; set; }
     public bool reply_enabled { get; set; } = true;
+    public string napcat_path { get; set; }
 }
 
 internal sealed class AddProviderWrite
@@ -831,6 +869,7 @@ internal sealed class SlotBundleWrite
 {
     public SlotRefWrite chat { get; set; }
     public SlotRefWrite thinking { get; set; }
+    public SlotRefWrite review { get; set; }
     public SlotRefWrite multimodal { get; set; }
     public SlotRefWrite image { get; set; }
     public SlotRefWrite speech { get; set; }

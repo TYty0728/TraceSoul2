@@ -1,0 +1,16 @@
+{
+  "dll": "TraceSoul2.Plugin.QqTts.dll",
+  "provider_id": "",
+  "api_key": "",
+  "api_url": "https://xyzapi0613.online/v1/audio/speech",
+  "model": "voice-3.2-fs",
+  "voice_id": "nova",
+  "audio_format": "wav",
+  "prompt_mode": "auto",
+  "max_text_length": 500,
+  "timeout": 120,
+  "cleanup_delay_seconds": 1800,
+  "failure_fallback_text": true,
+  "debug": false,
+  "proxy": ""
+}

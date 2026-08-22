@@ -10,8 +10,8 @@ using TraceSoul2.Plugins.Builtin;
 namespace TraceSoul2.Host
 {
     /// <summary>
-    /// 器官包配置：plugin.json 是值，config_schema.json 是表单（AstrBot 同款：标签 + 说明 + 控件）。
-    /// dll 字段由加载器使用，控制台不能改。
+    /// 器官包配置：plugin.json 是只读清单/默认值，config_schema.json 是表单，
+    /// plugins_data/&lt;包名&gt;/config.json 是用户持久值。dll 字段只由加载器使用。
     /// </summary>
     public static class PluginConfigStore
     {
@@ -55,28 +55,55 @@ namespace TraceSoul2.Host
             public List<Field> fields { get; set; }
         }
 
-        public static object ReadPackage(string packageDirectory, string dllName)
+        public static void EnsurePackageConfig(string packageDirectory, string pluginDataDirectory)
         {
             var schema = LoadSchema(packageDirectory) ?? InferSchema(packageDirectory);
-            var values = LoadPluginJson(packageDirectory);
-            return BuildForm(schema, values, dllName, restartRequired: false, folder: packageDirectory);
+            if (string.IsNullOrWhiteSpace(pluginDataDirectory))
+                throw new InvalidOperationException("没有插件数据目录。");
+            Directory.CreateDirectory(pluginDataDirectory);
+            var path = Path.Combine(pluginDataDirectory, "config.json");
+            if (File.Exists(path)) return;
+
+            // 首次启动把旧 plugin.json 里的可配置字段复制到独立数据目录。
+            var legacy = LoadPluginJson(packageDirectory);
+            var migrated = new JsonObject();
+            foreach (var field in schema.fields ?? new List<Field>())
+            {
+                if (field == null || string.IsNullOrWhiteSpace(field.key) ||
+                    string.Equals(field.key, "dll", StringComparison.OrdinalIgnoreCase)) continue;
+                JsonNode value;
+                if (legacy.TryGetPropertyValue(field.key, out value) && value != null)
+                    migrated[field.key] = value.DeepClone();
+            }
+            File.WriteAllText(path, migrated.ToJsonString(PrettyOptions()));
+        }
+
+        public static object ReadPackage(
+            string packageDirectory,
+            string pluginDataDirectory,
+            string dllName)
+        {
+            EnsurePackageConfig(packageDirectory, pluginDataDirectory);
+            var schema = LoadSchema(packageDirectory) ?? InferSchema(packageDirectory);
+            var values = MergeValues(
+                LoadPluginJson(packageDirectory),
+                LoadPluginObject(Path.Combine(pluginDataDirectory, "config.json")));
+            return BuildForm(schema, values, dllName, restartRequired: false,
+                folder: packageDirectory, dataFolder: pluginDataDirectory);
         }
 
         public static void WritePackage(
             string packageDirectory,
+            string pluginDataDirectory,
             string dllName,
             Dictionary<string, JsonElement> incoming)
         {
             if (string.IsNullOrWhiteSpace(packageDirectory))
                 throw new InvalidOperationException("没有插件包目录。");
-            Directory.CreateDirectory(packageDirectory);
-            var path = Path.Combine(packageDirectory, "plugin.json");
+            EnsurePackageConfig(packageDirectory, pluginDataDirectory);
+            var path = Path.Combine(pluginDataDirectory, "config.json");
             var schema = LoadSchema(packageDirectory) ?? InferSchema(packageDirectory);
             var node = LoadPluginObject(path);
-            JsonValue dllValue = node["dll"] as JsonValue;
-            if (!string.IsNullOrWhiteSpace(dllName) &&
-                (dllValue == null || string.IsNullOrWhiteSpace(dllValue.ToString())))
-                node["dll"] = dllName;
             var map = new Dictionary<string, JsonElement>(StringComparer.OrdinalIgnoreCase);
             if (incoming != null)
             {
@@ -106,7 +133,8 @@ namespace TraceSoul2.Host
                 ["http_url"] = config.http_url ?? "",
                 ["access_token"] = config.access_token ?? "",
                 ["self_id"] = config.self_id ?? "",
-                ["reply_enabled"] = config.reply_enabled
+                ["reply_enabled"] = config.reply_enabled,
+                ["napcat_path"] = config.napcat_path ?? ""
             };
             return BuildForm(OneBotSchema(), values, null, restartRequired: true, folder: dataDirectory);
         }
@@ -125,7 +153,8 @@ namespace TraceSoul2.Host
                 http_url = ReadString(incoming, "http_url", current.http_url),
                 access_token = ReadString(incoming, "access_token", current.access_token),
                 self_id = ReadString(incoming, "self_id", current.self_id),
-                reply_enabled = ReadBool(incoming, "reply_enabled", current.reply_enabled)
+                reply_enabled = ReadBool(incoming, "reply_enabled", current.reply_enabled),
+                napcat_path = ReadString(incoming, "napcat_path", current.napcat_path)
             };
             File.WriteAllText(
                 Path.Combine(dataDirectory, "onebot.json"),
@@ -133,7 +162,8 @@ namespace TraceSoul2.Host
         }
 
         private static object BuildForm(
-            Schema schema, JsonObject values, string dllName, bool restartRequired, string folder)
+            Schema schema, JsonObject values, string dllName, bool restartRequired, string folder,
+            string dataFolder = null)
         {
             var fields = new List<object>();
             foreach (var field in schema.fields ?? new List<Field>())
@@ -161,6 +191,7 @@ namespace TraceSoul2.Host
                 hint = schema.hint ?? string.Empty,
                 dll = dllName ?? string.Empty,
                 folder = folder ?? string.Empty,
+                dataFolder = dataFolder ?? string.Empty,
                 restartRequired,
                 fields
             };
@@ -188,8 +219,9 @@ namespace TraceSoul2.Host
                         type = "number", min = 1, max = 65535, step = 1
                     },
                     FieldOf("access_token", "Access Token", "可填多个，逗号/分号分隔；与 NapCat 的 token 对应。空=不校验。", "password"),
-                    FieldOf("self_id", "只收这个 QQ", "self_id。留空 = 都收。", "string"),
+                    FieldOf("self_id", "机器人自身 QQ", "填 NapCat 当前登录的 QQ，不是给它发消息的对方 QQ。留空 = 不限制。", "string"),
                     FieldOf("reply_enabled", "回发到 QQ", "开：文字回复自动发回 QQ。关：只收不回，回复留在控制台。", "bool"),
+                    FieldOf("napcat_path", "本机 NapCat 启动路径", "填写 .exe/.bat/.cmd，或包含启动文件的 NapCat 目录。", "string"),
                     FieldOf("ws_url", "正向 WS 地址", "仅正向模式使用。", "string"),
                     FieldOf("http_url", "正向 HTTP 动作地址", "仅正向模式使用；反向模式动作走同一根 WS。", "string")
                 }
@@ -253,6 +285,22 @@ namespace TraceSoul2.Host
             {
                 return new JsonObject();
             }
+        }
+
+        private static JsonObject MergeValues(JsonObject defaults, JsonObject saved)
+        {
+            var merged = new JsonObject();
+            if (defaults != null)
+            {
+                foreach (var pair in defaults)
+                    if (pair.Value != null) merged[pair.Key] = pair.Value.DeepClone();
+            }
+            if (saved != null)
+            {
+                foreach (var pair in saved)
+                    if (pair.Value != null) merged[pair.Key] = pair.Value.DeepClone();
+            }
+            return merged;
         }
 
         private static object ResolveValue(JsonObject values, Field field)

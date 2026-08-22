@@ -13,6 +13,10 @@ namespace TraceSoul2.Manager
         Task<string> CompleteJsonAsync(
             List<DeepSeekMessageData> messages,
             CancellationToken cancellationToken = default(CancellationToken));
+        /// <summary>开口用：普通文本，不强制 JSON 对象。</summary>
+        Task<string> CompleteTextAsync(
+            List<DeepSeekMessageData> messages,
+            CancellationToken cancellationToken = default(CancellationToken));
         Task<IReadOnlyList<string>> ListModelsAsync(
             CancellationToken cancellationToken = default(CancellationToken));
     }

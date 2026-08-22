@@ -872,6 +872,7 @@ namespace TraceSoul2.Manager
             EnsureColumn("event_indexes", "TimeUnixMs", "INTEGER");
             EnsureColumn("turn_reviews", "PayloadJson", "TEXT");
             EnsureColumn("moments", "MemoryStatus", "TEXT");
+            EnsureColumn("inner_runtime", "Asleep", "INTEGER");
         }
 
         private void EnsureColumn(string table, string column, string declaration)
@@ -1307,7 +1308,8 @@ namespace TraceSoul2.Manager
                     items = data.Attention ?? new List<AttentionItemData>()
                 }),
                 SourceMomentId = data.SourceMomentId ?? string.Empty,
-                UpdatedUnixMs = data.UpdatedUnixMs
+                UpdatedUnixMs = data.UpdatedUnixMs,
+                Asleep = data.Asleep
             };
         }
 
@@ -1330,7 +1332,8 @@ namespace TraceSoul2.Manager
                     ? new List<AttentionItemData>()
                     : attention.items,
                 SourceMomentId = record.SourceMomentId,
-                UpdatedUnixMs = record.UpdatedUnixMs
+                UpdatedUnixMs = record.UpdatedUnixMs,
+                Asleep = record.Asleep
             };
         }
 

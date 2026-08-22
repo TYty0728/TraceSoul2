@@ -1,0 +1,18 @@
+{
+  "hint": "完整迁回老语音插件：支持多段语音、情绪/语气词/raw 模式、失败回退和临时文件清理。优先使用供应商或默认语音槽。",
+  "fields": [
+    { "key": "provider_id", "label": "供应商", "type": "provider", "role": "speech", "description": "留空使用默认语音槽。" },
+    { "key": "model", "label": "模型", "type": "provider_model", "provider_key": "provider_id", "role": "speech", "placeholder": "voice-3.2-fs" },
+    { "key": "api_key", "label": "API Key（备用）", "type": "password" },
+    { "key": "api_url", "label": "完整接口地址（备用）", "type": "string", "placeholder": "https://example.com/v1/audio/speech" },
+    { "key": "voice_id", "label": "音色 ID", "type": "string", "placeholder": "例如：Xun20260216", "description": "传给 TTS 接口的 voice 字段；自定义/克隆音色请填写对应 ID。" },
+    { "key": "prompt_mode", "label": "语音提示模式", "type": "select", "options": ["auto", "tone_tags", "emotion", "raw"], "description": "auto 会让3.2系列使用语气词、3及以下使用 emotion；raw 原文透传。" },
+    { "key": "audio_format", "label": "音频格式", "type": "select", "options": ["wav", "mp3"] },
+    { "key": "max_text_length", "label": "单段最长字数", "type": "number", "min": 20, "max": 4000, "step": 10, "default": 500 },
+    { "key": "timeout", "label": "超时（秒）", "type": "number", "min": 10, "max": 600, "step": 5, "default": 120 },
+    { "key": "cleanup_delay_seconds", "label": "发送后清理延迟（秒）", "type": "number", "min": 10, "max": 3600, "step": 10, "default": 1800 },
+    { "key": "failure_fallback_text", "label": "失败时回退文字", "type": "bool", "default": true },
+    { "key": "debug", "label": "调试日志", "type": "bool", "default": false },
+    { "key": "proxy", "label": "代理（可选）", "type": "string", "placeholder": "http://127.0.0.1:7890" }
+  ]
+}

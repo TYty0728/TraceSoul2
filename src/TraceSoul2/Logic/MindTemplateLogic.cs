@@ -6,6 +6,7 @@ using System.Threading;
 using System.Threading.Tasks;
 using TraceSoul2.Data;
 using TraceSoul2.Manager;
+using TraceSoul2.Prompts;
 using TraceSoul2.Util;
 
 namespace TraceSoul2.Logic
@@ -26,36 +27,33 @@ namespace TraceSoul2.Logic
         public static readonly IReadOnlyList<MindTemplate> All = new[]
         {
             T("recall", "翻旧事",
-                "记不记得、当时、那一次、第一次、我们去过：这一拍要翻那些共同经历，从下面标签里勾对得上的。",
-                "你还记得吗。还记得那一次吗。还记得当时吗。当时我们。第一次见面。那晚后来。那时候你。我们去过吗。上次我们一起。从前那件事。",
-                "你还记得吗", "还记得那一次吗", "还记得当时吗", "还记得上次吗", "还记得上次情人节吗",
-                "我们第一次见面", "那晚后来", "那时候你", "我们去过吗", "上次我们一起"),
+                CorePrompts.MindTemplates.RecallInstruction,
+                CorePrompts.MindTemplates.RecallSense,
+                CorePrompts.MindTemplates.RecallExamples),
             T("perform", "当场做完",
-                "讲、唱、念、演：这一拍把内容做完，不要只答应。故事可以是新的。",
-                "给我讲个故事。讲个故事嘛。再讲一个。唱首歌给我听。念给我听。演一段。来一段。编一个故事。",
-                "给我讲个故事", "讲个故事嘛", "我又想听你讲故事了", "再讲一个",
-                "唱首歌给我听", "念给我听", "演一段给我看", "来一段", "编一个故事"),
+                CorePrompts.MindTemplates.PerformInstruction,
+                CorePrompts.MindTemplates.PerformSense,
+                CorePrompts.MindTemplates.PerformExamples),
             T("choose", "短商量",
-                "吃什么、选哪个、要不要、还是：这一拍要短，给两三个选项或把选择权递给她。对得上的口味、习惯可以勾。",
-                "中午吃什么呀。我们吃什么。晚上吃什么。要不要点外卖。这个还是那个。选哪个。穿哪件。点什么。",
-                "中午吃什么呀", "我们吃什么", "晚上吃什么", "要不要点外卖",
-                "这个还是那个", "选哪个", "穿哪件", "点什么"),
+                CorePrompts.MindTemplates.ChooseInstruction,
+                CorePrompts.MindTemplates.ChooseSense,
+                CorePrompts.MindTemplates.ChooseExamples),
             T("hold", "接住",
-                "靠着、抱、陪着、只要我在：这一拍接住身体和语气，不要总结成心情说明，也不要翻成旧事。",
-                "我靠着你。抱我。陪我待一会儿。亲亲我。挨着我。在我旁边。想挨着你。",
-                "我靠着你", "抱我", "陪我待一会儿", "亲亲我", "挨着我", "在我旁边"),
+                CorePrompts.MindTemplates.HoldInstruction,
+                CorePrompts.MindTemplates.HoldSense,
+                CorePrompts.MindTemplates.HoldExamples),
             T("leave", "出门",
-                "去查、去搜、帮我看看、会等很久：这一拍先出门办事，开口只要先说等一下。",
-                "帮我查一下。你搜搜这个。上网看看。帮我查查。帮我搜一下。等一下帮我看看。",
-                "帮我查一下", "你搜搜这个", "上网看看", "帮我查查", "帮我搜一下", "等一下帮我看看"),
+                CorePrompts.MindTemplates.LeaveInstruction,
+                CorePrompts.MindTemplates.LeaveSense,
+                CorePrompts.MindTemplates.LeaveExamples),
             T("note", "记下",
-                "帮我记着、你记住、以后别忘了：把她要记下的那一句写下来。",
-                "帮我记一下。帮我记着。你记住这句话。以后别忘了。记到心里。",
-                "帮我记一下", "帮我记着", "你记住这句话", "以后别忘了"),
+                CorePrompts.MindTemplates.NoteInstruction,
+                CorePrompts.MindTemplates.NoteSense,
+                CorePrompts.MindTemplates.NoteExamples),
             T("release", "放下",
-                "讲完了、告一段落、心里安静了：这一拍从手上拿开。手里没了写「无」。这段过完就 review=true。",
-                "讲完了。故事讲完了。这段过了。告一段落。心里安静了。就这样吧。先这样。",
-                "讲完了", "故事讲完了", "这段过了", "告一段落", "心里安静了", "就这样吧", "先这样")
+                CorePrompts.MindTemplates.ReleaseInstruction,
+                CorePrompts.MindTemplates.ReleaseSense,
+                CorePrompts.MindTemplates.ReleaseExamples)
         };
 
         public static async Task<List<MindTemplate>> SelectAsync(
@@ -111,7 +109,7 @@ namespace TraceSoul2.Logic
             var list = (templates ?? Enumerable.Empty<MindTemplate>()).Where(x => x != null).ToList();
             if (list.Count == 0) return string.Empty;
             var builder = new System.Text.StringBuilder();
-            builder.AppendLine("【这一拍的组织】");
+            builder.AppendLine(CorePrompts.MindTemplates.OrganizedHeader);
             foreach (var item in list)
                 builder.AppendLine("- " + item.Instruction);
             return builder.ToString().TrimEnd();
@@ -158,7 +156,7 @@ namespace TraceSoul2.Logic
         }
 
         private static MindTemplate T(
-            string id, string label, string instruction, string sense, params string[] examples)
+            string id, string label, string instruction, string sense, IEnumerable<string> examples)
         {
             return new MindTemplate(id, label, instruction, sense, examples);
         }

@@ -48,6 +48,12 @@ namespace TraceSoul2.Plugins
         /// <summary>记忆神经子代理专用小模型（宿主注入；为 null 时退回字符路由）。</summary>
         public ILlmClient NerveLlm { get; set; }
 
+        /// <summary>复盘专用（日构建 / identity.review）。未指定槽时由宿主回落到开口关思考。</summary>
+        public ILlmClient ReviewLlm { get; set; }
+
+        /// <summary>宿主注入的链路时序日志出口；插件只记阶段、耗时和状态，不记密钥。</summary>
+        public Action<string> TimingLog { get; set; }
+
         /// <summary>语义向量拼装引擎（宿主注入；为 null 时退回 n-gram 打分）。</summary>
         public IMemoryRecallEngine Recall { get; set; }
 
@@ -73,6 +79,12 @@ namespace TraceSoul2.Plugins
         /// <summary>数据目录（宿主注入；平台插件读自己的配置文件用）。</summary>
         public string DataDirectory { get; set; }
 
+        /// <summary>心跳最短分钟。与最长都为 0 表示关闭。</summary>
+        public int HeartbeatMinMinutes { get; set; }
+
+        /// <summary>心跳最长分钟。每次入站后的第一次心跳在此范围内随机。</summary>
+        public int HeartbeatMaxMinutes { get; set; }
+
         public TracePluginServices(IMemoryStore storage, IHierarchicalVectorRouter router)
         {
             Storage = storage ?? throw new ArgumentNullException("storage");
@@ -83,6 +95,15 @@ namespace TraceSoul2.Plugins
         public void SetRouter(IHierarchicalVectorRouter router)
         {
             Router = router ?? throw new ArgumentNullException("router");
+        }
+
+        public void LogTiming(string traceId, string stage, long? elapsedMs = null, string detail = null)
+        {
+            var id = string.IsNullOrWhiteSpace(traceId) ? "--------" : traceId.Trim();
+            var message = "[链路 " + id + "] " + (stage ?? string.Empty);
+            if (elapsedMs.HasValue) message += "｜耗时 " + elapsedMs.Value + " ms";
+            if (!string.IsNullOrWhiteSpace(detail)) message += "｜" + detail.Trim();
+            TimingLog?.Invoke(message);
         }
     }
 
@@ -132,6 +153,7 @@ namespace TraceSoul2.Plugins
         public string Wake { get; private set; }
         public TracePluginServices Services { get; private set; }
         public TraceTurnWorkspace Workspace { get; private set; }
+        public string TraceId { get; private set; }
 
         public TraceTurnContext(
             string conversationId,
@@ -140,7 +162,8 @@ namespace TraceSoul2.Plugins
             int rawHistoryLimit,
             bool requiresExpression,
             TracePluginServices services,
-            string wake = null)
+            string wake = null,
+            string traceId = null)
         {
             ConversationId = conversationId;
             Moment = moment;
@@ -151,6 +174,7 @@ namespace TraceSoul2.Plugins
             if (string.IsNullOrEmpty(Wake))
                 Wake = requiresExpression ? KernelWakeValues.Dialogue : KernelWakeValues.Mind;
             Services = services;
+            TraceId = traceId ?? string.Empty;
             Workspace = new TraceTurnWorkspace();
         }
     }
@@ -162,19 +186,24 @@ namespace TraceSoul2.Plugins
         public TracePluginServices Services { get; private set; }
         public TracePluginMetadataData Plugin { get; private set; }
 
-        /// <summary>外部插件包的所在文件夹（内置插件为 null）；插件在这里读自己的库文件与配置。</summary>
+        /// <summary>外部插件包的所在文件夹（内置插件为 null）；只用于读取代码包与静态资源。</summary>
         public string PackageDirectory { get; private set; }
+
+        /// <summary>外部插件独立的持久目录（plugins_data/&lt;包目录名&gt;）；配置与运行数据应写在这里。</summary>
+        public string PluginDataDirectory { get; private set; }
 
         public TracePluginContext(
             ITracePluginRegistrar registrar,
             TracePluginServices services,
             TracePluginMetadataData plugin,
-            string packageDirectory = null)
+            string packageDirectory = null,
+            string pluginDataDirectory = null)
         {
             this.registrar = registrar;
             Services = services;
             Plugin = plugin;
             PackageDirectory = packageDirectory;
+            PluginDataDirectory = pluginDataDirectory;
         }
 
         public void AddCallable(ITraceCallableContribution contribution)

@@ -9,7 +9,7 @@
 - [ ] **表情去重**：移植老 smartemoji 的「近期不重复」短期记忆（同一情绪换着发，不总发同一张）。
 - [ ] **表情阈值/候选**：语义兜底阈值与标签匹配权重微调；候选多于一张时引入随机（同分候选随机选）。
 - [ ] **消息组装细节**：多个表情连续追加的顺序；文字+图片+语音混排规则；群聊里 @ 与回复（reply 段）的组合。
-- [ ] **TTS/生图实测磨合**：待填 api_key（`plugins\qq-tts\plugin.json`、`plugins\qq-imagegen\plugin.json`）；音色/模板/超时第一轮磨合。
+- [ ] **TTS/生图实测磨合**：待在 WebUI 填 api_key（保存到 `plugins_data\qq-tts\config.json`、`plugins_data\qq-imagegen\config.json`）；音色/模板/超时第一轮磨合。
 - [ ] **说说实测**：真发一条验证 cookie/g_tk；处理发布后的「假失败」（老插件踩过：接口返回非 0 但实际已发出，绝不能重试重复发）；Cookie 过期自愈。
 - [ ] **稳定性**：
   - 宿主重启时 NapCat 重连窗口（30s）期间的消息提示；

@@ -6,6 +6,7 @@ using System.Threading;
 using System.Threading.Tasks;
 using TraceSoul2.Data;
 using TraceSoul2.Manager;
+using TraceSoul2.Prompts;
 
 namespace TraceSoul2.Logic
 {
@@ -43,7 +44,7 @@ namespace TraceSoul2.Logic
                 llm,
                 messages,
                 x => x != null && !string.IsNullOrWhiteSpace(x.perception_summary),
-                "感官输出缺少 perception_summary。",
+                CorePrompts.MemoryObservation.MissingSummary,
                 cancellationToken);
         }
 
@@ -84,71 +85,49 @@ namespace TraceSoul2.Logic
         {
             pair = pair ?? PairIdentity.Missing;
             var builder = new StringBuilder();
-            builder.AppendLine(pair.Apply("你是记忆插件内部的无人格事实观察算法，不是 {assname} 本人。你没有感情、认知或内心写入权。"));
-            builder.AppendLine("职责只有：理解当前文字证据；从候选第三层 Tag 中多选；必要时新增中性 Tag；写事实短句；唤醒真正相关的旧事实。");
+            builder.AppendLine(pair.Apply(CorePrompts.MemoryObservation.Role));
+            builder.AppendLine(CorePrompts.MemoryObservation.Duty);
             builder.AppendLine();
-            builder.AppendLine("硬规则：");
-            builder.AppendLine(pair.Apply("1. 事实 summary 必须少于20个汉字，主语必须是 {username} 或 {assname}，一次事实一条；最多3条。"));
-            builder.AppendLine("2. 不写关系结论、人格、动机、长期规律或‘这对我意味着什么’。这些属于 Brain 的 cognition。");
-            builder.AppendLine("3. 允许多选 Tag；语义相近事实不合并。没有值得结构化的事实时 fact_writes=[]。");
-            builder.AppendLine("4. 候选都不对时才新增 Tag。Tag 是可长期复用的人生主题，不是本句摘要；名称不超过12字。新 Tag 自动视为本轮已选择。");
-            builder.AppendLine(pair.Apply("5. 文字摸头、拥抱、亲吻属于 shared_scene；{username} 外部生活自述属于 external_world；系统讨论属于 meta。"));
-            builder.AppendLine(pair.Apply("6. ‘我上班啦’只能支持‘{username} 说自己去上班’，不能写‘{username} 已到公司’。明确说喜欢可以写事实，但不能据此断言关系定义。"));
-            builder.AppendLine("7. fact_wakes 只能使用提供的旧事实 ID。唤醒只是相关，不代表推断成立。");
-            builder.AppendLine(pair.Apply("8. 每条事实必须至少连接一个本轮选择或新增的 Tag；否则不要写入。新 Tag 的 domain_ids 只能填 {assname} / {username} / 我们 / 世界。dimension_ids 只能从 owner/subject/about/predicate/object/scope/context/quality/time/place/affect/goal/state/realm/modality/source 选择。"));
+            builder.AppendLine(CorePrompts.MemoryObservation.HardRulesHeader);
+            builder.AppendLine(pair.Apply(CorePrompts.MemoryObservation.Rule1));
+            builder.AppendLine(CorePrompts.MemoryObservation.Rule2);
+            builder.AppendLine(CorePrompts.MemoryObservation.Rule3);
+            builder.AppendLine(CorePrompts.MemoryObservation.Rule4);
+            builder.AppendLine(pair.Apply(CorePrompts.MemoryObservation.Rule5));
+            builder.AppendLine(pair.Apply(CorePrompts.MemoryObservation.Rule6));
+            builder.AppendLine(CorePrompts.MemoryObservation.Rule7);
+            builder.AppendLine(pair.Apply(CorePrompts.MemoryObservation.Rule8));
             if (pair.HasCallName)
-                builder.AppendLine(pair.Apply("9. {callname} 是称呼，不是另一个人。事实主语用 {username}。"));
+                builder.AppendLine(pair.Apply(CorePrompts.MemoryObservation.Rule9));
             builder.AppendLine();
-            builder.AppendLine("当前来源：plugin=" + moment.SourcePluginId + "；evidence=" + moment.EvidenceType);
-            builder.AppendLine("当前原始 Moment：" + moment.Content);
+            builder.AppendLine(CorePrompts.MemoryObservation.CurrentSourcePrefix + moment.SourcePluginId + "；evidence=" + moment.EvidenceType);
+            builder.AppendLine(CorePrompts.MemoryObservation.CurrentMomentPrefix + moment.Content);
             builder.AppendLine();
-            builder.AppendLine("仅用于指代消解的局部上下文（不得重复写入）：");
+            builder.AppendLine(CorePrompts.MemoryObservation.LocalContextHeader);
             var context = (localReferenceContext ?? Enumerable.Empty<MomentRecord>()).ToList();
-            if (context.Count == 0) builder.AppendLine("（无）");
+            if (context.Count == 0) builder.AppendLine(CorePrompts.MemoryObservation.Empty);
             foreach (var item in context)
                 builder.AppendLine("- " + pair.LabelForRole(item.Role) + "：" + item.Content);
             builder.AppendLine();
-            builder.AppendLine("固定第一、二层激活：");
-            if (route == null) builder.AppendLine("（无）");
+            builder.AppendLine(CorePrompts.MemoryObservation.Layer12Header);
+            if (route == null) builder.AppendLine(CorePrompts.MemoryObservation.Empty);
             else
             {
-                builder.AppendLine("域：" + JoinHits(route.Domains));
-                builder.AppendLine("维度：" + JoinHits(route.Dimensions));
+                builder.AppendLine(CorePrompts.MemoryObservation.DomainPrefix + JoinHits(route.Domains));
+                builder.AppendLine(CorePrompts.MemoryObservation.DimensionPrefix + JoinHits(route.Dimensions));
             }
-            builder.AppendLine("第三层候选 Top10：");
-            if (route == null || route.Concepts.Count == 0) builder.AppendLine("（无可靠候选，可以新增）");
+            builder.AppendLine(CorePrompts.MemoryObservation.Layer3Header);
+            if (route == null || route.Concepts.Count == 0) builder.AppendLine(CorePrompts.MemoryObservation.NoReliableTags);
             else foreach (var hit in route.Concepts)
                 builder.AppendLine("- " + hit.Node.Id + " | " + hit.Node.Label + " | " + hit.Node.Definition);
             builder.AppendLine();
-            builder.AppendLine("可唤醒的旧事实候选：");
+            builder.AppendLine(CorePrompts.MemoryObservation.FactCandidatesHeader);
             var facts = (factCandidates ?? Enumerable.Empty<FactSliceRecord>()).ToList();
-            if (facts.Count == 0) builder.AppendLine("（无）");
+            if (facts.Count == 0) builder.AppendLine(CorePrompts.MemoryObservation.Empty);
             else foreach (var fact in facts)
                 builder.AppendLine("- " + fact.Id + " | " + fact.Summary + " | " + fact.Realm);
             builder.AppendLine();
-            builder.AppendLine(pair.Apply(@"只输出 JSON：
-{
-  ""perception_summary"": ""对当前证据的一句话中性整理"",
-  ""fact_decision"": ""本轮为什么写或不写事实"",
-  ""selected_tag_ids"": [""只能填候选Tag ID""],
-  ""new_tags"": [{
-    ""name"": ""可复用Tag名"",
-    ""definition"": ""准确中性的定义"",
-    ""domain_ids"": [""{assname}|{username}|我们|世界""],
-    ""dimension_ids"": [""固定维度key""],
-    ""positive_examples"": [""短正例""],
-    ""negative_examples"": [""容易混淆的反例""]
-  }],
-  ""fact_writes"": [{
-    ""summary"": ""少于20字的事实，主语用名字"",
-    ""realm"": ""external_world|shared_scene|meta|explicit_fiction"",
-    ""evidence_type"": ""spoken|seen|shared_scene|enacted|fiction|dialogue"",
-    ""confidence"": 0.0,
-    ""tag_ids"": [""已选候选ID""],
-    ""new_tag_names"": [""已选新增Tag名""]
-  }],
-  ""fact_wakes"": [{""fact_id"":""候选事实ID"",""reason"":""短原因"",""relevance"":0.0}]
-}"));
+            CorePrompts.Write(builder, pair.Apply(CorePrompts.MemoryObservation.JsonSchema));
             return builder.ToString();
         }
 

@@ -18,7 +18,7 @@ namespace TraceSoul2.Plugins.Builtin
             Version = "1.0.0",
             Author = "TraceSoul2",
             Role = PluginRoleValues.Kernel,
-            Description = "已停用注入：通道由身体路由收口，不再把嘴清单写进 Prompt。"
+            Description = SensesCatalogPrompts.PluginDescription
         };
 
         public void Register(TracePluginContext context)
@@ -35,7 +35,7 @@ namespace TraceSoul2.Plugins.Builtin
                 Id = "senses.catalog",
                 Kind = TraceContributionKindValues.MountedFacet,
                 DisplayName = "可用感官",
-                Description = "已停用。",
+                Description = SensesCatalogPrompts.FacetDescription,
                 Provides = "senses.current_catalog",
                 RefreshMode = TraceFacetRefreshValues.OncePerTurn,
                 Priority = 88,

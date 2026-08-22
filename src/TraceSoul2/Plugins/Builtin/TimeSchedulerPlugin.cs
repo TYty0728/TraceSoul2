@@ -105,7 +105,7 @@ namespace TraceSoul2.Plugins.Builtin
                 return KernelWakeValues.InferFromContent(content);
             }
 
-            public const string DailyReviewContent = "每日复盘";
+            public const string DailyReviewContent = TimeSchedulerPrompts.DailyReviewContent;
 
             public void EnsureDailyReview(string conversationId)
             {
@@ -131,7 +131,7 @@ namespace TraceSoul2.Plugins.Builtin
                     .OrderBy(x => x.due_unix_ms).Select(Clone).ToList();
             }
 
-            public ScheduleEntry EnsureContinuation(string conversationId, string content, long dueUnixMs)
+            public ScheduleEntry EnsureHeartbeat(string conversationId, long dueUnixMs)
             {
                 lock (gate)
                 {
@@ -139,17 +139,14 @@ namespace TraceSoul2.Plugins.Builtin
                     {
                         if (item.enabled &&
                             string.Equals(item.conversation_id, conversationId, StringComparison.Ordinal) &&
-                            InnerLifeLogic.IsContinuationContent(item.content))
+                            HeartbeatLogic.IsHeartbeatOrLegacyContinue(item.content))
                             item.enabled = false;
                     }
-                    var text = (content ?? string.Empty).Trim();
-                    if (!text.StartsWith(InnerLifeLogic.ContinuationPrefix, StringComparison.Ordinal))
-                        text = InnerLifeLogic.ContinuationPrefix + text;
                     var itemNew = new ScheduleEntry
                     {
                         id = Guid.NewGuid().ToString("N"),
                         conversation_id = conversationId,
-                        content = Limit(text, 500),
+                        content = HeartbeatLogic.HeartbeatContent,
                         due_unix_ms = dueUnixMs,
                         recurrence = "none",
                         wake = KernelWakeValues.Mind,
@@ -161,7 +158,7 @@ namespace TraceSoul2.Plugins.Builtin
                 }
             }
 
-            public int ClearContinuation(string conversationId)
+            public int ClearHeartbeat(string conversationId)
             {
                 lock (gate)
                 {
@@ -171,7 +168,7 @@ namespace TraceSoul2.Plugins.Builtin
                         if (!item.enabled) continue;
                         if (!string.Equals(item.conversation_id, conversationId, StringComparison.Ordinal))
                             continue;
-                        if (!InnerLifeLogic.IsContinuationContent(item.content)) continue;
+                        if (!HeartbeatLogic.IsHeartbeatOrLegacyContinue(item.content)) continue;
                         item.enabled = false;
                         n++;
                     }
@@ -208,7 +205,7 @@ namespace TraceSoul2.Plugins.Builtin
                             ConversationId = item.conversation_id,
                             ExternalEventId = "schedule:" + item.id + ":" + item.due_unix_ms,
                             Role = "system_event",
-                            Content = "时间任务到期：" + item.content,
+                            Content = TimeSchedulerPrompts.DuePrefix + item.content,
                             Realm = TraceRealmValues.Meta,
                             EvidenceType = EvidenceTypeValues.PluginObserved,
                             Wake = wake,
@@ -266,7 +263,7 @@ namespace TraceSoul2.Plugins.Builtin
                 Id = "time.context",
                 Kind = TraceContributionKindValues.MountedFacet,
                 DisplayName = "当前时间感",
-                Description = "每个 Brain Step 刷新的本地时间与时区。",
+                Description = TimeSchedulerPrompts.TimeContextDescription,
                 Provides = "time.current_context",
                 RefreshMode = TraceFacetRefreshValues.EveryBrainStep,
                 Priority = 70,
@@ -283,7 +280,7 @@ namespace TraceSoul2.Plugins.Builtin
                 return Task.FromResult(new TraceContextBlockData
                 {
                     Title = "当前时间",
-                    Content = "现在是 " + TimeLanguageUtil.NaturalNow(now) + "。"
+                    Content = TimeSchedulerPrompts.NowPrefix + TimeLanguageUtil.NaturalNow(now) + "。"
                 });
             }
 
@@ -305,7 +302,7 @@ namespace TraceSoul2.Plugins.Builtin
                 Id = "day.trajectory",
                 Kind = TraceContributionKindValues.MountedFacet,
                 DisplayName = "今天我们的轨迹",
-                Description = "今天两人一起经历的滚动摘要（约200字内），实时维护；新的一天自动清空。",
+                Description = TimeSchedulerPrompts.TrajectoryDescription,
                 Provides = "day.current_trajectory",
                 OutputJsonSchema = "{changed:boolean,summary:string,fields:[trajectory]}",
                 RefreshMode = TraceFacetRefreshValues.OncePerTurn,
@@ -326,7 +323,7 @@ namespace TraceSoul2.Plugins.Builtin
                 return Task.FromResult(new TraceContextBlockData
                 {
                     Title = "今天我们的轨迹",
-                    Content = "今天我们的轨迹：" + record.Text.Trim()
+                    Content = TimeSchedulerPrompts.TrajectoryPrefix + record.Text.Trim()
                 });
             }
 
@@ -346,7 +343,7 @@ namespace TraceSoul2.Plugins.Builtin
                 {
                     Status = "success",
                     Summary = "今天的轨迹已更新（" + text.Length + " 字）。",
-                    Payload = "今天我们的轨迹：" + text,
+                    Payload = TimeSchedulerPrompts.TrajectoryPrefix + text,
                     EvidenceRefs = new List<string> { "moment:" + context.Moment.Id }
                 });
             }
@@ -383,7 +380,7 @@ namespace TraceSoul2.Plugins.Builtin
             {
                 var now = DateTimeOffset.Now;
                 return Task.FromResult(Success("已读取精确时间。",
-                    "现在：" + TimeLanguageUtil.NaturalNow(now) + "。\n" +
+                    TimeSchedulerPrompts.PreciseNowPrefix + TimeLanguageUtil.NaturalNow(now) + "。\n" +
                     "精确：local=" + now.ToString("O") + "\nutc=" + now.UtcDateTime.ToString("O") +
                     "\nunix_ms=" + now.ToUnixTimeMilliseconds()));
             }
@@ -400,8 +397,8 @@ namespace TraceSoul2.Plugins.Builtin
                 DisplayName = "建立时间任务",
                 Description = "保存一次性、每日或每周时间任务；到期后后台服务只产生新 Moment。",
                 Provides = "time.schedule.create",
-                WhenToUse = "{username} 要求未来提醒、我决定安排复盘，或未来计划需要在某时重新进入意识时。",
-                WhenNotToUse = "当前立即执行的动作。",
+                WhenToUse = TimeSchedulerPrompts.ScheduleWhenToUse,
+                WhenNotToUse = TimeSchedulerPrompts.ScheduleWhenNotToUse,
                 ParametersJsonSchema = "{content:string,due_iso?:ISO8601,due_unix_ms?:long,recurrence:none|daily|weekly,wake?:mind|subconscious}",
                 HasInternalMutation = true
             };
@@ -485,20 +482,18 @@ namespace TraceSoul2.Plugins.Builtin
             {
                 Id = "time.continue",
                 Kind = TraceContributionKindValues.CallableNerve,
-                DisplayName = "记下未完成自己叫醒",
-                Description = "未完成意图或答应过的事：在她没说话时到期叫醒心智，不要演成她在说话。",
+                DisplayName = "排一次心跳",
+                Description = TimeSchedulerPrompts.ContinueDescription,
                 Provides = "time.schedule.continue",
-                WhenToUse = "手上还有未完成的事、答应过回头再做时，让时间在安静之后叫醒我。",
-                WhenNotToUse = "她正在说话，或这件事已经放下。",
-                ParametersJsonSchema = "{content:string,due_iso?:ISO8601,due_unix_ms?:long}",
+                WhenToUse = TimeSchedulerPrompts.ContinueWhenToUse,
+                WhenNotToUse = TimeSchedulerPrompts.ContinueWhenNotToUse,
+                ParametersJsonSchema = "{due_iso?:ISO8601,due_unix_ms?:long,minutes?:int}",
                 HasInternalMutation = true
             };
             public bool IsAvailable(TraceTurnContext context) { return context != null; }
             public Task<TraceCapabilityResultData> ExecuteAsync(
                 BrainCapabilityCallData call, TraceTurnContext context, CancellationToken token)
             {
-                var content = call.GetArgument("content").Trim();
-                if (content.Length == 0) throw new InvalidOperationException("续上内容不能为空。");
                 long due;
                 if (!long.TryParse(call.GetArgument("due_unix_ms"), out due) || due <= 0)
                 {
@@ -507,12 +502,24 @@ namespace TraceSoul2.Plugins.Builtin
                             DateTimeStyles.AllowWhiteSpaces, out parsed))
                         due = parsed.ToUnixTimeMilliseconds();
                     else
-                        due = InnerLifeLogic.InferContinuationDueUnixMs(content, DateTimeOffset.Now);
+                    {
+                        int minutes;
+                        if (!int.TryParse(call.GetArgument("minutes"), out minutes) || minutes <= 0)
+                        {
+                            var min = context.Services.HeartbeatMinMinutes;
+                            var max = context.Services.HeartbeatMaxMinutes;
+                            due = HeartbeatLogic.PickDueUnixMs(min, max, DateTimeOffset.Now);
+                        }
+                        else
+                            due = HeartbeatLogic.DueFromMinutes(minutes, DateTimeOffset.Now);
+                    }
                 }
+                if (due <= 0)
+                    return Task.FromResult(Success("心跳已关闭，未排下一次。", string.Empty));
                 if (due <= DateTimeOffset.UtcNow.ToUnixTimeMilliseconds())
                     due = DateTimeOffset.UtcNow.ToUnixTimeMilliseconds() + 1000;
-                var item = state.EnsureContinuation(context.ConversationId, content, due);
-                return Task.FromResult(Success("未完成已交给时间叫醒心智。",
+                var item = state.EnsureHeartbeat(context.ConversationId, due);
+                return Task.FromResult(Success("已排一次心跳。",
                     item.id + " | " + DateTimeOffset.FromUnixTimeMilliseconds(item.due_unix_ms).ToLocalTime().ToString("O") +
                     " | " + item.wake + " | " + item.content));
             }
@@ -526,11 +533,11 @@ namespace TraceSoul2.Plugins.Builtin
             {
                 Id = "time.continue.clear",
                 Kind = TraceContributionKindValues.CallableNerve,
-                DisplayName = "放下未完成叫醒",
-                Description = "手上的事已经放下时，取消自己叫醒心智的续上任务。",
+                DisplayName = "取消心跳",
+                Description = TimeSchedulerPrompts.ClearDescription,
                 Provides = "time.schedule.continue.clear",
-                WhenToUse = "未完成已经做完或明确放下。",
-                WhenNotToUse = "手上还有事。",
+                WhenToUse = TimeSchedulerPrompts.ClearWhenToUse,
+                WhenNotToUse = TimeSchedulerPrompts.ClearWhenNotToUse,
                 ParametersJsonSchema = "{reason?:string}",
                 HasInternalMutation = true
             };
@@ -538,11 +545,11 @@ namespace TraceSoul2.Plugins.Builtin
             public Task<TraceCapabilityResultData> ExecuteAsync(
                 BrainCapabilityCallData call, TraceTurnContext context, CancellationToken token)
             {
-                var n = state.ClearContinuation(context.ConversationId);
+                var n = state.ClearHeartbeat(context.ConversationId);
                 return Task.FromResult(new TraceCapabilityResultData
                 {
                     Status = "success",
-                    Summary = n > 0 ? "已放下 " + n + " 个续上叫醒。" : "没有待续上的叫醒。",
+                    Summary = n > 0 ? "已取消 " + n + " 个心跳。" : "没有待跳的心跳。",
                     Payload = n.ToString()
                 });
             }

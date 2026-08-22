@@ -3,6 +3,7 @@ using System.Collections.Generic;
 using System.Linq;
 using System.Text;
 using TraceSoul2.Data;
+using TraceSoul2.Prompts;
 
 namespace TraceSoul2.Logic
 {
@@ -29,7 +30,8 @@ namespace TraceSoul2.Logic
                 UnfinishedIntent = string.Empty,
                 Attention = new List<AttentionItemData>(),
                 SourceMomentId = string.Empty,
-                UpdatedUnixMs = nowUnixMs
+                UpdatedUnixMs = nowUnixMs,
+                Asleep = false
             };
         }
 
@@ -57,7 +59,8 @@ namespace TraceSoul2.Logic
                     ? CloneAttention(current.Attention)
                     : NormalizeAttention(proposed.attention, current.Attention, sourceMomentId),
                 SourceMomentId = sourceMomentId,
-                UpdatedUnixMs = nowUnixMs
+                UpdatedUnixMs = nowUnixMs,
+                Asleep = proposed != null && proposed.asleep.HasValue ? proposed.asleep.Value : current.Asleep
             };
         }
 
@@ -98,6 +101,7 @@ namespace TraceSoul2.Logic
                     proposed.unfinished_intent = string.Join("、", held);
                 }
             }
+            if (mind.sleep) proposed.asleep = true;
             return proposed;
         }
 
@@ -109,21 +113,23 @@ namespace TraceSoul2.Logic
                    proposed.relationship_update != null ||
                    proposed.ongoing_activity != null ||
                    proposed.unfinished_intent != null ||
-                   proposed.attention != null;
+                   proposed.attention != null ||
+                   proposed.asleep.HasValue;
         }
 
         public static string Format(InnerRuntimeData runtime)
         {
-            if (runtime == null) return "（内心 Runtime 尚未建立）";
+            if (runtime == null) return CorePrompts.InnerLife.RuntimeMissing;
             var builder = new StringBuilder();
-            builder.Append("此刻：").AppendLine(runtime.Narrative);
-            builder.Append("情绪：").AppendLine(Blank(runtime.Mood));
-            builder.Append("关系视角：").AppendLine(Blank(runtime.RelationshipLens));
-            builder.Append("进行中：").AppendLine(Blank(runtime.OngoingActivity));
-            builder.Append("未完成意图：").AppendLine(Blank(runtime.UnfinishedIntent));
-            builder.Append("注意：");
+            builder.Append(CorePrompts.InnerLife.NowPrefix).AppendLine(runtime.Narrative);
+            builder.Append(CorePrompts.InnerLife.MoodPrefix).AppendLine(Blank(runtime.Mood));
+            builder.Append(CorePrompts.InnerLife.RelationshipPrefix).AppendLine(Blank(runtime.RelationshipLens));
+            builder.Append(CorePrompts.InnerLife.OngoingPrefix).AppendLine(Blank(runtime.OngoingActivity));
+            builder.Append(CorePrompts.InnerLife.UnfinishedPrefix).AppendLine(Blank(runtime.UnfinishedIntent));
+            builder.Append(CorePrompts.InnerLife.StatePrefix).AppendLine(runtime.Asleep ? CorePrompts.InnerLife.Asleep : CorePrompts.InnerLife.Awake);
+            builder.Append(CorePrompts.InnerLife.AttentionPrefix);
             if (runtime.Attention == null || runtime.Attention.Count == 0)
-                builder.Append("（无）");
+                builder.Append(CorePrompts.InnerLife.None);
             else
                 foreach (var item in runtime.Attention.Take(3))
                     builder.AppendLine().Append("- [").Append(item.kind).Append("] ").Append(item.content);
@@ -138,14 +144,30 @@ namespace TraceSoul2.Logic
             var mood = runtime == null ? string.Empty : (runtime.Mood ?? string.Empty).Trim();
             var ongoing = runtime == null ? string.Empty : OneLine(runtime.OngoingActivity);
             var unfinished = runtime == null ? string.Empty : OneLine(runtime.UnfinishedIntent);
-            builder.Append("上一拍当前时：").Append(narrative.Length == 0 ? "（空）" : narrative);
-            if (mood.Length > 0) builder.Append("（情绪：").Append(mood).Append("）");
+            builder.Append(CorePrompts.InnerLife.LastInnerPrefix).Append(narrative.Length == 0 ? CorePrompts.InnerLife.Empty : narrative);
+            if (mood.Length > 0) builder.Append(CorePrompts.InnerLife.LastMoodWrapPrefix).Append(mood).Append("）");
             builder.AppendLine();
             if (ongoing.Length > 0 && !string.Equals(ongoing, narrative, StringComparison.Ordinal))
-                builder.Append("上一拍进行中：").AppendLine(ongoing);
-            builder.Append("上一拍未完成：").AppendLine(unfinished.Length == 0 ? "（空）" : unfinished);
-            builder.Append("上一拍手上：").Append(FormatHold(runtime).Length == 0 ? "（空）" : FormatHold(runtime));
+                builder.Append(CorePrompts.InnerLife.LastOngoingPrefix).AppendLine(ongoing);
+            builder.Append(CorePrompts.InnerLife.LastUnfinishedPrefix).AppendLine(unfinished.Length == 0 ? CorePrompts.InnerLife.Empty : unfinished);
+            builder.Append(CorePrompts.InnerLife.LastHoldPrefix).Append(FormatHold(runtime).Length == 0 ? CorePrompts.InnerLife.Empty : FormatHold(runtime));
+            if (runtime != null && runtime.Asleep)
+                builder.AppendLine().Append(CorePrompts.InnerLife.LastAsleep);
             return builder.ToString().TrimEnd();
+        }
+
+        public static InnerRuntimeData WithAsleep(
+            InnerRuntimeData current,
+            bool asleep,
+            string sourceMomentId,
+            long nowUnixMs)
+        {
+            if (current == null) throw new ArgumentNullException("current");
+            if (current.Asleep == asleep) return current;
+            var source = sourceMomentId;
+            if (string.IsNullOrWhiteSpace(source)) source = current.SourceMomentId;
+            if (string.IsNullOrWhiteSpace(source)) source = "sleep-state";
+            return Reduce(current, new InnerRuntimeWriteData { asleep = asleep }, source, nowUnixMs);
         }
 
         public static string FormatHold(InnerRuntimeData runtime)
