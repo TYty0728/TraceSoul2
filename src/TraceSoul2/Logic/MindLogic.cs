@@ -43,13 +43,9 @@ namespace TraceSoul2.Logic
             var embedding = turn.Services == null ? null : turn.Services.Embedding;
             var templates = await MindTemplateLogic.SelectAsync(
                 query, embedding, MindTemplateLogic.CandidateCap, cancellationToken);
-            var messages = new List<DeepSeekMessageData>
-            {
-                new DeepSeekMessageData("system", BuildFoundationPrompt(turn)),
-                new DeepSeekMessageData("system", BuildTurnPrompt(
-                    turn, leaveResult, alreadyLeft, templates, naturallyAwakenedPast)),
-                new DeepSeekMessageData("user", query)
-            };
+            var system = BuildFoundationPrompt(turn).TrimEnd() + "\n\n" +
+                         BuildTurnPrompt(turn, leaveResult, alreadyLeft, templates, naturallyAwakenedPast).TrimEnd();
+            var messages = AssembleTurnMessages(system, turn, query);
             var decided = await DeepSeekStructuredOutputLogic.CompleteAsync<MindDecisionData>(
                 llm,
                 messages,
@@ -76,7 +72,11 @@ namespace TraceSoul2.Logic
             output.note = (output.note ?? string.Empty).Trim();
             output.today = Limit((output.today ?? string.Empty).Trim(), 200);
             output.inner = OneLine(output.inner);
+            output.scene = Limit(OneLine(output.scene), 160);
+            output.speak_center = Limit(OneLine(output.speak_center), 100);
             output.cognition = Limit(OneLine(output.cognition), 19);
+            output.heartbeat_intent = Limit(OneLine(output.heartbeat_intent), 120);
+            output.next_heartbeat_plan = Limit(OneLine(output.next_heartbeat_plan), 120);
             if (output.ClearsAttention())
                 output.attention = "无";
             else
@@ -95,6 +95,8 @@ namespace TraceSoul2.Logic
             if (output.sleep) output.next_heartbeat_minutes = 0;
             output.sticker = output.StickerValue();
             output.image = output.ImageValue();
+            // 表情是否发送不再由心智卡决定；这里保留旧字段兼容，但统一归零。
+            output.sticker = MindAtmosphereValues.None;
             if (output.sleep || output.BeatValue() == MindBeatValues.Leave)
             {
                 output.image = MindAtmosphereValues.None;
@@ -113,6 +115,8 @@ namespace TraceSoul2.Logic
             builder.AppendLine();
             builder.AppendLine(CorePrompts.Mind.HowToThinkHeader);
             CorePrompts.Write(builder, CorePrompts.Mind.Foundation);
+            InjectMindJsonFields(builder, turn);
+            AppendOrganMindPrompts(builder, turn);
             return builder.ToString();
         }
 
@@ -126,14 +130,22 @@ namespace TraceSoul2.Logic
             var pair = turn.Services.Storage.LoadPairIdentity();
             var storage = turn.Services.Storage;
             var builder = new StringBuilder();
-            builder.AppendLine(CorePrompts.Mind.NowPrefix + TimeLanguageUtil.NaturalNow(DateTimeOffset.Now) + "。");
-            builder.AppendLine();
-            var recentDialogue = FormatRecentDialogue(turn);
-            if (!string.IsNullOrWhiteSpace(recentDialogue))
+            var now = DateTimeOffset.Now;
+            builder.AppendLine(CorePrompts.Mind.NowPrefix + TimeLanguageUtil.NaturalNow(now) + "。");
+            var lastReal = storage.GetRecentMoments(turn.ConversationId, 200)
+                .Where(x => x != null &&
+                            (pair.IsHumanMoment(x.Role) || pair.IsCompanionMoment(x.Role)) &&
+                            (turn.Moment == null || x.Id != turn.Moment.Id))
+                .OrderByDescending(x => x.CreatedUnixMs)
+                .FirstOrDefault();
+            if (lastReal != null && lastReal.CreatedUnixMs > 0)
             {
-                builder.AppendLine(recentDialogue);
-                builder.AppendLine();
+                var lastTime = DateTimeOffset.FromUnixTimeMilliseconds(lastReal.CreatedUnixMs).ToLocalTime();
+                builder.AppendLine("距离上一段真实相处约" +
+                                  TimeLanguageUtil.ElapsedZh(lastReal.CreatedUnixMs, now.ToUnixTimeMilliseconds()) +
+                                  "，上一段停在" + lastTime.ToString("M月d日 HH:mm") + "。");
             }
+            builder.AppendLine();
             var runtime = storage.LoadOrCreateInnerRuntime(turn.ConversationId);
             builder.AppendLine(InnerLifeLogic.FormatForMind(runtime));
             builder.AppendLine(CorePrompts.Mind.InnerAttentionRule);
@@ -181,7 +193,15 @@ namespace TraceSoul2.Logic
             builder.AppendLine(CorePrompts.Mind.NowHeader);
             var momentContent = turn.Moment == null ? string.Empty : turn.Moment.Content;
             if (HeartbeatLogic.IsHeartbeatContent(momentContent))
+            {
+                var plan = HeartbeatLogic.ExtractPlan(momentContent);
+                if (!string.IsNullOrWhiteSpace(plan))
+                {
+                    builder.AppendLine("上次安排这次醒来时，留下的重新检查计划：" + plan);
+                    builder.AppendLine("这只是计划提示，不是她刚发来的话；本次要重新判断，不能照着上一拍续说。");
+                }
                 CorePrompts.Write(builder, CorePrompts.Mind.Heartbeat);
+            }
             else if (turn.Wake == KernelWakeValues.Mind)
                 builder.AppendLine(CorePrompts.Mind.MindWake);
             else
@@ -193,12 +213,32 @@ namespace TraceSoul2.Logic
             return builder.ToString();
         }
 
-        /// <summary>WebUI 控制的原文拼接；只拼两个人的真实 Moment，不把时间事件混成对话。</summary>
-        internal static string FormatRecentDialogue(TraceTurnContext turn)
+        /// <summary>
+        /// 一轮请求：一条 system（身份/规则/本轮状态），随后是真正的 user/assistant 历史。
+        /// 普通消息最后追加真实 user；心跳是系统唤醒，不伪装成 user 消息。
+        /// </summary>
+        internal static List<DeepSeekMessageData> AssembleTurnMessages(
+            string systemPrompt,
+            TraceTurnContext turn,
+            string currentUserContent)
         {
+            var messages = new List<DeepSeekMessageData>
+            {
+                new DeepSeekMessageData("system", systemPrompt ?? string.Empty)
+            };
+            messages.AddRange(BuildRecentChatHistory(turn));
+            if (!HeartbeatLogic.IsHeartbeatContent(currentUserContent))
+                messages.Add(new DeepSeekMessageData("user", currentUserContent ?? string.Empty));
+            return messages;
+        }
+
+        /// <summary>只把两个人的真实 Moment 做成对话轮次，不把时间事件混进去。连续同一角色会并成一条。</summary>
+        internal static List<DeepSeekMessageData> BuildRecentChatHistory(TraceTurnContext turn)
+        {
+            var result = new List<DeepSeekMessageData>();
             if (turn == null || turn.RawHistoryLimit <= 0 || turn.RecentMoments == null ||
                 turn.RecentMoments.Count == 0 || turn.Services == null || turn.Services.Storage == null)
-                return string.Empty;
+                return result;
             var pair = turn.Services.Storage.LoadPairIdentity();
             var lines = turn.RecentMoments
                 .Where(x => x != null &&
@@ -207,16 +247,20 @@ namespace TraceSoul2.Logic
                             !IsOutboundProtocolMoment(x.Content))
                 .TakeLast(turn.RawHistoryLimit)
                 .ToList();
-            if (lines.Count == 0) return string.Empty;
-            var builder = new StringBuilder();
-            builder.AppendLine(CorePrompts.Mind.RecentDialogueHeader);
-            builder.AppendLine(CorePrompts.Mind.RecentDialogueHint);
             foreach (var item in lines)
-                builder.AppendLine(pair.LabelForRole(item.Role) + "：" + item.Content.Trim());
-            return builder.ToString().TrimEnd();
+            {
+                var role = pair.IsHumanMoment(item.Role) ? "user" : "assistant";
+                var text = item.Content.Trim();
+                if (result.Count > 0 &&
+                    string.Equals(result[result.Count - 1].role, role, StringComparison.Ordinal))
+                    result[result.Count - 1].content += "\n" + text;
+                else
+                    result.Add(new DeepSeekMessageData(role, text));
+            }
+            return result;
         }
 
-        /// <summary>出站入库的系统占位，不是对她说的话，不能进最近对话原文。</summary>
+        /// <summary>出站入库的系统占位，不是对她说的话，不能进对话历史。</summary>
         internal static bool IsOutboundProtocolMoment(string content)
         {
             var text = (content ?? string.Empty).Trim();
@@ -260,6 +304,65 @@ namespace TraceSoul2.Logic
         {
             value = value ?? string.Empty;
             return value.Length <= max ? value : value.Substring(0, max);
+        }
+
+        private static void InjectMindJsonFields(StringBuilder builder, TraceTurnContext turn)
+        {
+            if (builder == null || turn == null || turn.Services == null ||
+                turn.Services.MindJsonFields == null)
+                return;
+            var extras = new List<string>();
+            foreach (var field in turn.Services.MindJsonFields)
+            {
+                if (field == null) continue;
+                string value;
+                try { value = field(turn); }
+                catch { continue; }
+                if (string.IsNullOrWhiteSpace(value)) continue;
+                extras.Add(value.Trim().Trim(','));
+            }
+            if (extras.Count == 0) return;
+            var text = builder.ToString();
+            var close = text.LastIndexOf('}');
+            if (close < 0) return;
+            var head = text.Substring(0, close);
+            var unique = new List<string>();
+            foreach (var extra in extras)
+            {
+                var colon = extra.IndexOf(':');
+                var key = colon > 0 ? extra.Substring(0, colon).Trim() : extra;
+                if (head.IndexOf(key, StringComparison.Ordinal) >= 0) continue;
+                if (!unique.Contains(extra)) unique.Add(extra);
+            }
+            if (unique.Count == 0) return;
+            builder.Clear();
+            builder.Append(head);
+            builder.Append(',');
+            builder.Append(string.Join(",", unique));
+            builder.Append(text.Substring(close));
+        }
+
+        private static void AppendOrganMindPrompts(StringBuilder builder, TraceTurnContext turn)
+        {
+            if (builder == null || turn == null || turn.Services == null ||
+                turn.Services.MindPromptAppends == null)
+                return;
+            var any = false;
+            var seen = new HashSet<string>(StringComparer.Ordinal);
+            foreach (var append in turn.Services.MindPromptAppends)
+            {
+                if (append == null) continue;
+                string text;
+                try { text = append(turn); }
+                catch { continue; }
+                if (string.IsNullOrWhiteSpace(text) || !seen.Add(text.Trim())) continue;
+                if (!any)
+                {
+                    builder.AppendLine();
+                    any = true;
+                }
+                CorePrompts.Write(builder, text);
+            }
         }
     }
 }

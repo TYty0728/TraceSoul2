@@ -396,6 +396,127 @@ namespace TraceSoul2.Host
             };
         }
 
+        /// <summary>WebUI 只读监视台：把当前身体、内心、心跳、最近判断和生活上下文集中成一份快照。</summary>
+        public object LiveState()
+        {
+            var now = DateTimeOffset.Now;
+            var pair = Store.LoadPairIdentity();
+            var inner = Store.LoadOrCreateInnerRuntime(ConversationId);
+            var body = MouthLogic.LoadState(DataDirectory);
+            var due = HeartbeatLogic.NextDueUnixMs(Store, ConversationId);
+            var plan = HeartbeatLogic.NextPlan(Store, ConversationId);
+            var decision = LastTurn == null ? LoadLatestMindDecision() : LastTurn.MindDecision;
+            var dayBoundary = new DateTimeOffset(now.Date.AddHours(4), now.Offset);
+            if (now < dayBoundary) dayBoundary = dayBoundary.AddDays(-1);
+            var dayKey = dayBoundary.ToString("yyyy-MM-dd");
+            var lastMoments = Store.GetRecentMoments(ConversationId, 18)
+                .Select(x => new
+                {
+                    x.Id,
+                    role = pair.LabelForRole(x.Role),
+                    x.Content,
+                    x.SourcePluginId,
+                    x.MemoryStatus,
+                    x.CreatedUnixMs
+                }).ToList();
+            var trajectory = Store.LoadDayTrajectory(dayKey);
+            var today = Store.GetTodayNewItems(ConversationId, dayBoundary.ToUnixTimeMilliseconds(), 12)
+                .Select(x => new { x.Content, x.SourceMomentId, x.CreatedUnixMs }).ToList();
+            var latest = LastTurnPayload();
+            var activeEvents = Store.GetActiveEventIndexes().Take(8)
+                .Select(x => new { x.Id, x.EventSummary, x.MoodLabel, x.TimeLabel, x.UpdatedUnixMs })
+                .ToList();
+            return new
+            {
+                hostTime = now.ToString("O"),
+                username = pair.Username,
+                assname = pair.Assname,
+                body = new
+                {
+                    scene = string.Equals(body.scene, "out", StringComparison.OrdinalIgnoreCase) ? "外出" : "家里",
+                    activeBody = body.active_body ?? string.Empty
+                },
+                runtime = new
+                {
+                    state = inner.Asleep ? "睡着" : "醒着",
+                    inner.Narrative,
+                    inner.Mood,
+                    inner.Revision,
+                    inner.RelationshipLens,
+                    inner.OngoingActivity,
+                    sharedScene = inner.OngoingActivity,
+                    inner.Asleep,
+                    attention = (inner.Attention ?? new List<AttentionItemData>()).Take(3)
+                        .Select(x => new { kind = x.kind ?? string.Empty, content = x.content ?? string.Empty, updatedUnixMs = x.UpdatedUnixMs }).ToList(),
+                    inner.SnapshotId,
+                    inner.SourceMomentId,
+                    inner.UpdatedUnixMs
+                },
+                heartbeat = new
+                {
+                    enabled = due.HasValue,
+                    dueUnixMs = due,
+                    dueInSeconds = due.HasValue ? Math.Max(0, (due.Value - now.ToUnixTimeMilliseconds()) / 1000) : 0,
+                    minMinutes = HeartbeatMinMinutes,
+                    maxMinutes = HeartbeatMaxMinutes,
+                    nextPlan = plan
+                },
+                decision = PublicMindDecision(decision),
+                latestTurn = latest,
+                context = new
+                {
+                    day = dayKey,
+                    trajectory = trajectory == null ? string.Empty : trajectory.Text ?? string.Empty,
+                    todayNewItems = today,
+                    activeEvents,
+                    recentMoments = lastMoments
+                }
+            };
+        }
+
+        private MindDecisionData LoadLatestMindDecision()
+        {
+            var reviews = Store.GetRecentTurnReviews(ConversationId, 1);
+            if (reviews.Count == 0 || string.IsNullOrWhiteSpace(reviews[reviews.Count - 1].PayloadJson)) return null;
+            try
+            {
+                var snapshot = TraceJson.FromJson<TurnPayloadSnapshotData>(reviews[reviews.Count - 1].PayloadJson);
+                return snapshot == null ? null : snapshot.mind_decision;
+            }
+            catch { return null; }
+        }
+
+        private static object PublicMindDecision(MindDecisionData decision)
+        {
+            if (decision == null) return null;
+            decision = MindLogic.Normalize(decision);
+            return new
+            {
+                beat = decision.beat,
+                tags = decision.ParseTags(),
+                query = decision.query ?? string.Empty,
+                mood = decision.mood ?? string.Empty,
+                moodChanged = decision.mood_changed,
+                archive = decision.archive,
+                newFact = decision.new_fact ?? string.Empty,
+                leave = decision.leave ?? string.Empty,
+                note = decision.note ?? string.Empty,
+                today = decision.today ?? string.Empty,
+                inner = decision.inner ?? string.Empty,
+                scene = decision.SceneValue(),
+                attention = decision.ParseAttention(),
+                review = decision.review,
+                cognition = decision.cognition ?? string.Empty,
+                speak = decision.speak,
+                heartbeatIntent = decision.heartbeat_intent ?? string.Empty,
+                nextHeartbeatPlan = decision.next_heartbeat_plan ?? string.Empty,
+                sleep = decision.sleep,
+                nextHeartbeatMinutes = decision.next_heartbeat_minutes,
+                sticker = decision.sticker ?? string.Empty,
+                image = decision.image ?? string.Empty
+            };
+        }
+
         public async Task<ChatTurnResultData> PostMomentAsync(string text, CancellationToken cancellationToken)
         {
             if (string.IsNullOrWhiteSpace(text))
@@ -622,6 +743,7 @@ namespace TraceSoul2.Host
                     decisionSummary = review.DecisionSummary,
                     capabilitySummary = review.CapabilitySummary,
                     facetSummary = review.FacetSummary,
+                    mindDecision = PublicMindDecision(snapshot == null ? null : snapshot.mind_decision),
                     blocks = snapshot == null
                         ? new List<object>()
                         : snapshot.blocks.Select(x => new { x.facet_id, x.title, x.content })
@@ -644,6 +766,7 @@ namespace TraceSoul2.Host
                 brainMode = turn.BrainMode,
                 brainIntent = turn.BrainIntent,
                 decisionSummary = turn.DecisionSummary,
+                mindDecision = PublicMindDecision(turn.MindDecision),
                 blocks = turn.ContextBlocks.Select(x => new { x.FacetId, x.Title, x.Content }).ToList(),
                 facetOutputs = turn.FacetOutputs.Select(x => new { x.facet_id, x.changed, x.summary }).ToList(),
                 results = turn.ContributionResults.Select(x => new { x.CapabilityId, x.Status, x.Summary, x.Payload }).ToList()

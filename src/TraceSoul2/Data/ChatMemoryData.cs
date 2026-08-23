@@ -91,6 +91,8 @@ namespace TraceSoul2.Data
         public string BrainMode { get; private set; }
         public string BrainIntent { get; private set; }
         public string DecisionSummary { get; private set; }
+        /// <summary>本轮心智组织卡；只供 Host/WebUI 观察，不参与表达协议。</summary>
+        public MindDecisionData MindDecision { get; private set; }
         public IReadOnlyList<TraceContextBlockData> ContextBlocks { get; private set; }
         public IReadOnlyList<BrainFacetOutputData> FacetOutputs { get; private set; }
         public IReadOnlyList<TraceCapabilityResultData> ContributionResults { get; private set; }
@@ -102,12 +104,14 @@ namespace TraceSoul2.Data
             string decisionSummary,
             List<TraceContextBlockData> contextBlocks,
             List<BrainFacetOutputData> facetOutputs,
-            List<TraceCapabilityResultData> contributionResults)
+            List<TraceCapabilityResultData> contributionResults,
+            MindDecisionData mindDecision = null)
         {
             Reply = reply ?? string.Empty;
             BrainMode = brainMode ?? string.Empty;
             BrainIntent = brainIntent ?? string.Empty;
             DecisionSummary = decisionSummary ?? string.Empty;
+            MindDecision = mindDecision;
             ContextBlocks = contextBlocks ?? new List<TraceContextBlockData>();
             FacetOutputs = facetOutputs ?? new List<BrainFacetOutputData>();
             ContributionResults = contributionResults ?? new List<TraceCapabilityResultData>();
@@ -235,6 +239,7 @@ namespace TraceSoul2.Data
     [Serializable]
     public sealed class TurnPayloadSnapshotData
     {
+        public MindDecisionData mind_decision;
         public List<TurnBlockSnapshotData> blocks = new List<TurnBlockSnapshotData>();
         public List<TurnResultSnapshotData> results = new List<TurnResultSnapshotData>();
     }

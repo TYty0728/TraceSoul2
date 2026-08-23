@@ -1,5 +1,6 @@
 using System;
 using System.Collections.Generic;
+using System.Linq;
 using TraceSoul2.Data;
 using TraceSoul2.Manager;
 using TraceSoul2.Plugins.Builtin;
@@ -16,6 +17,8 @@ namespace TraceSoul2.Logic
         public const string PluginId = "builtin.time";
         public const string ScheduleDocumentKey = "schedules";
         public const string HeartbeatContent = "心跳";
+        public const string PlanSeparator = "｜醒来计划：";
+        public const string DefaultNextPlan = "重新看看时间、她有没有新消息和近期计划，再决定是否联系";
         public const int DefaultMinMinutes = 10;
         public const int DefaultMaxMinutes = 20;
         public const int MinuteCap = 180;
@@ -25,11 +28,35 @@ namespace TraceSoul2.Logic
         public static bool IsHeartbeatContent(string content)
         {
             var value = (content ?? string.Empty).Trim();
-            if (value == HeartbeatContent) return true;
             const string due = TimeSchedulerPrompts.DuePrefix;
             if (value.StartsWith(due, StringComparison.Ordinal))
                 value = value.Substring(due.Length).Trim();
-            return value == HeartbeatContent;
+            return value == HeartbeatContent ||
+                   value.StartsWith(HeartbeatContent + PlanSeparator, StringComparison.Ordinal);
+        }
+
+        public static string BuildContent(string nextPlan)
+        {
+            nextPlan = LimitPlan(nextPlan);
+            return HeartbeatContent + PlanSeparator +
+                   (nextPlan.Length == 0 ? DefaultNextPlan : nextPlan);
+        }
+
+        public static string ExtractPlan(string content)
+        {
+            var value = (content ?? string.Empty).Trim();
+            const string due = TimeSchedulerPrompts.DuePrefix;
+            if (value.StartsWith(due, StringComparison.Ordinal))
+                value = value.Substring(due.Length).Trim();
+            var marker = HeartbeatContent + PlanSeparator;
+            if (!value.StartsWith(marker, StringComparison.Ordinal)) return string.Empty;
+            return LimitPlan(value.Substring(marker.Length).Trim());
+        }
+
+        private static string LimitPlan(string value)
+        {
+            value = (value ?? string.Empty).Trim();
+            return value.Length <= 120 ? value : value.Substring(0, 120);
         }
 
         public static bool IsHeartbeatOrLegacyContinue(string content)
@@ -117,6 +144,26 @@ namespace TraceSoul2.Logic
                     soonest = item.due_unix_ms;
             }
             return soonest;
+        }
+
+        public static string NextPlan(IMemoryStore storage, string conversationId)
+        {
+            if (storage == null || string.IsNullOrWhiteSpace(conversationId)) return string.Empty;
+            var json = storage.LoadPluginDocument(PluginId, ScheduleDocumentKey);
+            if (string.IsNullOrWhiteSpace(json)) return string.Empty;
+            ScheduleFile file;
+            try { file = TraceJson.FromJson<ScheduleFile>(json); }
+            catch { return string.Empty; }
+            if (file == null || file.items == null) return string.Empty;
+            var now = DateTimeOffset.UtcNow.ToUnixTimeMilliseconds();
+            var item = file.items
+                .Where(x => x != null && x.enabled &&
+                            string.Equals(x.conversation_id, conversationId, StringComparison.Ordinal) &&
+                            IsHeartbeatOrLegacyContinue(x.content) && x.due_unix_ms > now)
+                .OrderBy(x => x.due_unix_ms)
+                .FirstOrDefault();
+            if (item == null) return string.Empty;
+            return ExtractPlan(item.content);
         }
 
         [Serializable]

@@ -10,6 +10,8 @@ namespace TraceSoul2.Data
         public string kind;
         public string content;
         public List<string> source_refs = new List<string>();
+        /// <summary>这块碎片最近一次浮上来的时间；旧库没有时由运行态时间兜底。</summary>
+        public long UpdatedUnixMs;
     }
 
     [Serializable]
@@ -28,6 +30,7 @@ namespace TraceSoul2.Data
         public string RelationshipLens { get; set; }
         public string Mood { get; set; }
         public string OngoingActivity { get; set; }
+        /// <summary>旧字段，仅为旧库兼容保留；新内心不把碎片当成未完成事项。</summary>
         public string UnfinishedIntent { get; set; }
         public List<AttentionItemData> Attention { get; set; } = new List<AttentionItemData>();
         public string SourceMomentId { get; set; }
@@ -68,8 +71,9 @@ namespace TraceSoul2.Data
         public string relationship_update;
         public string mood;
         public string ongoing_activity;
+        /// <summary>旧字段，仅为迁移兼容保留；新链路不写入未完成事项。</summary>
         public string unfinished_intent;
-        /// <summary>null=不改手上；空列表=放下。</summary>
+        /// <summary>null=沿用（仅供时间醒来等非对话入口）；空列表=让当前碎片沉下去。</summary>
         public List<AttentionWriteData> attention;
         /// <summary>null=不改睡眠；true=睡下；false=醒来。</summary>
         public bool? asleep;

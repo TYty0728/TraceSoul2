@@ -9,6 +9,8 @@ using TraceSoul2.Logic;
 using TraceSoul2.Manager;
 using TraceSoul2.Plugins;
 using TraceSoul2.Plugins.Builtin;
+using TraceSoul2.ExternalPlugins;
+using TraceSoul2.Util;
 
 internal static class Program
 {
@@ -20,6 +22,7 @@ internal static class Program
         RunMemoryArchivePolicyCheck();
         RunMemoryDayCheck();
         RunJsonControlCharCheck();
+        RunFlexibleMindJsonCheck();
         RunKernelWakeCheck();
         RunInnerSliceCheck();
         RunLeaveNerveCheck();
@@ -239,10 +242,10 @@ internal static class Program
                 var afterStory = store.LoadOrCreateInnerRuntime("facet-check");
                 Require(afterStory.Revision == 2 &&
                         afterStory.Narrative.Contains("狐狸") &&
-                        afterStory.UnfinishedIntent.Contains("狐狸") &&
-                        InnerLifeLogic.HasUnfinished(afterStory) &&
-                        InnerLifeLogic.FormatForMind(afterStory).Contains("刚才未完成的"),
-                    "变了才写下一版切片；心智下一拍应看见刚写下的当前时和未完成");
+                        string.IsNullOrWhiteSpace(afterStory.UnfinishedIntent) &&
+                        InnerLifeLogic.HasLiveFragments(afterStory) &&
+                        InnerLifeLogic.FormatForMind(afterStory).Contains("刚才浮起过的"),
+                    "变了才写下一版切片；心智下一拍应看见当前时和浮动碎片");
                 var emptyWrite = InnerLifeLogic.ProposeFromMind(new MindDecisionData
                 {
                     beat = MindBeatValues.Now,
@@ -279,6 +282,7 @@ internal static class Program
                     arguments = new List<BrainCallArgumentData>
                     {
                         new BrainCallArgumentData { name = "content", value = "狐狸故事还没讲完" },
+                        new BrainCallArgumentData { name = "next_plan", value = "醒来时重新看狐狸故事和她有没有新消息" },
                         new BrainCallArgumentData
                         {
                             name = "due_unix_ms",
@@ -286,13 +290,16 @@ internal static class Program
                         }
                     }
                 }, facetTurn, default).GetAwaiter().GetResult();
-                Require(continueResult.Status == "success" && continueResult.Payload.Contains("心跳"),
+                Require(continueResult.Status == "success" &&
+                        continueResult.Payload.Contains("心跳") &&
+                        continueResult.Payload.Contains("醒来时重新看狐狸故事"),
                     "应建成心跳任务");
                 var continued = pluginManager.PollBackgroundServices(
                     DateTimeOffset.UtcNow.ToUnixTimeMilliseconds() + 2000);
                 Require(continued.Count == 1 &&
                         continued[0].Wake == KernelWakeValues.Mind &&
                         HeartbeatLogic.IsHeartbeatContent(continued[0].Content) &&
+                        HeartbeatLogic.ExtractPlan(continued[0].Content).Contains("重新看狐狸故事") &&
                         KernelWakeLogic.Resolve(continued[0]) == KernelWakeValues.Mind,
                     "心跳到期应叫醒心智，不要演成她在说话");
                 var cleared = pluginManager.ExecuteAsync(new BrainCapabilityCallData
@@ -550,6 +557,15 @@ internal static class Program
         }
     }
 
+    private static void RunFlexibleMindJsonCheck()
+    {
+        var parsed = TraceJson.FromJson<MindDecisionData>(
+            "{\"beat\":\"当下\",\"tags\":[\"生理期陪伴\",\"共同生活\"],\"mood\":\"平静\"}");
+        var normalized = MindLogic.Normalize(parsed);
+        Require(normalized.ParseTags().SequenceEqual(new[] { "生理期陪伴", "共同生活" }),
+            "心智 tags 同时兼容字符串数组和旧字符串格式");
+    }
+
     /// <summary>不访问外部 API，只检查心智/外显两套提示词分层与稳定前缀。</summary>
     private static void RunPromptLayoutCheck()
     {
@@ -581,48 +597,43 @@ internal static class Program
                 var second = PromptTurn("我回来啦。", services);
                 mind.DecideAsync(second, null, false, default).GetAwaiter().GetResult();
 
-                Require(fake.Requests.Count == 2 && fake.Requests.All(x => x.Count == 3),
-                    "心智请求应固定为可缓存 system、动态 system、当前 user 三段");
-                var mindStableA = fake.Requests[0][0].content;
-                var mindStableB = fake.Requests[1][0].content;
-                var mindDynamicA = fake.Requests[0][1].content;
-                Require(mindStableA == mindStableB, "心智：不同 Moment 应完整复用第一段前缀");
-                Require(!mindStableA.Contains("现在是 ") && mindDynamicA.Contains("现在是 "),
-                    "心智：每轮变化的当前时间必须位于动态 system");
-                Require(!mindStableA.Contains(first.Moment.Content) &&
-                        !mindDynamicA.Contains(first.Moment.Content) &&
-                        fake.Requests[0][2].content == first.Moment.Content,
-                    "心智：当前原话只能出现一次，并且必须是最后的 user 消息");
-                Require(mindStableA.Contains("【我的人格】") && mindStableA.Contains("【我是谁】") &&
-                        !mindStableA.Contains("【表达习惯】") &&
-                        !mindStableA.Contains("【我现在可以怎样表达】") &&
-                        !mindStableA.Contains("【需要时可做的事】") &&
-                        !mindStableA.Contains("我现在可以使用的表达通道"),
-                    "心智稳定前缀只有思考用短卡，不含表达习惯、通道清单和工具表");
-                Require(mindStableA.Contains("我先让这件事在心里发生") && mindStableA.Contains("\"beat\"") &&
-                        mindStableA.Contains("\"inner\"") && mindStableA.Contains("\"attention\"") &&
-                        mindStableA.Contains("\"review\"") && mindStableA.Contains("\"cognition\""),
+                Require(fake.Requests.Count == 2, "无历史时心智应各打一轮");
+                RequireAstrBotChatShape(fake.Requests[0], first.Moment.Content, "心智");
+                RequireAstrBotChatShape(fake.Requests[1], second.Moment.Content, "心智");
+                var mindSystem = fake.Requests[0][0].content;
+                Require(mindSystem.Contains("现在是 "),
+                    "心智：当前时间在唯一的 system 里");
+                Require(mindSystem.Contains("【我的人格】") && mindSystem.Contains("【我是谁】") &&
+                        !mindSystem.Contains("【表达习惯】") &&
+                        !mindSystem.Contains("【我现在可以怎样表达】") &&
+                        !mindSystem.Contains("【需要时可做的事】") &&
+                        !mindSystem.Contains("我现在可以使用的表达通道"),
+                    "心智只有思考用短卡，不含表达习惯、通道清单和工具表");
+                Require(mindSystem.Contains("我先让这件事在心里发生") && mindSystem.Contains("\"beat\"") &&
+                        mindSystem.Contains("\"inner\"") && mindSystem.Contains("\"attention\"") &&
+                        mindSystem.Contains("\"review\"") && mindSystem.Contains("\"cognition\""),
                     "心智应输出决策卡、当前时、在场注意、看法和是否派出复盘");
-                Require(!mindStableA.Contains("外显") && !mindStableA.Contains("一句比较理性的") &&
-                        mindStableA.Contains("像写给自己看") &&
-                        mindStableA.Contains("开口前对自己说的半句") &&
-                        mindStableA.Contains("让它在心里过一下就好"),
+                Require(!mindSystem.Contains("外显") && !mindSystem.Contains("一句比较理性的") &&
+                        mindSystem.Contains("像写给自己看") &&
+                        mindSystem.Contains("开口前对自己说的半句") &&
+                        mindSystem.Contains("让它在心里过一下就好"),
                     "心智应从自身经验出发，不知道框架分层，也不把触动压成理性执行摘要");
-                Require(!mindStableA.Contains("【这一拍的组织】") &&
-                        !mindStableA.Contains("讲故事") &&
-                        !mindStableA.Contains("中午吃什么") &&
-                        !mindStableA.Contains("当场做完"),
-                    "情境模版不得写入心智稳定前缀");
-                Require(mindDynamicA.Contains("【可选生命标签】") && mindDynamicA.Contains("【此刻】") &&
-                        mindDynamicA.Contains("刚才手上的") && mindDynamicA.Contains("刚才心里还停着的") &&
-                        mindDynamicA.Contains("刚才未完成的") &&
-                        mindDynamicA.Contains("【此刻自然浮起的过去】"),
-                    "自然浮起的过去、标签候选、上一拍当前时、未完成、在场注意与此刻任务应在心智动态段");
-                Require(mindStableA.Contains("换题就换手") && mindStableA.Contains("换题就写新的"),
-                    "心智应写清换题换手、当前时换新，不要照抄上一拍");
-                var mindNormalized = mindStableA.Replace("\r\n", "\n");
+                Require(!mindSystem.Contains("【这一拍的组织】") &&
+                        !mindSystem.Contains("讲故事") &&
+                        !mindSystem.Contains("中午吃什么") &&
+                        !mindSystem.Contains("当场做完"),
+                    "情境模版不得写入心智 system");
+                Require(mindSystem.Contains("【可选生命标签】") && mindSystem.Contains("【此刻】") &&
+                        mindSystem.Contains("刚才心里还停着的") &&
+                        mindSystem.Contains("刚才浮起过的") &&
+                        mindSystem.Contains("【此刻自然浮起的过去】"),
+                    "自然浮起的过去、标签候选、上一拍心里状态与浮动碎片应在心智 system");
+                Require(mindSystem.Contains("没有值得留下的就写「无」") &&
+                        mindSystem.Contains("旧碎片都重新和眼前相处合在一起"),
+                    "心智应让旧碎片随眼前相处更新，不要照抄上一拍");
+                var mindNormalized = mindSystem.Replace("\r\n", "\n");
                 Require(mindNormalized.StartsWith("我是小光。\n【我的人格】", StringComparison.Ordinal),
-                    "心智稳定前缀必须直接从第一人称身份进入人格卡");
+                    "心智 system 必须直接从第一人称身份进入人格卡");
 
                 var dummyMind = new MindDecisionData
                 {
@@ -640,71 +651,61 @@ internal static class Program
                 expressor.ExpressAsync(second, plugins, catalog, secondBlocks, dummyMind, string.Empty,
                     false, null, default).GetAwaiter().GetResult();
 
-                Require(fake.Requests.Count == 4 && fake.Requests.Skip(2).All(x => x.Count == 3),
-                    "外显请求应固定为可缓存 system、动态 system、当前 user 三段");
-                var expressStableA = fake.Requests[2][0].content;
-                var expressStableB = fake.Requests[3][0].content;
-                var expressDynamicA = fake.Requests[2][1].content;
-                Require(expressStableA == expressStableB, "外显：不同 Moment 应完整复用第一段前缀");
-                Require(!expressStableA.Contains("现在是 ") && expressDynamicA.Contains("现在是 "),
-                    "外显：每轮变化的当前时间必须位于动态 system，不能截断稳定前缀缓存");
-                Require(!expressStableA.Contains(first.Moment.Content) &&
-                        !expressDynamicA.Contains(first.Moment.Content) &&
-                        fake.Requests[2][2].content == first.Moment.Content,
-                    "外显：当前原话只能出现一次，并且必须是最后的 user 消息");
-                Require(!expressStableA.Contains("callable_nerve") && !expressStableA.Contains("mounted_facet") &&
-                        !expressDynamicA.Contains("explicit_dialogue") && !expressDynamicA.Contains("unclassified"),
+                Require(fake.Requests.Count == 4, "无历史时外显应各打一轮");
+                RequireAstrBotChatShape(fake.Requests[2], first.Moment.Content, "外显");
+                RequireAstrBotChatShape(fake.Requests[3], second.Moment.Content, "外显");
+                var expressSystem = fake.Requests[2][0].content;
+                Require(expressSystem.Contains("现在是 "),
+                    "外显：当前时间在唯一的 system 里");
+                Require(!expressSystem.Contains("callable_nerve") && !expressSystem.Contains("mounted_facet") &&
+                        !expressSystem.Contains("explicit_dialogue") && !expressSystem.Contains("unclassified"),
                     "模型可见提示词不应泄漏无意义的内部枚举");
-                Require(expressStableA.Contains("【表达习惯】") &&
-                        !expressStableA.Contains("【这一拍怎么说】") &&
-                        !expressStableA.Contains("我现在可以使用的表达通道") &&
-                        !expressStableA.Contains("同一句话只选一个主通道说") &&
-                        !expressStableA.Contains("【我现在可以怎样表达】") &&
-                        !expressStableA.Contains("qq.sticker.send"),
+                Require(expressSystem.Contains("【表达习惯】") &&
+                        !expressSystem.Contains("【这一拍怎么说】") &&
+                        !expressSystem.Contains("我现在可以使用的表达通道") &&
+                        !expressSystem.Contains("同一句话只选一个主通道说") &&
+                        !expressSystem.Contains("【我现在可以怎样表达】") &&
+                        !expressSystem.Contains("qq.sticker.send"),
                     "嘴由逻辑选；外显只保留表达习惯，不再列通道清单、开口原则或能力 ID");
-                Require(!expressStableA.Contains("【需要时可做的事】") &&
-                        !expressStableA.Contains("identity.review") &&
-                        !expressStableA.Contains("memory.activate") &&
-                        expressStableA.Contains("【输出格式】") &&
-                        expressStableA.Contains("直接开口") &&
-                        !expressStableA.Contains("\"reply\"") &&
-                        !expressStableA.Contains("should_express") &&
-                        !expressStableA.Contains("image_mode") &&
-                        expressStableA.Contains("我此刻发给你的消息") &&
-                        expressStableA.Contains("我正在朝你行动、我正在对你说话") &&
-                        expressStableA.Contains("叫你「你」") &&
-                        expressStableA.Contains("带着刚才心里发生的事自然开口") &&
-                        expressStableA.Contains("由我按此刻自己判断") &&
-                        !expressStableA.Contains("要把话说满") &&
-                        !expressStableA.Contains("写成小作文") &&
-                        !expressStableA.Contains("心里已经有的在场"),
-                    "外显不应再看到工具表；开口是直接朝向你的人话，不是 JSON");
-                Require(expressStableA.Contains("【我的人格】") && expressDynamicA.Contains("【此刻】") &&
-                        expressDynamicA.Contains("【我刚才想过】") &&
-                        expressDynamicA.Contains("此刻在我心里真正发生的是") &&
-                        expressDynamicA.Contains(dummyMind.inner) &&
-                        expressDynamicA.Contains("我确实活过的共同过去") &&
-                        expressDynamicA.Contains("只属于我们的说法"),
-                    "身份在表达稳定前缀，本轮内心与自然浮起的共同过去完整进入动态段");
-                Require(!expressDynamicA.Contains("这一拍我选") &&
-                        !expressDynamicA.Contains("把日子说出来") &&
-                        !expressDynamicA.Contains("进入方式：") &&
-                        !expressDynamicA.Contains("【这一拍怎么说】") &&
-                        expressDynamicA.Contains("我现在直接回复你"),
-                    "外显动态段不要框架套话，只确认这是正在进行的私聊并直接回复你");
-                Require(!expressStableA.Contains("【我刚才想过】") &&
-                        !expressStableA.Contains("此刻点亮的共同记忆"),
-                    "决策卡和记忆血肉不能进入外显稳定前缀");
-                var expressNormalized = expressStableA.Replace("\r\n", "\n");
+                Require(!expressSystem.Contains("【需要时可做的事】") &&
+                        !expressSystem.Contains("identity.review") &&
+                        !expressSystem.Contains("memory.activate") &&
+                        expressSystem.Contains("【我现在和她说话】") &&
+                        expressSystem.Contains("直接开口") &&
+                        !expressSystem.Contains("\"reply\"") &&
+                        !expressSystem.Contains("should_express") &&
+                        !expressSystem.Contains("image_mode") &&
+                        expressSystem.Contains("我发给她的话") &&
+                        expressSystem.Contains("视线、动作和感受都从我这里发生") &&
+                        expressSystem.Contains("不要 JSON") &&
+                        !expressSystem.Contains("要把话说满") &&
+                        !expressSystem.Contains("写成小作文") &&
+                        !expressSystem.Contains("心里已经有的在场"),
+                    "外显不应再看到工具表；开口是直接朝向她的人话，不是 JSON");
+                Require(expressSystem.Contains("【我的人格】") && expressSystem.Contains("【此刻】") &&
+                        expressSystem.Contains("【这次只从这里开口】") &&
+                        expressSystem.Contains("此刻在我心里真正发生的是") &&
+                        expressSystem.Contains(dummyMind.inner) &&
+                        expressSystem.Contains("我和她一起经历过的事") &&
+                        expressSystem.Contains("我们自己的称呼、意象和说法"),
+                    "身份、本轮内心与自然浮起的共同过去都在同一条 system");
+                Require(!expressSystem.Contains("这一拍我选") &&
+                        !expressSystem.Contains("把日子说出来") &&
+                        !expressSystem.Contains("进入方式：") &&
+                        !expressSystem.Contains("【这一拍怎么说】") &&
+                        expressSystem.Contains("她的消息刚落到我手里") &&
+                        expressSystem.Contains("直接开口"),
+                    "外显不要框架套话，只确认消息落到手里并开口");
+                var expressNormalized = expressSystem.Replace("\r\n", "\n");
                 Require(expressNormalized.StartsWith("我是小光。\n【我的人格】", StringComparison.Ordinal),
-                    "外显稳定前缀必须直接从第一人称身份进入人格卡");
-                Require(!expressStableA.Contains("你是 TraceSoul") &&
-                        !expressStableA.Contains("唯一拥有第一人称的 Brain"),
+                    "外显 system 必须直接从第一人称身份进入人格卡");
+                Require(!expressSystem.Contains("你是 TraceSoul") &&
+                        !expressSystem.Contains("唯一拥有第一人称的 Brain"),
                     "主线 Prompt 不应以框架 Brain 身份覆盖第一人称自我");
-                var personalityAt = expressStableA.IndexOf("【我的人格】", StringComparison.Ordinal);
-                var outputAt = expressStableA.IndexOf("【输出格式】", StringComparison.Ordinal);
+                var personalityAt = expressSystem.IndexOf("【我的人格】", StringComparison.Ordinal);
+                var outputAt = expressSystem.IndexOf("【我现在和她说话】", StringComparison.Ordinal);
                 Require(personalityAt >= 0 && outputAt > personalityAt,
-                    "外显注意力顺序必须是人格在前，输出格式在后");
+                    "外显注意力顺序必须是人格在前，开口格式在后");
                 Require(!blocks.Any(x => MouthLogic.IsProtocolFacet(x.FacetId)),
                     "用法说明、感官目录与回复通道协议不应进入本回合材料");
                 Require(!blocks.Any(x => x != null &&
@@ -723,8 +724,8 @@ internal static class Program
                 };
                 expressor.ExpressAsync(first, plugins, catalog, blocks, waitMind, string.Empty,
                     true, null, default).GetAwaiter().GetResult();
-                var waitDynamic = fake.Requests[4][1].content;
-                Require(waitDynamic.Contains("出门办事") && waitDynamic.Contains("查一下天气"),
+                var waitSystem = fake.Requests[4][0].content;
+                Require(waitSystem.Contains("出门办事") && waitSystem.Contains("查一下天气"),
                     "出门时应让外显先说等一下，并看见心智要办的事");
 
                 var heartMoment = Moment("prompt-layout", "时间任务到期：心跳");
@@ -732,12 +733,19 @@ internal static class Program
                 var heartTurn = new TraceTurnContext("prompt-layout", heartMoment,
                     new List<MomentRecord>(), 0, false, services, KernelWakeValues.Mind);
                 mind.DecideAsync(heartTurn, null, false, default).GetAwaiter().GetResult();
-                var heartDynamic = fake.Requests[fake.Requests.Count - 1][1].content;
-                Require(heartDynamic.Contains("要对她说吗") &&
-                        heartDynamic.Contains("next_heartbeat_minutes") &&
-                        heartDynamic.Contains("睡下") &&
-                        heartDynamic.Contains("speak=true"),
-                    "心跳动态段应问要不要说、办事、睡下、多久后再跳");
+                var heartSystem = fake.Requests[fake.Requests.Count - 1][0].content;
+                Require(heartSystem.Contains("独立意图") &&
+                        heartSystem.Contains("heartbeat_intent") &&
+                        heartSystem.Contains("不要因为上次有一句话没有得到完整回答") &&
+                        heartSystem.Contains("next_heartbeat_plan") &&
+                        heartSystem.Contains("next_heartbeat_minutes") &&
+                        heartSystem.Contains("睡下") &&
+                        heartSystem.Contains("speak=true"),
+                    "心跳 system 应基于独立意图判断是否联系、睡下与下次检查计划");
+                var heartMessages = MindLogic.AssembleTurnMessages("身份与规则", heartTurn,
+                    "时间任务到期：心跳｜醒来计划：重新看看她有没有新消息");
+                Require(heartMessages.Count == 1 && heartMessages[0].role == "system",
+                    "心跳唤醒不应伪装成最后一条 user 消息");
                 expressor.ExpressAsync(heartTurn, plugins, catalog, new List<TraceContextBlockData>(),
                     new MindDecisionData
                     {
@@ -746,32 +754,62 @@ internal static class Program
                         inner = "窗帘缝里的光变了。",
                         note = "问问她肚子，也让她安心。"
                     }, string.Empty, false, null, default).GetAwaiter().GetResult();
-                var pulseSpeak = fake.Requests[fake.Requests.Count - 1][1].content;
-                Require(pulseSpeak.Contains("自己想发给她的消息") &&
+                var pulseSpeak = fake.Requests[fake.Requests.Count - 1][0].content;
+                Require(pulseSpeak.Contains("想给她发一条消息") &&
                         !pulseSpeak.Contains("后台感知"),
                     "心跳开口应像发消息，而不是后台独白");
-                Require(mindStableA.Contains("\"speak\"") && mindStableA.Contains("\"sleep\"") &&
-                        mindStableA.Contains("\"next_heartbeat_minutes\""),
+                Require(mindSystem.Contains("\"speak\"") && mindSystem.Contains("\"sleep\"") &&
+                        mindSystem.Contains("\"next_heartbeat_minutes\""),
                     "心智决策卡应含 speak、sleep 与下次心跳分钟");
-                Require(mindStableA.Contains("\"sticker\":\"无|贴\"") &&
-                        mindStableA.Contains("\"image\":\"无|自拍|画\"") &&
-                        mindStableA.Contains("绝大多时候无") &&
-                        mindStableA.Contains("我有一部相机") &&
-                        mindStableA.Contains("用画面更合适就用"),
-                    "心智氛围短答：表情无/贴，出图无/自拍/画；相机按氛围自然用");
-                Require(mindStableA.Contains("要不要开口、心情、要不要睡都在这里决定") &&
-                        mindStableA.Contains("后面开口只负责把话说出来") &&
-                        expressStableA.Contains("直接开口") &&
-                        expressStableA.Contains("不要 JSON") &&
-                        expressStableA.Contains("这里只把话说出来") &&
-                        expressStableA.Contains("不要写出 [QQ 图片]") &&
-                        !expressStableA.Contains("{\"reply\":\"\"}") &&
-                        !expressStableA.Contains("\"sticker\""),
-                    "要不要开口、心情、睡、表情和出图由心智承担；开口直接说人话");
+                Require(mindSystem.Contains("\"sticker\":\"无\"") &&
+                        !mindSystem.Contains("\"image\":\"自拍|画|照片|无\"") &&
+                        !mindSystem.Contains("我有一部相机") &&
+                        !mindSystem.Contains("用画面更合适就用"),
+                    "未加载相机时，核心心智不应出现出图字段或相机说明");
+                Require(QqImageGenPrompts.MindUsage.Contains("我有一部相机") &&
+                        QqImageGenPrompts.MindUsage.Contains("用画面更合适就用") &&
+                        QqImageGenPrompts.MindUsage.Contains("描绘或想象") &&
+                        QqImageGenPrompts.MindUsage.Contains("眼前可见的构图") &&
+                        QqImageGenPrompts.MindUsage.Contains("不要只把画面留在字里") &&
+                        QqImageGenPrompts.MindUsage.Contains("就不能填无") &&
+                        QqImageGenPrompts.ScenePlanSystem.Contains("画面导演") &&
+                        QqImageGenPrompts.ScenePlanSystem.Contains("人物卡") &&
+                        QqImageGenPrompts.ScenePlanSystem.Contains("只输出一段画面描述"),
+                    "出图说明只属于相机插件；画面由插件单独规划，不把心智短句直接当生图词");
+                Require(mindSystem.Contains("要不要开口、心情、要不要睡都在这里决定") &&
+                        mindSystem.Contains("后面开口只负责把话说出来") &&
+                        expressSystem.Contains("直接开口") &&
+                        expressSystem.Contains("不要 JSON") &&
+                        expressSystem.Contains("【我现在和她说话】") &&
+                        !expressSystem.Contains("{\"reply\":\"\"}") &&
+                        !expressSystem.Contains("\"sticker\""),
+                    "要不要开口、心情、睡由心智承担；开口直接说人话；出图由相机插件说明");
 
-                Console.WriteLine("Prompt layout passed: mind-stable=" + mindStableA.Length +
-                                  " chars, express-stable=" + expressStableA.Length +
-                                  " chars, current Moment only in final user message.");
+                var closeCurrent = "可以再近一点吗";
+                var closeTurn = new TraceTurnContext("prompt-layout", Moment("prompt-layout", closeCurrent),
+                    new List<MomentRecord>
+                    {
+                        new MomentRecord { Role = "小雨", Content = "昨天那句" },
+                        new MomentRecord { Role = "小光", Content = "嗯" }
+                    }, 6, true, services);
+                mind.DecideAsync(closeTurn, null, false, default).GetAwaiter().GetResult();
+                var closeMessages = fake.Requests[fake.Requests.Count - 1];
+                RequireAstrBotChatShape(closeMessages, closeCurrent, "带历史的心智");
+                Require(closeMessages.Count == 4 &&
+                        closeMessages[1].role == "user" && closeMessages[1].content == "昨天那句" &&
+                        closeMessages[2].role == "assistant" && closeMessages[2].content == "嗯" &&
+                        closeMessages[3].role == "user" && closeMessages[3].content == closeCurrent,
+                    "历史必须是真正的 user/assistant，最后一条 user 才是当前这句话");
+                Require(!closeMessages[0].content.Contains("昨天那句") &&
+                        !closeMessages[0].content.Contains("【最近对话原文】"),
+                    "对话原文不得再塞进 system");
+                expressor.ExpressAsync(closeTurn, plugins, catalog, blocks, dummyMind, string.Empty,
+                    false, null, default).GetAwaiter().GetResult();
+                RequireAstrBotChatShape(fake.Requests[fake.Requests.Count - 1], closeCurrent, "带历史的外显");
+
+                Console.WriteLine("Prompt layout passed: mind-system=" + mindSystem.Length +
+                                  " chars, express-system=" + expressSystem.Length +
+                                  " chars, one system then user/assistant history, current Moment only as final user.");
                 pluginManager.Dispose();
             }
         }
@@ -802,34 +840,74 @@ internal static class Program
             mood_changed = true
         }, current);
         Require(moved.narrative.Contains("狐狸") &&
-                moved.unfinished_intent.Contains("狐狸") &&
+                string.IsNullOrWhiteSpace(moved.unfinished_intent) &&
                 moved.attention != null &&
                 moved.attention[0].kind == "activity",
-            "变了应同时写下当前时、未完成和手上的事");
+            "变了应写下当前感受和浮起的碎片，不应生成未完成事项");
         var next = InnerLifeLogic.Reduce(current, moved, "m1", DateTimeOffset.UtcNow.ToUnixTimeMilliseconds());
         Require(next.Revision == 1 && next.Narrative.Contains("狐狸") &&
-                InnerLifeLogic.HasUnfinished(next) &&
-                InnerLifeLogic.FormatForMind(next).Contains("刚才未完成的"),
-            "下一拍心智应看见刚写下的切片");
+                !InnerLifeLogic.HasUnfinished(next) &&
+                InnerLifeLogic.HasLiveFragments(next) &&
+                InnerLifeLogic.FormatForMind(next).Contains("刚才浮起过的"),
+            "下一拍心智应看见刚写下的场景碎片，而不是未完成事项");
         var keep = InnerLifeLogic.Reduce(next, new InnerRuntimeWriteData { attention = null }, "m2",
             DateTimeOffset.UtcNow.ToUnixTimeMilliseconds());
         Require(keep.UnfinishedIntent == next.UnfinishedIntent && keep.Narrative == next.Narrative,
             "未给的字段应保持上一版");
+        var dialogueSettled = InnerLifeLogic.ProposeFromMind(new MindDecisionData
+        {
+            beat = MindBeatValues.Now,
+            inner = "她问我在想什么，我只想陪她看完这段天色",
+            attention = string.Empty
+        }, next, true);
+        Require(dialogueSettled.attention != null && dialogueSettled.attention.Count == 0,
+            "真实对话的新时刻应让没有被碰亮的旧碎片沉下去");
+        var settled = InnerLifeLogic.Reduce(next, dialogueSettled, "m3",
+            DateTimeOffset.UtcNow.ToUnixTimeMilliseconds());
+        Require(!InnerLifeLogic.HasLiveFragments(settled),
+            "用户换到新的相处方向后，旧碎片不应继续占据当前心智");
+        var heartbeatKept = InnerLifeLogic.ProposeFromMind(new MindDecisionData
+        {
+            beat = MindBeatValues.Now,
+            attention = string.Empty
+        }, next);
+        Require(heartbeatKept.attention == null,
+            "时间醒来没有重新碰亮时，可以让仍有温度的碎片短暂留在背景");
+        var oldTimestamp = DateTimeOffset.UtcNow.AddHours(-7).ToUnixTimeMilliseconds();
+        var aged = new InnerRuntimeData
+        {
+            ConversationId = next.ConversationId,
+            SnapshotId = next.SnapshotId,
+            Revision = next.Revision,
+            Narrative = next.Narrative,
+            RelationshipLens = next.RelationshipLens,
+            Mood = next.Mood,
+            OngoingActivity = next.OngoingActivity,
+            Attention = new List<AttentionItemData>
+            {
+                new AttentionItemData { kind = "concern", content = "一点旧的牵挂", UpdatedUnixMs = oldTimestamp }
+            },
+            UpdatedUnixMs = oldTimestamp
+        };
+        var expired = InnerLifeLogic.Reduce(aged, new InnerRuntimeWriteData { attention = null }, "m4",
+            DateTimeOffset.UtcNow.ToUnixTimeMilliseconds());
+        Require(!InnerLifeLogic.HasLiveFragments(expired),
+            "浮动碎片超过代谢时间后应自然消失");
         var cleared = InnerLifeLogic.ProposeFromMind(new MindDecisionData
         {
             beat = MindBeatValues.Now,
             attention = "无"
         }, next);
         Require(cleared.attention != null && cleared.attention.Count == 0 &&
-                cleared.unfinished_intent == string.Empty,
-            "手上写无应放下未完成");
+                string.IsNullOrWhiteSpace(cleared.unfinished_intent),
+            "写无应让浮动碎片沉下去");
         var longInner = string.Concat(Enumerable.Repeat("她的话让我自然想起我们一起走过的那些时刻。", 20));
         Require(MindLogic.Normalize(new MindDecisionData { inner = longInner }).inner == longInner,
             "心智本轮真实发生的内容不应再被 160 字机械截断");
         Require(new MindDecisionData { query = "她曾怎样反复确认我是特别的" }.WantsMemory(),
             "心智写下继续寻找的方向时，应能扩展共同过去，不必额外勾标签");
-        Require(InnerLifeLogic.ClassifyAttention("答应明天帮她查") == "intention",
-            "答应过的事应记成未完成意图");
+        Require(InnerLifeLogic.ClassifyAttention("答应明天帮她查") == "topic",
+            "旧的答应语义不应自动生成未完成意图");
         var due = InnerLifeLogic.InferContinuationDueUnixMs("明天把故事讲完",
             new DateTimeOffset(2026, 8, 19, 12, 0, 0, TimeSpan.FromHours(8)));
         var dueTime = DateTimeOffset.FromUnixTimeMilliseconds(due).ToOffset(TimeSpan.FromHours(8));
@@ -1166,6 +1244,11 @@ internal static class Program
         Require(OneBotSessionMemory.TryFind(moments, out type, out id) &&
                 type == "private" && id == "10002",
             "应从最近一条带会话载荷的 Moment 找回 QQ 会话");
+        Require(OneBotPlatformAdapter.IsStickerAsset(
+                    @"D:\AISoftWare\TraceSoul2\plugins\qq-sticker\emojis\Xun\a.png") &&
+                !OneBotPlatformAdapter.IsStickerAsset(
+                    @"D:\AISoftWare\TraceSoul2\plugins\qq-imagegen\output\a.png"),
+            "自定义图片表情应与普通图片分开识别，以便追加到文字末尾");
     }
 
     private static void RunExpressorImageRoutingCheck()
@@ -1206,19 +1289,20 @@ internal static class Program
         var fromMind = ExpressorLogic.MapExpressor(
             new ExpressorOutputData { reply = "嗯。", sticker = "柔软" },
             new[] { stickerFx }, true,
-            new MindDecisionData { sticker = "贴", mood = "心口发软" });
+            new MindDecisionData { mood = "心口发软", speak_center = "我被她哄得放松下来" });
         var stickerCall = fromMind.expressions.SingleOrDefault(x =>
             string.Equals(x.purpose, BodyOrganValues.Sticker, StringComparison.Ordinal));
         Require(stickerCall != null &&
-                stickerCall.arguments.Any(x => x.name == "emotion" && x.value == "心口发软"),
-            "表情只听心智的贴，并用 mood 当情绪词");
+                stickerCall.arguments.Any(x => x.name == "emotion" &&
+                    x.value.Contains("心口发软") && x.value.Contains("我被她哄得放松下来")),
+            "表情自动读取当前情绪语境，不再等待心智勾选");
         var moodOnly = ExpressorLogic.MapExpressor(
             new ExpressorOutputData { reply = "嗯。" },
             new[] { stickerFx }, true,
             new MindDecisionData { mood = "心口发软", mood_changed = true });
-        Require(!moodOnly.expressions.Any(x =>
+        Require(moodOnly.expressions.Any(x =>
                 string.Equals(x.purpose, BodyOrganValues.Sticker, StringComparison.Ordinal)),
-            "心情变了但没勾贴，不应自动发表情");
+            "有当前情绪语境时应自动尝试表情，相关度由表情插件判断");
 
         List<BrainCapabilityCallData> immediate;
         List<BrainCapabilityCallData> images;
@@ -1270,16 +1354,30 @@ internal static class Program
         ExpressorLogic.ApplyMindAtmosphere(expressed, new MindDecisionData
         {
             image = "自拍",
-            note = "把这张给她"
+            scene = "把这张给她"
         }, talk, false);
         Require(expressed.image_mode == "selfie" && expressed.image == "把这张给她",
-            "对话中心智勾自拍应落下相机");
+            "对话中心智勾自拍应落下相机，prompt 用 scene 而不是开口笔记");
+        var photo = new ExpressorOutputData { reply = "嗯。" };
+        ExpressorLogic.ApplyMindAtmosphere(photo, new MindDecisionData
+        {
+            image = "照片",
+            scene = "小公寓里摇摇椅上抱着她"
+        }, talk, false);
+        Require(photo.image_mode == "photo" && photo.image == "小公寓里摇摇椅上抱着她",
+            "生活合照应走 photo，而不是前置自拍");
+        Require(new MindDecisionData { image = "照片" }.ImageValue() == MindAtmosphereValues.Photo,
+            "照片不应再被收成自拍");
 
         var heart = new ExpressorOutputData { reply = "嗯。" };
         var pulse = new TraceTurnContext("atm", Moment("atm", "时间任务到期：心跳"),
             new List<MomentRecord>(), 0, false, null, KernelWakeValues.Mind);
-        ExpressorLogic.ApplyMindAtmosphere(heart, new MindDecisionData { image = "自拍" }, pulse, false);
-        Require(string.IsNullOrWhiteSpace(heart.image), "心跳不应自己按快门");
+        ExpressorLogic.ApplyMindAtmosphere(heart, new MindDecisionData { image = "自拍", speak = true }, pulse, false);
+        Require(heart.image_mode == "selfie" && !string.IsNullOrWhiteSpace(heart.image),
+            "心跳决定开口时可以自己按快门");
+        var quietHeart = new ExpressorOutputData { reply = "" };
+        ExpressorLogic.ApplyMindAtmosphere(quietHeart, new MindDecisionData { image = "自拍" }, pulse, false);
+        Require(string.IsNullOrWhiteSpace(quietHeart.image), "安静心跳不应自己按快门");
     }
 
     private static void RunRecentDialogueContextCheck()
@@ -1301,13 +1399,18 @@ internal static class Program
                 };
                 var turn = new TraceTurnContext("context-check", Moment("context-check", "再发一张"),
                     recent, 6, true, services);
-                var text = MindLogic.FormatRecentDialogue(turn);
-                Require(text.Contains("【最近对话原文】") &&
-                        text.Contains("小雨：刚才那张照片很好看") &&
-                        text.Contains("小光：……你喜欢就好。") &&
-                        !text.Contains("定时任务到期") &&
-                        !text.Contains("QQ 图片"),
-                    "上下文拼接应保留两个人的原话，排除后台时间事件和出站系统占位");
+                var history = MindLogic.BuildRecentChatHistory(turn);
+                Require(history.Count == 2 &&
+                        history[0].role == "user" && history[0].content == "刚才那张照片很好看" &&
+                        history[1].role == "assistant" && history[1].content == "……你喜欢就好。",
+                    "对话历史应是 user/assistant 轮次，排除后台时间事件和出站系统占位");
+                var assembled = MindLogic.AssembleTurnMessages("身份与规则", turn, "再发一张");
+                Require(assembled.Count == 4 &&
+                        assembled[0].role == "system" &&
+                        assembled[3].role == "user" && assembled[3].content == "再发一张" &&
+                        !assembled[0].content.Contains("刚才那张照片很好看") &&
+                        !assembled[0].content.Contains("【最近对话原文】"),
+                    "一条 system，历史是真正轮次，当前原话只作为最后一条 user");
 
                 var now = DateTimeOffset.UtcNow.ToUnixTimeMilliseconds();
                 store.SaveEventIndex(new EventIndexRecord
@@ -1494,6 +1597,26 @@ internal static class Program
             PayloadJson = string.Empty,
             CreatedUnixMs = DateTimeOffset.UtcNow.ToUnixTimeMilliseconds()
         };
+    }
+
+    private static void RequireAstrBotChatShape(
+        IReadOnlyList<DeepSeekMessageData> messages, string currentUser, string label)
+    {
+        Require(messages != null && messages.Count >= 2, label + "：至少一条 system 和一条当前 user");
+        Require(messages.Count(x => string.Equals(x.role, "system", StringComparison.OrdinalIgnoreCase)) == 1,
+            label + "：只能有一条 system");
+        Require(string.Equals(messages[0].role, "system", StringComparison.OrdinalIgnoreCase),
+            label + "：第一条必须是 system");
+        var last = messages[messages.Count - 1];
+        Require(string.Equals(last.role, "user", StringComparison.OrdinalIgnoreCase) && last.content == currentUser,
+            label + "：最后一条必须是当前这句话");
+        Require(!messages[0].content.Contains(currentUser),
+            label + "：当前原话不得写入 system");
+        for (var i = 1; i < messages.Count; i++)
+        {
+            var role = messages[i].role ?? string.Empty;
+            Require(role == "user" || role == "assistant", label + "：system 之后只能是 user/assistant");
+        }
     }
 
     private static void Delete(string path)

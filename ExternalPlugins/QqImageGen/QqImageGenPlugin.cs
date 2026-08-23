@@ -58,12 +58,14 @@ namespace TraceSoul2.ExternalPlugins
         private readonly object filesGate = new object();
         private readonly HashSet<string> pendingFiles = new HashSet<string>(StringComparer.OrdinalIgnoreCase);
         private readonly CancellationTokenSource shutdown = new CancellationTokenSource();
+        private Func<TraceTurnContext, string> mindUsageAppend;
+        private Func<TraceTurnContext, string> mindJsonField;
 
         public TracePluginMetadataData Metadata { get; } = new TracePluginMetadataData
         {
             Id = PluginId,
             DisplayName = "QQ 相机与生图",
-            Version = "2.0.3",
+            Version = "2.0.4",
             Author = "TraceSoul2",
             Role = PluginRoleValues.Organ,
             PlatformId = BodyIds.Qq,
@@ -85,15 +87,39 @@ namespace TraceSoul2.ExternalPlugins
                 "｜base_url=" + SafeEndpoint(runtime.BaseUrl) + "｜api_keys=" + runtime.ApiKeys.Count +
                 "｜图库=" + references.Describe());
             context.AddCallable(new ImageEffector(this));
+            AttachMindHooks(context.Services);
         }
 
         public void Shutdown()
         {
+            DetachMindHooks();
             shutdown.Cancel();
             List<string> files;
             lock (filesGate) files = pendingFiles.ToList();
             foreach (var path in files) TryDelete(path);
             shutdown.Dispose();
+        }
+
+        private void AttachMindHooks(TracePluginServices current)
+        {
+            if (current == null) return;
+            if (mindUsageAppend == null)
+                mindUsageAppend = turn =>
+                    turn != null && IsReady(turn.Services) ? QqImageGenPrompts.MindUsage : null;
+            if (mindJsonField == null)
+                mindJsonField = turn =>
+                    turn != null && IsReady(turn.Services) ? "\"image\":\"自拍|画|照片|无\"" : null;
+            if (!current.MindPromptAppends.Contains(mindUsageAppend))
+                current.MindPromptAppends.Add(mindUsageAppend);
+            if (!current.MindJsonFields.Contains(mindJsonField))
+                current.MindJsonFields.Add(mindJsonField);
+        }
+
+        private void DetachMindHooks()
+        {
+            if (services == null) return;
+            if (mindUsageAppend != null) services.MindPromptAppends.Remove(mindUsageAppend);
+            if (mindJsonField != null) services.MindJsonFields.Remove(mindJsonField);
         }
 
         internal bool IsReady(TracePluginServices currentServices)
@@ -218,6 +244,8 @@ namespace TraceSoul2.ExternalPlugins
                 return await SendDirectUrlAsync(url, context, cancellationToken);
             }
             if (prompt.Length == 0) throw new InvalidOperationException("生图需要 prompt。URL 发图请同时给 url。 ");
+            if (mode != "url" && mode != "edit")
+                prompt = await PlanSceneAsync(prompt, mode, context, cancellationToken);
 
             try
             {
@@ -388,6 +416,169 @@ namespace TraceSoul2.ExternalPlugins
             return path.IndexOf('\\') >= 0 || path.IndexOf('/') >= 0 || File.Exists(path);
         }
 
+        private async Task<string> PlanSceneAsync(
+            string seed,
+            string mode,
+            TraceTurnContext context,
+            CancellationToken cancellationToken)
+        {
+            var llm = context == null || context.Services == null ? null : context.Services.Llm;
+            seed = (seed ?? string.Empty).Trim();
+            if (llm == null) return seed;
+            var user = BuildPlanUser(seed, mode, context);
+            var timer = Stopwatch.StartNew();
+            try
+            {
+                var planned = await llm.CompleteTextAsync(
+                    new List<DeepSeekMessageData>
+                    {
+                        new DeepSeekMessageData("system", QqImageGenPrompts.ScenePlanSystem),
+                        new DeepSeekMessageData("user", user)
+                    },
+                    cancellationToken);
+                planned = CleanPlan(planned);
+                if (planned.Length < 12)
+                {
+                    context.Services.LogTiming(context.TraceId, "TA的相机 画面规划过短，沿用心智原文",
+                        timer.ElapsedMilliseconds, "chars=" + planned.Length);
+                    return seed.Length > 0 ? seed : planned;
+                }
+                context.Services.LogTiming(context.TraceId, "TA的相机 画面规划完成",
+                    timer.ElapsedMilliseconds, TruncateForLog(planned, 400));
+                return planned;
+            }
+            catch (Exception exception)
+            {
+                context.Services.LogTiming(context.TraceId, "TA的相机 画面规划失败，沿用心智原文",
+                    timer.ElapsedMilliseconds, ExceptionDetail(exception));
+                return seed;
+            }
+        }
+
+        private string BuildPlanUser(string seed, string mode, TraceTurnContext context)
+        {
+            var builder = new System.Text.StringBuilder();
+            if (mode == "selfie") builder.AppendLine(QqImageGenPrompts.ScenePlanSelfie);
+            else if (mode == "draw") builder.AppendLine(QqImageGenPrompts.ScenePlanDraw);
+            else builder.AppendLine(QqImageGenPrompts.ScenePlanPhoto);
+            if (!string.IsNullOrWhiteSpace(characterDetails))
+                builder.AppendLine(QqImageGenPrompts.ScenePlanLookPrefix + Truncate(characterDetails.Trim(), 400));
+            var storage = context.Services == null ? null : context.Services.Storage;
+            if (storage != null)
+            {
+                var pair = storage.LoadPairIdentity() ?? PairIdentity.Missing;
+                var cards = storage.LoadIdentityCards(context.ConversationId);
+                var cardText = FormatCardsForPlan(cards, pair);
+                if (cardText.Length > 0)
+                {
+                    builder.AppendLine(QqImageGenPrompts.ScenePlanCardsHeader);
+                    builder.AppendLine(cardText);
+                }
+                var inner = storage.LoadOrCreateInnerRuntime(context.ConversationId);
+                builder.AppendLine(QqImageGenPrompts.ScenePlanNowHeader);
+                if (inner != null)
+                {
+                    if (!string.IsNullOrWhiteSpace(inner.Mood))
+                        builder.AppendLine(QqImageGenPrompts.ScenePlanMoodPrefix + Truncate(inner.Mood, 120));
+                    if (!string.IsNullOrWhiteSpace(inner.OngoingActivity))
+                        builder.AppendLine(QqImageGenPrompts.ScenePlanActivityPrefix + Truncate(inner.OngoingActivity, 160));
+                    if (!string.IsNullOrWhiteSpace(inner.Narrative))
+                        builder.AppendLine(QqImageGenPrompts.ScenePlanInnerPrefix + Truncate(inner.Narrative, 280));
+                }
+            }
+            else builder.AppendLine(QqImageGenPrompts.ScenePlanNowHeader);
+            var spoken = context.Moment == null ? string.Empty : (context.Moment.Content ?? string.Empty).Trim();
+            if (spoken.Length > 0 && !LooksLikeProtocol(spoken))
+                builder.AppendLine(QqImageGenPrompts.ScenePlanSpeakPrefix + Truncate(spoken, 240));
+            if (seed.Length > 0)
+                builder.AppendLine(QqImageGenPrompts.ScenePlanSeedPrefix + Truncate(seed, 300));
+            var recent = FormatRecentForPlan(context);
+            if (recent.Length > 0)
+            {
+                builder.AppendLine(QqImageGenPrompts.ScenePlanRecentHeader);
+                builder.AppendLine(recent);
+            }
+            return builder.ToString().Trim();
+        }
+
+        private static string FormatCardsForPlan(IEnumerable<IdentityCardRecord> cards, PairIdentity pair)
+        {
+            pair = pair ?? PairIdentity.Missing;
+            var map = (cards ?? Enumerable.Empty<IdentityCardRecord>())
+                .Where(x => x != null && IdentityCardSlotValues.IsKnown(x.Slot) &&
+                            x.Slot != IdentityCardSlotValues.ExpressionHabit &&
+                            !string.IsNullOrWhiteSpace(x.Body))
+                .GroupBy(x => x.Slot, StringComparer.OrdinalIgnoreCase)
+                .ToDictionary(x => x.Key, x => x.First().Body.Trim(), StringComparer.OrdinalIgnoreCase);
+            var builder = new System.Text.StringBuilder();
+            if (pair.IsComplete) builder.AppendLine("我是" + pair.Assname + "。");
+            foreach (var slot in new[]
+                     {
+                         IdentityCardSlotValues.Personality,
+                         IdentityCardSlotValues.Self,
+                         IdentityCardSlotValues.Other,
+                         IdentityCardSlotValues.Relation,
+                         IdentityCardSlotValues.UserProfile
+                     })
+            {
+                string body;
+                if (!map.TryGetValue(slot, out body) || string.IsNullOrWhiteSpace(body)) continue;
+                builder.Append("【").Append(IdentityCardSlotValues.Title(slot, pair)).Append("】")
+                    .Append(Truncate(body, 400)).AppendLine();
+            }
+            return builder.ToString().Trim();
+        }
+
+        private static string FormatRecentForPlan(TraceTurnContext context)
+        {
+            if (context == null || context.RecentMoments == null) return string.Empty;
+            var pair = context.Services != null && context.Services.Storage != null
+                ? context.Services.Storage.LoadPairIdentity() ?? PairIdentity.Missing
+                : PairIdentity.Missing;
+            var lines = new List<string>();
+            foreach (var item in context.RecentMoments)
+            {
+                if (item == null || string.IsNullOrWhiteSpace(item.Content)) continue;
+                var text = item.Content.Trim();
+                if (LooksLikeProtocol(text)) continue;
+                if (!pair.IsHumanMoment(item.Role) && !pair.IsCompanionMoment(item.Role)) continue;
+                var name = pair.CanonicalMomentRole(item.Role);
+                lines.Add(name + "：" + Truncate(text, 80));
+            }
+            if (lines.Count > 6) lines = lines.Skip(lines.Count - 6).ToList();
+            return string.Join("\n", lines);
+        }
+
+        private static string CleanPlan(string raw)
+        {
+            var text = (raw ?? string.Empty).Trim();
+            if (text.StartsWith("```", StringComparison.Ordinal))
+            {
+                var first = text.IndexOf('\n');
+                if (first > 0) text = text.Substring(first + 1);
+                var close = text.LastIndexOf("```", StringComparison.Ordinal);
+                if (close >= 0) text = text.Substring(0, close);
+                text = text.Trim();
+            }
+            if ((text.StartsWith("\"") && text.EndsWith("\"")) ||
+                (text.StartsWith("“") && text.EndsWith("”")))
+                text = text.Substring(1, Math.Max(0, text.Length - 2)).Trim();
+            return Truncate(text.Replace("\r\n", "\n").Trim(), 800);
+        }
+
+        private static bool LooksLikeProtocol(string text)
+        {
+            text = (text ?? string.Empty).Trim();
+            return text.StartsWith("[QQ ", StringComparison.Ordinal) ||
+                   text.StartsWith("[CQ:", StringComparison.OrdinalIgnoreCase);
+        }
+
+        private static string Truncate(string value, int max)
+        {
+            value = value ?? string.Empty;
+            return value.Length <= max ? value : value.Substring(0, max);
+        }
+
         private string BuildPrompt(string source, string mode,
             IReadOnlyList<ReferenceImageData> selected, string aspectRatio)
         {
@@ -445,8 +636,9 @@ namespace TraceSoul2.ExternalPlugins
                 return value;
             prompt = prompt ?? string.Empty;
             if (HasInboundImages(context) && Regex.IsMatch(prompt, "改|修改|换成|去掉|删除|加上|编辑|修图")) return "edit";
-            if (Regex.IsMatch(prompt, "自拍|照片|拍张|拍一张|看看你|看你|现在的你|你穿着")) return "selfie";
+            if (Regex.IsMatch(prompt, "自拍|拍张|拍一张|看看你|看你|现在的你|你穿着")) return "selfie";
             if (Regex.IsMatch(prompt, "画|绘制|生成图|做张图|海报|插画|壁纸|头像")) return "draw";
+            if (Regex.IsMatch(prompt, "照片|生活照|合照")) return "photo";
             return "photo";
         }
 

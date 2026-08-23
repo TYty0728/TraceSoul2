@@ -105,9 +105,10 @@ namespace TraceSoul2.Manager
             var diagnostics = new List<string>();
             var attempts = 1 + config.EmptyContentRetries;
             var current = messages;
+            var useJsonResponseFormat = json;
             for (var attempt = 0; attempt < attempts; attempt++)
             {
-                var result = await SendOnceAsync(current, json, cancellationToken);
+                var result = await SendOnceAsync(current, json, useJsonResponseFormat, cancellationToken);
                 var incomplete = json && DeepSeekStructuredOutputLogic.LooksIncompleteJson(result.Content);
                 if (!incomplete && !string.IsNullOrWhiteSpace(result.Content)) return result.Content;
                 diagnostics.Add("第" + (attempt + 1) + "次：" + result.Diagnostic);
@@ -121,6 +122,10 @@ namespace TraceSoul2.Manager
                 current = json
                     ? (truncated ? BuildTruncationRetryMessages(messages) : BuildEmptyContentRetryMessages(messages))
                     : BuildTextRetryMessages(messages, truncated);
+                // 少数 OpenAI 兼容中转在 response_format=json_object 下会返回
+                // finish=stop 但 content 为空。下一次保留 JSON 提示，但去掉协议级
+                // response_format，让模型仍可输出 JSON，同时避开该通道的空响应路径。
+                if (json && !truncated) useJsonResponseFormat = false;
             }
 
             throw new InvalidOperationException(
@@ -131,18 +136,19 @@ namespace TraceSoul2.Manager
         private async Task<CompletionAttempt> SendOnceAsync(
             List<DeepSeekMessageData> messages,
             bool json,
+            bool useJsonResponseFormat,
             CancellationToken cancellationToken)
         {
             var temperature = ResolveTemperature();
             try
             {
-                return await PostOnceAsync(messages, temperature, json, cancellationToken);
+                return await PostOnceAsync(messages, temperature, json, useJsonResponseFormat, cancellationToken);
             }
             catch (InvalidOperationException exception)
             {
                 if (Math.Abs(temperature - 1f) > 0.001f &&
                     LooksLikeUnitTemperatureOnly(exception.Message))
-                    return await PostOnceAsync(messages, 1f, json, cancellationToken);
+                    return await PostOnceAsync(messages, 1f, json, useJsonResponseFormat, cancellationToken);
                 throw;
             }
         }
@@ -151,6 +157,7 @@ namespace TraceSoul2.Manager
             List<DeepSeekMessageData> messages,
             float temperature,
             bool json,
+            bool useJsonResponseFormat,
             CancellationToken cancellationToken)
         {
             string bodyJson;
@@ -162,7 +169,7 @@ namespace TraceSoul2.Manager
                     {
                         model = ResolveModel(),
                         messages = messages,
-                        response_format = new DeepSeekResponseFormatData(),
+                        response_format = useJsonResponseFormat ? new DeepSeekResponseFormatData() : null,
                         thinking = new DeepSeekThinkingData
                         {
                             type = config.ThinkingEnabled ? "enabled" : "disabled"

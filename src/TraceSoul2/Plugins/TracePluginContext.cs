@@ -76,6 +76,20 @@ namespace TraceSoul2.Plugins
         public List<Func<TraceTurnContext, Task>> TurnCompleteHooks { get; } =
             new List<Func<TraceTurnContext, Task>>();
 
+        /// <summary>
+        /// 器官插件可把心智补充说明挂到这里。未加载或未就绪时不要挂；
+        /// 心智核心提示词里不应出现相机/出图字段。
+        /// </summary>
+        public List<Func<TraceTurnContext, string>> MindPromptAppends { get; } =
+            new List<Func<TraceTurnContext, string>>();
+
+        /// <summary>
+        /// 器官插件可把心智 JSON 额外字段挂到这里，例如 "image":"自拍|画|照片|无"。
+        /// 未就绪时返回空；核心 JSON 样例本身不含出图字段。
+        /// </summary>
+        public List<Func<TraceTurnContext, string>> MindJsonFields { get; } =
+            new List<Func<TraceTurnContext, string>>();
+
         /// <summary>数据目录（宿主注入；平台插件读自己的配置文件用）。</summary>
         public string DataDirectory { get; set; }
 

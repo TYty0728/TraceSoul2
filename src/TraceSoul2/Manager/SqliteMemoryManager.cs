@@ -1327,7 +1327,8 @@ namespace TraceSoul2.Manager
                 RelationshipLens = record.RelationshipLens,
                 Mood = record.Mood,
                 OngoingActivity = record.OngoingActivity,
-                UnfinishedIntent = record.UnfinishedIntent,
+                // 旧库里的“未完成意图”不再恢复成当前任务，避免旧状态继续驱动追问。
+                UnfinishedIntent = string.Empty,
                 Attention = attention == null || attention.items == null
                     ? new List<AttentionItemData>()
                     : attention.items,

@@ -34,13 +34,10 @@ namespace TraceSoul2.Logic
             CancellationToken cancellationToken)
         {
             var needsReply = waitOnly || turn.RequiresExpression;
-            var messages = new List<DeepSeekMessageData>
-            {
-                new DeepSeekMessageData("system", BuildFoundationPrompt(turn, contextBlocks)),
-                new DeepSeekMessageData("system", BuildTurnPrompt(
-                    turn, plugins, contextBlocks, mind, memoryFlesh, waitOnly, leaveResult)),
-                new DeepSeekMessageData("user", turn.Moment.Content)
-            };
+            var system = BuildFoundationPrompt(turn, contextBlocks).TrimEnd() + "\n\n" +
+                         BuildTurnPrompt(
+                             turn, plugins, contextBlocks, mind, memoryFlesh, waitOnly, leaveResult).TrimEnd();
+            var messages = MindLogic.AssembleTurnMessages(system, turn, turn.Moment.Content);
             var raw = await DeepSeekStructuredOutputLogic.CompletePlainAsync(
                 llm,
                 messages,
@@ -49,9 +46,19 @@ namespace TraceSoul2.Logic
                     : CorePrompts.Expressor.MissingSpeak,
                 cancellationToken);
             var expressed = ParseSpoken(raw);
-            ApplyMindAtmosphere(expressed, mind, turn, waitOnly);
+            ApplyMindAtmosphere(expressed, mind, turn, waitOnly, catalog);
             EnsureExplicitImageRequest(expressed, turn, catalog);
-            var mapped = MapExpressor(expressed, catalog, needsReply, waitOnly ? new MindDecisionData() : mind);
+            var mapped = MapExpressor(
+                expressed, catalog, needsReply, waitOnly ? new MindDecisionData() : mind,
+                includeAutoSticker: !waitOnly);
+            var stickerCalls = (mapped.expressions ?? new List<BrainCapabilityCallData>())
+                .Where(x => x != null && string.Equals(x.purpose, BodyOrganValues.Sticker, StringComparison.Ordinal))
+                .ToList();
+            turn.Services?.LogTiming(turn.TraceId, "表情自动路由", detail:
+                "尝试=" + stickerCalls.Count + "｜候选=" +
+                (catalog ?? Enumerable.Empty<TraceContributionDescriptorData>())
+                    .Count(x => x != null && x.Kind == TraceContributionKindValues.Effector &&
+                                string.Equals(MouthLogic.OrganOf(x), BodyOrganValues.Sticker, StringComparison.Ordinal)));
             var imageCalls = (mapped.expressions ?? new List<BrainCapabilityCallData>())
                 .Where(x => x != null && string.Equals(x.purpose, BodyOrganValues.Image, StringComparison.Ordinal))
                 .ToList();
@@ -98,29 +105,38 @@ namespace TraceSoul2.Logic
         }
 
         /// <summary>
-        /// 氛围向的出图只听心智的固定短答。开口人话里即使残留旧字段也不算数。
-        /// 出门等一下、心跳未在对话里说话、睡着，都不由心智自己按快门。
+        /// 氛围向的出图听心智这一拍的自然选择。开口人话里即使残留旧字段也不算数。
+        /// 出门等一下、安静心跳、睡着，都不由心智自己按快门；心跳真正决定开口时可以主动发图。
         /// </summary>
         internal static void ApplyMindAtmosphere(
             ExpressorOutputData expressed,
             MindDecisionData mind,
             TraceTurnContext turn,
-            bool waitOnly)
+            bool waitOnly,
+            IEnumerable<TraceContributionDescriptorData> catalog = null)
         {
             if (expressed == null) return;
             mind = MindLogic.Normalize(mind);
             if (waitOnly) return;
             if (HasImageExpression(expressed)) return;
+            if (catalog != null && FindImageEffector(catalog) == null) return;
             if (!mind.WantsImage()) return;
             var heartbeatQuiet = turn != null &&
                                  string.Equals(turn.Wake, KernelWakeValues.Mind, StringComparison.Ordinal) &&
-                                 !turn.RequiresExpression;
+                                 !turn.RequiresExpression &&
+                                 !mind.speak;
             if (heartbeatQuiet) return;
             if (mind.ImageValue() == MindAtmosphereValues.Selfie)
             {
                 expressed.image_mode = "selfie";
                 expressed.image = SceneFromMind(mind,
                     "在此刻自然生活场景中面向镜头拍下的一张自拍，神情与当前对话氛围一致");
+            }
+            else if (mind.ImageValue() == MindAtmosphereValues.Photo)
+            {
+                expressed.image_mode = "photo";
+                expressed.image = SceneFromMind(mind,
+                    "拍下此刻你们共同处在的生活画面，两人关系清楚，不要写成自拍特写");
             }
             else if (mind.ImageValue() == MindAtmosphereValues.Draw)
             {
@@ -131,8 +147,8 @@ namespace TraceSoul2.Logic
 
         private static string SceneFromMind(MindDecisionData mind, string fallback)
         {
-            var note = mind == null ? string.Empty : (mind.note ?? string.Empty).Trim();
-            if (note.Length > 0) return Limit(note, 500);
+            var scene = mind == null ? string.Empty : mind.SceneValue();
+            if (scene.Length > 0) return Limit(scene, 500);
             var inner = mind == null ? string.Empty : (mind.inner ?? string.Empty).Trim();
             if (inner.Length > 0) return Limit(inner, 500);
             return fallback;
@@ -251,7 +267,8 @@ namespace TraceSoul2.Logic
             ExpressorOutputData expressed,
             IEnumerable<TraceContributionDescriptorData> catalog,
             bool requiresExpression,
-            MindDecisionData mind = null)
+            MindDecisionData mind = null,
+            bool includeAutoSticker = true)
         {
             expressed = expressed ?? new ExpressorOutputData();
             var legacyVoices = new List<ExpressorVoiceOutputData>();
@@ -274,8 +291,13 @@ namespace TraceSoul2.Logic
                 facet_outputs = new List<BrainFacetOutputData>()
             };
             mind = MindLogic.Normalize(mind);
-            var sticker = mind.WantsSticker() ? (mind.mood ?? string.Empty).Trim() : string.Empty;
-            AddExtra(output.expressions, effectors, BodyOrganValues.Sticker, "emotion", sticker);
+            // 表情不再由心智勾选。把这一刻的情绪语境交给表情插件，
+            // 由插件自己的语义阈值决定有没有足够相关的表情可发。
+            if (includeAutoSticker)
+            {
+                var sticker = AutoStickerContext(mind);
+                AddExtra(output.expressions, effectors, BodyOrganValues.Sticker, "emotion", sticker);
+            }
             AddExtra(output.expressions, effectors, BodyOrganValues.Qzone, "content", expressed.qzone);
             AddVoice(output.expressions, effectors, expressed.voice, expressed.voice_emotion);
             foreach (var voice in expressed.voices ?? new List<ExpressorVoiceOutputData>())
@@ -291,6 +313,20 @@ namespace TraceSoul2.Logic
                 AddImage(output.expressions, effectors, image.prompt, image.mode,
                     image.refs, image.aspect_ratio, image.url);
             return output;
+        }
+
+        private static string AutoStickerContext(MindDecisionData mind)
+        {
+            if (mind == null) return string.Empty;
+            var parts = new List<string>();
+            var mood = (mind.mood ?? string.Empty).Trim();
+            var center = (mind.speak_center ?? string.Empty).Trim();
+            var scene = mind.SceneValue();
+            if (mood.Length > 0) parts.Add(mood);
+            if (center.Length > 0) parts.Add(center);
+            if (scene.Length > 0) parts.Add(scene);
+            // 普通对话也交给插件尝试一次；匹配不上时由表情插件静默丢弃。
+            return Limit(parts.Count == 0 ? "当下这句回应" : string.Join("｜", parts), 160);
         }
 
         /// <summary>
@@ -583,8 +619,8 @@ namespace TraceSoul2.Logic
         }
 
         /// <summary>
-        /// 外显可缓存前缀：完整短卡（含表达习惯）、持续状态、一张嘴、开口格式。
-        /// 不含工具目录。心智决策与记忆血肉放在动态段。
+        /// 身份短卡（含表达习惯）、持续状态、开口格式。不含工具目录。
+        /// 心智决策与记忆血肉在 BuildTurnPrompt，再与这里拼成同一条 system。
         /// </summary>
         private static string BuildFoundationPrompt(
             TraceTurnContext turn,
@@ -619,6 +655,8 @@ namespace TraceSoul2.Logic
                 }
             }
 
+            builder.AppendLine(CorePrompts.Expressor.ExpressionPosture);
+
             builder.AppendLine();
             AppendOutputFormat(builder);
             return builder.ToString();
@@ -642,12 +680,6 @@ namespace TraceSoul2.Logic
             if (time != null && !string.IsNullOrWhiteSpace(time.Content))
             {
                 builder.AppendLine(time.Content.Trim());
-                builder.AppendLine();
-            }
-            var recentDialogue = MindLogic.FormatRecentDialogue(turn);
-            if (!string.IsNullOrWhiteSpace(recentDialogue))
-            {
-                builder.AppendLine(recentDialogue);
                 builder.AppendLine();
             }
             builder.AppendLine(CorePrompts.Expressor.ThoughtHeader);
@@ -677,6 +709,9 @@ namespace TraceSoul2.Logic
             else if (mind != null && mind.speak)
             {
                 builder.AppendLine(CorePrompts.Expressor.Proactive);
+                if (!string.IsNullOrWhiteSpace(mind.heartbeat_intent))
+                    builder.AppendLine("本次醒来的独立意图：" + mind.heartbeat_intent);
+                builder.AppendLine("把这次醒来真正浮出的感觉带到眼前，顺着现在的场景自然开口；旧碎片没有被此刻碰亮，就让它留在背景。");
             }
             else
             {
@@ -690,25 +725,24 @@ namespace TraceSoul2.Logic
         {
             mind = MindLogic.Normalize(mind);
             var builder = new StringBuilder();
-            if (mind.ParseTags().Count > 0)
-                builder.AppendLine(CorePrompts.Expressor.MindTagsPrefix + string.Join("、", mind.ParseTags()));
             if (!string.IsNullOrWhiteSpace(mind.mood))
                 builder.AppendLine(CorePrompts.Expressor.MindMoodPrefix + mind.mood + (mind.mood_changed ? CorePrompts.Expressor.MindMoodChanged : string.Empty));
             if (!string.IsNullOrWhiteSpace(mind.inner))
                 builder.AppendLine(CorePrompts.Expressor.MindInnerPrefix + mind.inner);
-            if (mind.archive) builder.AppendLine(CorePrompts.Expressor.MindArchive);
-            if (!string.IsNullOrWhiteSpace(mind.new_fact))
-                builder.AppendLine(CorePrompts.Expressor.MindNewFactPrefix + mind.new_fact);
-            if (!string.IsNullOrWhiteSpace(mind.leave))
-                builder.AppendLine(CorePrompts.Expressor.MindLeavePrefix + mind.leave);
             if (!string.IsNullOrWhiteSpace(mind.note))
                 builder.AppendLine(CorePrompts.Expressor.MindNotePrefix + mind.note);
-            if (!string.IsNullOrWhiteSpace(mind.cognition))
-                builder.AppendLine(CorePrompts.Expressor.MindCognitionPrefix + mind.cognition);
+            if (!string.IsNullOrWhiteSpace(mind.speak_center))
+                builder.AppendLine(CorePrompts.Expressor.MindSpeakCenterPrefix + mind.speak_center);
+            if (!string.IsNullOrWhiteSpace(mind.SceneValue()))
+                builder.AppendLine(CorePrompts.Expressor.MindScenePrefix + mind.SceneValue());
+            if (!string.IsNullOrWhiteSpace(mind.leave))
+                builder.AppendLine(CorePrompts.Expressor.MindLeavePrefix + mind.leave);
             if (mind.WantsSticker())
                 builder.AppendLine(CorePrompts.Expressor.MindSticker);
             if (mind.ImageValue() == MindAtmosphereValues.Selfie)
                 builder.AppendLine(CorePrompts.Expressor.MindSelfie);
+            else if (mind.ImageValue() == MindAtmosphereValues.Photo)
+                builder.AppendLine(CorePrompts.Expressor.MindPhoto);
             else if (mind.ImageValue() == MindAtmosphereValues.Draw)
                 builder.AppendLine(CorePrompts.Expressor.MindDraw);
             return builder.ToString().TrimEnd();

@@ -64,7 +64,6 @@ namespace TraceSoul2.Migrate
             public string inner_mood;
             public string inner_relationship_lens;
             public string inner_ongoing_activity;
-            public string inner_unfinished_intent;
             public List<AttentionWriteData> inner_attention = new List<AttentionWriteData>();
         }
 

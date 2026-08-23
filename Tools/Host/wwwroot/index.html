@@ -227,6 +227,53 @@
     .model-row .roles { display: flex; gap: 4px; flex-wrap: wrap; }
     .model-empty { color: var(--muted); padding: 16px 4px; font-size: 12px; }
 
+    /* ---------- 实时状态监视台 ---------- */
+    .live-hero {
+      display: grid; grid-template-columns: minmax(250px, 1.35fr) repeat(3, minmax(150px, 1fr));
+      gap: 10px; align-items: stretch; margin-bottom: 16px;
+    }
+    .live-state-card, .live-metric {
+      background: linear-gradient(145deg, #fff, #f8f9ff); border: 1px solid var(--border);
+      border-radius: 14px; padding: 16px; box-shadow: var(--shadow-soft);
+    }
+    .live-state-card { display: flex; align-items: center; gap: 13px; }
+    .live-orb {
+      width: 54px; height: 54px; border-radius: 18px; display: grid; place-items: center;
+      color: #fff; font-size: 26px; background: linear-gradient(145deg, #6673f5, #4c57de);
+      box-shadow: 0 9px 22px rgba(77, 89, 224, .25); flex: 0 0 auto;
+    }
+    .live-orb.sleep { background: linear-gradient(145deg, #77839c, #4f5971); box-shadow: 0 9px 22px rgba(76, 88, 116, .2); }
+    .live-state-title { font-size: 20px; font-weight: 800; line-height: 1.2; }
+    .live-state-sub { color: var(--muted); margin-top: 5px; line-height: 1.5; }
+    .live-metric .lab { color: var(--muted); font-size: 11px; }
+    .live-metric .val { font-size: 17px; font-weight: 750; margin-top: 9px; word-break: break-word; }
+    .live-metric .sub { color: var(--muted); font-size: 11px; margin-top: 6px; }
+    .live-grid { display: grid; grid-template-columns: minmax(0, 1.1fr) minmax(0, .9fr); gap: 16px; align-items: start; }
+    .live-list { display: grid; gap: 9px; }
+    .live-field { display: grid; grid-template-columns: 92px minmax(0, 1fr); gap: 10px; align-items: start; }
+    .live-field .key { color: var(--muted); font-size: 12px; padding-top: 2px; }
+    .live-field .value { line-height: 1.55; word-break: break-word; white-space: pre-wrap; }
+    .live-field .value.empty { color: #b4bac8; }
+    .live-tags { display: flex; flex-wrap: wrap; gap: 6px; }
+    .live-tag { display: inline-flex; align-items: center; border-radius: 999px; padding: 3px 9px;
+      background: var(--accent-soft); color: #4454c7; font-size: 11px; }
+    .live-tag.gray { background: #f0f2f6; color: #667085; }
+    .live-tag.green { background: #e8f8f0; color: #267552; }
+    .live-attention { border-left: 3px solid #7c8bf6; padding-left: 10px; margin-top: 2px; }
+    .live-timeline { max-height: 440px; overflow: auto; padding-right: 4px; }
+    .live-event { position: relative; padding: 0 0 13px 18px; border-left: 2px solid #e3e6f2; margin-left: 5px; }
+    .live-event:last-child { border-left-color: transparent; }
+    .live-event:before { content: ""; position: absolute; width: 8px; height: 8px; border-radius: 50%;
+      left: -5px; top: 4px; background: #6673f5; box-shadow: 0 0 0 3px #eef0ff; }
+    .live-event.me:before { background: #42a5f5; box-shadow: 0 0 0 3px #e7f4ff; }
+    .live-event .meta { color: var(--muted); font-size: 11px; margin-bottom: 3px; }
+    .live-event .text { line-height: 1.5; white-space: pre-wrap; word-break: break-word; }
+    .live-json { max-height: 340px; margin: 0; }
+    .live-refresh { display: inline-flex; align-items: center; gap: 7px; margin-left: auto; }
+    .live-refresh input { width: auto; min-height: 0; }
+    @media (max-width: 1100px) { .live-hero { grid-template-columns: 1fr 1fr; } .live-state-card { grid-column: 1 / -1; } }
+    @media (max-width: 760px) { .live-grid { grid-template-columns: 1fr; } .live-hero { grid-template-columns: 1fr 1fr; } .live-state-card { grid-column: 1 / -1; } }
+
     /* ---------- 视觉与响应式优化 ---------- */
     body {
       background:
@@ -419,6 +466,7 @@
     <aside class="sidebar">
       <div class="nav-group">日常</div>
       <button class="nav-item" data-section="chat" onclick="showSection('chat')"><span class="ic">💬</span>对话</button>
+      <button class="nav-item" data-section="live" onclick="showSection('live')"><span class="ic">📡</span>实时状态</button>
       <button class="nav-item" data-section="identity" onclick="showSection('identity')"><span class="ic">👤</span>身份</button>
       <button class="nav-item" data-section="memory" onclick="showSection('memory')"><span class="ic">🧭</span>记忆</button>
       <div class="nav-group">系统</div>
@@ -446,6 +494,36 @@
         <div class="box">
           <h2>最近一轮（链路 / 决策）</h2>
           <div id="turnBox"></div>
+        </div>
+      </section>
+
+      <!-- 实时状态 -->
+      <section id="sec-live" class="panel-section">
+        <div class="section-head">
+          <h1>实时状态</h1>
+          <span class="muted">身体 · 心理切片 · 心跳计划 · 最近活动</span>
+          <label class="live-refresh"><input id="liveAutoRefresh" type="checkbox" checked onchange="toggleLiveRefresh()" /> 自动刷新 <span id="liveUpdated" class="muted">—</span></label>
+        </div>
+        <div class="live-hero">
+          <div class="live-state-card">
+            <div id="liveOrb" class="live-orb">✦</div>
+            <div><div id="liveStateTitle" class="live-state-title">加载中…</div><div id="liveStateSub" class="live-state-sub">正在读取当前状态</div></div>
+          </div>
+          <div class="live-metric"><div class="lab">此刻心情</div><div id="liveMood" class="val">—</div><div id="liveMoodSub" class="sub">内心切片</div></div>
+          <div class="live-metric"><div class="lab">下次心跳</div><div id="liveHeartbeat" class="val">—</div><div id="liveHeartbeatSub" class="sub">—</div></div>
+          <div class="live-metric"><div class="lab">内心 revision</div><div id="liveRevision" class="val">—</div><div id="liveRevisionSub" class="sub">—</div></div>
+        </div>
+        <div class="live-grid">
+          <div>
+            <div class="box"><h2>此刻心理切片</h2><div id="liveRuntime" class="live-list"></div></div>
+            <div class="box"><h2>本次心智判断</h2><div id="liveDecision" class="live-list"></div></div>
+            <div class="box"><h2>生活上下文</h2><div id="liveContext" class="live-list"></div></div>
+          </div>
+          <div>
+            <div class="box"><h2>心跳与身体</h2><div id="liveHeartbeatBox" class="live-list"></div></div>
+            <div class="box"><h2>最近活动</h2><div id="liveTimeline" class="live-timeline"></div></div>
+            <div class="box"><h2>最近一轮链路</h2><div id="liveTurn"></div></div>
+          </div>
         </div>
       </section>
 
@@ -739,6 +817,8 @@
   let sending = false;
   let dbData = null;
   let currentUsername = "";
+  let liveTimer = null;
+  let liveBusy = false;
 
   function classify(text) {
     if (text.indexOf("记忆神经") >= 0) return "memory";
@@ -779,7 +859,7 @@
 
   /* ================= 左侧导航切换（懒加载） ================= */
   const sectionLoaders = {
-    chat: loadChat, identity: loadIdentity, memory: loadMemory,
+    chat: loadChat, live: loadLive, identity: loadIdentity, memory: loadMemory,
     brain: loadBrain, platform: loadPlatform, plugins: loadPlugins,
     update: loadUpdate, log: null
   };
@@ -956,9 +1036,8 @@
       "\n此刻：" + (inner.narrative || "—") +
       "\n心情：" + (inner.mood || "—") +
       "\n关系视角：" + (inner.relationshipLens || "—") +
-      "\n进行中：" + (inner.ongoingActivity || "—") +
-      "\n未完成意图：" + (inner.unfinishedIntent || "—") +
-      "\n注意：" + att +
+      "\n共享场景：" + (inner.ongoingActivity || inner.sharedScene || "—") +
+      "\n浮着的碎片：" + att +
       "\nsnapshot：" + (inner.snapshotId || "—") + " · 来源moment：" + (inner.sourceMomentId || "无");
   }
   async function savePair() {
@@ -1284,6 +1363,108 @@
     const pad = n => (n < 10 ? "0" : "") + n;
     return d.getFullYear() + "-" + pad(d.getMonth() + 1) + "-" + pad(d.getDate()) +
       " " + pad(d.getHours()) + ":" + pad(d.getMinutes());
+  }
+
+  /* ================= 实时状态 ================= */
+  function liveText(value, fallback) {
+    const text = value === null || value === undefined ? "" : String(value).trim();
+    return text || (fallback || "—");
+  }
+  function liveField(key, value, extraClass) {
+    const text = liveText(value);
+    return `<div class="live-field"><div class="key">${esc(key)}</div><div class="value${text === "—" ? " empty" : ""}${extraClass ? " " + extraClass : ""}">${esc(text)}</div></div>`;
+  }
+  function liveFieldHtml(key, html, isEmpty) {
+    return `<div class="live-field"><div class="key">${esc(key)}</div><div class="value${isEmpty ? " empty" : ""}">${html}</div></div>`;
+  }
+  function liveTags(values, cls) {
+    const list = (values || []).filter(x => x !== null && x !== undefined && String(x).trim());
+    return list.length
+      ? `<div class="live-tags">${list.map(x => `<span class="live-tag ${cls || ""}">${esc(String(x))}</span>`).join("")}</div>`
+      : `<span class="live-tag gray">无</span>`;
+  }
+  function liveAttention(values) {
+    const list = values || [];
+    if (!list.length) return `<span class="live-tag gray">暂无在意的事</span>`;
+    return `<div class="live-attention">${list.map(x => `<div>${esc((x.kind ? "[" + x.kind + "] " : "") + (x.content || x))}</div>`).join("")}</div>`;
+  }
+  function liveCountdown(seconds) {
+    if (!seconds && seconds !== 0) return "未排";
+    if (seconds <= 0) return "即将醒来";
+    const h = Math.floor(seconds / 3600), m = Math.floor((seconds % 3600) / 60), s = seconds % 60;
+    if (h > 0) return h + "小时" + (m ? m + "分" : "");
+    if (m > 0) return m + "分" + (s ? s + "秒" : "");
+    return s + "秒";
+  }
+  function renderLive(d) {
+    const r = d.runtime || {}, h = d.heartbeat || {}, c = d.context || {};
+    const decision = d.decision || (d.latestTurn && d.latestTurn.mindDecision) || {};
+    const asleep = !!r.asleep;
+    $("liveOrb").className = "live-orb" + (asleep ? " sleep" : "");
+    $("liveOrb").textContent = asleep ? "☾" : "✦";
+    $("liveStateTitle").textContent = asleep ? "睡着了" : "醒着，正在生活";
+    $("liveStateSub").textContent = liveText(d.assname, "TraceSoul") + " · " + liveText(d.body && d.body.scene, "场景未知") + " · " + new Date(d.hostTime).toLocaleTimeString();
+    $("liveMood").textContent = liveText(r.mood);
+    $("liveMoodSub").textContent = "revision " + (r.revision || 0);
+    $("liveHeartbeat").textContent = h.enabled ? liveCountdown(h.dueInSeconds) : "未排";
+    $("liveHeartbeatSub").textContent = h.enabled ? formatHeartbeatDue(h.dueUnixMs) : "等待新的入站或主动安排";
+    $("liveRevision").textContent = String(r.revision || 0);
+    $("liveRevisionSub").textContent = r.updatedUnixMs ? "更新于 " + new Date(r.updatedUnixMs).toLocaleTimeString() : "尚无写回记录";
+
+    $("liveRuntime").innerHTML =
+      liveField("此刻", r.narrative) +
+      liveField("关系视角", r.relationshipLens) +
+      liveField("共享场景", r.ongoingActivity || r.sharedScene) +
+      liveFieldHtml("浮着的碎片", liveAttention(r.attention), !(r.attention || []).length);
+    $("liveDecision").innerHTML =
+      liveField("判断轨道", decision.beat) +
+      liveField("心智说明", decision.note) +
+      liveField("本次内心", decision.inner) +
+      liveField("联系理由", decision.heartbeatIntent) +
+      liveField("下次检查", decision.nextHeartbeatPlan || h.nextPlan) +
+      `<div class="live-field"><div class="key">状态选择</div><div class="value">${liveTags([
+        decision.speak ? "决定开口" : "保持安静",
+        decision.sleep ? "睡下" : "不睡",
+        decision.nextHeartbeatMinutes > 0 ? "下次 " + decision.nextHeartbeatMinutes + " 分钟" : "不再自醒"
+      ], decision.speak ? "green" : "gray")}</div></div>` +
+      `<div class="live-field"><div class="key">标签</div><div class="value">${liveTags(decision.tags)}</div></div>` +
+      liveField("查询 / 认知", [decision.query, decision.cognition].filter(Boolean).join("｜"));
+    $("liveContext").innerHTML =
+      liveField("记忆日", c.day) +
+      liveField("身体场景", d.body && d.body.scene) +
+      liveField("今日轨迹", c.trajectory) +
+      `<div class="live-field"><div class="key">今日新识</div><div class="value">${c.todayNewItems && c.todayNewItems.length ? c.todayNewItems.map(x => esc(x.content)).join("；") : "—"}</div></div>` +
+      `<div class="live-field"><div class="key">活跃事件</div><div class="value">${c.activeEvents && c.activeEvents.length ? c.activeEvents.map(x => esc(x.eventSummary || x.id)).join("；") : "—"}</div></div>`;
+    $("liveHeartbeatBox").innerHTML =
+      liveField("当前状态", asleep ? "睡着后停止自醒" : (h.enabled ? "等待下一次醒来" : "当前没有心跳任务")) +
+      liveField("时间范围", (h.minMinutes || 0) + "–" + (h.maxMinutes || 0) + " 分钟") +
+      liveField("下次时间", formatHeartbeatDue(h.dueUnixMs)) +
+      liveField("醒来计划", h.nextPlan) +
+      liveField("激活身体", d.body && d.body.activeBody);
+
+    const moments = (c.recentMoments || []).slice().reverse();
+    $("liveTimeline").innerHTML = moments.length ? moments.map(x => {
+      const me = x.role === d.username;
+      return `<div class="live-event${me ? " me" : ""}"><div class="meta">${esc(x.role || "系统")} · ${new Date(x.createdUnixMs).toLocaleString()}${x.sourcePluginId ? " · " + esc(x.sourcePluginId) : ""}</div><div class="text">${esc(x.content || "")}</div></div>`;
+    }).join("") : `<span class="muted">还没有活动记录。</span>`;
+    const turn = d.latestTurn;
+    $("liveTurn").innerHTML = turn
+      ? `<div class="live-list">${liveField("模式", turn.brainMode)}${liveField("意图", turn.brainIntent)}${liveField("总结", turn.decisionSummary)}${turn.reply ? liveField("回复", turn.reply) : ""}<details><summary class="muted">查看本轮原始快照</summary><pre class="live-json">${esc(JSON.stringify(turn, null, 2))}</pre></details></div>`
+      : `<span class="muted">还没有可回看的轮次。</span>`;
+    $("liveUpdated").textContent = "刷新于 " + new Date().toLocaleTimeString();
+  }
+  async function loadLive() {
+    if (liveBusy) return;
+    liveBusy = true;
+    try { renderLive(await api("/live-state")); }
+    catch (e) { logLine("「实时状态」加载失败：" + e.message); }
+    finally { liveBusy = false; }
+    if ($("liveAutoRefresh") && $("liveAutoRefresh").checked && !liveTimer)
+      liveTimer = setInterval(() => { if (document.getElementById("sec-live").classList.contains("active")) loadLive(); }, 3000);
+  }
+  function toggleLiveRefresh() {
+    if (liveTimer) { clearInterval(liveTimer); liveTimer = null; }
+    if ($("liveAutoRefresh").checked) loadLive();
   }
 
   /* ================= 记忆 ================= */

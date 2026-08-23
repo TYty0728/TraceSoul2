@@ -1,10 +1,46 @@
 using System;
 using System.Collections.Generic;
 using System.Linq;
+using System.Text.Json;
 using SQLite;
+using System.Text.Json.Serialization;
 
 namespace TraceSoul2.Data
 {
+    /// <summary>兼容模型把本应是字符串的字段输出成字符串数组。</summary>
+    public sealed class FlexibleStringJsonConverter : JsonConverter<string>
+    {
+        public override string Read(
+            ref Utf8JsonReader reader,
+            Type typeToConvert,
+            JsonSerializerOptions options)
+        {
+            if (reader.TokenType == JsonTokenType.Null) return string.Empty;
+            if (reader.TokenType == JsonTokenType.String) return reader.GetString() ?? string.Empty;
+            using (var document = JsonDocument.ParseValue(ref reader))
+            {
+                var root = document.RootElement;
+                if (root.ValueKind == JsonValueKind.Array)
+                {
+                    return string.Join("、", root.EnumerateArray()
+                        .Select(x => x.ValueKind == JsonValueKind.String
+                            ? x.GetString()
+                            : x.ToString())
+                        .Where(x => !string.IsNullOrWhiteSpace(x)));
+                }
+                return root.ToString();
+            }
+        }
+
+        public override void Write(
+            Utf8JsonWriter writer,
+            string value,
+            JsonSerializerOptions options)
+        {
+            writer.WriteStringValue(value ?? string.Empty);
+        }
+    }
+
     /// <summary>插件是容器；Contribution 才是它挂到 Kernel 上的具体形态。</summary>
     public static class TraceContributionKindValues
     {
@@ -304,6 +340,7 @@ namespace TraceSoul2.Data
         /// <summary>当下 / 旧事 / 出门</summary>
         public string beat;
         /// <summary>生命标签名，顿号或逗号分隔。</summary>
+        [JsonConverter(typeof(FlexibleStringJsonConverter))]
         public string tags;
         /// <summary>旧事检索句；空则用当前 Moment。</summary>
         public string query;
@@ -319,19 +356,27 @@ namespace TraceSoul2.Data
         public string today;
         /// <summary>这一拍的当前时；空表示没有往前挪，不改内心。</summary>
         public string inner;
+        /// <summary>我们此刻共同处在的场景；空表示场景不变，「无」表示场景退去。</summary>
+        public string scene;
+        /// <summary>给外显的一点核心：这一刻最想让她听见什么，不是分析、承诺或任务。</summary>
+        public string speak_center;
         /// <summary>派出潜意识复盘；具体怎么改短卡由复盘链路去做。</summary>
         public bool review;
-        /// <summary>在场工作台：一两件正搁在手里的事。空=不改；「无」=放下。</summary>
+        /// <summary>此刻浮着的一两块第一人称余波。空=普通对话中让旧碎片沉下去；「无」=明确沉下去。</summary>
         public string attention;
         /// <summary>这一拍真的改了的看法；空则不写认知切片。短卡仍不由心智改。</summary>
         public string cognition;
         /// <summary>心跳时：要对她说。普通对话由入口强制表达，此字段可忽略。</summary>
         public bool speak;
+        /// <summary>本次醒来的独立意图；只有心跳且 speak=true 时使用，不能用上一拍原话代替。</summary>
+        public string heartbeat_intent;
+        /// <summary>下一次醒来时要重新检查的计划；随心跳任务一起保存，不写入长期内心。</summary>
+        public string next_heartbeat_plan;
         /// <summary>要睡下。睡着后心跳停，直到打破性 Moment 才醒来。</summary>
         public bool sleep;
         /// <summary>心跳想完后：多少分钟后再跳一次。0 表示不再跳，等下一个入站。</summary>
         public int next_heartbeat_minutes;
-        /// <summary>无 / 贴。贴则按 mood 丢一张表情。</summary>
+        /// <summary>旧兼容字段。表情现在由外显自动尝试，插件按相关度决定是否发。</summary>
         public string sticker;
         /// <summary>无 / 自拍 / 画。真的把图发到对话里，不是描写。</summary>
         public string image;
@@ -360,7 +405,9 @@ namespace TraceSoul2.Data
         public bool WantsImage()
         {
             var value = ImageValue();
-            return value == MindAtmosphereValues.Selfie || value == MindAtmosphereValues.Draw;
+            return value == MindAtmosphereValues.Selfie ||
+                   value == MindAtmosphereValues.Draw ||
+                   value == MindAtmosphereValues.Photo;
         }
 
         public string StickerValue()
@@ -377,10 +424,12 @@ namespace TraceSoul2.Data
         public string ImageValue()
         {
             var value = (image ?? string.Empty).Trim();
-            if (value == "自拍" || value == "照片" ||
-                string.Equals(value, "selfie", StringComparison.OrdinalIgnoreCase) ||
-                string.Equals(value, "photo", StringComparison.OrdinalIgnoreCase))
+            if (value == "自拍" ||
+                string.Equals(value, "selfie", StringComparison.OrdinalIgnoreCase))
                 return MindAtmosphereValues.Selfie;
+            if (value == "照片" ||
+                string.Equals(value, "photo", StringComparison.OrdinalIgnoreCase))
+                return MindAtmosphereValues.Photo;
             if (value == "画" || value == "生图" ||
                 string.Equals(value, "draw", StringComparison.OrdinalIgnoreCase))
                 return MindAtmosphereValues.Draw;
@@ -391,6 +440,18 @@ namespace TraceSoul2.Data
         {
             var value = (attention ?? string.Empty).Trim();
             return value == "无" || value == "（空）" || value == "(空)" || value == "没有";
+        }
+
+        public bool ClearsScene()
+        {
+            var value = (scene ?? string.Empty).Trim();
+            return value == "无" || value == "（空）" || value == "(空)" || value == "没有";
+        }
+
+        public string SceneValue()
+        {
+            var value = (scene ?? string.Empty).Trim();
+            return ClearsScene() ? string.Empty : value;
         }
 
         public List<string> ParseAttention()
@@ -440,6 +501,7 @@ namespace TraceSoul2.Data
         public const string Stick = "贴";
         public const string Selfie = "自拍";
         public const string Draw = "画";
+        public const string Photo = "照片";
     }
 
     /// <summary>中枢按入口换轨：叫醒心智、叫醒潜意识、或她正在说话。</summary>

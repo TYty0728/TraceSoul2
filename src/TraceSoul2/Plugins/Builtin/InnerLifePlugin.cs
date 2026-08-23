@@ -39,7 +39,7 @@ namespace TraceSoul2.Plugins.Builtin
                 DisplayName = "当前内心切片",
                 Description = InnerLifePrompts.FacetDescription,
                 Provides = "inner_life.current_snapshot",
-                OutputJsonSchema = "{changed:boolean,summary:string,fields:[narrative,relationship_update,mood,ongoing_activity,unfinished_intent,attention_topic|attention_activity|attention_concern|attention_intention]}",
+                OutputJsonSchema = "{changed:boolean,summary:string,fields:[narrative,relationship_update,mood,ongoing_activity,attention_topic|attention_activity|attention_concern]}",
                 RefreshMode = TraceFacetRefreshValues.OncePerTurn,
                 Priority = 90,
                 MaxContextChars = 500,
@@ -54,16 +54,13 @@ namespace TraceSoul2.Plugins.Builtin
             {
                 var runtime = context.Services.Storage.LoadOrCreateInnerRuntime(context.ConversationId);
                 var mood = (runtime.Mood ?? string.Empty).Trim();
-                var unfinished = (runtime.UnfinishedIntent ?? string.Empty).Trim();
-                var hold = InnerLifeLogic.FormatHold(runtime);
-                var extra = string.Empty;
-                if (unfinished.Length > 0) extra += InnerLifePrompts.UnfinishedPrefix + unfinished;
-                else if (hold.Length > 0) extra += InnerLifePrompts.HoldPrefix + hold;
+                var scene = OneLine(runtime.OngoingActivity);
                 return Task.FromResult(new TraceContextBlockData
                 {
                     Title = InnerLifePrompts.SnapshotTitle,
-                    Content = InnerLifePrompts.SnapshotPrefix + OneLine(runtime.Narrative) +
-                              (mood.Length == 0 ? string.Empty : InnerLifePrompts.MoodWrapPrefix + mood + "）") + extra
+                    Content = InnerLifePrompts.SnapshotPrefix +
+                              (scene.Length == 0 ? "（没有固定场景）" : scene) +
+                              (mood.Length == 0 ? string.Empty : InnerLifePrompts.MoodWrapPrefix + mood + "）")
                 });
             }
 
@@ -102,9 +99,8 @@ namespace TraceSoul2.Plugins.Builtin
                     relationship_update = output.GetField("relationship_update", null),
                     mood = output.GetField("mood", null),
                     ongoing_activity = output.GetField("ongoing_activity", null),
-                    unfinished_intent = clearHold
-                        ? string.Empty
-                        : output.GetField("unfinished_intent", null),
+                    // 旧字段不再从内心切片写入；显式时间任务由时间插件单独保存。
+                    unfinished_intent = string.Empty,
                     attention = attention,
                     asleep = ParseAsleepField(output.GetField("asleep", null))
                 };
@@ -114,7 +110,7 @@ namespace TraceSoul2.Plugins.Builtin
                 return Task.FromResult(new TraceCapabilityResultData
                 {
                     Status = "success",
-                    Summary = "内心切片已更新到 revision " + next.Revision + "。",
+                    Summary = "这一拍的内心余波已更新到 revision " + next.Revision + "。",
                     Payload = InnerLifeLogic.Format(next),
                     EvidenceRefs = new List<string> { "moment:" + context.Moment.Id }
                 });
