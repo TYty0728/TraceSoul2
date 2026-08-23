@@ -65,7 +65,7 @@ namespace TraceSoul2.ExternalPlugins
         {
             Id = PluginId,
             DisplayName = "QQ 相机与生图",
-            Version = "2.0.4",
+            Version = "2.0.6",
             Author = "TraceSoul2",
             Role = PluginRoleValues.Organ,
             PlatformId = BodyIds.Qq,
@@ -108,7 +108,7 @@ namespace TraceSoul2.ExternalPlugins
                     turn != null && IsReady(turn.Services) ? QqImageGenPrompts.MindUsage : null;
             if (mindJsonField == null)
                 mindJsonField = turn =>
-                    turn != null && IsReady(turn.Services) ? "\"image\":\"自拍|画|照片|无\"" : null;
+                    turn != null && IsReady(turn.Services) ? "\"image\":\"有|无\"" : null;
             if (!current.MindPromptAppends.Contains(mindUsageAppend))
                 current.MindPromptAppends.Add(mindUsageAppend);
             if (!current.MindJsonFields.Contains(mindJsonField))
@@ -233,10 +233,9 @@ namespace TraceSoul2.ExternalPlugins
             var timer = Stopwatch.StartNew();
             var prompt = (call.GetArgument("prompt") ?? string.Empty).Trim();
             var mode = NormalizeMode(call.GetArgument("mode"), prompt, context);
-            var aspectRatio = NormalizeAspectRatio(call.GetArgument("aspect_ratio"));
             var directUrl = (call.GetArgument("url") ?? string.Empty).Trim();
             context.Services.LogTiming(context.TraceId, send ? "TA的相机 === 开始生图 ===" : "TA的相机 === 后台生图 ===",
-                detail: "mode=" + mode + "｜aspect=" + aspectRatio + "｜description=" + TruncateForLog(prompt, 300));
+                detail: "mode=" + mode + "｜description=" + TruncateForLog(prompt, 300));
             if (mode == "url" || directUrl.Length > 0)
             {
                 var url = directUrl.Length > 0 ? directUrl : prompt;
@@ -245,7 +244,12 @@ namespace TraceSoul2.ExternalPlugins
             }
             if (prompt.Length == 0) throw new InvalidOperationException("生图需要 prompt。URL 发图请同时给 url。 ");
             if (mode != "url" && mode != "edit")
-                prompt = await PlanSceneAsync(prompt, mode, context, cancellationToken);
+            {
+                var planned = await PlanSceneAsync(prompt, context, cancellationToken);
+                prompt = planned.Scene;
+                mode = planned.Mode;
+            }
+            var aspectRatio = NormalizeAspectRatio(call.GetArgument("aspect_ratio"), mode);
 
             try
             {
@@ -416,16 +420,21 @@ namespace TraceSoul2.ExternalPlugins
             return path.IndexOf('\\') >= 0 || path.IndexOf('/') >= 0 || File.Exists(path);
         }
 
-        private async Task<string> PlanSceneAsync(
+        private sealed class ScenePlanResult
+        {
+            public string Mode;
+            public string Scene;
+        }
+
+        private async Task<ScenePlanResult> PlanSceneAsync(
             string seed,
-            string mode,
             TraceTurnContext context,
             CancellationToken cancellationToken)
         {
+            var fallback = new ScenePlanResult { Mode = "selfie", Scene = (seed ?? string.Empty).Trim() };
             var llm = context == null || context.Services == null ? null : context.Services.Llm;
-            seed = (seed ?? string.Empty).Trim();
-            if (llm == null) return seed;
-            var user = BuildPlanUser(seed, mode, context);
+            if (llm == null) return fallback;
+            var user = BuildPlanUser(fallback.Scene, context);
             var timer = Stopwatch.StartNew();
             try
             {
@@ -436,31 +445,32 @@ namespace TraceSoul2.ExternalPlugins
                         new DeepSeekMessageData("user", user)
                     },
                     cancellationToken);
-                planned = CleanPlan(planned);
-                if (planned.Length < 12)
+                var parsed = ParseScenePlan(planned, fallback.Scene);
+                if (parsed.Scene.Length < 12)
                 {
                     context.Services.LogTiming(context.TraceId, "TA的相机 画面规划过短，沿用心智原文",
-                        timer.ElapsedMilliseconds, "chars=" + planned.Length);
-                    return seed.Length > 0 ? seed : planned;
+                        timer.ElapsedMilliseconds, "chars=" + parsed.Scene.Length);
+                    parsed.Scene = fallback.Scene.Length > 0 ? fallback.Scene : parsed.Scene;
                 }
                 context.Services.LogTiming(context.TraceId, "TA的相机 画面规划完成",
-                    timer.ElapsedMilliseconds, TruncateForLog(planned, 400));
-                return planned;
+                    timer.ElapsedMilliseconds, "mode=" + parsed.Mode + "｜" + TruncateForLog(parsed.Scene, 400));
+                return parsed;
             }
             catch (Exception exception)
             {
                 context.Services.LogTiming(context.TraceId, "TA的相机 画面规划失败，沿用心智原文",
                     timer.ElapsedMilliseconds, ExceptionDetail(exception));
-                return seed;
+                return fallback;
             }
         }
 
-        private string BuildPlanUser(string seed, string mode, TraceTurnContext context)
+        private string BuildPlanUser(string seed, TraceTurnContext context)
         {
             var builder = new System.Text.StringBuilder();
-            if (mode == "selfie") builder.AppendLine(QqImageGenPrompts.ScenePlanSelfie);
-            else if (mode == "draw") builder.AppendLine(QqImageGenPrompts.ScenePlanDraw);
-            else builder.AppendLine(QqImageGenPrompts.ScenePlanPhoto);
+            builder.AppendLine(QqImageGenPrompts.ScenePlanChoose);
+            builder.AppendLine(QqImageGenPrompts.ScenePlanSelfie);
+            builder.AppendLine(QqImageGenPrompts.ScenePlanPhoto);
+            builder.AppendLine(QqImageGenPrompts.ScenePlanDraw);
             if (!string.IsNullOrWhiteSpace(characterDetails))
                 builder.AppendLine(QqImageGenPrompts.ScenePlanLookPrefix + Truncate(characterDetails.Trim(), 400));
             var storage = context.Services == null ? null : context.Services.Storage;
@@ -549,6 +559,73 @@ namespace TraceSoul2.ExternalPlugins
             return string.Join("\n", lines);
         }
 
+        private static ScenePlanResult ParseScenePlan(string raw, string seed)
+        {
+            var text = CleanPlan(raw);
+            var kind = ReadLabeledLine(text, "种类");
+            var picture = ReadLabeledBlock(text, "画面");
+            var mode = kind.Length > 0 ? ClassifyPlanKind(kind) : "selfie";
+            var scene = picture.Length > 0 ? picture : StripKindLine(text);
+            if (scene.Length < 12) scene = (seed ?? string.Empty).Trim();
+            return new ScenePlanResult { Mode = mode, Scene = scene };
+        }
+
+        private static string ClassifyPlanKind(string value)
+        {
+            var text = (value ?? string.Empty).Trim();
+            if (text.IndexOf("画", StringComparison.Ordinal) >= 0 ||
+                text.IndexOf("draw", StringComparison.OrdinalIgnoreCase) >= 0)
+                return "draw";
+            if (text.IndexOf("照片", StringComparison.Ordinal) >= 0 ||
+                text.IndexOf("情景", StringComparison.Ordinal) >= 0 ||
+                text.IndexOf("photo", StringComparison.OrdinalIgnoreCase) >= 0)
+                return "photo";
+            return "selfie";
+        }
+
+        private static string ReadLabeledLine(string text, string label)
+        {
+            foreach (var line in (text ?? string.Empty).Replace("\r\n", "\n").Split('\n'))
+            {
+                var trimmed = line.Trim();
+                if (!trimmed.StartsWith(label, StringComparison.Ordinal)) continue;
+                return trimmed.Substring(label.Length).TrimStart('：', ':', ' ', '　');
+            }
+            return string.Empty;
+        }
+
+        private static string ReadLabeledBlock(string text, string label)
+        {
+            var lines = (text ?? string.Empty).Replace("\r\n", "\n").Split('\n');
+            for (var i = 0; i < lines.Length; i++)
+            {
+                var trimmed = lines[i].Trim();
+                if (!trimmed.StartsWith(label, StringComparison.Ordinal)) continue;
+                var rest = trimmed.Substring(label.Length).TrimStart('：', ':', ' ', '　');
+                var parts = new List<string>();
+                if (rest.Length > 0) parts.Add(rest);
+                for (var j = i + 1; j < lines.Length; j++)
+                {
+                    var next = lines[j].Trim();
+                    if (next.StartsWith("种类", StringComparison.Ordinal)) break;
+                    parts.Add(lines[j]);
+                }
+                return string.Join("\n", parts).Trim();
+            }
+            return string.Empty;
+        }
+
+        private static string StripKindLine(string text)
+        {
+            var parts = new List<string>();
+            foreach (var line in (text ?? string.Empty).Replace("\r\n", "\n").Split('\n'))
+            {
+                if (line.Trim().StartsWith("种类", StringComparison.Ordinal)) continue;
+                parts.Add(line);
+            }
+            return string.Join("\n", parts).Trim();
+        }
+
         private static string CleanPlan(string raw)
         {
             var text = (raw ?? string.Empty).Trim();
@@ -632,20 +709,21 @@ namespace TraceSoul2.ExternalPlugins
         private string NormalizeMode(string requested, string prompt, TraceTurnContext context)
         {
             var value = string.IsNullOrWhiteSpace(requested) ? defaultMode : requested.Trim().ToLowerInvariant();
-            if (value == "selfie" || value == "photo" || value == "draw" || value == "edit" || value == "url")
+            if (value == "selfie" || value == "photo" || value == "draw" || value == "edit" ||
+                value == "url" || value == "auto")
                 return value;
             prompt = prompt ?? string.Empty;
-            if (HasInboundImages(context) && Regex.IsMatch(prompt, "改|修改|换成|去掉|删除|加上|编辑|修图")) return "edit";
-            if (Regex.IsMatch(prompt, "自拍|拍张|拍一张|看看你|看你|现在的你|你穿着")) return "selfie";
-            if (Regex.IsMatch(prompt, "画|绘制|生成图|做张图|海报|插画|壁纸|头像")) return "draw";
-            if (Regex.IsMatch(prompt, "照片|生活照|合照")) return "photo";
-            return "photo";
+            if (HasInboundImages(context) && Regex.IsMatch(prompt, "改|修改|换成|去掉|删除|加上|编辑|修图"))
+                return "edit";
+            return "auto";
         }
 
-        private string NormalizeAspectRatio(string requested)
+        private string NormalizeAspectRatio(string requested, string mode = null)
         {
             if (!string.IsNullOrWhiteSpace(requested) && Regex.IsMatch(requested.Trim(), @"^\d{1,2}:\d{1,2}$"))
                 return requested.Trim();
+            if (string.Equals(mode, "selfie", StringComparison.OrdinalIgnoreCase))
+                return "3:4";
             return aiDecideAspectRatio ? string.Empty : defaultAspectRatio;
         }
 

@@ -768,14 +768,24 @@ internal static class Program
                     "未加载相机时，核心心智不应出现出图字段或相机说明");
                 Require(QqImageGenPrompts.MindUsage.Contains("我有一部相机") &&
                         QqImageGenPrompts.MindUsage.Contains("用画面更合适就用") &&
-                        QqImageGenPrompts.MindUsage.Contains("描绘或想象") &&
                         QqImageGenPrompts.MindUsage.Contains("眼前可见的构图") &&
                         QqImageGenPrompts.MindUsage.Contains("不要只把画面留在字里") &&
                         QqImageGenPrompts.MindUsage.Contains("就不能填无") &&
+                        QqImageGenPrompts.MindUsage.Contains("\"image\":\"有|无\"") &&
+                        QqImageGenPrompts.MindUsage.Contains("不要选种类") &&
+                        !QqImageGenPrompts.MindUsage.Contains("自拍|画|照片") &&
+                        QqImageGenPrompts.Selfie.Contains("前置镜头") &&
+                        QqImageGenPrompts.Selfie.Contains("竖构图") &&
+                        QqImageGenPrompts.Selfie.Contains("默认不要画出伸向镜头的手") &&
+                        QqImageGenPrompts.ScenePlanSelfie.Contains("前置镜头") &&
+                        QqImageGenPrompts.ScenePlanSelfie.Contains("默认不要画伸向镜头的手") &&
                         QqImageGenPrompts.ScenePlanSystem.Contains("画面导演") &&
                         QqImageGenPrompts.ScenePlanSystem.Contains("人物卡") &&
-                        QqImageGenPrompts.ScenePlanSystem.Contains("只输出一段画面描述"),
-                    "出图说明只属于相机插件；画面由插件单独规划，不把心智短句直接当生图词");
+                        QqImageGenPrompts.ScenePlanSystem.Contains("只输出一段画面描述") &&
+                        QqImageGenPrompts.ScenePlanSystem.Contains("自拍不是电影分镜") &&
+                        QqImageGenPrompts.ScenePlanSystem.Contains("种类：自拍|照片|画") &&
+                        QqImageGenPrompts.ScenePlanSystem.Contains("默认不要出现伸向镜头的手"),
+                    "心智只判断要不要出图；种类和构图由相机规划，自拍默认不伸手");
                 Require(mindSystem.Contains("要不要开口、心情、要不要睡都在这里决定") &&
                         mindSystem.Contains("后面开口只负责把话说出来") &&
                         expressSystem.Contains("直接开口") &&
@@ -1356,24 +1366,27 @@ internal static class Program
             image = "自拍",
             scene = "把这张给她"
         }, talk, false);
-        Require(expressed.image_mode == "selfie" && expressed.image == "把这张给她",
-            "对话中心智勾自拍应落下相机，prompt 用 scene 而不是开口笔记");
+        Require(expressed.image_mode == "auto" && expressed.image == "把这张给她",
+            "对话中心智勾出图应落下相机，种类由插件规划，prompt 用 scene 而不是开口笔记");
         var photo = new ExpressorOutputData { reply = "嗯。" };
         ExpressorLogic.ApplyMindAtmosphere(photo, new MindDecisionData
         {
-            image = "照片",
+            image = "有",
             scene = "小公寓里摇摇椅上抱着她"
         }, talk, false);
-        Require(photo.image_mode == "photo" && photo.image == "小公寓里摇摇椅上抱着她",
-            "生活合照应走 photo，而不是前置自拍");
+        Require(photo.image_mode == "auto" && photo.image == "小公寓里摇摇椅上抱着她",
+            "心智只勾要不要出图，种类交给相机");
+        Require(new MindDecisionData { image = "有" }.ImageValue() == MindAtmosphereValues.Yes &&
+                new MindDecisionData { image = "有" }.WantsImage(),
+            "有应视为出图");
         Require(new MindDecisionData { image = "照片" }.ImageValue() == MindAtmosphereValues.Photo,
-            "照片不应再被收成自拍");
+            "旧的照片取值仍应识别为出图");
 
         var heart = new ExpressorOutputData { reply = "嗯。" };
         var pulse = new TraceTurnContext("atm", Moment("atm", "时间任务到期：心跳"),
             new List<MomentRecord>(), 0, false, null, KernelWakeValues.Mind);
-        ExpressorLogic.ApplyMindAtmosphere(heart, new MindDecisionData { image = "自拍", speak = true }, pulse, false);
-        Require(heart.image_mode == "selfie" && !string.IsNullOrWhiteSpace(heart.image),
+        ExpressorLogic.ApplyMindAtmosphere(heart, new MindDecisionData { image = "有", speak = true }, pulse, false);
+        Require(heart.image_mode == "auto" && !string.IsNullOrWhiteSpace(heart.image),
             "心跳决定开口时可以自己按快门");
         var quietHeart = new ExpressorOutputData { reply = "" };
         ExpressorLogic.ApplyMindAtmosphere(quietHeart, new MindDecisionData { image = "自拍" }, pulse, false);
@@ -1451,8 +1464,8 @@ internal static class Program
                 var photoTurn = new TraceTurnContext("context-check",
                     Moment("context-check", "循循，发张照片试试呢"), new List<MomentRecord>(), 0, true, services);
                 ExpressorLogic.EnsureExplicitImageRequest(missed, photoTurn, new[] { generator });
-                Require(!string.IsNullOrWhiteSpace(missed.image) && missed.image_mode == "selfie",
-                    "明确索要照片时，即使外显漏填图片，也必须补成可执行的自拍动作");
+                Require(!string.IsNullOrWhiteSpace(missed.image) && missed.image_mode == "auto",
+                    "明确索要照片时，即使外显漏填图片，也必须补成可执行的出图动作");
             }
         }
         finally

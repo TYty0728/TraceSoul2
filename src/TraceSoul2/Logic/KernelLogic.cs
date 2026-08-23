@@ -832,9 +832,7 @@ namespace TraceSoul2.Logic
                                       (decision.WantsLeave() ? "｜出门" : string.Empty) +
                                       (decision.sleep ? "｜睡下" : string.Empty) +
                                       (decision.speak ? "｜开口" : string.Empty) +
-                                      (decision.ImageValue() == MindAtmosphereValues.Selfie ? "｜自拍" :
-                                          decision.ImageValue() == MindAtmosphereValues.Photo ? "｜照片" :
-                                          decision.ImageValue() == MindAtmosphereValues.Draw ? "｜画" : string.Empty) +
+                                      (decision.WantsImage() ? "｜出图" : string.Empty) +
                                       (decision.next_heartbeat_minutes > 0
                                           ? "｜心跳" + decision.next_heartbeat_minutes + "分"
                                           : string.Empty) +

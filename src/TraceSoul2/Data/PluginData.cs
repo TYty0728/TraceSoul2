@@ -405,7 +405,8 @@ namespace TraceSoul2.Data
         public bool WantsImage()
         {
             var value = ImageValue();
-            return value == MindAtmosphereValues.Selfie ||
+            return value == MindAtmosphereValues.Yes ||
+                   value == MindAtmosphereValues.Selfie ||
                    value == MindAtmosphereValues.Draw ||
                    value == MindAtmosphereValues.Photo;
         }
@@ -433,6 +434,11 @@ namespace TraceSoul2.Data
             if (value == "画" || value == "生图" ||
                 string.Equals(value, "draw", StringComparison.OrdinalIgnoreCase))
                 return MindAtmosphereValues.Draw;
+            if (value == "有" || value == "要" || value == "出图" ||
+                string.Equals(value, "yes", StringComparison.OrdinalIgnoreCase) ||
+                string.Equals(value, "true", StringComparison.OrdinalIgnoreCase) ||
+                string.Equals(value, "image", StringComparison.OrdinalIgnoreCase))
+                return MindAtmosphereValues.Yes;
             return MindAtmosphereValues.None;
         }
 
@@ -499,6 +505,7 @@ namespace TraceSoul2.Data
     {
         public const string None = "无";
         public const string Stick = "贴";
+        public const string Yes = "有";
         public const string Selfie = "自拍";
         public const string Draw = "画";
         public const string Photo = "照片";
