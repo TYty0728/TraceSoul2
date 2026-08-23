@@ -108,9 +108,7 @@ QQ 里的我可以说话，也可以带一小段正在发生的动作或神情�
             public const string MindNotePrefix = "开口前我对自己说：";
             public const string MindCognitionPrefix = "此刻让我新明白：";
             public const string MindSticker = "我会给她丢一个表情。";
-            public const string MindSelfie = "我会给她看一张此刻的自拍。";
-            public const string MindDraw = "我会给她画一张。";
-            public const string MindPhoto = "我会给她看一张此刻我们的生活照片。";
+            public const string MindImage = "我会给她看一张此刻的图。";
             public const string MissingWait = "还没说出等一下。";
             public const string MissingSpeak = "开口是空的。";
         }

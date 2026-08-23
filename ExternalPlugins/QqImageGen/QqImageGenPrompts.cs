@@ -4,7 +4,11 @@ namespace TraceSoul2.ExternalPlugins
     public static class QqImageGenPrompts
     {
         public const string Selfie =
-            "生成一张角色亲自拍给对话对象看的真实自拍照片。视角是手机前置镜头，角色直视镜头，近景或半身，构图自然，人物是正在和对话对象真实相处，而不是摆拍剧情。画面中不要出现手机、相机或第三人称拍摄者。 ";
+            "生成一张角色用手机前置镜头随手拍给对话对象看的真实自拍。竖构图，近景或半身特写，角色直视镜头，脸是主体。" +
+            "构图要像随手发给她的手机自拍：浅景深，私密生活感。" +
+            "默认不要画出伸向镜头的手或手指；只有这一拍真有挥手、比心、挡镜头这类动作时才出现手。" +
+            "不是摆拍剧情，不是电影分镜，不是双人故事照，也不要全身远景。" +
+            "画面中不要出现手机外壳、相机或对话对象。 ";
         public const string LockFace =
             "角色参考图仅用于严格保持同一人的脸、发型和整体身份一致，不照搬参考图的姿势、构图、背景或服装。 ";
         public const string Photo =
@@ -22,23 +26,34 @@ namespace TraceSoul2.ExternalPlugins
         public const string EffectorDescription = "自拍、生活照片、画图、基于来图修改或发送 URL 图片。";
         public const string EffectorBoundary =
             "QQ相机｜prompt + mode(selfie/photo/draw/edit/url) + refs/aspect_ratio/url（可选）";
-        /// <summary>仅当本插件已加载且相机就绪时，挂到心智 system。不要写具体场景，以免抢戏。</summary>
+        /// <summary>仅当本插件已加载且相机就绪时，挂到心智 system。只判断要不要出图，不选种类。</summary>
         public const string MindUsage =
             "我有一部相机，这一拍用画面更合适就用。\n" +
-            "上面的 JSON 必须带 \"image\":\"自拍|画|照片|无\"。这是真的把图发到对话里，不是描写。不要等她说「拍照」「发图」才用。" +
-            "scene 一旦写出眼前可见的构图，image 就不能填无，也不要只把画面留在字里：" +
-            "两人在一起的眼前场景用「照片」，只给她看我自己用「自拍」，她在描绘或想象一个画面时用「画」。" +
+            "上面的 JSON 必须带 \"image\":\"有|无\"。这是真的把图发到对话里，不是描写。不要等她说「拍照」「发图」才用。" +
+            "scene 一旦写出眼前可见的构图，image 就不能填无，也不要只把画面留在字里。" +
+            "心智只判断这一拍要不要出图。自拍还是情景、画面怎么拍，相机自己会想，不要选种类。" +
             "没有可见构图的纯交谈才填无。不说话时不发图。";
 
         public const string ScenePlanSystem =
             "你是这台相机的画面导演，不是在替角色写情书。\n" +
-            "根据人物卡和这一拍实际发生的情况，自行规划一张能拍出来的静帧。\n" +
-            "只输出一段画面描述，不要标题、解释、对话或内心独白。\n" +
+            "这一拍已经确定要出图。由你决定怎么拍：自拍、生活情景照，还是画。\n" +
+            "多数时候选自拍：前置近景、直视镜头、随手拍给她看。只有场面本身才是重点时才拍情景照；她在描绘或想象时才画。\n" +
+            "先写种类，再写画面。只输出：\n" +
+            "种类：自拍|照片|画\n" +
+            "画面：只输出一段画面描述\n" +
+            "不要标题、解释、对话或内心独白。\n" +
             "写清：谁在画面里、镜头远近、姿势与相对位置、光线、环境、服装与神情。\n" +
-            "不要发明人物卡没有的外貌；不要画没发生的事。气味、心跳、文学比喻不要写进画面。";
-        public const string ScenePlanSelfie = "镜头：自拍。角色自己对着镜头，近景或半身。";
-        public const string ScenePlanPhoto = "镜头：生活照片。呈现眼前共同场景，不要做成自拍特写。";
-        public const string ScenePlanDraw = "镜头：画。把她正在描绘或想象的画面画出来。";
+            "不要发明人物卡没有的外貌；不要画没发生的事。气味、心跳、文学比喻不要写进画面。\n" +
+            "自拍不是电影分镜：只拍角色自己给她看的前置近景，直视镜头；不要把两人关系拍成故事海报。\n" +
+            "自拍默认不要出现伸向镜头的手或手指；只有这一拍气氛里真有挥手、比心、挡镜头这类动作时才写手。";
+        public const string ScenePlanChoose =
+            "这一拍已经要出图。由你选种类并规划画面。不要把心智原文当成已经定好的镜头。";
+        public const string ScenePlanSelfie =
+            "自拍：角色自己用前置镜头拍给她看。直视镜头，脸或上半身占满竖构图。" +
+            "默认不要画伸向镜头的手；只有气氛里真有动作才写手。环境只作虚化背景。" +
+            "心智记下的眼前只作神情与气氛参考，不要按它拍成故事分镜或双人场面。不要出现她。";
+        public const string ScenePlanPhoto = "照片：呈现眼前共同场景，不要做成自拍特写。";
+        public const string ScenePlanDraw = "画：把她正在描绘或想象的画面画出来。";
         public const string ScenePlanCardsHeader = "【人物卡】";
         public const string ScenePlanNowHeader = "【这一拍】";
         public const string ScenePlanSeedPrefix = "心智记下的眼前：";

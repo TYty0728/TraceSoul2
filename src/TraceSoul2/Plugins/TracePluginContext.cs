@@ -84,7 +84,7 @@ namespace TraceSoul2.Plugins
             new List<Func<TraceTurnContext, string>>();
 
         /// <summary>
-        /// 器官插件可把心智 JSON 额外字段挂到这里，例如 "image":"自拍|画|照片|无"。
+        /// 器官插件可把心智 JSON 额外字段挂到这里，例如 "image":"有|无"。
         /// 未就绪时返回空；核心 JSON 样例本身不含出图字段。
         /// </summary>
         public List<Func<TraceTurnContext, string>> MindJsonFields { get; } =

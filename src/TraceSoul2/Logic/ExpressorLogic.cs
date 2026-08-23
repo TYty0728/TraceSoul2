@@ -126,23 +126,9 @@ namespace TraceSoul2.Logic
                                  !turn.RequiresExpression &&
                                  !mind.speak;
             if (heartbeatQuiet) return;
-            if (mind.ImageValue() == MindAtmosphereValues.Selfie)
-            {
-                expressed.image_mode = "selfie";
-                expressed.image = SceneFromMind(mind,
-                    "在此刻自然生活场景中面向镜头拍下的一张自拍，神情与当前对话氛围一致");
-            }
-            else if (mind.ImageValue() == MindAtmosphereValues.Photo)
-            {
-                expressed.image_mode = "photo";
-                expressed.image = SceneFromMind(mind,
-                    "拍下此刻你们共同处在的生活画面，两人关系清楚，不要写成自拍特写");
-            }
-            else if (mind.ImageValue() == MindAtmosphereValues.Draw)
-            {
-                expressed.image_mode = "draw";
-                expressed.image = SceneFromMind(mind, "根据当前气氛生成一张画");
-            }
+            expressed.image_mode = "auto";
+            expressed.image = SceneFromMind(mind,
+                "这一拍要给她看的画面，神情与当前对话氛围一致");
         }
 
         private static string SceneFromMind(MindDecisionData mind, string fallback)
@@ -218,13 +204,8 @@ namespace TraceSoul2.Logic
                 return;
             }
 
-            var drawing = Regex.IsMatch(text, @"(?:画|生成|做).{0,12}(?:图片|图)", RegexOptions.IgnoreCase) &&
-                          text.IndexOf("照片", StringComparison.Ordinal) < 0 &&
-                          text.IndexOf("自拍", StringComparison.Ordinal) < 0;
-            expressed.image = drawing
-                ? "根据当前请求生成画面：" + Limit(text, 500)
-                : "在此刻自然生活场景中面向镜头拍下的一张自拍，神情与当前对话氛围一致";
-            expressed.image_mode = drawing ? "draw" : "selfie";
+            expressed.image = "这一拍要给她看的画面，神情与当前对话氛围一致";
+            expressed.image_mode = "auto";
             turn.Services?.LogTiming(turn.TraceId, "TA的相机 明确请求兜底补图", detail:
                 "capability=" + imageEffector.Id + "｜mode=" + expressed.image_mode +
                 "｜prompt=" + Limit(expressed.image, 240));
@@ -739,12 +720,8 @@ namespace TraceSoul2.Logic
                 builder.AppendLine(CorePrompts.Expressor.MindLeavePrefix + mind.leave);
             if (mind.WantsSticker())
                 builder.AppendLine(CorePrompts.Expressor.MindSticker);
-            if (mind.ImageValue() == MindAtmosphereValues.Selfie)
-                builder.AppendLine(CorePrompts.Expressor.MindSelfie);
-            else if (mind.ImageValue() == MindAtmosphereValues.Photo)
-                builder.AppendLine(CorePrompts.Expressor.MindPhoto);
-            else if (mind.ImageValue() == MindAtmosphereValues.Draw)
-                builder.AppendLine(CorePrompts.Expressor.MindDraw);
+            if (mind.WantsImage())
+                builder.AppendLine(CorePrompts.Expressor.MindImage);
             return builder.ToString().TrimEnd();
         }
 
