@@ -146,6 +146,7 @@ namespace TraceSoul2.Logic
                 prepareTimer.ElapsedMilliseconds,
                 "wake=" + wake + "｜catalog=" + catalog.Count + "｜history=" + recent.Count);
             BrainStructuredOutputData final;
+            MindDecisionData mindDecision = null;
             TraceCapabilityResultData expression = null;
             var responseFlushed = false;
 
@@ -160,6 +161,7 @@ namespace TraceSoul2.Logic
                 var branchTimer = Stopwatch.StartNew();
                 var lived = await RunLivedMindAsync(turn, catalog, cancellationToken);
                 final = lived.Final;
+                mindDecision = lived.MindDecision;
                 expression = lived.Expression;
                 responseFlushed = lived.ResponseFlushed;
                 plugins.Services.LogTiming(turn.TraceId, "心智/对话轨完成", branchTimer.ElapsedMilliseconds);
@@ -187,7 +189,7 @@ namespace TraceSoul2.Logic
                 DecisionSummary = final.decision_summary,
                 CapabilitySummary = FormatResults(turn.Workspace.Results),
                 FacetSummary = FormatFacets(final.facet_outputs),
-                PayloadJson = BuildTurnSnapshot(turn),
+                PayloadJson = BuildTurnSnapshot(turn, mindDecision),
                 CreatedUnixMs = DateTimeOffset.UtcNow.ToUnixTimeMilliseconds()
             });
             plugins.Services.LogTiming(turn.TraceId, "轮次审查落库完成", reviewTimer.ElapsedMilliseconds);
@@ -201,7 +203,8 @@ namespace TraceSoul2.Logic
                 final.decision_summary,
                 turn.Workspace.ContextBlocks.ToList(),
                 turn.Workspace.FacetOutputs.ToList(),
-                turn.Workspace.Results.ToList());
+                turn.Workspace.Results.ToList(),
+                mindDecision);
         }
 
         private async Task<BrainStructuredOutputData> RunSubconsciousAsync(
@@ -254,8 +257,14 @@ namespace TraceSoul2.Logic
             var mindTimer = Stopwatch.StartNew();
             var decision = await mind.DecideAsync(
                 turn, null, false, naturallyAwakenedPast, cancellationToken);
+            if (HeartbeatLogic.IsHeartbeatContent(turn.Moment == null ? string.Empty : turn.Moment.Content) &&
+                decision.speak && string.IsNullOrWhiteSpace(decision.heartbeat_intent))
+            {
+                decision.speak = false;
+                plugins.Services.LogTiming(turn.TraceId, "心跳无独立意图，保持安静", 0);
+            }
             plugins.Services.LogTiming(turn.TraceId, "心智判断完成", mindTimer.ElapsedMilliseconds,
-                "beat=" + decision.BeatValue());
+                "beat=" + decision.BeatValue() + "｜image=" + decision.ImageValue());
             string leaveResult = null;
             TraceCapabilityResultData expression = null;
             if (decision.WantsLeave())
@@ -355,7 +364,7 @@ namespace TraceSoul2.Logic
             await SyncHeartbeatAsync(turn, catalog, decision, cancellationToken);
             await RunPostSpeakAsync(decision, turn, catalog, cancellationToken);
             plugins.Services.LogTiming(turn.TraceId, "轮后记忆/认知处理完成", persistTimer.ElapsedMilliseconds);
-            return new LivedMindTurn(final, expression, responseFlushed);
+            return new LivedMindTurn(final, expression, responseFlushed, decision);
         }
 
         private sealed class LivedMindTurn
@@ -363,15 +372,18 @@ namespace TraceSoul2.Logic
             public BrainStructuredOutputData Final { get; private set; }
             public TraceCapabilityResultData Expression { get; private set; }
             public bool ResponseFlushed { get; private set; }
+            public MindDecisionData MindDecision { get; private set; }
 
             public LivedMindTurn(
                 BrainStructuredOutputData final,
                 TraceCapabilityResultData expression,
-                bool responseFlushed)
+                bool responseFlushed,
+                MindDecisionData mindDecision)
             {
                 Final = final;
                 Expression = expression;
                 ResponseFlushed = responseFlushed;
+                MindDecision = mindDecision;
             }
         }
 
@@ -820,8 +832,8 @@ namespace TraceSoul2.Logic
                                       (decision.WantsLeave() ? "｜出门" : string.Empty) +
                                       (decision.sleep ? "｜睡下" : string.Empty) +
                                       (decision.speak ? "｜开口" : string.Empty) +
-                                      (decision.WantsSticker() ? "｜表情" : string.Empty) +
                                       (decision.ImageValue() == MindAtmosphereValues.Selfie ? "｜自拍" :
+                                          decision.ImageValue() == MindAtmosphereValues.Photo ? "｜照片" :
                                           decision.ImageValue() == MindAtmosphereValues.Draw ? "｜画" : string.Empty) +
                                       (decision.next_heartbeat_minutes > 0
                                           ? "｜心跳" + decision.next_heartbeat_minutes + "分"
@@ -855,7 +867,9 @@ namespace TraceSoul2.Logic
             InnerRuntimeData runtime = null;
             if (turn != null && turn.Services != null && turn.Services.Storage != null)
                 runtime = turn.Services.Storage.LoadOrCreateInnerRuntime(turn.ConversationId);
-            var proposed = InnerLifeLogic.ProposeFromMind(mind, runtime);
+            // 真实对话是新的心理时刻：旧碎片默认沉下去，避免“自己问过的问题”
+            // 被下一拍误认成仍需完成的目标。心跳等非对话入口仍可保留有温度的碎片。
+            var proposed = InnerLifeLogic.ProposeFromMind(mind, runtime, turn != null && turn.RequiresExpression);
             if (InnerLifeLogic.HasProposedWrite(proposed))
             {
                 var snapshot = output.facet_outputs.FirstOrDefault(x => x != null && x.facet_id == "inner.snapshot");
@@ -982,7 +996,7 @@ namespace TraceSoul2.Logic
                 }
                 var due = HeartbeatLogic.DueFromMinutes(minutes, DateTimeOffset.Now);
                 await TryExecuteNerveAsync("time.continue", "心跳后续跳", turn, catalog,
-                    HeartbeatDueArgs(due), cancellationToken);
+                    HeartbeatDueArgs(due, decision.next_heartbeat_plan), cancellationToken);
                 return;
             }
             var min = turn.Services.HeartbeatMinMinutes;
@@ -995,14 +1009,15 @@ namespace TraceSoul2.Logic
             }
             var firstDue = HeartbeatLogic.PickDueUnixMs(min, max, DateTimeOffset.Now);
             await TryExecuteNerveAsync("time.continue", "入站后排一次心跳", turn, catalog,
-                HeartbeatDueArgs(firstDue), cancellationToken);
+                HeartbeatDueArgs(firstDue, HeartbeatLogic.DefaultNextPlan), cancellationToken);
         }
 
-        private static List<BrainCallArgumentData> HeartbeatDueArgs(long dueUnixMs)
+        private static List<BrainCallArgumentData> HeartbeatDueArgs(long dueUnixMs, string nextPlan)
         {
             return new List<BrainCallArgumentData>
             {
-                new BrainCallArgumentData { name = "content", value = HeartbeatLogic.HeartbeatContent },
+                new BrainCallArgumentData { name = "content", value = HeartbeatLogic.BuildContent(nextPlan) },
+                new BrainCallArgumentData { name = "next_plan", value = nextPlan ?? string.Empty },
                 new BrainCallArgumentData { name = "due_unix_ms", value = dueUnixMs.ToString() }
             };
         }
@@ -1020,9 +1035,10 @@ namespace TraceSoul2.Logic
         }
 
         /// <summary>整轮链路快照：挂载块（截断）+ 回调结果（含召回证据），供控制台回看。</summary>
-        private static string BuildTurnSnapshot(TraceTurnContext turn)
+        private static string BuildTurnSnapshot(TraceTurnContext turn, MindDecisionData mindDecision)
         {
             var snapshot = new TurnPayloadSnapshotData();
+            snapshot.mind_decision = mindDecision == null ? null : MindLogic.Normalize(mindDecision);
             foreach (var block in turn.Workspace.ContextBlocks)
             {
                 if (block == null) continue;

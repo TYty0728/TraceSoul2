@@ -237,6 +237,15 @@ namespace TraceSoul2.Plugins.Builtin
                     var file = (message.File ?? string.Empty).Trim();
                     if (file.Length == 0) throw new InvalidOperationException("QQ 图片表达需要 file。");
                     payload = "[CQ:image,file=" + file.Replace(",", "%2C") + "]";
+                    // 自定义表情库里的 PNG/GIF 通过平台协议仍是 image 段，语义上却是 sticker。
+                    // 文字已经暂存时，把它接到同一条消息结尾；普通图片和生图仍单独发送。
+                    if (IsStickerAsset(file) && owner.TryAppendSegment(payload))
+                    {
+                        canonicalContent = OneBotPlatformPrompts.SendStickerMoment;
+                        summary = "已把图片表情追加到 QQ 文字消息结尾。";
+                        deferred = true;
+                        break;
+                    }
                     canonicalContent = OneBotPlatformPrompts.SendImageMoment;
                     summary = "已通过 QQ 发送图片。";
                     break;
@@ -300,6 +309,12 @@ namespace TraceSoul2.Plugins.Builtin
                 ProducedEvent = canonical,
                 EvidenceRefs = new List<string>()
             };
+        }
+
+        internal static bool IsStickerAsset(string file)
+        {
+            var path = (file ?? string.Empty).Trim().Replace('\\', '/');
+            return path.IndexOf("/qq-sticker/", StringComparison.OrdinalIgnoreCase) >= 0;
         }
     }
 

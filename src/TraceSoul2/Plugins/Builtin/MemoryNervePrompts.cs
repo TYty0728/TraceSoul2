@@ -35,7 +35,7 @@ namespace TraceSoul2.Plugins.Builtin
             var builder = new StringBuilder();
             builder.AppendLine(pair.Apply("你是 {assname} 的记忆整理助手，不是他自己。下面是一段刚结束的话题的对话记录（来自若干条 Moment：Moment＝一次进入意识的原始记录）。请："));
             builder.AppendLine("1. summary：一句客观、事实化的话题总结（谁做了什么/发生了什么，不超过80字）；");
-            builder.AppendLine(pair.Apply("2. detail：以 {assname} 的第一人称写细节，“我”只指 {assname}，“你”只指 {username}；不要用“她”或名字指代正在对话的 {username}。自然、不超过200字、不截断半句；没有可写的就留空；"));
+            builder.AppendLine(pair.Apply("2. detail：以 {assname} 的第一人称记下一小段确实发生过的经历；“我”只指 {assname}，“你”只指 {username}。保留这段经历里真正有意义的动作、说法和私人意象，写清楚发生了什么，以及它在我心里留下了什么。没有值得记下的细节就留空；"));
             builder.AppendLine(pair.Apply("3. mood：{username}在这段对话里的心情词（如 轻松、开心、平静、难过），读不出就留空。"));
             builder.AppendLine("只输出 JSON：{\"summary\":\"一句总结\",\"detail\":\"第一人称细节\",\"mood\":\"心情词\"}");
             return builder.ToString();

@@ -75,8 +75,10 @@ namespace TraceSoul2.Logic
                 IdentityCardRecord card;
                 var stored = map.TryGetValue(slot, out card) ? card.Body : null;
                 var body = ResolveBody(slot, stored, pair);
-                builder.Append("【").Append(IdentityCardSlotValues.Title(slot, pair)).Append("】")
-                    .AppendLine(body);
+                builder.Append("【").Append(IdentityCardSlotValues.Title(slot, pair)).Append("】");
+                if (slot == IdentityCardSlotValues.ExpressionHabit)
+                    builder.Append("（这里保存的是相处里长出来的语感和偏好，供我自然取回，不是这一轮必须执行的动作。）");
+                builder.AppendLine(body);
             }
             return builder.ToString().TrimEnd();
         }

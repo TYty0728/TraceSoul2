@@ -233,6 +233,22 @@ namespace TraceSoul2.Logic
         private static string BuildPreludeQuery(TraceTurnContext turn)
         {
             var parts = new List<string>();
+            if (turn != null && turn.Moment != null &&
+                HeartbeatLogic.IsHeartbeatContent(turn.Moment.Content))
+            {
+                var now = DateTimeOffset.Now;
+                var routing = MouthLogic.LoadState(
+                    turn.Services == null ? null : turn.Services.DataDirectory);
+                var scene = string.Equals(routing.scene, "out", StringComparison.OrdinalIgnoreCase)
+                    ? "外出"
+                    : "家里";
+                parts.Add("心跳醒来时的生活环境：" + TimeLanguageUtil.NaturalNow(now) +
+                          "，身体场景在" + scene +
+                          "。寻找她在这个时段通常做什么、近期计划、可以自然联系的共同经历。");
+                var plan = HeartbeatLogic.ExtractPlan(turn.Moment.Content);
+                if (!string.IsNullOrWhiteSpace(plan))
+                    parts.Add("这次醒来原定重新检查：" + plan);
+            }
             if (turn.RawHistoryLimit > 0 && turn.RecentMoments != null &&
                 turn.Services != null && turn.Services.Storage != null)
             {

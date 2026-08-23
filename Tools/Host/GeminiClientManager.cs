@@ -1,5 +1,6 @@
 using System;
 using System.Collections.Generic;
+using System.Linq;
 using System.Net.Http;
 using System.Text;
 using System.Text.Json;
@@ -153,7 +154,7 @@ namespace TraceSoul2.Host
         private string BuildPayload(List<DeepSeekMessageData> messages, float temperature, bool json)
         {
             var systems = new List<string>();
-            var contents = new List<object>();
+            var turns = new List<KeyValuePair<string, string>>();
             foreach (var item in messages ?? new List<DeepSeekMessageData>())
             {
                 var role = (item.role ?? string.Empty).Trim().ToLowerInvariant();
@@ -163,14 +164,22 @@ namespace TraceSoul2.Host
                     systems.Add(text);
                     continue;
                 }
-                contents.Add(new
-                {
-                    role = role == "assistant" ? "model" : "user",
-                    parts = new[] { new { text } }
-                });
+                var geminiRole = role == "assistant" ? "model" : "user";
+                if (turns.Count == 0 && geminiRole == "model")
+                    turns.Add(new KeyValuePair<string, string>("user", " "));
+                if (turns.Count > 0 && turns[turns.Count - 1].Key == geminiRole)
+                    turns[turns.Count - 1] = new KeyValuePair<string, string>(
+                        geminiRole, turns[turns.Count - 1].Value + "\n" + text);
+                else
+                    turns.Add(new KeyValuePair<string, string>(geminiRole, text));
             }
-            if (contents.Count == 0)
-                contents.Add(new { role = "user", parts = new[] { new { text = " " } } });
+            if (turns.Count == 0)
+                turns.Add(new KeyValuePair<string, string>("user", " "));
+            var contents = turns.Select(x => (object)new
+            {
+                role = x.Key,
+                parts = new[] { new { text = x.Value } }
+            }).ToList();
 
             var generation = new Dictionary<string, object>
             {

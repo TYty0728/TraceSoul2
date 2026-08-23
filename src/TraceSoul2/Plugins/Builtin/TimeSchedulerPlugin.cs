@@ -131,7 +131,25 @@ namespace TraceSoul2.Plugins.Builtin
                     .OrderBy(x => x.due_unix_ms).Select(Clone).ToList();
             }
 
-            public ScheduleEntry EnsureHeartbeat(string conversationId, long dueUnixMs)
+            public List<string> UpcomingDescriptions(string conversationId, long nowUnixMs, int take)
+            {
+                lock (gate)
+                {
+                    return document.items
+                        .Where(x => x.enabled &&
+                                    string.Equals(x.conversation_id, conversationId, StringComparison.Ordinal) &&
+                                    x.due_unix_ms > nowUnixMs &&
+                                    !HeartbeatLogic.IsHeartbeatOrLegacyContinue(x.content) &&
+                                    !string.Equals(x.content, DailyReviewContent, StringComparison.Ordinal))
+                        .OrderBy(x => x.due_unix_ms)
+                        .Take(Math.Max(1, take))
+                        .Select(x => x.content + "（" +
+                            DateTimeOffset.FromUnixTimeMilliseconds(x.due_unix_ms).ToLocalTime().ToString("M月d日 HH:mm") + "）")
+                        .ToList();
+                }
+            }
+
+            public ScheduleEntry EnsureHeartbeat(string conversationId, long dueUnixMs, string nextPlan)
             {
                 lock (gate)
                 {
@@ -146,7 +164,7 @@ namespace TraceSoul2.Plugins.Builtin
                     {
                         id = Guid.NewGuid().ToString("N"),
                         conversation_id = conversationId,
-                        content = HeartbeatLogic.HeartbeatContent,
+                        content = HeartbeatLogic.BuildContent(nextPlan),
                         due_unix_ms = dueUnixMs,
                         recurrence = "none",
                         wake = KernelWakeValues.Mind,
@@ -277,10 +295,47 @@ namespace TraceSoul2.Plugins.Builtin
                 if (state != null && context != null)
                     state.EnsureDailyReview(context.ConversationId);
                 var now = DateTimeOffset.Now;
+                var routing = MouthLogic.LoadState(
+                    context == null || context.Services == null ? null : context.Services.DataDirectory);
+                var scene = string.Equals(routing.scene, "out", StringComparison.OrdinalIgnoreCase)
+                    ? "外出"
+                    : "家里";
+                var builder = new StringBuilder();
+                builder.Append(TimeSchedulerPrompts.NowPrefix)
+                    .Append(TimeLanguageUtil.NaturalNow(now))
+                    .Append("。身体场景：")
+                    .Append(scene)
+                    .Append("。");
+                if (context != null && context.Services != null && context.Services.Storage != null)
+                {
+                    var pair = context.Services.Storage.LoadPairIdentity();
+                    var lastReal = context.Services.Storage.GetRecentMoments(context.ConversationId, 200)
+                        .Where(x => x != null &&
+                                    (pair.IsHumanMoment(x.Role) || pair.IsCompanionMoment(x.Role)) &&
+                                    (context.Moment == null || x.Id != context.Moment.Id))
+                        .OrderByDescending(x => x.CreatedUnixMs)
+                        .FirstOrDefault();
+                    if (lastReal != null && lastReal.CreatedUnixMs > 0)
+                    {
+                        var lastTime = DateTimeOffset.FromUnixTimeMilliseconds(lastReal.CreatedUnixMs).ToLocalTime();
+                        builder.Append("距离上一段真实相处约")
+                            .Append(TimeLanguageUtil.ElapsedZh(lastReal.CreatedUnixMs, now.ToUnixTimeMilliseconds()))
+                            .Append("，上一段停在")
+                            .Append(lastTime.ToString("M月d日 HH:mm"))
+                            .Append("。");
+                    }
+                }
+                if (state != null && context != null)
+                {
+                    var upcoming = state.UpcomingDescriptions(
+                        context.ConversationId, now.ToUnixTimeMilliseconds(), 3);
+                    if (upcoming.Count > 0)
+                        builder.Append("近期计划：").Append(string.Join("；", upcoming)).Append("。");
+                }
                 return Task.FromResult(new TraceContextBlockData
                 {
                     Title = "当前时间",
-                    Content = TimeSchedulerPrompts.NowPrefix + TimeLanguageUtil.NaturalNow(now) + "。"
+                    Content = builder.ToString()
                 });
             }
 
@@ -487,7 +542,7 @@ namespace TraceSoul2.Plugins.Builtin
                 Provides = "time.schedule.continue",
                 WhenToUse = TimeSchedulerPrompts.ContinueWhenToUse,
                 WhenNotToUse = TimeSchedulerPrompts.ContinueWhenNotToUse,
-                ParametersJsonSchema = "{due_iso?:ISO8601,due_unix_ms?:long,minutes?:int}",
+                ParametersJsonSchema = "{due_iso?:ISO8601,due_unix_ms?:long,minutes?:int,next_plan?:string}",
                 HasInternalMutation = true
             };
             public bool IsAvailable(TraceTurnContext context) { return context != null; }
@@ -518,7 +573,10 @@ namespace TraceSoul2.Plugins.Builtin
                     return Task.FromResult(Success("心跳已关闭，未排下一次。", string.Empty));
                 if (due <= DateTimeOffset.UtcNow.ToUnixTimeMilliseconds())
                     due = DateTimeOffset.UtcNow.ToUnixTimeMilliseconds() + 1000;
-                var item = state.EnsureHeartbeat(context.ConversationId, due);
+                var nextPlan = call.GetArgument("next_plan").Trim();
+                if (nextPlan.Length == 0)
+                    nextPlan = HeartbeatLogic.ExtractPlan(call.GetArgument("content"));
+                var item = state.EnsureHeartbeat(context.ConversationId, due, nextPlan);
                 return Task.FromResult(Success("已排一次心跳。",
                     item.id + " | " + DateTimeOffset.FromUnixTimeMilliseconds(item.due_unix_ms).ToLocalTime().ToString("O") +
                     " | " + item.wake + " | " + item.content));

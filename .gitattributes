@@ -5,6 +5,8 @@
 *.sln text eol=crlf
 *.ps1 text eol=crlf
 *.bat text eol=crlf
+# cmd.exe helper must stay GBK bytes; UTF-8 or LF-only checkout breaks it.
+Tools/Host/快速重新编译Host.bat -text
 *.md text eol=lf
 *.json text eol=lf
 *.html text eol=lf

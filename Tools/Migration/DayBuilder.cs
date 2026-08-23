@@ -343,24 +343,23 @@ namespace TraceSoul2.Migrate
                 changed.Add(IdentityCardSlotValues.Title(card.slot, pair) + "：" + Limit(card.reason, 40));
             }
 
-            // 内心：attention 空数组=不改；ongoing/unfinished 空字符串在有相处的日子表示清除，空天表示保留。
+            // 内心：attention 是会代谢的碎片；ongoing 是共享场景。旧 unfinished 字段不再恢复。
             var attention = (reviewOutput.inner_attention == null || reviewOutput.inner_attention.Count == 0)
                 ? null
                 : reviewOutput.inner_attention;
             var ongoing = (reviewOutput.inner_ongoing_activity ?? string.Empty).Trim();
-            var unfinished = (reviewOutput.inner_unfinished_intent ?? string.Empty).Trim();
             var proposed = new InnerRuntimeWriteData
             {
                 narrative = pair.RewriteRecordedText((reviewOutput.inner_narrative ?? string.Empty).Trim()),
                 mood = (reviewOutput.inner_mood ?? string.Empty).Trim(),
                 relationship_update = (reviewOutput.inner_relationship_lens ?? string.Empty).Trim(),
                 ongoing_activity = emptyDay && ongoing.Length == 0 ? null : ongoing,
-                unfinished_intent = emptyDay && unfinished.Length == 0 ? null : unfinished,
+                unfinished_intent = string.Empty,
                 attention = attention
             };
             var hasInner = proposed.narrative.Length > 0 || proposed.mood.Length > 0 ||
                            proposed.relationship_update.Length > 0 || proposed.ongoing_activity.Length > 0 ||
-                           proposed.unfinished_intent.Length > 0 || (attention != null && attention.Count > 0);
+                           (attention != null && attention.Count > 0);
             if (hasInner)
             {
                 var sourceMomentId = string.IsNullOrWhiteSpace(lastMomentId)

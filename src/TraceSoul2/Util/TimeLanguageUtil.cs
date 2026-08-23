@@ -54,5 +54,21 @@ namespace TraceSoul2.Util
             return now.Year + "年" + now.Month + "月" + now.Day + "日（" +
                    WeekZh(now) + "·" + DayKindZh(now) + "）" + PeriodZh(now) + " " + timeText;
         }
+
+        public static string ElapsedZh(long fromUnixMs, long toUnixMs)
+        {
+            if (fromUnixMs <= 0 || toUnixMs <= fromUnixMs) return "刚才";
+            var minutes = (toUnixMs - fromUnixMs) / 60000L;
+            if (minutes < 2) return "刚才";
+            if (minutes < 60) return minutes + "分钟";
+            var hours = minutes / 60L;
+            if (hours < 24)
+            {
+                var rest = minutes % 60L;
+                return rest == 0 ? hours + "小时" : hours + "小时" + rest + "分钟";
+            }
+            var days = hours / 24L;
+            return days + "天" + (hours % 24L == 0 ? string.Empty : (hours % 24L) + "小时");
+        }
     }
 }

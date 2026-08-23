@@ -137,6 +137,7 @@ app.Use(async (context, next) =>
 });
 
 app.MapGet("/status", (SoulRuntime runtime) => Results.Json(runtime.Status()));
+app.MapGet("/live-state", (SoulRuntime runtime) => Results.Json(runtime.LiveState()));
 
 // 正式版更新：GitHub Release → SHA-256 校验 → 外置 runner 替换应用目录。
 app.MapGet("/updates", (UpdateService updates) => Results.Json(updates.Status()));
@@ -217,12 +218,12 @@ app.MapGet("/inner", (SoulRuntime runtime) =>
         inner.Revision,
         inner.RelationshipLens,
         inner.OngoingActivity,
-        inner.UnfinishedIntent,
+        sharedScene = inner.OngoingActivity,
         inner.Asleep,
         nextHeartbeatUnixMs = HeartbeatLogic.NextDueUnixMs(runtime.Store, runtime.ConversationId),
         attention = (inner.Attention ?? new List<AttentionItemData>())
             .Take(3)
-            .Select(x => new { kind = x.kind ?? string.Empty, content = x.content ?? string.Empty })
+            .Select(x => new { kind = x.kind ?? string.Empty, content = x.content ?? string.Empty, updatedUnixMs = x.UpdatedUnixMs })
             .ToList(),
         inner.SnapshotId,
         inner.SourceMomentId,
