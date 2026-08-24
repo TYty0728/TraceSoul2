@@ -33,8 +33,8 @@ namespace TraceSoul2.Plugins
     /// <summary>
     /// 平台适配器契约：一个平台 = 一个适配器，负责两类翻译——
     /// 入站：平台原始消息 → 规范 Moment 事件（PluginEventData，role=user，含平台会话信息）；
-    /// 出站：规范表达（TraceOutboundMessageData）→ 平台动作，并且必须回传规范的「已发送」事件
-    /// （ProducedEvent，role=ass），保证每轮表达都能完整入库。
+    /// 出站：规范表达（TraceOutboundMessageData）→ 平台动作，并且必须回传规范的「已发送」事件。
+    /// 实际文字进入 Moment；图片、表情、语音等动作回执进入 operational_events。
     /// 平台的连接/鉴权/心跳等传输细节留在平台插件里，适配器只做消息结构翻译。
     /// </summary>
     public interface ITracePlatformAdapter
@@ -45,7 +45,7 @@ namespace TraceSoul2.Plugins
         /// <summary>平台原始载荷 → 规范 Moment；不是消息事件（心跳/回包/元事件等）返回 null。</summary>
         PluginEventData ConvertInbound(string platformPayload);
 
-        /// <summary>规范表达 → 平台动作；返回结果必须带 ProducedEvent（规范已发送事件），否则中枢无法入库。</summary>
+        /// <summary>规范表达 → 平台动作；返回结果必须带 ProducedEvent，供中枢按语义事件/运行回执分流。</summary>
         Task<TraceCapabilityResultData> SendAsync(
             TraceOutboundMessageData message,
             TraceTurnContext context,

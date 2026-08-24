@@ -174,7 +174,8 @@ namespace TraceSoul2.Logic
 
         private static bool IsUnbuiltDialogueMoment(MomentRecord moment, PairIdentity pair)
         {
-            if (string.Equals(moment.MemoryStatus, "built", StringComparison.OrdinalIgnoreCase))
+            if (string.Equals(moment.MemoryStatus, "built", StringComparison.OrdinalIgnoreCase) ||
+                string.Equals(moment.MemoryStatus, "operational", StringComparison.OrdinalIgnoreCase))
                 return false;
             if (string.IsNullOrWhiteSpace(moment.Content)) return false;
             var role = (moment.Role ?? string.Empty).Trim();

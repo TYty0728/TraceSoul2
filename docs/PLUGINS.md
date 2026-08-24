@@ -37,6 +37,19 @@
 | `Services.Embedding` | 文本语义向量（Host 侧 ONNX BGE），表情匹配等语义任务用 |
 | `Services.Llm` / `NerveLlm` | 语言模型口 |
 | `Services.Storage` | 记忆存取面（LoadPairIdentity 等） |
+| `Services.LifeState` | 当前生活状态（位置 + 活动）的读写面；更新必须带 `source/source_id`，按来源优先级仲裁 |
+
+例如游戏插件在 `ExecuteAsync` / Facet 中开始会话时只更新活动，不碰物理位置（`turn` 为当前轮上下文）：
+
+```csharp
+context.Services.LifeState?.Update(turn.ConversationId, new LifeStatePatchData
+{
+    activity = "游戏",
+    activity_detail = gameTitle,
+    source = LifeStateSourceValues.Plugin,
+    source_id = sessionId
+});
+```
 | `context.PackageDirectory` | 本包代码文件夹（只读 manifest/程序集/默认资源） |
 | `context.PluginDataDirectory` | 本包持久数据目录（读写配置、生成文件和用户资源） |
 
@@ -107,7 +120,7 @@ public sealed class XxxEffector : ITraceCallableContribution
 
 其余约定：
 
-- 出站表达**必须**经平台适配器并带 `ProducedEvent`（入库契约）；
+- 出站表达**必须**经平台适配器并带 `ProducedEvent`；实际文字进入 `moments`，图片、表情、语音等动作回执进入 `operational_events`；
 - 未配置（如缺 api_key）时让 `IsAvailable` 返回 false，该器官自动从身体上消失。
 
 ## 已交付的四个包（家目录 `plugins/`）

@@ -513,6 +513,18 @@
           <div class="live-metric"><div class="lab">下次心跳</div><div id="liveHeartbeat" class="val">—</div><div id="liveHeartbeatSub" class="sub">—</div></div>
           <div class="live-metric"><div class="lab">内心 revision</div><div id="liveRevision" class="val">—</div><div id="liveRevisionSub" class="sub">—</div></div>
         </div>
+        <div class="box">
+          <h2>他的生活状态</h2>
+          <p class="muted">位置和当前活动是可变化状态，可由你、Mind、插件或传感器更新。这里的修改按“用户”来源写入，并立即影响后续心智上下文。</p>
+          <div class="row">
+            <div class="nogrow"><label>位置</label>
+              <select id="liveLifeLocation"><option value="home">在家</option><option value="out">外出</option></select></div>
+            <div><label>当前活动</label><input id="liveLifeActivity" placeholder="游戏、睡觉、看剧、工作……" /></div>
+            <div><label>活动补充</label><input id="liveLifeActivityDetail" placeholder="例如：和我玩某某游戏" /></div>
+            <div class="nogrow"><label>&nbsp;</label><button class="primary" onclick="saveLiveLifeState()">保存他的状态</button></div>
+          </div>
+          <div id="liveLifeStateMeta" class="muted">状态来源：—</div>
+        </div>
         <div class="live-grid">
           <div>
             <div class="box"><h2>此刻心理切片</h2><div id="liveRuntime" class="live-list"></div></div>
@@ -700,6 +712,7 @@
           <div class="row">
             <div class="nogrow"><label>情境</label>
               <select id="bodyScene"><option value="home">在家</option><option value="out">出门</option></select></div>
+            <div><label>当前活动</label><input id="lifeActivity" placeholder="例如：游戏、睡觉、看剧、工作；留空=清除" /></div>
             <div class="nogrow"><label>当前激活</label>
               <div id="activeBodyLabel" class="muted">—</div></div>
           </div>
@@ -1398,12 +1411,23 @@
   }
   function renderLive(d) {
     const r = d.runtime || {}, h = d.heartbeat || {}, c = d.context || {};
+    const life = d.lifeState || {};
     const decision = d.decision || (d.latestTurn && d.latestTurn.mindDecision) || {};
     const asleep = !!r.asleep;
     $("liveOrb").className = "live-orb" + (asleep ? " sleep" : "");
     $("liveOrb").textContent = asleep ? "☾" : "✦";
     $("liveStateTitle").textContent = asleep ? "睡着了" : "醒着，正在生活";
-    $("liveStateSub").textContent = liveText(d.assname, "TraceSoul") + " · " + liveText(d.body && d.body.scene, "场景未知") + " · " + new Date(d.hostTime).toLocaleTimeString();
+    const lifeActivity = life.activity || (d.body && d.body.activity) || "空闲";
+    $("liveStateSub").textContent = liveText(d.assname, "TraceSoul") + " · " + liveText(life.locationLabel || (d.body && d.body.scene), "位置未知") + " · " + lifeActivity + " · " + new Date(d.hostTime).toLocaleTimeString();
+    const locationInput = $("liveLifeLocation"), activityInput = $("liveLifeActivity"), detailInput = $("liveLifeActivityDetail");
+    if (locationInput && document.activeElement !== locationInput) locationInput.value = life.location === "out" ? "out" : "home";
+    if (activityInput && document.activeElement !== activityInput) activityInput.value = life.activity || "";
+    if (detailInput && document.activeElement !== detailInput) detailInput.value = life.activityDetail || "";
+    if ($("liveLifeStateMeta")) $("liveLifeStateMeta").textContent =
+      "位置来源：" + liveText(life.locationSource) + " · 活动来源：" + liveText(life.activitySource) +
+      " · 最近更新：" + (life.activityUpdatedUnixMs || life.locationUpdatedUnixMs
+        ? new Date(Math.max(life.activityUpdatedUnixMs || 0, life.locationUpdatedUnixMs || 0)).toLocaleString()
+        : "—");
     $("liveMood").textContent = liveText(r.mood);
     $("liveMoodSub").textContent = "revision " + (r.revision || 0);
     $("liveHeartbeat").textContent = h.enabled ? liveCountdown(h.dueInSeconds) : "未排";
@@ -1432,6 +1456,8 @@
     $("liveContext").innerHTML =
       liveField("记忆日", c.day) +
       liveField("身体场景", d.body && d.body.scene) +
+      liveField("当前活动", lifeActivity) +
+      liveField("活动补充", life.activityDetail) +
       liveField("今日轨迹", c.trajectory) +
       `<div class="live-field"><div class="key">今日新识</div><div class="value">${c.todayNewItems && c.todayNewItems.length ? c.todayNewItems.map(x => esc(x.content)).join("；") : "—"}</div></div>` +
       `<div class="live-field"><div class="key">活跃事件</div><div class="value">${c.activeEvents && c.activeEvents.length ? c.activeEvents.map(x => esc(x.eventSummary || x.id)).join("；") : "—"}</div></div>`;
@@ -1461,6 +1487,20 @@
     finally { liveBusy = false; }
     if ($("liveAutoRefresh") && $("liveAutoRefresh").checked && !liveTimer)
       liveTimer = setInterval(() => { if (document.getElementById("sec-live").classList.contains("active")) loadLive(); }, 3000);
+  }
+  async function saveLiveLifeState() {
+    try {
+      await api("/life-state", "PUT", {
+        location: $("liveLifeLocation") ? $("liveLifeLocation").value : "home",
+        activity: $("liveLifeActivity") ? $("liveLifeActivity").value.trim() : "无",
+        activityDetail: $("liveLifeActivityDetail") ? $("liveLifeActivityDetail").value.trim() : "",
+        source: "user",
+        sourceId: "webui.live",
+        force: true
+      });
+      logLine("他的生活状态已保存");
+      await loadLive();
+    } catch (e) { alert("保存他的状态失败：" + e.message); }
   }
   function toggleLiveRefresh() {
     if (liveTimer) { clearInterval(liveTimer); liveTimer = null; }
@@ -1556,8 +1596,11 @@
   async function loadMouths() {
     try {
       const data = await api("/mouths");
+      let life = null;
+      try { life = await api("/life-state"); } catch (_) { life = null; }
       const bodies = data.bodies || data || [];
-      if ($("bodyScene")) $("bodyScene").value = data.scene === "out" ? "out" : "home";
+      if ($("bodyScene")) $("bodyScene").value = (life && life.location === "out") || data.scene === "out" ? "out" : "home";
+      if ($("lifeActivity")) $("lifeActivity").value = life && life.activity ? life.activity : "";
       if ($("activeBodyLabel")) {
         const active = (bodies || []).find(m => m.active);
         $("activeBodyLabel").textContent = active
@@ -1625,6 +1668,13 @@
       await api("/mouths", "PUT", {
         scene: $("bodyScene") ? $("bodyScene").value : "home",
         items
+      });
+      await api("/life-state", "PUT", {
+        location: $("bodyScene") ? $("bodyScene").value : "home",
+        activity: $("lifeActivity") ? $("lifeActivity").value.trim() : "无",
+        source: "user",
+        sourceId: "webui",
+        force: true
       });
       logLine("身体路由已保存");
       await loadMouths();

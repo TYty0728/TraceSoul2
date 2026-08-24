@@ -813,7 +813,7 @@ section / day / week / month / year / forever
 - 长期事实与认知留在网中。
 - 当前给 Brain 的粗粒度人生切片由 InnerRuntime 承担。
 - 复盘的核心意义变成：重新观察一段时间发生了什么、哪些节点升权或降权、是否形成重要认知、内心是否需要重排。
-- 复盘应由时间 Moment 唤醒 Brain，再由 Brain 调用相关神经，而不是调度器直接操作数据库。
+- 复盘应由时间运行事件唤醒 Brain，再由 Brain 调用相关神经，而不是调度器直接操作数据库或污染 Moment 账本。
 
 未来若重新引入“周/月/年视图”，它应当是记忆插件的可派生索引或复盘结果，不是不可替代的原始数据层。
 
@@ -828,7 +828,7 @@ section / day / week / month / year / forever
 列出任务
 取消任务
 检查到期
-产生 Moment
+产生运行事件
 ```
 
 它不负责：
@@ -844,7 +844,7 @@ section / day / week / month / year / forever
 
 ```text
 time.scheduler.service
-→ “每日复盘到期” system_event Moment
+→ “每日复盘到期” scheduler_trigger 运行事件
 → BrainFrame（已挂载四张身份短卡）
 → Brain 必须先 call identity.review
 → 需要时再 memory.activate / inner.inspect
@@ -866,7 +866,7 @@ time.scheduler.service
 她：“明天下午提醒我交报告。”
 → Brain 调用 time.schedule
 → 时间插件保存任务
-→ 明天下午产生 system_event Moment
+→ 明天下午产生 scheduler_trigger 运行事件
 → Brain 决定通过哪个 Effector 提醒
 ```
 
@@ -1008,6 +1008,7 @@ Brain：deep
 
 ```text
 后台服务产生：“每日复盘时间已到”
+记录：operational_events.scheduler_trigger
 Role：system_event
 RequiresExpression：false
 Brain 可以静默完成
@@ -1018,7 +1019,7 @@ Brain 可以静默完成
 ```text
 身体触觉传感器 → Moment Source
 Brain 需要动作 → Robot Effector
-真实动作结果 → ProducedEvent → Moment
+真实动作结果 → ProducedEvent → 语义发言进 Moment / 动作回执进 operational_events
 ```
 
 文字共享场景与物理身体证据继续分开。
@@ -1123,7 +1124,7 @@ API Key 不写入项目、SQLite、日志或插件文档。
 - Moment Source、MountedFacet、CallableNerve、Effector、BackgroundService。
 - 固定四张身份短卡 Facet，以及每日复盘时的 `identity.review`。
 - 一句话内心 Facet、完整自省和持久 revision。
-- 时间上下文、一次/每日/每周调度、到期 Moment。
+- 时间上下文、一次/每日/每周调度、到期运行事件。
 - 文字输入、近期原文神经和文字表达。
 - 四域、十六维度、动态 LifeTag。
 - BGE 本地向量导航。
@@ -1179,7 +1180,7 @@ QQ / 摄像头 / 以后的 Unity 身体 ──Moment·Effector──► Soul Hos
 | Console | 看短卡、内心、日志、开关插件、改名字 | Unity IMGUI | 浏览器 WebUI，以后可再打 PWA |
 | Body | 可选：3D 形象、机器人 | 和 Kernel 焊在一起 | 普通插件客户端 |
 
-内核无论用 C# 还是 Python，都必须继续遵守本文底线：唯一 Brain、插件不能互调、时间只产 Moment、短卡常驻 / 习惯点亮。
+内核无论用 C# 还是 Python，都必须继续遵守本文底线：唯一 Brain、插件不能互调、时间只产运行事件、短卡常驻 / 习惯点亮。
 
 ### 25.2 内核语言：C# Host，禁止双写 Brain
 
@@ -1218,7 +1219,7 @@ WebUI 不跑 Brain，不直接打开 SQLite，不替 Brain 调用神经。所有
 
 **进入生命（写，会触发 Brain）**
 
-- `POST /moments`：投入一条对话 Moment，等价于当前 `dialogue.receive`。后台感官（时间到期、QQ、摄像头）仍由插件自己产生 Moment，不走这条给「她打字」用的入口。
+- `POST /moments`：投入一条对话 Moment，等价于当前 `dialogue.receive`。QQ 等真实外部感官可产生语义 Moment；时间到期和动作回执产生运行事件，均不走这条给「她打字」用的入口。
 
 **WebUI 禁止**
 
@@ -1268,8 +1269,8 @@ WebUI 不跑 Brain，不直接打开 SQLite，不替 Brain 调用神经。所有
 9. 事实与认知必须分开，认知必须能修正和追溯证据。
 10. 第三层从人生中生长，不预装百科全书。
 11. 向量只负责候选导航，不能独自决定最终分类和召回。
-12. 时间调度只产生 Moment，不替 Brain 复盘或表达。
-13. 插件外部动作必须返回真实执行结果，并形成 ProducedEvent。
+12. 时间调度只产生运行事件，不进入 Moment，也不替 Brain 复盘或表达。
+13. 插件外部动作必须返回真实执行结果，并形成 ProducedEvent；只有有语义的真实发言进入 Moment。
 14. 原始上下文条数为 0 时，旧对话原文不得偷偷注入。
 15. 没有共享人生 Tag 时，不得用“最近记忆”兜底制造伪相关。
 16. WebUI 与可选身体客户端不得绕过 Host 直接改 Kernel 状态。
@@ -1279,8 +1280,9 @@ WebUI 不跑 Brain，不直接打开 SQLite，不替 Brain 调用神经。所有
 
 ```text
                          ┌──────────────────────┐
-外部平台 / 身体 / 时间 ─→│       Moment         │
+外部平台 / 身体 / 时间 ─→│  事件分流器            │
                          └──────────┬───────────┘
+                         Moment / operational_event
                                     ↓
                          ┌──────────────────────┐
                          │     BrainFrame       │

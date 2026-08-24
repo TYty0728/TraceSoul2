@@ -101,6 +101,11 @@ namespace TraceSoul2.Data
         public string Realm { get; set; }
         public string EvidenceType { get; set; }
         public string PayloadJson { get; set; }
+        /// <summary>
+        /// 仅作运行留痕、不应进入语义 Moment 的事件（例如 QQ 图片/表情发送回执、定时器触发）。
+        /// 默认 false：未声明的插件事件仍按语义 Moment 处理，保持旧插件兼容。
+        /// </summary>
+        public bool IsOperational { get; set; }
         /// <summary>入站器官；只给身体路由用，不写入 Moment。</summary>
         public string Organ { get; set; }
         /// <summary>中枢叫醒谁：dialogue / mind / subconscious。空则由角色与内容推断。</summary>

@@ -85,6 +85,73 @@ namespace TraceSoul2.Data
         public const string Small = "small";
     }
 
+    /// <summary>身体所在的物理场景；不同于 MindDecisionData.scene 的共享文字场景。</summary>
+    public static class BodySceneValues
+    {
+        public const string Home = "home";
+        public const string Out = "out";
+
+        public static string Normalize(string value)
+        {
+            var text = (value ?? string.Empty).Trim().ToLowerInvariant();
+            if (text == Out || text == "外出" || text == "出门") return Out;
+            return Home;
+        }
+
+        public static string Label(string value)
+        {
+            return Normalize(value) == Out ? "外出" : "家里";
+        }
+    }
+
+    public static class LifeStateSourceValues
+    {
+        public const string User = "user";
+        public const string Sensor = "sensor";
+        public const string Plugin = "plugin";
+        public const string Mind = "mind";
+        public const string System = "system";
+
+        public static int Priority(string source)
+        {
+            switch ((source ?? string.Empty).Trim().ToLowerInvariant())
+            {
+                case User: return 100;
+                case Sensor: return 90;
+                case Plugin: return 80;
+                case Mind: return 50;
+                default: return 10;
+            }
+        }
+    }
+
+    [Serializable]
+    public sealed class LifeStateData
+    {
+        public string conversation_id;
+        public string location = BodySceneValues.Home;
+        public string activity = string.Empty;
+        public string activity_detail = string.Empty;
+        public string location_source = LifeStateSourceValues.System;
+        public string activity_source = LifeStateSourceValues.System;
+        public string location_source_id = string.Empty;
+        public string activity_source_id = string.Empty;
+        public long location_updated_unix_ms;
+        public long activity_updated_unix_ms;
+        public long activity_started_unix_ms;
+    }
+
+    [Serializable]
+    public sealed class LifeStatePatchData
+    {
+        public string location;
+        public string activity;
+        public string activity_detail;
+        public string source;
+        public string source_id;
+        public bool force;
+    }
+
     public static class BodyIds
     {
         public const string Console = "console";
@@ -380,6 +447,13 @@ namespace TraceSoul2.Data
         public string sticker;
         /// <summary>无 / 自拍 / 画。真的把图发到对话里，不是描写。</summary>
         public string image;
+        /// <summary>可选的物理位置更新：home/out；空表示不改。</summary>
+        public string location;
+        /// <summary>可选的当前活动更新：游戏/睡觉/看剧等自由文本；空表示不改，无表示清除。</summary>
+        public string activity;
+        public string activity_detail;
+        /// <summary>用户明确要求改变生活状态时为 true；普通推断不得强行覆盖插件/传感器。</summary>
+        public bool state_force;
 
         public bool WantsMemory()
         {
@@ -440,6 +514,19 @@ namespace TraceSoul2.Data
                 string.Equals(value, "image", StringComparison.OrdinalIgnoreCase))
                 return MindAtmosphereValues.Yes;
             return MindAtmosphereValues.None;
+        }
+
+        public string LocationValue()
+        {
+            var value = (location ?? string.Empty).Trim();
+            return value.Length == 0 ? string.Empty : BodySceneValues.Normalize(value);
+        }
+
+        public string ActivityValue()
+        {
+            var value = (activity ?? string.Empty).Trim();
+            if (value == "无" || value == "空闲" || value == "没有") return string.Empty;
+            return value;
         }
 
         public bool ClearsAttention()

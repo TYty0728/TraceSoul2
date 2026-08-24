@@ -273,8 +273,9 @@ internal static class Program
                     DateTimeOffset.UtcNow.ToUnixTimeMilliseconds() + 2000);
                 Require(dueMoments.Count == 1 && dueMoments[0].Role == "system_event" &&
                         dueMoments[0].ConversationId == "facet-check" &&
-                        dueMoments[0].Wake == KernelWakeValues.Mind,
-                    "时间到期只能产生新 Moment，普通任务叫醒心智");
+                        dueMoments[0].Wake == KernelWakeValues.Mind &&
+                        dueMoments[0].IsOperational,
+                    "时间到期只能产生运行事件并叫醒心智，不能进入 Moment");
                 var continueResult = pluginManager.ExecuteAsync(new BrainCapabilityCallData
                 {
                     call_id = "continue-check",
@@ -297,6 +298,7 @@ internal static class Program
                 var continued = pluginManager.PollBackgroundServices(
                     DateTimeOffset.UtcNow.ToUnixTimeMilliseconds() + 2000);
                 Require(continued.Count == 1 &&
+                        continued[0].IsOperational &&
                         continued[0].Wake == KernelWakeValues.Mind &&
                         HeartbeatLogic.IsHeartbeatContent(continued[0].Content) &&
                         HeartbeatLogic.ExtractPlan(continued[0].Content).Contains("重新看狐狸故事") &&
@@ -533,6 +535,34 @@ internal static class Program
                 Require(store.CountCognitions() == 3, "应保存独立认知切片与痕迹认知，以及活体看法");
                 Require(store.GetCognitionCandidates(new[] { "concept.life.unrelated" }, 10).Count == 0,
                     "不共享 Tag 的认知不得混入候选");
+                store.SaveMoment(new MomentRecord
+                {
+                    Id = "legacy-time-event",
+                    ConversationId = conversationId,
+                    Role = "system_event",
+                    Content = "时间任务到期：旧心跳",
+                    Realm = TraceRealmValues.Meta,
+                    EvidenceType = EvidenceTypeValues.PluginObserved,
+                    SourcePluginId = "builtin.time",
+                    SourceEventId = "legacy-schedule",
+                    PayloadJson = "{}",
+                    MemoryStatus = "live",
+                    CreatedUnixMs = DateTimeOffset.UtcNow.ToUnixTimeMilliseconds()
+                });
+                store.SaveMoment(new MomentRecord
+                {
+                    Id = "legacy-image-receipt",
+                    ConversationId = conversationId,
+                    Role = "assistant",
+                    Content = OneBotPlatformPrompts.SendImageMoment,
+                    Realm = TraceRealmValues.Unclassified,
+                    EvidenceType = EvidenceTypeValues.AssPerformed,
+                    SourcePluginId = "builtin.onebot",
+                    SourceEventId = "legacy-image",
+                    PayloadJson = string.Empty,
+                    MemoryStatus = "live",
+                    CreatedUnixMs = DateTimeOffset.UtcNow.ToUnixTimeMilliseconds()
+                });
             }
 
             using (var reopened = new SqliteMemoryManager(path))
@@ -546,8 +576,15 @@ internal static class Program
                     "同一第三层 Tag 应能导航到 Brain 认知");
                 Require(reopened.GetRecentMoments(conversationId, 10).All(x => x.SourcePluginId == "builtin.dialogue"),
                     "每个 Moment 必须保留插件来源");
+                var operational = reopened.GetRecentOperationalEvents(conversationId, 10);
+                Require(operational.Count == 2 &&
+                        operational.Any(x => x.Id == "legacy-time-event" &&
+                                             x.Kind == OperationalEventKindValues.SchedulerTrigger) &&
+                        operational.Any(x => x.Id == "legacy-image-receipt" &&
+                                             x.Kind == OperationalEventKindValues.OutboundImage),
+                    "升级时应非破坏性迁出旧时间触发与非文字发送回执");
             }
-            Console.WriteLine("ChatCheck passed: 身份短卡/每日复盘/LLM模型列表 → 插件贡献发现/启停 → BrainFrame Facet → 时间 Moment → 记忆/内心 SQLite 往返。");
+            Console.WriteLine("ChatCheck passed: 身份短卡/每日复盘/LLM模型列表 → 插件贡献发现/启停 → BrainFrame Facet → 时间运行事件 → 记忆/内心 SQLite 往返。");
         }
         finally
         {
@@ -1248,6 +1285,12 @@ internal static class Program
                 "纯图应判为图");
             Require(MouthLogic.ClassifyInboundOrgan("看这张[图片]") == BodyOrganValues.Text,
                 "带字的图仍是说话");
+            MouthLogic.SetScene(dir, "外出");
+            Require(MouthLogic.LoadState(dir).scene == BodySceneValues.Out,
+                "身体场景应接受中文外出值并持久化为 out");
+            MouthLogic.SetScene(dir, "未知值");
+            Require(MouthLogic.LoadState(dir).scene == BodySceneValues.Home,
+                "未知身体场景应安全回落到 home");
         }
         finally
         {
@@ -1286,6 +1329,11 @@ internal static class Program
                 !OneBotPlatformAdapter.IsStickerAsset(
                     @"D:\AISoftWare\TraceSoul2\plugins\qq-imagegen\output\a.png"),
             "自定义图片表情应与普通图片分开识别，以便追加到文字末尾");
+        Require(!OneBotPlatformAdapter.IsOperationalReceipt(TraceOutboundKinds.Text) &&
+                OneBotPlatformAdapter.IsOperationalReceipt(TraceOutboundKinds.Image) &&
+                OneBotPlatformAdapter.IsOperationalReceipt(TraceOutboundKinds.Sticker) &&
+                OneBotPlatformAdapter.IsOperationalReceipt(TraceOutboundKinds.Voice),
+            "只有真实文字发送进入 Moment，图片、表情和语音只记运行回执");
     }
 
     private static void RunExpressorImageRoutingCheck()

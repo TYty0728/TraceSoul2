@@ -288,17 +288,26 @@ namespace TraceSoul2.Plugins.Builtin
                 deferred ? "QQ 出站已暂存" : "QQ 出站动作完成",
                 timer.ElapsedMilliseconds, "kind=" + message.Kind);
 
-            // 规范「已发送」事件：平台适配器契约，中枢据此把回复 Moment 完整入库。
+            // 规范「已发送」事件：实际文字进 Moment，非文字动作只进运行回执。
             var pair = context.Services.Storage.LoadPairIdentity();
             var canonical = new PluginEventData
             {
+                TraceId = context.TraceId,
                 PluginId = PlatformId,
                 ExternalEventId = Guid.NewGuid().ToString("N"),
                 Role = pair.IsComplete ? pair.Assname : "assistant",
                 Content = canonicalContent,
                 Realm = TraceRealmValues.Unclassified,
                 EvidenceType = EvidenceTypeValues.AssPerformed,
-                PayloadJson = string.Empty,
+                PayloadJson = TraceJson.ToJson(new Dictionary<string, string>
+                {
+                    { "kind", message.Kind ?? string.Empty },
+                    { "session_type", sessionType ?? string.Empty },
+                    { "session_id", sessionId ?? string.Empty },
+                    { "asset_ref", string.Equals(message.Kind, TraceOutboundKinds.Text,
+                        StringComparison.Ordinal) ? string.Empty : (message.File ?? string.Empty) }
+                }),
+                IsOperational = IsOperationalReceipt(message.Kind),
                 OccurredUnixMs = DateTimeOffset.UtcNow.ToUnixTimeMilliseconds()
             };
             return new TraceCapabilityResultData
@@ -315,6 +324,11 @@ namespace TraceSoul2.Plugins.Builtin
         {
             var path = (file ?? string.Empty).Trim().Replace('\\', '/');
             return path.IndexOf("/qq-sticker/", StringComparison.OrdinalIgnoreCase) >= 0;
+        }
+
+        internal static bool IsOperationalReceipt(string kind)
+        {
+            return !string.Equals(kind, TraceOutboundKinds.Text, StringComparison.Ordinal);
         }
     }
 

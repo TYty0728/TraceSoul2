@@ -95,6 +95,9 @@ namespace TraceSoul2.Logic
             if (output.sleep) output.next_heartbeat_minutes = 0;
             output.sticker = output.StickerValue();
             output.image = output.ImageValue();
+            output.location = output.LocationValue();
+            output.activity = Limit(OneLine(output.activity), 80);
+            output.activity_detail = Limit(OneLine(output.activity_detail), 160);
             // 表情是否发送不再由心智卡决定；这里保留旧字段兼容，但统一归零。
             output.sticker = MindAtmosphereValues.None;
             if (output.sleep || output.BeatValue() == MindBeatValues.Leave)
@@ -132,6 +135,18 @@ namespace TraceSoul2.Logic
             var builder = new StringBuilder();
             var now = DateTimeOffset.Now;
             builder.AppendLine(CorePrompts.Mind.NowPrefix + TimeLanguageUtil.NaturalNow(now) + "。");
+            var bodyScene = MouthLogic.LoadState(
+                turn == null || turn.Services == null ? null : turn.Services.DataDirectory).scene;
+            builder.AppendLine(CorePrompts.Mind.BodyScenePrefix + BodySceneValues.Label(bodyScene) + "。这是物理所在，不是我们共同的文字场景；它只作为当前生活上下文参考。");
+            if (turn != null && turn.Services != null && turn.Services.LifeState != null)
+            {
+                var life = turn.Services.LifeState.Load(turn.ConversationId);
+                if (life != null)
+                    builder.AppendLine("【当前活动】" +
+                                      (string.IsNullOrWhiteSpace(life.activity) ? "空闲" : life.activity) +
+                                      (string.IsNullOrWhiteSpace(life.activity_detail) ? string.Empty : "｜" + life.activity_detail) +
+                                      "。这是可变化的生活状态；没有明确变化不要擅自改写。");
+            }
             var lastReal = storage.GetRecentMoments(turn.ConversationId, 200)
                 .Where(x => x != null &&
                             (pair.IsHumanMoment(x.Role) || pair.IsCompanionMoment(x.Role)) &&

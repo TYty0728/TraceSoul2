@@ -4,6 +4,16 @@ using SQLite;
 
 namespace TraceSoul2.Data
 {
+    public static class OperationalEventKindValues
+    {
+        public const string SchedulerTrigger = "scheduler_trigger";
+        public const string OutboundImage = "outbound_image";
+        public const string OutboundSticker = "outbound_sticker";
+        public const string OutboundVoice = "outbound_voice";
+        public const string ActionReceipt = "action_receipt";
+        public const string PluginRuntime = "plugin_runtime";
+    }
+
     [Table("moments")]
     public sealed class MomentRecord
     {
@@ -23,6 +33,33 @@ namespace TraceSoul2.Data
         /// <summary>记忆落库标记：live=已保存未构筑；built=已归档进多维索引/条目。</summary>
         public string MemoryStatus { get; set; }
         [Indexed]
+        public long CreatedUnixMs { get; set; }
+    }
+
+    /// <summary>
+    /// 运行层留痕，不是可供记忆构筑的生命事件。
+    /// 例如平台发送回执、调度器触发、插件执行结果等都写这里。
+    /// </summary>
+    [Table("operational_events")]
+    public sealed class OperationalEventRecord
+    {
+        [PrimaryKey]
+        public string Id { get; set; }
+        [Indexed]
+        public string ConversationId { get; set; }
+        [Indexed]
+        public string Kind { get; set; }
+        [Indexed]
+        public string SourcePluginId { get; set; }
+        [Indexed]
+        public string SourceEventId { get; set; }
+        public string TraceId { get; set; }
+        public string Role { get; set; }
+        public string Content { get; set; }
+        public string Realm { get; set; }
+        public string EvidenceType { get; set; }
+        public string PayloadJson { get; set; }
+        public long OccurredUnixMs { get; set; }
         public long CreatedUnixMs { get; set; }
     }
 

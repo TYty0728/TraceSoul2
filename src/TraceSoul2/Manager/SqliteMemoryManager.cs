@@ -49,15 +49,37 @@ namespace TraceSoul2.Manager
             connection.Insert(moment);
         }
 
+        public void SaveOperationalEvent(OperationalEventRecord operationalEvent)
+        {
+            if (operationalEvent == null) throw new ArgumentNullException("operationalEvent");
+            var pair = LoadPairIdentity();
+            if (pair.IsComplete)
+                operationalEvent.Role = pair.CanonicalMomentRole(operationalEvent.Role);
+            connection.Insert(operationalEvent);
+        }
+
         public List<MomentRecord> GetRecentMoments(string conversationId, int take)
         {
             if (take <= 0) return new List<MomentRecord>();
             return connection.Table<MomentRecord>()
-                .Where(x => x.ConversationId == conversationId)
+                .Where(x => x.ConversationId == conversationId &&
+                            (x.MemoryStatus == null || x.MemoryStatus != "operational"))
                 .OrderByDescending(x => x.CreatedUnixMs)
                 .Take(Math.Min(200, take))
                 .ToList()
                 .OrderBy(x => x.CreatedUnixMs)
+                .ToList();
+        }
+
+        public List<OperationalEventRecord> GetRecentOperationalEvents(string conversationId, int take)
+        {
+            if (take <= 0) return new List<OperationalEventRecord>();
+            return connection.Table<OperationalEventRecord>()
+                .Where(x => x.ConversationId == conversationId)
+                .OrderByDescending(x => x.OccurredUnixMs)
+                .Take(Math.Min(200, take))
+                .ToList()
+                .OrderBy(x => x.OccurredUnixMs)
                 .ToList();
         }
 
@@ -597,7 +619,8 @@ namespace TraceSoul2.Manager
             if (take <= 0) return new List<MomentRecord>();
             conversationId = Required(conversationId, "conversationId");
             return connection.Table<MomentRecord>()
-                .Where(x => x.ConversationId == conversationId && x.CreatedUnixMs >= fromUnixMs)
+                .Where(x => x.ConversationId == conversationId && x.CreatedUnixMs >= fromUnixMs &&
+                            (x.MemoryStatus == null || x.MemoryStatus != "operational"))
                 .OrderBy(x => x.CreatedUnixMs)
                 .Take(Math.Min(200, take))
                 .ToList();
@@ -844,6 +867,7 @@ namespace TraceSoul2.Manager
         private void InitializeSchema()
         {
             connection.CreateTable<MomentRecord>();
+            connection.CreateTable<OperationalEventRecord>();
             connection.CreateTable<TurnReviewRecord>();
             connection.CreateTable<PluginStateRecord>();
             connection.CreateTable<PluginDocumentRecord>();
@@ -873,6 +897,36 @@ namespace TraceSoul2.Manager
             EnsureColumn("turn_reviews", "PayloadJson", "TEXT");
             EnsureColumn("moments", "MemoryStatus", "TEXT");
             EnsureColumn("inner_runtime", "Asleep", "INTEGER");
+            ArchiveLegacyOperationalMoments();
+        }
+
+        /// <summary>
+        /// 旧版本曾把调度触发和 QQ 非文字发送回执写进 moments。
+        /// 升级时保留原行以便审计，同时复制到运行表并标成 operational，后续查询和复盘都会忽略它们。
+        /// </summary>
+        private void ArchiveLegacyOperationalMoments()
+        {
+            const string legacyWhere =
+                "((SourcePluginId='builtin.time' AND Role='system_event') OR " +
+                "(SourcePluginId='builtin.onebot' AND EvidenceType='ass_performed' AND " +
+                "(Content LIKE '[QQ %' OR Content LIKE '[CQ:%')))";
+            connection.RunInTransaction(() =>
+            {
+                connection.Execute(
+                    "INSERT OR IGNORE INTO operational_events " +
+                    "(Id,ConversationId,Kind,SourcePluginId,SourceEventId,TraceId,Role,Content,Realm,EvidenceType,PayloadJson,OccurredUnixMs,CreatedUnixMs) " +
+                    "SELECT Id,ConversationId," +
+                    "CASE WHEN SourcePluginId='builtin.time' THEN 'scheduler_trigger' " +
+                    "WHEN Content LIKE '%发送图片%' THEN 'outbound_image' " +
+                    "WHEN Content LIKE '%表情%' THEN 'outbound_sticker' " +
+                    "WHEN Content LIKE '%发送语音%' THEN 'outbound_voice' " +
+                    "ELSE 'action_receipt' END," +
+                    "SourcePluginId,SourceEventId,'',Role,Content,Realm,EvidenceType,PayloadJson,CreatedUnixMs,CreatedUnixMs " +
+                    "FROM moments WHERE " + legacyWhere);
+                connection.Execute(
+                    "UPDATE moments SET MemoryStatus='operational' WHERE " + legacyWhere +
+                    " AND (MemoryStatus IS NULL OR MemoryStatus!='operational')");
+            });
         }
 
         private void EnsureColumn(string table, string column, string declaration)
