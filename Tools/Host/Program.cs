@@ -60,6 +60,9 @@ var builder = WebApplication.CreateBuilder(new WebApplicationOptions
 });
 builder.WebHost.ConfigureKestrel(options =>
 {
+    // NapCat 心跳约 30s 一次，远低于 Kestrel 默认 240B/s；不关掉会把反向 WS 当空闲连接掐掉。
+    options.Limits.MinRequestBodyDataRate = null;
+    options.Limits.MinResponseDataRate = null;
     ConfigureListenUrls(options, urls);
     if (onebotListenPort > 0 && PortFree(onebotListenPort))
         options.ListenLocalhost(onebotListenPort);
@@ -92,8 +95,12 @@ app.Use(async (context, next) =>
         return;
     }
 
+    var isWebSocketUpgrade = context.Request.Headers.Upgrade.ToString()
+        .Split(',')
+        .Any(part => string.Equals(part.Trim(), "websocket", StringComparison.OrdinalIgnoreCase));
     var origin = context.Request.Headers.Origin.ToString();
-    if (!string.IsNullOrWhiteSpace(origin))
+    // NapCat 反向 WS 的 Origin 常是 ws://127.0.0.1:9021，和 HTTP 控制台 scheme/port 对不上。
+    if (!isWebSocketUpgrade && !string.IsNullOrWhiteSpace(origin))
     {
         Uri originUri;
         var requestPort = context.Request.Host.Port ??

@@ -65,7 +65,7 @@ namespace TraceSoul2.ExternalPlugins
         {
             Id = PluginId,
             DisplayName = "QQ 相机与生图",
-            Version = "2.0.6",
+            Version = "2.1.0",
             Author = "TraceSoul2",
             Role = PluginRoleValues.Organ,
             PlatformId = BodyIds.Qq,
@@ -103,23 +103,37 @@ namespace TraceSoul2.ExternalPlugins
         private void AttachMindHooks(TracePluginServices current)
         {
             if (current == null) return;
-            if (mindUsageAppend == null)
-                mindUsageAppend = turn =>
-                    turn != null && IsReady(turn.Services) ? QqImageGenPrompts.MindUsage : null;
-            if (mindJsonField == null)
-                mindJsonField = turn =>
-                    turn != null && IsReady(turn.Services) ? "\"image\":\"有|无\"" : null;
-            if (!current.MindPromptAppends.Contains(mindUsageAppend))
-                current.MindPromptAppends.Add(mindUsageAppend);
-            if (!current.MindJsonFields.Contains(mindJsonField))
-                current.MindJsonFields.Add(mindJsonField);
+            try
+            {
+                if (mindUsageAppend == null)
+                    mindUsageAppend = turn =>
+                        turn != null && IsReady(turn.Services) ? QqImageGenPrompts.MindUsage : null;
+                if (mindJsonField == null)
+                    mindJsonField = turn =>
+                        turn != null && IsReady(turn.Services) ? "\"image\":\"有|无\"" : null;
+                if (!current.MindPromptAppends.Contains(mindUsageAppend))
+                    current.MindPromptAppends.Add(mindUsageAppend);
+                if (!current.MindJsonFields.Contains(mindJsonField))
+                    current.MindJsonFields.Add(mindJsonField);
+            }
+            catch (MissingMethodException)
+            {
+                // 宿主 PluginApi 尚未包含心智扩展槽时跳过挂载。
+            }
         }
 
         private void DetachMindHooks()
         {
             if (services == null) return;
-            if (mindUsageAppend != null) services.MindPromptAppends.Remove(mindUsageAppend);
-            if (mindJsonField != null) services.MindJsonFields.Remove(mindJsonField);
+            try
+            {
+                if (mindUsageAppend != null) services.MindPromptAppends.Remove(mindUsageAppend);
+                if (mindJsonField != null) services.MindJsonFields.Remove(mindJsonField);
+            }
+            catch (MissingMethodException)
+            {
+                // 宿主 PluginApi 比插件旧时，关机不应再炸。
+            }
         }
 
         internal bool IsReady(TracePluginServices currentServices)
@@ -243,11 +257,13 @@ namespace TraceSoul2.ExternalPlugins
                 return await SendDirectUrlAsync(url, context, cancellationToken);
             }
             if (prompt.Length == 0) throw new InvalidOperationException("生图需要 prompt。URL 发图请同时给 url。 ");
+            var plannedReferences = new List<string>();
             if (mode != "url" && mode != "edit")
             {
                 var planned = await PlanSceneAsync(prompt, context, cancellationToken);
                 prompt = planned.Scene;
                 mode = planned.Mode;
+                plannedReferences.AddRange(planned.ReferenceCategories);
             }
             var aspectRatio = NormalizeAspectRatio(call.GetArgument("aspect_ratio"), mode);
 
@@ -256,6 +272,9 @@ namespace TraceSoul2.ExternalPlugins
                 references.Reload();
                 context.Services.LogTiming(context.TraceId, "TA的相机 参考图库已刷新", detail: references.Describe());
                 var requested = SplitCategories(call.GetArgument("refs"));
+                foreach (var planned in plannedReferences)
+                    if (!requested.Contains(planned, StringComparer.OrdinalIgnoreCase))
+                        requested.Add(planned);
                 foreach (var configured in characterCategories)
                     if ((mode == "selfie" || mode == "photo") && !requested.Contains(configured, StringComparer.OrdinalIgnoreCase))
                         requested.Insert(0, configured);
@@ -424,6 +443,7 @@ namespace TraceSoul2.ExternalPlugins
         {
             public string Mode;
             public string Scene;
+            public List<string> ReferenceCategories = new List<string>();
         }
 
         private async Task<ScenePlanResult> PlanSceneAsync(
@@ -453,7 +473,9 @@ namespace TraceSoul2.ExternalPlugins
                     parsed.Scene = fallback.Scene.Length > 0 ? fallback.Scene : parsed.Scene;
                 }
                 context.Services.LogTiming(context.TraceId, "TA的相机 画面规划完成",
-                    timer.ElapsedMilliseconds, "mode=" + parsed.Mode + "｜" + TruncateForLog(parsed.Scene, 400));
+                    timer.ElapsedMilliseconds, "mode=" + parsed.Mode + "｜refs=" +
+                    (parsed.ReferenceCategories.Count == 0 ? "(无)" : string.Join(",", parsed.ReferenceCategories)) +
+                    "｜" + TruncateForLog(parsed.Scene, 400));
                 return parsed;
             }
             catch (Exception exception)
@@ -473,6 +495,12 @@ namespace TraceSoul2.ExternalPlugins
             builder.AppendLine(QqImageGenPrompts.ScenePlanDraw);
             if (!string.IsNullOrWhiteSpace(characterDetails))
                 builder.AppendLine(QqImageGenPrompts.ScenePlanLookPrefix + Truncate(characterDetails.Trim(), 400));
+            if (references != null && references.Categories.Count > 0)
+            {
+                builder.AppendLine(QqImageGenPrompts.ScenePlanReferencesHeader);
+                builder.AppendLine(QqImageGenPrompts.ScenePlanReferencesHint);
+                builder.AppendLine(references.Describe());
+            }
             var storage = context.Services == null ? null : context.Services.Storage;
             if (storage != null)
             {
@@ -564,10 +592,14 @@ namespace TraceSoul2.ExternalPlugins
             var text = CleanPlan(raw);
             var kind = ReadLabeledLine(text, "种类");
             var picture = ReadLabeledBlock(text, "画面");
+            var referenceText = ReadLabeledLine(text, "参考");
             var mode = kind.Length > 0 ? ClassifyPlanKind(kind) : "selfie";
             var scene = picture.Length > 0 ? picture : StripKindLine(text);
             if (scene.Length < 12) scene = (seed ?? string.Empty).Trim();
-            return new ScenePlanResult { Mode = mode, Scene = scene };
+            var categories = SplitCategories(referenceText)
+                .Where(x => x != "无" && x != "不需要" && x != "none")
+                .ToList();
+            return new ScenePlanResult { Mode = mode, Scene = scene, ReferenceCategories = categories };
         }
 
         private static string ClassifyPlanKind(string value)
@@ -696,14 +728,31 @@ namespace TraceSoul2.ExternalPlugins
                     x.Key + "=" + x.First().Role + "参考")));
                 builder.Append(QqImageGenPrompts.RefsHint);
             }
-            if (!string.IsNullOrWhiteSpace(characterDetails) && hasPersonIntent)
-                builder.Append(QqImageGenPrompts.CharacterPrefix).Append(characterDetails.Trim()).Append("。 ");
             if (!string.IsNullOrWhiteSpace(stylePrompt))
                 builder.Append(QqImageGenPrompts.StylePrefix).Append(stylePrompt.Trim()).Append("。 ");
             builder.Append(QqImageGenPrompts.RequestPrefix).Append(prompt).Append("。 ");
             if (!string.IsNullOrWhiteSpace(aspectRatio))
                 builder.Append(QqImageGenPrompts.AspectPrefix).Append(aspectRatio).Append("。");
+            if (!string.IsNullOrWhiteSpace(characterDetails) && hasPersonIntent)
+                builder.Append(QqImageGenPrompts.CharacterPrefix).Append(characterDetails.Trim()).Append("。 ");
+            if (selected.Count > 0)
+                builder.Append(BuildReferenceGuide(selected));
             return Regex.Replace(builder.ToString(), @"\s+", " ").Trim();
+        }
+
+        private static string BuildReferenceGuide(IReadOnlyList<ReferenceImageData> selected)
+        {
+            var indexed = selected.Select((image, index) => new { Image = image, Number = index + 1 });
+            var groups = indexed.GroupBy(x => new
+            {
+                Category = x.Image.Category ?? "未分类",
+                Role = x.Image.Role ?? "辅助"
+            });
+            var mapping = string.Join("；", groups.Select(group =>
+                string.Join("、", group.Select(x => "图" + x.Number)) + "=" +
+                "分类「" + group.Key.Category + "」/用途「" + group.Key.Role + "」"));
+            return QqImageGenPrompts.ReferenceOrderPrefix + mapping + "。" +
+                   QqImageGenPrompts.ReferenceFusionRules;
         }
 
         private string NormalizeMode(string requested, string prompt, TraceTurnContext context)

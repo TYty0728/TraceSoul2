@@ -26,6 +26,9 @@ namespace TraceSoul2.Plugins.Builtin
     {
         private const string PluginId = "builtin.onebot";
         private const string LastSessionDocumentKey = "last_session";
+        private const int InputStatusRefreshMilliseconds = 5000;
+        // 生图插件允许的最长超时为 30 分钟；异常路径会由中枢 finally 提前停止刷新。
+        private const int InputStatusMaximumMilliseconds = 1800000;
 
         private readonly object gate = new object();
         private readonly object socketGate = new object();
@@ -35,6 +38,7 @@ namespace TraceSoul2.Plugins.Builtin
         private readonly HashSet<string> learnedSelfIds = new HashSet<string>(StringComparer.Ordinal);
         private readonly Dictionary<string, TaskCompletionSource<string>> pendingActions =
             new Dictionary<string, TaskCompletionSource<string>>(StringComparer.Ordinal);
+        private readonly HashSet<TypingTurnState> activeTypingStates = new HashSet<TypingTurnState>();
         private ClientWebSocket forwardSocket;
         private CancellationTokenSource forwardCts;
         private HttpClient http;
@@ -59,7 +63,7 @@ namespace TraceSoul2.Plugins.Builtin
         {
             Id = PluginId,
             DisplayName = "QQ 平台（OneBot v11 / NapCat）",
-            Version = "1.3.0",
+            Version = "1.4.1",
             Author = "TraceSoul2",
             Role = PluginRoleValues.Platform,
             PlatformId = BodyIds.Qq,
@@ -168,6 +172,9 @@ namespace TraceSoul2.Plugins.Builtin
             context.AddBackgroundService(new OneBotInboxService(this));
             // 整轮收尾：把暂存的文字（可能带结尾表情）合并成一条 QQ 消息发出。
             context.Services.TurnCompleteHooks.Add(FlushStagedAsync);
+            // 心智决定开口后立即显示输入状态；整轮的文字/表情/图片都发完后再恢复。
+            context.Services.ExpressionStartingHooks.Add(StartTypingAsync);
+            context.Services.ExpressionCompletedHooks.Add(StopTypingAsync);
             LoadLastSession();
             if (!config.enabled) return;
             waitingSinceUnixMs = DateTimeOffset.UtcNow.ToUnixTimeMilliseconds();
@@ -236,9 +243,137 @@ namespace TraceSoul2.Plugins.Builtin
                 timer.ElapsedMilliseconds);
         }
 
+        // ---------- NapCat 好友输入状态（一整轮表达的生命周期） ----------
+
+        private async Task StartTypingAsync(TraceTurnContext turn)
+        {
+            if (turn == null || !CanOutbound()) return;
+            string sessionType;
+            string sessionId;
+            if (!TryResolveSession(turn, out sessionType, out sessionId) ||
+                !string.Equals(sessionType, "private", StringComparison.OrdinalIgnoreCase) ||
+                string.IsNullOrWhiteSpace(sessionId)) return;
+
+            var state = turn.Workspace.GetOrCreateState(PluginId, () => new TypingTurnState());
+            if (Interlocked.CompareExchange(ref state.Started, 1, 0) != 0) return;
+            state.UserId = sessionId.Trim();
+            state.Cancellation = new CancellationTokenSource();
+            lock (gate) activeTypingStates.Add(state);
+
+            var first = TrySetInputStatusAsync(state.UserId, 1, turn.TraceId);
+            var firstFinished = await Task.WhenAny(first, Task.Delay(1500));
+            if (firstFinished == first && !await first)
+            {
+                Interlocked.Exchange(ref state.Stopped, 1);
+                lock (gate) activeTypingStates.Remove(state);
+                state.Cancellation.Dispose();
+                state.Cancellation = null;
+                return;
+            }
+
+            services?.LogTiming(turn.TraceId, "QQ 正在输入已开启", 0,
+                "session=private");
+            state.RefreshTask = RefreshTypingAsync(state, turn.TraceId);
+        }
+
+        private async Task RefreshTypingAsync(TypingTurnState state, string traceId)
+        {
+            var token = state.Cancellation.Token;
+            var startedAt = Stopwatch.StartNew();
+            try
+            {
+                while (!token.IsCancellationRequested &&
+                       startedAt.ElapsedMilliseconds < InputStatusMaximumMilliseconds)
+                {
+                    await Task.Delay(InputStatusRefreshMilliseconds, token);
+                    if (token.IsCancellationRequested) break;
+                    if (!await TrySetInputStatusAsync(state.UserId, 1, traceId)) break;
+                }
+            }
+            catch (OperationCanceledException) when (token.IsCancellationRequested)
+            {
+                // 本轮正常收尾。
+            }
+            finally
+            {
+                var timedOut = false;
+                if (!token.IsCancellationRequested &&
+                    Interlocked.CompareExchange(ref state.Stopped, 1, 0) == 0)
+                {
+                    timedOut = true;
+                }
+                RemoveTypingStateAndHasSameSession(state);
+                // NapCat/NTQQ 的 event_type=0 会显示「对方正在说话」，并不是取消状态。
+                // 只停止刷新；正常轮次由最后一条 QQ 消息自然清除，异常轮次由 QQ 超时恢复。
+                if (timedOut)
+                    services?.LogTiming(traceId, "QQ 正在输入已停止刷新（超时）", 0);
+            }
+        }
+
+        private async Task StopTypingAsync(TraceTurnContext turn)
+        {
+            if (turn == null) return;
+            var state = turn.Workspace.GetOrCreateState(PluginId, () => new TypingTurnState());
+            if (Interlocked.CompareExchange(ref state.Stopped, 1, 0) != 0 || state.Started == 0) return;
+
+            try { state.Cancellation?.Cancel(); } catch { /* ignored */ }
+            if (state.RefreshTask != null)
+                await Task.WhenAny(state.RefreshTask, Task.Delay(1500));
+            var anotherTurnIsTyping = RemoveTypingStateAndHasSameSession(state);
+            try { state.Cancellation?.Dispose(); } catch { /* ignored */ }
+            state.Cancellation = null;
+            services?.LogTiming(turn.TraceId,
+                anotherTurnIsTyping ? "QQ 输入状态仍由其它轮次持有" : "QQ 正在输入已停止刷新", 0);
+        }
+
+        private bool RemoveTypingStateAndHasSameSession(TypingTurnState state)
+        {
+            lock (gate)
+            {
+                activeTypingStates.Remove(state);
+                return activeTypingStates.Any(other =>
+                    other != null && Volatile.Read(ref other.Stopped) == 0 &&
+                    string.Equals(other.UserId, state.UserId, StringComparison.Ordinal));
+            }
+        }
+
+        private async Task<bool> TrySetInputStatusAsync(string userId, int eventType, string traceId)
+        {
+            try
+            {
+                await CallActionAsync("set_input_status", new Dictionary<string, object>
+                {
+                    { "user_id", userId },
+                    { "event_type", eventType }
+                });
+                return true;
+            }
+            catch (Exception exception)
+            {
+                services?.LogTiming(traceId, "QQ 输入状态更新失败", 0,
+                    exception.GetType().Name + ": " + exception.Message);
+                return false;
+            }
+        }
+
+        private sealed class TypingTurnState
+        {
+            public int Started;
+            public int Stopped;
+            public string UserId = string.Empty;
+            public CancellationTokenSource Cancellation;
+            public Task RefreshTask;
+        }
+
         public void Shutdown()
         {
             stopped = true;
+            TypingTurnState[] typingStates;
+            lock (gate) typingStates = activeTypingStates.ToArray();
+            foreach (var state in typingStates)
+            {
+                try { state.Cancellation?.Cancel(); } catch { /* ignored */ }
+            }
             try { forwardCts?.Cancel(); } catch { /* ignored */ }
             try { forwardSocket?.Dispose(); } catch { /* ignored */ }
             try { http?.Dispose(); } catch { /* ignored */ }

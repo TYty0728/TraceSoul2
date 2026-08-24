@@ -77,6 +77,19 @@ namespace TraceSoul2.Plugins
             new List<Func<TraceTurnContext, Task>>();
 
         /// <summary>
+        /// 对话入口开始思考回应，或自主轮次已决定对外表达时的钩子。
+        /// 平台可用它展示「正在输入」；钩子不得影响表达主链。
+        /// </summary>
+        public List<Func<TraceTurnContext, Task>> ExpressionStartingHooks { get; } =
+            new List<Func<TraceTurnContext, Task>>();
+
+        /// <summary>
+        /// 本轮对外内容（包括轮后生图等延迟内容）全部发送完毕后的钩子。
+        /// </summary>
+        public List<Func<TraceTurnContext, Task>> ExpressionCompletedHooks { get; } =
+            new List<Func<TraceTurnContext, Task>>();
+
+        /// <summary>
         /// 器官插件可把心智补充说明挂到这里。未加载或未就绪时不要挂；
         /// 心智核心提示词里不应出现相机/出图字段。
         /// </summary>

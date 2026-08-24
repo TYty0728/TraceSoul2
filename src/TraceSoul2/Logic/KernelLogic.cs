@@ -141,6 +141,10 @@ namespace TraceSoul2.Logic
                 source.TraceId);
             MouthLogic.NoticeInbound(source, turn);
 
+            var turnFinished = false;
+            try
+            {
+
             var catalog = plugins.GetAvailableCatalog(turn);
             plugins.Services.LogTiming(turn.TraceId, "输入落库与轮次准备完成",
                 prepareTimer.ElapsedMilliseconds,
@@ -178,6 +182,8 @@ namespace TraceSoul2.Logic
                 plugins.Services.LogTiming(turn.TraceId, "整轮收尾钩子已在记忆观察前完成", 0);
             }
 
+            await TryCompleteExpressionAsync(turn);
+
             var reviewTimer = Stopwatch.StartNew();
             storage.SaveTurnReview(new TurnReviewRecord
             {
@@ -196,6 +202,7 @@ namespace TraceSoul2.Logic
             plugins.Services.LogTiming(turn.TraceId, "Brain 整轮完成", totalTimer.ElapsedMilliseconds,
                 "mode=" + final.mode + "｜results=" + turn.Workspace.Results.Count);
 
+            turnFinished = true;
             return new ChatTurnResultData(
                 expression == null ? string.Empty : expression.ProducedEvent.Content,
                 final.mode,
@@ -205,6 +212,15 @@ namespace TraceSoul2.Logic
                 turn.Workspace.FacetOutputs.ToList(),
                 turn.Workspace.Results.ToList(),
                 mindDecision);
+            }
+            finally
+            {
+                // 表达器、平台发送或轮次审查异常时也不能让「正在输入」悬挂。
+                if (!turnFinished)
+                    Interlocked.Exchange(
+                        ref GetExpressionLifecycleState(turn).PendingOutboundBatches, 0);
+                await TryCompleteExpressionAsync(turn);
+            }
         }
 
         private async Task<BrainStructuredOutputData> RunSubconsciousAsync(
@@ -254,6 +270,11 @@ namespace TraceSoul2.Logic
             plugins.Services.LogTiming(turn.TraceId, "记忆预激活完成", preludeTimer.ElapsedMilliseconds,
                 "top_k=" + recallTopK + "｜chars=" + naturallyAwakenedPast.Length);
 
+            // QQ 等对话入口本轮必须回应：在第一次 Mind LLM 请求前就通知平台。
+            // 心跳/时间触发等可能保持沉默的轮次，仍由后面的表达分支在决定开口后通知。
+            if (turn.RequiresExpression)
+                await RunExpressionStartingHooksAsync(turn);
+
             var mindTimer = Stopwatch.StartNew();
             var decision = await mind.DecideAsync(
                 turn, null, false, naturallyAwakenedPast, cancellationToken);
@@ -270,6 +291,7 @@ namespace TraceSoul2.Logic
             if (decision.WantsLeave())
             {
                 await ApplyInnerFacetsAsync(decision, turn, cancellationToken);
+                await RunExpressionStartingHooksAsync(turn);
                 var waitingTimer = Stopwatch.StartNew();
                 var waiting = await expressor.ExpressAsync(
                     turn, pluginList, expressionCatalog, blocks, decision, string.Empty, true, null, cancellationToken);
@@ -311,6 +333,7 @@ namespace TraceSoul2.Logic
             var needsReply = turn.RequiresExpression || decision.speak;
             if (needsReply || !string.IsNullOrWhiteSpace(leaveResult))
             {
+                await RunExpressionStartingHooksAsync(turn);
                 var expressTimer = Stopwatch.StartNew();
                 final = await expressor.ExpressAsync(
                     turn, pluginList, expressionCatalog, blocks, decision, memoryFlesh, false,
@@ -354,6 +377,7 @@ namespace TraceSoul2.Logic
                 await RunTurnCompleteHooksAsync(turn);
                 responseFlushed = true;
                 plugins.Services.LogTiming(turn.TraceId, "回复已发送，开始轮后慢任务", flushTimer.ElapsedMilliseconds);
+                await TryCompleteExpressionAsync(turn);
             }
 
             var persistTimer = Stopwatch.StartNew();
@@ -549,12 +573,14 @@ namespace TraceSoul2.Logic
             TraceTurnContext turn,
             string conversationId)
         {
+            var lifecycle = GetExpressionLifecycleState(turn);
+            Interlocked.Increment(ref lifecycle.PendingOutboundBatches);
             var generateTasks = images.Select(call => PrepareImageAsync(call, turn)).ToList();
             plugins.Services.LogTiming(turn.TraceId, "TA的相机 后台生图已开始",
                 detail: "calls=" + generateTasks.Count);
             EnqueueDeferred(new DeferredTurnWork(turn.TraceId, async ct =>
             {
-                PreparedOutboundImage[] prepared;
+                PreparedOutboundImage[] prepared = Array.Empty<PreparedOutboundImage>();
                 try
                 {
                     prepared = await Task.WhenAll(generateTasks);
@@ -562,12 +588,19 @@ namespace TraceSoul2.Logic
                 catch (Exception exception)
                 {
                     plugins.Services.LogTiming(turn.TraceId, "TA的相机 后台生图失败", 0, exception.Message);
-                    return null;
                 }
                 return async sendCt =>
                 {
-                    foreach (var item in prepared)
-                        await SendPreparedImageAsync(item, turn, conversationId, sendCt);
+                    try
+                    {
+                        foreach (var item in prepared)
+                            await SendPreparedImageAsync(item, turn, conversationId, sendCt);
+                    }
+                    finally
+                    {
+                        Interlocked.Decrement(ref lifecycle.PendingOutboundBatches);
+                        await TryCompleteExpressionAsync(turn);
+                    }
                 };
             }));
         }
@@ -817,6 +850,52 @@ namespace TraceSoul2.Logic
                     });
                 }
             }
+        }
+
+        private async Task RunExpressionStartingHooksAsync(TraceTurnContext turn)
+        {
+            foreach (var hook in turn.Services.ExpressionStartingHooks)
+            {
+                try { await hook(turn); }
+                catch (Exception exception)
+                {
+                    plugins.Services.LogTiming(turn.TraceId, "表达开始钩子失败", 0,
+                        exception.GetType().Name + ": " + exception.Message);
+                }
+            }
+        }
+
+        private async Task RunExpressionCompletedHooksAsync(TraceTurnContext turn)
+        {
+            foreach (var hook in turn.Services.ExpressionCompletedHooks)
+            {
+                try { await hook(turn); }
+                catch (Exception exception)
+                {
+                    plugins.Services.LogTiming(turn.TraceId, "表达完成钩子失败", 0,
+                        exception.GetType().Name + ": " + exception.Message);
+                }
+            }
+        }
+
+        private static ExpressionLifecycleState GetExpressionLifecycleState(TraceTurnContext turn)
+        {
+            return turn.Workspace.GetOrCreateState(
+                "kernel.expression-lifecycle", () => new ExpressionLifecycleState());
+        }
+
+        private async Task TryCompleteExpressionAsync(TraceTurnContext turn)
+        {
+            var lifecycle = GetExpressionLifecycleState(turn);
+            if (Volatile.Read(ref lifecycle.PendingOutboundBatches) > 0 ||
+                Interlocked.CompareExchange(ref lifecycle.Completed, 1, 0) != 0) return;
+            await RunExpressionCompletedHooksAsync(turn);
+        }
+
+        private sealed class ExpressionLifecycleState
+        {
+            public int PendingOutboundBatches;
+            public int Completed;
         }
 
         private static void StampDecision(BrainStructuredOutputData output, MindDecisionData decision)
