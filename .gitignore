@@ -12,6 +12,7 @@ TestResults/
 
 # Runtime data must never enter the source repository
 *.sqlite
+*.sqlite-*
 *.sqlite3
 *.sqlite3-*
 *.db
@@ -37,6 +38,11 @@ TestResults/
 *.key
 *.secrets.json
 secrets.json
+**/*secret*.json
+**/*credential*.json
+**/*credentials*.json
+**/*api-key*.json
+**/*apikey*.json
 appsettings.Development.json
 
 # Local work notes and diagnostics

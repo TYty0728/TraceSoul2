@@ -70,6 +70,7 @@ namespace TraceSoul2.Host
             router = new HierarchicalVectorRouterLogic(new BagOfCharsVectorEncoder(), vectorStore);
             var services = new TracePluginServices(Store, router);
             services.DataDirectory = DataDirectory;
+            services.LifeState = new JsonLifeStateStore(DataDirectory);
             services.HeartbeatMinMinutes = HeartbeatMinMinutes;
             services.HeartbeatMaxMinutes = HeartbeatMaxMinutes;
             services.TimingLog = Emit;
@@ -403,6 +404,9 @@ namespace TraceSoul2.Host
             var pair = Store.LoadPairIdentity();
             var inner = Store.LoadOrCreateInnerRuntime(ConversationId);
             var body = MouthLogic.LoadState(DataDirectory);
+            var life = liveServices == null || liveServices.LifeState == null
+                ? new LifeStateData { conversation_id = ConversationId, location = body.scene }
+                : liveServices.LifeState.Load(ConversationId);
             var due = HeartbeatLogic.NextDueUnixMs(Store, ConversationId);
             var plan = HeartbeatLogic.NextPlan(Store, ConversationId);
             var decision = LastTurn == null ? LoadLatestMindDecision() : LastTurn.MindDecision;
@@ -433,8 +437,23 @@ namespace TraceSoul2.Host
                 assname = pair.Assname,
                 body = new
                 {
-                    scene = string.Equals(body.scene, "out", StringComparison.OrdinalIgnoreCase) ? "外出" : "家里",
+                    scene = BodySceneValues.Label(life.location),
+                    sceneKey = BodySceneValues.Normalize(life.location),
+                    activity = life.activity ?? string.Empty,
+                    activityDetail = life.activity_detail ?? string.Empty,
                     activeBody = body.active_body ?? string.Empty
+                },
+                lifeState = new
+                {
+                    location = BodySceneValues.Normalize(life.location),
+                    locationLabel = BodySceneValues.Label(life.location),
+                    activity = life.activity ?? string.Empty,
+                    activityDetail = life.activity_detail ?? string.Empty,
+                    locationSource = life.location_source ?? string.Empty,
+                    activitySource = life.activity_source ?? string.Empty,
+                    locationUpdatedUnixMs = life.location_updated_unix_ms,
+                    activityUpdatedUnixMs = life.activity_updated_unix_ms,
+                    activityStartedUnixMs = life.activity_started_unix_ms
                 },
                 runtime = new
                 {
@@ -504,6 +523,10 @@ namespace TraceSoul2.Host
                 today = decision.today ?? string.Empty,
                 inner = decision.inner ?? string.Empty,
                 scene = decision.SceneValue(),
+                location = decision.LocationValue(),
+                activity = decision.activity ?? string.Empty,
+                activityDetail = decision.activity_detail ?? string.Empty,
+                stateForce = decision.state_force,
                 attention = decision.ParseAttention(),
                 review = decision.review,
                 cognition = decision.cognition ?? string.Empty,
@@ -879,8 +902,56 @@ namespace TraceSoul2.Host
         public object SaveMouths(string scene, string activeBody, IEnumerable<MouthRankEntry> items)
         {
             MouthLogic.SaveRouting(DataDirectory, scene, activeBody, items);
+            if (!string.IsNullOrWhiteSpace(scene) && liveServices != null && liveServices.LifeState != null)
+                liveServices.LifeState.Update(ConversationId, new LifeStatePatchData
+                {
+                    location = scene,
+                    source = LifeStateSourceValues.User,
+                    source_id = "webui",
+                    force = true
+                });
             Emit("身体路由已保存");
             return MouthStatus();
+        }
+
+        public object LifeStateStatus()
+        {
+            var state = liveServices == null || liveServices.LifeState == null
+                ? new LifeStateData { conversation_id = ConversationId }
+                : liveServices.LifeState.Load(ConversationId);
+            return new
+            {
+                conversationId = state.conversation_id,
+                location = BodySceneValues.Normalize(state.location),
+                locationLabel = BodySceneValues.Label(state.location),
+                activity = state.activity ?? string.Empty,
+                activityDetail = state.activity_detail ?? string.Empty,
+                locationSource = state.location_source ?? string.Empty,
+                activitySource = state.activity_source ?? string.Empty,
+                locationUpdatedUnixMs = state.location_updated_unix_ms,
+                activityUpdatedUnixMs = state.activity_updated_unix_ms,
+                activityStartedUnixMs = state.activity_started_unix_ms
+            };
+        }
+
+        public object UpdateLifeState(string location, string activity, string activityDetail,
+            string source, string sourceId, bool force)
+        {
+            if (liveServices == null || liveServices.LifeState == null)
+                throw new InvalidOperationException("生活状态存储未就绪。");
+            var state = liveServices.LifeState.Update(ConversationId, new LifeStatePatchData
+            {
+                location = location,
+                activity = activity,
+                activity_detail = activityDetail,
+                source = string.IsNullOrWhiteSpace(source) ? LifeStateSourceValues.User : source,
+                source_id = string.IsNullOrWhiteSpace(sourceId) ? "webui" : sourceId,
+                force = force
+            });
+            MouthLogic.SetScene(DataDirectory, state.location);
+            Emit("生活状态已更新：" + BodySceneValues.Label(state.location) +
+                 (string.IsNullOrWhiteSpace(state.activity) ? string.Empty : "｜" + state.activity));
+            return LifeStateStatus();
         }
 
         /// <summary>平台列表（连接状态与运行详情，控制台展示）。</summary>

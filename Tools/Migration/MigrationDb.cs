@@ -156,7 +156,8 @@ namespace TraceSoul2.Migrate
         public List<MomentRecord> GetUnbuiltMomentsInRange(long startMs, long endMs)
         {
             return brain.Query<MomentRecord>(
-                "SELECT * FROM moments WHERE CreatedUnixMs>=? AND CreatedUnixMs<? AND (MemoryStatus IS NULL OR MemoryStatus!='built') ORDER BY CreatedUnixMs",
+                "SELECT * FROM moments WHERE CreatedUnixMs>=? AND CreatedUnixMs<? " +
+                "AND (MemoryStatus IS NULL OR MemoryStatus NOT IN ('built','operational')) ORDER BY CreatedUnixMs",
                 startMs, endMs);
         }
 
@@ -165,7 +166,8 @@ namespace TraceSoul2.Migrate
         {
             return brain.QueryScalars<string>(
                 "SELECT DISTINCT strftime('%Y-%m-%d', datetime(CreatedUnixMs/1000, 'unixepoch', '+8 hours', '-4 hours')) " +
-                "FROM moments WHERE CreatedUnixMs>=? AND CreatedUnixMs<? ORDER BY 1",
+                "FROM moments WHERE CreatedUnixMs>=? AND CreatedUnixMs<? " +
+                "AND (MemoryStatus IS NULL OR MemoryStatus!='operational') ORDER BY 1",
                 startMs, endMs);
         }
 
@@ -232,7 +234,8 @@ namespace TraceSoul2.Migrate
         {
             lock (brainWriteGate)
                 return brain.Execute(
-                    "UPDATE moments SET MemoryStatus='built' WHERE CreatedUnixMs>=? AND CreatedUnixMs<? AND (MemoryStatus IS NULL OR MemoryStatus!='built')",
+                    "UPDATE moments SET MemoryStatus='built' WHERE CreatedUnixMs>=? AND CreatedUnixMs<? " +
+                    "AND (MemoryStatus IS NULL OR MemoryStatus NOT IN ('built','operational'))",
                     startMs, endMs);
         }
 

@@ -337,6 +337,10 @@ app.MapGet("/moments", (SoulRuntime runtime, int? take) =>
     }));
 });
 
+app.MapGet("/operational-events", (SoulRuntime runtime, int? take) =>
+    Results.Json(runtime.Store.GetRecentOperationalEvents(
+        runtime.ConversationId, take ?? 40)));
+
 app.MapGet("/turns/last", (SoulRuntime runtime) =>
 {
     var payload = runtime.LastTurnPayload();
@@ -477,6 +481,13 @@ app.MapPut("/mouths", async (SoulRuntime runtime, MouthsWrite body, Cancellation
     return Results.Json(await runtime.ExclusiveAsync(
         () => runtime.SaveMouths(body.scene, body.activeBody, items), token));
 });
+
+app.MapGet("/life-state", (SoulRuntime runtime) => Results.Json(runtime.LifeStateStatus()));
+
+app.MapPut("/life-state", (SoulRuntime runtime, LifeStateWrite body) =>
+    Results.Json(runtime.UpdateLifeState(
+        body.location, body.activity, body.activityDetail,
+        body.source, body.sourceId, body.force)));
 
 // OneBot 配置（控制台编辑；保存后宿主自动重启应用）。
 app.MapGet("/platforms/onebot/config", (SoulRuntime runtime) =>
@@ -823,6 +834,16 @@ internal sealed class MouthWriteItem
     public string id { get; set; }
     public int priority { get; set; }
     public int score { get; set; }
+}
+
+internal sealed class LifeStateWrite
+{
+    public string location { get; set; }
+    public string activity { get; set; }
+    public string activityDetail { get; set; }
+    public string source { get; set; }
+    public string sourceId { get; set; }
+    public bool force { get; set; } = true;
 }
 
 internal sealed class OneBotConfigWrite

@@ -36,6 +36,8 @@ namespace TraceSoul2.Plugins
     public sealed class TracePluginServices
     {
         public IMemoryStore Storage { get; private set; }
+        /// <summary>统一的当前生活状态读写面；插件更新时必须带 source/source_id。</summary>
+        public ILifeStateStore LifeState { get; set; }
         public IHierarchicalVectorRouter Router { get; private set; }
         public ILlmClient Llm { get; set; }
 

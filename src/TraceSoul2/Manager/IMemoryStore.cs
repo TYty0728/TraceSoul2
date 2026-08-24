@@ -23,7 +23,9 @@ namespace TraceSoul2.Manager
     public interface IMemoryStore
     {
         void SaveMoment(MomentRecord moment);
+        void SaveOperationalEvent(OperationalEventRecord operationalEvent);
         List<MomentRecord> GetRecentMoments(string conversationId, int take);
+        List<OperationalEventRecord> GetRecentOperationalEvents(string conversationId, int take);
         List<TurnReviewRecord> GetRecentTurnReviews(string conversationId, int take);
         void SeedLifeTags(IEnumerable<VectorIndexNode> ontology);
         List<LifeTagRecord> GetActiveLifeTags();
@@ -84,5 +86,12 @@ namespace TraceSoul2.Manager
             string sourceMomentId,
             string dayKey,
             long nowUnixMs);
+    }
+
+    /// <summary>跨内核与插件共享的当前生活状态读写面。</summary>
+    public interface ILifeStateStore
+    {
+        LifeStateData Load(string conversationId);
+        LifeStateData Update(string conversationId, LifeStatePatchData patch);
     }
 }

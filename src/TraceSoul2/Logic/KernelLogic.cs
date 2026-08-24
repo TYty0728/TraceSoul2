@@ -103,8 +103,8 @@ namespace TraceSoul2.Logic
 
             var prepareTimer = Stopwatch.StartNew();
             var wake = KernelWakeLogic.Resolve(source);
-            var triggerMoment = ToMoment(conversationId, source);
-            storage.SaveMoment(triggerMoment);
+            // 运行事件也会临时成为本轮刺激，但不会进入可复盘的 Moment 账本。
+            var triggerMoment = PersistPluginEvent(conversationId, source);
             var inner = storage.LoadOrCreateInnerRuntime(conversationId);
             if (inner.Asleep && HeartbeatLogic.IsBreaking(source, pair))
             {
@@ -447,6 +447,22 @@ namespace TraceSoul2.Logic
                 }
             };
             TraceCapabilityResultData result;
+            var previousBodyScene = MouthLogic.LoadState(
+                turn.Services == null ? null : turn.Services.DataDirectory).scene;
+            var previousLife = turn.Services == null || turn.Services.LifeState == null
+                ? null : turn.Services.LifeState.Load(turn.ConversationId);
+            // 外出神经真正开始执行时，身体才离开当前场景；返回（成功或失败）后恢复原场景。
+            // 这与 MindDecisionData.scene（共享文字场景）是两套状态，不能混用。
+            MouthLogic.SetScene(turn.Services == null ? null : turn.Services.DataDirectory,
+                BodySceneValues.Out);
+            if (turn.Services != null && turn.Services.LifeState != null)
+                turn.Services.LifeState.Update(turn.ConversationId, new LifeStatePatchData
+                {
+                    location = BodySceneValues.Out,
+                    source = LifeStateSourceValues.System,
+                    source_id = "leave",
+                    force = true
+                });
             try
             {
                 result = await plugins.ExecuteAsync(call, turn, cancellationToken);
@@ -462,6 +478,19 @@ namespace TraceSoul2.Logic
                     Payload = exception.Message
                 };
             }
+            finally
+            {
+                MouthLogic.SetScene(turn.Services == null ? null : turn.Services.DataDirectory,
+                    previousBodyScene);
+                if (turn.Services != null && turn.Services.LifeState != null)
+                    turn.Services.LifeState.Update(turn.ConversationId, new LifeStatePatchData
+                    {
+                        location = previousLife == null ? previousBodyScene : previousLife.location,
+                        source = previousLife == null ? LifeStateSourceValues.System : previousLife.location_source,
+                        source_id = previousLife == null ? "leave.return" : previousLife.location_source_id,
+                        force = true
+                    });
+            }
             if (result == null)
             {
                 result = new TraceCapabilityResultData
@@ -475,7 +504,7 @@ namespace TraceSoul2.Logic
             }
             turn.Workspace.Results.Add(result);
             if (result.ProducedEvent != null)
-                storage.SaveMoment(ToMoment(turn.ConversationId, result.ProducedEvent));
+                PersistPluginEvent(turn.ConversationId, result.ProducedEvent);
             var body = !string.IsNullOrWhiteSpace(result.Payload)
                 ? result.Payload.Trim()
                 : (result.Summary ?? string.Empty).Trim();
@@ -508,7 +537,7 @@ namespace TraceSoul2.Logic
             if (expression.Status != "success" || expression.ProducedEvent == null)
                 throw new InvalidOperationException("外部表达器执行失败：" + expression.Summary);
             turn.Workspace.Results.Add(expression);
-            storage.SaveMoment(ToMoment(conversationId, expression.ProducedEvent));
+            PersistPluginEvent(conversationId, expression.ProducedEvent);
 
             List<BrainCapabilityCallData> immediate;
             List<BrainCapabilityCallData> images;
@@ -548,7 +577,7 @@ namespace TraceSoul2.Logic
             {
                 var extraResult = await plugins.ExecuteAsync(extraCall, turn, cancellationToken);
                 if (extraResult != null && extraResult.ProducedEvent != null)
-                    storage.SaveMoment(ToMoment(conversationId, extraResult.ProducedEvent));
+                    PersistPluginEvent(conversationId, extraResult.ProducedEvent);
                 turn.Workspace.Results.Add(extraResult);
             }
             catch (Exception exception)
@@ -647,7 +676,7 @@ namespace TraceSoul2.Logic
             {
                 var extraResult = await plugins.ExecuteAsync(sendCall, turn, cancellationToken);
                 if (extraResult != null && extraResult.ProducedEvent != null)
-                    storage.SaveMoment(ToMoment(conversationId, extraResult.ProducedEvent));
+                    PersistPluginEvent(conversationId, extraResult.ProducedEvent);
                 plugins.Services.LogTiming(turn.TraceId, "TA的相机 后台图已发出", 0,
                     extraResult == null ? "null" : extraResult.Summary);
             }
@@ -792,7 +821,7 @@ namespace TraceSoul2.Logic
                     MemoryArchivePolicyLogic.SoftDialogueMomentThreshold);
             }
 
-            // 身份短卡复盘只由时间 Moment 进入 RunSubconsciousAsync，普通对话不再派出。
+            // 身份短卡复盘只由时间运行事件进入 RunSubconsciousAsync，普通对话不再派出。
         }
 
         private async Task TryExecuteNerveAsync(
@@ -818,7 +847,7 @@ namespace TraceSoul2.Logic
                 var result = await plugins.ExecuteAsync(call, turn, cancellationToken);
                 turn.Workspace.Results.Add(result);
                 if (result != null && result.ProducedEvent != null)
-                    storage.SaveMoment(ToMoment(turn.ConversationId, result.ProducedEvent));
+                    PersistPluginEvent(turn.ConversationId, result.ProducedEvent);
             }
             catch (Exception exception)
             {
@@ -940,6 +969,7 @@ namespace TraceSoul2.Logic
             BrainStructuredOutputData output, MindDecisionData mind, TraceTurnContext turn)
         {
             mind = MindLogic.Normalize(mind);
+            ApplyLifeState(mind, turn);
             output.facet_outputs = output.facet_outputs ?? new List<BrainFacetOutputData>();
             InnerRuntimeData runtime = null;
             if (turn != null && turn.Services != null && turn.Services.Storage != null)
@@ -1023,6 +1053,24 @@ namespace TraceSoul2.Logic
                     }
                 });
             }
+        }
+
+        private static void ApplyLifeState(MindDecisionData mind, TraceTurnContext turn)
+        {
+            if (mind == null || turn == null || turn.Services == null || turn.Services.LifeState == null)
+                return;
+            var location = mind.LocationValue();
+            var activity = (mind.activity ?? string.Empty).Trim();
+            if (location.Length == 0 && activity.Length == 0) return;
+            turn.Services.LifeState.Update(turn.ConversationId, new LifeStatePatchData
+            {
+                location = location.Length == 0 ? null : location,
+                activity = activity.Length == 0 ? null : activity,
+                activity_detail = activity.Length == 0 ? null : mind.activity_detail,
+                source = LifeStateSourceValues.Mind,
+                source_id = turn.Moment == null ? string.Empty : turn.Moment.Id,
+                force = mind.state_force
+            });
         }
 
         private static void WriteField(BrainFacetOutputData snapshot, string name, string value)
@@ -1150,6 +1198,52 @@ namespace TraceSoul2.Logic
         {
             return string.Join("\n", (values ?? Enumerable.Empty<BrainFacetOutputData>())
                 .Select(x => x.facet_id + " | changed=" + x.changed + " | " + x.summary));
+        }
+
+        private MomentRecord PersistPluginEvent(string conversationId, PluginEventData source)
+        {
+            var moment = ToMoment(conversationId, source);
+            if (!source.IsOperational)
+            {
+                storage.SaveMoment(moment);
+                return moment;
+            }
+
+            storage.SaveOperationalEvent(new OperationalEventRecord
+            {
+                // 与本轮临时 Moment 共用 ID，TurnReview/内心切片仍能追到真正的触发记录。
+                Id = moment.Id,
+                ConversationId = moment.ConversationId,
+                Kind = ResolveOperationalKind(source),
+                SourcePluginId = moment.SourcePluginId,
+                SourceEventId = moment.SourceEventId,
+                TraceId = source.TraceId ?? string.Empty,
+                Role = moment.Role,
+                Content = moment.Content,
+                Realm = moment.Realm,
+                EvidenceType = moment.EvidenceType,
+                PayloadJson = moment.PayloadJson,
+                OccurredUnixMs = moment.CreatedUnixMs,
+                CreatedUnixMs = DateTimeOffset.UtcNow.ToUnixTimeMilliseconds()
+            });
+            return moment;
+        }
+
+        private static string ResolveOperationalKind(PluginEventData source)
+        {
+            if (string.Equals(source.PluginId, "builtin.time", StringComparison.Ordinal))
+                return OperationalEventKindValues.SchedulerTrigger;
+            var content = (source.Content ?? string.Empty).Trim();
+            if (content.IndexOf("发送图片", StringComparison.Ordinal) >= 0)
+                return OperationalEventKindValues.OutboundImage;
+            if (content.IndexOf("表情", StringComparison.Ordinal) >= 0)
+                return OperationalEventKindValues.OutboundSticker;
+            if (content.IndexOf("发送语音", StringComparison.Ordinal) >= 0)
+                return OperationalEventKindValues.OutboundVoice;
+            if (string.Equals(source.EvidenceType, EvidenceTypeValues.AssPerformed,
+                    StringComparison.Ordinal))
+                return OperationalEventKindValues.ActionReceipt;
+            return OperationalEventKindValues.PluginRuntime;
         }
 
         private static MomentRecord ToMoment(string conversationId, PluginEventData source)

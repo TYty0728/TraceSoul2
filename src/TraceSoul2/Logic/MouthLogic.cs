@@ -297,7 +297,7 @@ namespace TraceSoul2.Logic
         {
             var state = LoadState(dataDirectory);
             if (!string.IsNullOrWhiteSpace(scene))
-                state.scene = scene.Trim();
+                state.scene = BodySceneValues.Normalize(scene);
             if (activeBody != null)
                 state.active_body = activeBody.Trim();
             foreach (var item in items ?? Enumerable.Empty<MouthRankEntry>())
@@ -305,6 +305,14 @@ namespace TraceSoul2.Logic
                 if (item == null || string.IsNullOrWhiteSpace(item.id)) continue;
                 UpsertScore(state, item.id.Trim(), Clamp(item.priority));
             }
+            SaveState(dataDirectory, state);
+        }
+
+        /// <summary>更新物理所在场景，不改变身体分数或当前激活身体。</summary>
+        public static void SetScene(string dataDirectory, string scene)
+        {
+            var state = LoadState(dataDirectory);
+            state.scene = BodySceneValues.Normalize(scene);
             SaveState(dataDirectory, state);
         }
 
@@ -378,7 +386,7 @@ namespace TraceSoul2.Logic
             var state = new BodyRoutingState
             {
                 active_body = string.Empty,
-                scene = "home",
+                scene = BodySceneValues.Home,
                 items = new[]
                 {
                     new BodyScoreEntry { id = BodyIds.Console, score = DefaultScore },
@@ -397,7 +405,7 @@ namespace TraceSoul2.Logic
                 if (!string.IsNullOrWhiteSpace(loaded.active_body))
                     state.active_body = loaded.active_body.Trim();
                 if (!string.IsNullOrWhiteSpace(loaded.scene))
-                    state.scene = loaded.scene.Trim();
+                    state.scene = BodySceneValues.Normalize(loaded.scene);
                 if (loaded.items != null)
                 {
                     foreach (var item in loaded.items)
@@ -419,7 +427,7 @@ namespace TraceSoul2.Logic
             var document = new BodyRoutingState
             {
                 active_body = state.active_body ?? string.Empty,
-                scene = string.IsNullOrWhiteSpace(state.scene) ? "home" : state.scene,
+                scene = BodySceneValues.Normalize(state.scene),
                 items = (state.items ?? new BodyScoreEntry[0])
                     .Where(x => x != null && !string.IsNullOrWhiteSpace(x.id))
                     .OrderByDescending(x => x.score)

@@ -226,6 +226,7 @@ namespace TraceSoul2.Plugins.Builtin
                             Content = TimeSchedulerPrompts.DuePrefix + item.content,
                             Realm = TraceRealmValues.Meta,
                             EvidenceType = EvidenceTypeValues.PluginObserved,
+                            IsOperational = true,
                             Wake = wake,
                             PayloadJson = "{\"schedule_id\":\"" + item.id +
                                           "\",\"recurrence\":\"" + item.recurrence +
@@ -297,15 +298,19 @@ namespace TraceSoul2.Plugins.Builtin
                 var now = DateTimeOffset.Now;
                 var routing = MouthLogic.LoadState(
                     context == null || context.Services == null ? null : context.Services.DataDirectory);
-                var scene = string.Equals(routing.scene, "out", StringComparison.OrdinalIgnoreCase)
-                    ? "外出"
-                    : "家里";
+                var scene = BodySceneValues.Label(routing.scene);
                 var builder = new StringBuilder();
                 builder.Append(TimeSchedulerPrompts.NowPrefix)
                     .Append(TimeLanguageUtil.NaturalNow(now))
                     .Append("。身体场景：")
                     .Append(scene)
                     .Append("。");
+                var life = context == null || context.Services == null || context.Services.LifeState == null
+                    ? null : context.Services.LifeState.Load(context.ConversationId);
+                if (life != null && !string.IsNullOrWhiteSpace(life.activity))
+                    builder.Append("当前活动：").Append(life.activity)
+                        .Append(string.IsNullOrWhiteSpace(life.activity_detail) ? string.Empty : "｜" + life.activity_detail)
+                        .Append("。");
                 if (context != null && context.Services != null && context.Services.Storage != null)
                 {
                     var pair = context.Services.Storage.LoadPairIdentity();
@@ -450,7 +455,7 @@ namespace TraceSoul2.Plugins.Builtin
                 Id = "time.schedule",
                 Kind = TraceContributionKindValues.CallableNerve,
                 DisplayName = "建立时间任务",
-                Description = "保存一次性、每日或每周时间任务；到期后后台服务只产生新 Moment。",
+                Description = "保存一次性、每日或每周时间任务；到期后只产生唤醒中枢的运行事件。",
                 Provides = "time.schedule.create",
                 WhenToUse = TimeSchedulerPrompts.ScheduleWhenToUse,
                 WhenNotToUse = TimeSchedulerPrompts.ScheduleWhenNotToUse,
@@ -622,7 +627,7 @@ namespace TraceSoul2.Plugins.Builtin
                 Id = "time.scheduler.service",
                 Kind = TraceContributionKindValues.BackgroundService,
                 DisplayName = "时间到期监听",
-                Description = "启用期间检查到期任务，并把它们转换成 system_event Moment。",
+                Description = "启用期间检查到期任务，并把它们转换成只唤醒中枢的运行事件。",
                 Provides = "moment.time.due"
             };
             public bool IsAvailable { get { return true; } }

@@ -239,9 +239,7 @@ namespace TraceSoul2.Logic
                 var now = DateTimeOffset.Now;
                 var routing = MouthLogic.LoadState(
                     turn.Services == null ? null : turn.Services.DataDirectory);
-                var scene = string.Equals(routing.scene, "out", StringComparison.OrdinalIgnoreCase)
-                    ? "外出"
-                    : "家里";
+                var scene = BodySceneValues.Label(routing.scene);
                 parts.Add("心跳醒来时的生活环境：" + TimeLanguageUtil.NaturalNow(now) +
                           "，身体场景在" + scene +
                           "。寻找她在这个时段通常做什么、近期计划、可以自然联系的共同经历。");
