@@ -97,6 +97,7 @@ dotnet Tools\Host\bin\Debug\net8.0\TraceSoul2.Host.dll
 - 反向 WS 为主（AstrBot aiocqhttp 同款）：宿主监听 `ws://127.0.0.1:9021/ws`，NapCat 主动连入，事件与 API 动作共用一根连接。
 - NapCat 登录账号与启动脚本属于机器私有配置，不要写进仓库；这里只要求它连接本机 OneBot WebSocket。
 - 配置在数据目录 `onebot.json`（WebUI「QQ 平台配置」保存即重启生效）：`enabled / mode(reverse|forward) / listen_port / ws_url / http_url / access_token(可多个) / self_id / reply_enabled(回发开关) / napcat_path(本机启动路径)`。保存本地 NapCat 的 `.exe/.bat/.cmd` 或安装目录后，可直接在 WebUI 点击“启动 NapCat”；Host 重启不会自动重复拉起。
+- QQ 私聊中，对话轮会在第一次 Mind LLM 请求前就通过 NapCat `set_input_status` 显示“正在输入”，心跳等自主轮次则在决定开口后显示；状态会持续到本轮文字、表情、语音及轮后图片全部发送完毕，由最后一条 QQ 消息自然清除。不发 `event_type=0`，因为 NTQQ 会将它显示为“对方正在说话”而非取消。群聊无对应的好友输入状态。
 
 ## 外部插件
 

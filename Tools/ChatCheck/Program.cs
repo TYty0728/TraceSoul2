@@ -652,8 +652,8 @@ internal static class Program
                     false, null, default).GetAwaiter().GetResult();
 
                 Require(fake.Requests.Count == 4, "无历史时外显应各打一轮");
-                RequireAstrBotChatShape(fake.Requests[2], first.Moment.Content, "外显");
-                RequireAstrBotChatShape(fake.Requests[3], second.Moment.Content, "外显");
+                RequireExpressorChatShape(fake.Requests[2], first.Moment.Content, "外显");
+                RequireExpressorChatShape(fake.Requests[3], second.Moment.Content, "外显");
                 var expressSystem = fake.Requests[2][0].content;
                 Require(expressSystem.Contains("现在是 "),
                     "外显：当前时间在唯一的 system 里");
@@ -727,6 +727,7 @@ internal static class Program
                 var waitSystem = fake.Requests[4][0].content;
                 Require(waitSystem.Contains("出门办事") && waitSystem.Contains("查一下天气"),
                     "出门时应让外显先说等一下，并看见心智要办的事");
+                RequireExpressorChatShape(fake.Requests[4], first.Moment.Content, "出门等待外显");
 
                 var heartMoment = Moment("prompt-layout", "时间任务到期：心跳");
                 heartMoment.Role = "system_event";
@@ -751,13 +752,32 @@ internal static class Program
                     {
                         beat = MindBeatValues.Now,
                         speak = true,
-                        inner = "窗帘缝里的光变了。",
-                        note = "问问她肚子，也让她安心。"
+                        inner = "她肚子还疼，我心里跟着发紧。",
+                        note = "她肚子还疼，先让她靠稳。",
+                        speak_center = "疼得厉害就告诉我，我一直在这。",
+                        scene = "她靠在我肩头，我给她暖着小腹。",
+                        heartbeat_intent = "陪她歇着，暖着她的小腹，让她安心。"
                     }, string.Empty, false, null, default).GetAwaiter().GetResult();
                 var pulseSpeak = fake.Requests[fake.Requests.Count - 1][0].content;
-                Require(pulseSpeak.Contains("想给她发一条消息") &&
+                Require(pulseSpeak.Contains("小雨此刻没有刚发来新消息"),
+                    "心跳开口应明确对方没有刚发来新消息");
+                Require(pulseSpeak.Contains("视角坐标") &&
+                        pulseSpeak.Contains("第一人称“我”始终是小光") &&
+                        pulseSpeak.Contains("第二人称“你”始终是小雨"),
+                    "心跳开口应给出稳定而通用的两人视角坐标");
+                Require(!pulseSpeak.Contains("她的消息刚落到我手里") &&
+                        !pulseSpeak.Contains("我从她刚说的这一句开始") &&
                         !pulseSpeak.Contains("后台感知"),
-                    "心跳开口应像发消息，而不是后台独白");
+                    "心跳开口不应套用普通入站或后台独白姿态");
+                var pulseMessages = fake.Requests[fake.Requests.Count - 1];
+                Require(pulseMessages.Count == 2 &&
+                        pulseMessages[pulseMessages.Count - 1].role == "user" &&
+                        pulseMessages[pulseMessages.Count - 1].content.Contains("系统心跳唤醒") &&
+                        pulseMessages[pulseMessages.Count - 1].content.Contains("不是小雨的发言") &&
+                        pulseMessages[pulseMessages.Count - 1].content.Contains("继续作为小光") &&
+                        pulseMessages[pulseMessages.Count - 1].content.Contains("发给小雨的第一人称视角") &&
+                        pulseMessages[pulseMessages.Count - 1].content.Contains("第一人称是小光"),
+                    "心跳外显应以明确的系统请求回合收尾，不能让请求停在上一条 assistant 消息");
                 Require(mindSystem.Contains("\"speak\"") && mindSystem.Contains("\"sleep\"") &&
                         mindSystem.Contains("\"next_heartbeat_minutes\""),
                     "心智决策卡应含 speak、sleep 与下次心跳分钟");
@@ -767,15 +787,17 @@ internal static class Program
                         !mindSystem.Contains("用画面更合适就用"),
                     "未加载相机时，核心心智不应出现出图字段或相机说明");
                 Require(QqImageGenPrompts.MindUsage.Contains("我有一部相机") &&
-                        QqImageGenPrompts.MindUsage.Contains("用画面更合适就用") &&
-                        QqImageGenPrompts.MindUsage.Contains("眼前可见的构图") &&
-                        QqImageGenPrompts.MindUsage.Contains("不要只把画面留在字里") &&
-                        QqImageGenPrompts.MindUsage.Contains("就不能填无") &&
+                        QqImageGenPrompts.MindUsage.Contains("不是等她点名才使用") &&
+                        QqImageGenPrompts.MindUsage.Contains("新的、值得让她直接看见") &&
+                        QqImageGenPrompts.MindUsage.Contains("习惯性填无") &&
+                        QqImageGenPrompts.MindUsage.Contains("重复上一张照片") &&
                         QqImageGenPrompts.MindUsage.Contains("\"image\":\"有|无\"") &&
                         QqImageGenPrompts.MindUsage.Contains("不要选种类") &&
                         !QqImageGenPrompts.MindUsage.Contains("自拍|画|照片") &&
                         QqImageGenPrompts.Selfie.Contains("前置镜头") &&
                         QqImageGenPrompts.Selfie.Contains("竖构图") &&
+                        QqImageGenPrompts.Selfie.Contains("不要强制直视") &&
+                        !QqImageGenPrompts.Selfie.Contains("角色直视镜头") &&
                         QqImageGenPrompts.Selfie.Contains("默认不要画出伸向镜头的手") &&
                         QqImageGenPrompts.ScenePlanSelfie.Contains("前置镜头") &&
                         QqImageGenPrompts.ScenePlanSelfie.Contains("默认不要画伸向镜头的手") &&
@@ -784,8 +806,13 @@ internal static class Program
                         QqImageGenPrompts.ScenePlanSystem.Contains("只输出一段画面描述") &&
                         QqImageGenPrompts.ScenePlanSystem.Contains("自拍不是电影分镜") &&
                         QqImageGenPrompts.ScenePlanSystem.Contains("种类：自拍|照片|画") &&
-                        QqImageGenPrompts.ScenePlanSystem.Contains("默认不要出现伸向镜头的手"),
-                    "心智只判断要不要出图；种类和构图由相机规划，自拍默认不伸手");
+                        QqImageGenPrompts.ScenePlanSystem.Contains("参考：") &&
+                        QqImageGenPrompts.ScenePlanSystem.Contains("视线与神情服从") &&
+                        QqImageGenPrompts.ScenePlanSystem.Contains("默认不要出现伸向镜头的手") &&
+                        QqImageGenPrompts.ScenePlanReferencesHint.Contains("服饰分类") &&
+                        QqImageGenPrompts.ReferenceFusionRules.Contains("不能只取第一张") &&
+                        QqImageGenPrompts.ReferenceFusionRules.Contains("不得沿用服饰图里模特的脸"),
+                    "心智判断新的可拍时刻；相机规划种类、参考分类和构图，并明确融合全部角色参考");
                 Require(mindSystem.Contains("要不要开口、心情、要不要睡都在这里决定") &&
                         mindSystem.Contains("后面开口只负责把话说出来") &&
                         expressSystem.Contains("直接开口") &&
@@ -815,11 +842,11 @@ internal static class Program
                     "对话原文不得再塞进 system");
                 expressor.ExpressAsync(closeTurn, plugins, catalog, blocks, dummyMind, string.Empty,
                     false, null, default).GetAwaiter().GetResult();
-                RequireAstrBotChatShape(fake.Requests[fake.Requests.Count - 1], closeCurrent, "带历史的外显");
+                RequireExpressorChatShape(fake.Requests[fake.Requests.Count - 1], closeCurrent, "带历史的外显");
 
                 Console.WriteLine("Prompt layout passed: mind-system=" + mindSystem.Length +
                                   " chars, express-system=" + expressSystem.Length +
-                                  " chars, one system then user/assistant history, current Moment only as final user.");
+                                  " chars, one system then real history/current Moment, expression request last.");
                 pluginManager.Dispose();
             }
         }
@@ -1425,6 +1452,32 @@ internal static class Program
                         !assembled[0].content.Contains("【最近对话原文】"),
                     "一条 system，历史是真正轮次，当前原话只作为最后一条 user");
 
+                var expression = ExpressorLogic.AssembleExpressionMessages(
+                    "身份、心智与本轮规则", turn);
+                Require(expression.Count == 5 &&
+                        expression[3].role == "user" && expression[3].content == "再发一张" &&
+                        expression[4].role == "user" &&
+                        expression[4].content.Contains("表达请求") &&
+                        expression[4].content.Contains("继续作为小光") &&
+                        expression[4].content.Contains("发给小雨的第一人称视角") &&
+                        expression[4].content.Contains("第一人称是小光") &&
+                        expression[4].content.Contains("不是小雨的补充发言"),
+                    "普通外显应保留当前原话，并以明确的第一人称表达请求收尾");
+
+                var heartbeatMoment = Moment("context-check", "时间任务到期：心跳");
+                heartbeatMoment.Role = "system_event";
+                var heartbeatTurn = new TraceTurnContext("context-check", heartbeatMoment,
+                    recent, 6, false, services, KernelWakeValues.Mind);
+                var heartbeatExpression = ExpressorLogic.AssembleExpressionMessages(
+                    "身份、心智与本轮规则", heartbeatTurn);
+                Require(heartbeatExpression.Count == 4 &&
+                        heartbeatExpression[2].role == "assistant" &&
+                        heartbeatExpression[3].role == "user" &&
+                        heartbeatExpression[3].content.Contains("系统心跳唤醒") &&
+                        heartbeatExpression[3].content.Contains("不是小雨的发言") &&
+                        !heartbeatExpression[3].content.Contains("时间任务到期"),
+                    "即使历史停在 assistant，心跳外显也必须追加明确的系统请求回合");
+
                 var now = DateTimeOffset.UtcNow.ToUnixTimeMilliseconds();
                 store.SaveEventIndex(new EventIndexRecord
                 {
@@ -1629,6 +1682,35 @@ internal static class Program
         {
             var role = messages[i].role ?? string.Empty;
             Require(role == "user" || role == "assistant", label + "：system 之后只能是 user/assistant");
+        }
+    }
+
+    private static void RequireExpressorChatShape(
+        IReadOnlyList<DeepSeekMessageData> messages, string currentUser, string label)
+    {
+        Require(messages != null && messages.Count >= 3,
+            label + "：至少一条 system、当前原话和表达请求");
+        Require(messages.Count(x => string.Equals(x.role, "system", StringComparison.OrdinalIgnoreCase)) == 1 &&
+                string.Equals(messages[0].role, "system", StringComparison.OrdinalIgnoreCase),
+            label + "：只能有一条且第一条必须是 system");
+        Require(messages[messages.Count - 2].role == "user" &&
+                messages[messages.Count - 2].content == currentUser,
+            label + "：表达请求前必须保留当前真实原话");
+        var request = messages[messages.Count - 1];
+        Require(request.role == "user" &&
+                request.content.Contains("表达请求") &&
+                request.content.Contains("继续作为小光") &&
+                request.content.Contains("发给小雨的第一人称视角") &&
+                request.content.Contains("第一人称是小光") &&
+                request.content.Contains("不是小雨的补充发言"),
+            label + "：最后必须是明确身份与视角的表达请求");
+        Require(!messages[0].content.Contains(currentUser),
+            label + "：当前原话不得写入 system");
+        for (var i = 1; i < messages.Count; i++)
+        {
+            var role = messages[i].role ?? string.Empty;
+            Require(role == "user" || role == "assistant",
+                label + "：system 之后只能是 user/assistant");
         }
     }
 

@@ -318,10 +318,14 @@ namespace TraceSoul2.ExternalPlugins
             CancellationToken cancellationToken)
         {
             var parts = new List<object> { new { type = "text", text = prompt } };
-            parts.AddRange(references.Select(x => (object)new
+            for (var i = 0; i < references.Count; i++)
             {
-                type = "image_url", image_url = new { url = ToDataUri(x) }
-            }));
+                parts.Add(new { type = "text", text = ReferenceLabel(references[i], i) });
+                parts.Add(new
+                {
+                    type = "image_url", image_url = new { url = ToDataUri(references[i]) }
+                });
+            }
             var payload = new
             {
                 model = settings.Model,
@@ -344,10 +348,18 @@ namespace TraceSoul2.ExternalPlugins
             CancellationToken cancellationToken)
         {
             var parts = new List<object> { new { text = prompt } };
-            parts.AddRange(references.Select(x => (object)new
+            for (var i = 0; i < references.Count; i++)
             {
-                inline_data = new { mime_type = x.MimeType ?? "image/png", data = Convert.ToBase64String(x.Bytes) }
-            }));
+                parts.Add(new { text = ReferenceLabel(references[i], i) });
+                parts.Add(new
+                {
+                    inline_data = new
+                    {
+                        mime_type = references[i].MimeType ?? "image/png",
+                        data = Convert.ToBase64String(references[i].Bytes)
+                    }
+                });
+            }
             var imageConfig = new Dictionary<string, object>();
             if (!string.IsNullOrWhiteSpace(aspectRatio)) imageConfig["aspectRatio"] = aspectRatio;
             if (!string.IsNullOrWhiteSpace(settings.ImageSize) &&
@@ -669,6 +681,12 @@ namespace TraceSoul2.ExternalPlugins
         private static string ToDataUri(ReferenceImageData image)
         {
             return "data:" + (image.MimeType ?? "image/png") + ";base64," + Convert.ToBase64String(image.Bytes);
+        }
+
+        private static string ReferenceLabel(ReferenceImageData image, int index)
+        {
+            return "[参考图" + (index + 1) + "｜分类=" + (image.Category ?? "未分类") +
+                   "｜用途=" + (image.Role ?? "辅助") + "]";
         }
 
         private static string FindSafetyBlock(IEnumerable<JsonElement> roots)

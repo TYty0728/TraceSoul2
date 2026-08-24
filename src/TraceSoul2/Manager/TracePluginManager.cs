@@ -418,7 +418,11 @@ namespace TraceSoul2.Manager
             RemoveOwned(momentSources, id, x => x.Descriptor.PluginId);
             RemoveOwned(facets, id, x => x.Descriptor.PluginId);
             RemoveOwned(backgroundServices, id, x => x.Descriptor.PluginId);
-            loaded.Instance.Shutdown();
+            try { loaded.Instance.Shutdown(); }
+            catch (Exception exception)
+            {
+                Console.Error.WriteLine("TraceSoul2 插件卸载失败：" + id + " / " + exception.Message);
+            }
         }
 
         private static void RemoveOwned<T>(Dictionary<string, T> values, string pluginId, Func<T, string> owner)

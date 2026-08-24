@@ -33,11 +33,12 @@ namespace TraceSoul2.Logic
             string leaveResult,
             CancellationToken cancellationToken)
         {
-            var needsReply = waitOnly || turn.RequiresExpression;
+            var proactive = !waitOnly && !turn.RequiresExpression && mind != null && mind.speak;
+            var needsReply = waitOnly || turn.RequiresExpression || proactive;
             var system = BuildFoundationPrompt(turn, contextBlocks).TrimEnd() + "\n\n" +
                          BuildTurnPrompt(
                              turn, plugins, contextBlocks, mind, memoryFlesh, waitOnly, leaveResult).TrimEnd();
-            var messages = MindLogic.AssembleTurnMessages(system, turn, turn.Moment.Content);
+            var messages = AssembleExpressionMessages(system, turn);
             var raw = await DeepSeekStructuredOutputLogic.CompletePlainAsync(
                 llm,
                 messages,
@@ -75,6 +76,38 @@ namespace TraceSoul2.Logic
             if (expressed == null) return false;
             if (!needsReply) return true;
             return !string.IsNullOrWhiteSpace(expressed.reply);
+        }
+
+        /// <summary>
+        /// 普通对话以她的真实 user Moment 收尾；心跳没有新入站，但外显仍需要一个清晰的请求回合。
+        /// 这个 user role 是 LLM 协议里的请求通道，正文明确标成系统唤醒，绝不冒充她说过的话。
+        /// </summary>
+        internal static List<DeepSeekMessageData> AssembleExpressionMessages(
+            string systemPrompt,
+            TraceTurnContext turn)
+        {
+            var messages = new List<DeepSeekMessageData>
+            {
+                new DeepSeekMessageData("system", systemPrompt ?? string.Empty)
+            };
+            messages.AddRange(MindLogic.BuildRecentChatHistory(turn));
+            var current = turn == null || turn.Moment == null
+                ? string.Empty
+                : turn.Moment.Content ?? string.Empty;
+            if (HeartbeatLogic.IsHeartbeatContent(current))
+            {
+                var pair = turn.Services.Storage.LoadPairIdentity();
+                messages.Add(new DeepSeekMessageData(
+                    "user", pair.Apply(CorePrompts.Expressor.HeartbeatRequest)));
+            }
+            else
+            {
+                messages.Add(new DeepSeekMessageData("user", current));
+                var pair = turn.Services.Storage.LoadPairIdentity();
+                messages.Add(new DeepSeekMessageData(
+                    "user", pair.Apply(CorePrompts.Expressor.ExpressionRequest)));
+            }
+            return messages;
         }
 
         /// <summary>
@@ -663,6 +696,8 @@ namespace TraceSoul2.Logic
                 builder.AppendLine(time.Content.Trim());
                 builder.AppendLine();
             }
+            builder.AppendLine(pair.Apply(CorePrompts.Expressor.SubjectBoundary));
+            builder.AppendLine();
             builder.AppendLine(CorePrompts.Expressor.ThoughtHeader);
             builder.AppendLine(FormatMind(mind));
             if (!string.IsNullOrWhiteSpace(memoryFlesh))
@@ -689,7 +724,7 @@ namespace TraceSoul2.Logic
             }
             else if (mind != null && mind.speak)
             {
-                builder.AppendLine(CorePrompts.Expressor.Proactive);
+                builder.AppendLine(pair.Apply(CorePrompts.Expressor.Proactive));
                 if (!string.IsNullOrWhiteSpace(mind.heartbeat_intent))
                     builder.AppendLine("本次醒来的独立意图：" + mind.heartbeat_intent);
                 builder.AppendLine("把这次醒来真正浮出的感觉带到眼前，顺着现在的场景自然开口；旧碎片没有被此刻碰亮，就让它留在背景。");
