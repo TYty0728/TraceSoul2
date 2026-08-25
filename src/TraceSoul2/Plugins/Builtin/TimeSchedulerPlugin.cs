@@ -75,6 +75,20 @@ namespace TraceSoul2.Plugins.Builtin
                 catch { document = null; }
                 if (document == null) document = new ScheduleDocument();
                 if (document.items == null) document.items = new List<ScheduleEntry>();
+                DisableLegacyDailyReviews();
+            }
+
+            private void DisableLegacyDailyReviews()
+            {
+                var changed = false;
+                foreach (var item in document.items)
+                {
+                    if (!item.enabled || !string.Equals(item.content, DailyReviewContent, StringComparison.Ordinal))
+                        continue;
+                    item.enabled = false;
+                    changed = true;
+                }
+                if (changed) SaveUnsafe();
             }
 
             public ScheduleEntry Add(string conversationId, string content, long due, string recurrence, string wake = null)
@@ -286,15 +300,13 @@ namespace TraceSoul2.Plugins.Builtin
                 Provides = "time.current_context",
                 RefreshMode = TraceFacetRefreshValues.EveryBrainStep,
                 Priority = 70,
-                MaxContextChars = 200
+                MaxContextChars = 320
             };
 
             public bool IsAvailable(TraceTurnContext context) { return context != null; }
 
             public Task<TraceContextBlockData> BuildContextAsync(TraceTurnContext context, CancellationToken token)
             {
-                if (state != null && context != null)
-                    state.EnsureDailyReview(context.ConversationId);
                 var now = DateTimeOffset.Now;
                 var routing = MouthLogic.LoadState(
                     context == null || context.Services == null ? null : context.Services.DataDirectory);
@@ -328,6 +340,12 @@ namespace TraceSoul2.Plugins.Builtin
                             .Append("，上一段停在")
                             .Append(lastTime.ToString("M月d日 HH:mm"))
                             .Append("。");
+                        if (pair.IsCompanionMoment(lastReal.Role))
+                        {
+                            builder.Append("上一条真实消息由我发出，至今没有她的新回复；内容：")
+                                .Append(Limit(lastReal.Content, 80))
+                                .Append("。");
+                        }
                     }
                 }
                 if (state != null && context != null)
@@ -352,8 +370,8 @@ namespace TraceSoul2.Plugins.Builtin
         }
 
         /// <summary>
-        /// 今天我们的轨迹：当天共同经历的滚动摘要（约200字内），
-        /// 实时对话中由 Brain 用 facet_outputs 写回；新的一天（04:00 边界）自动清空。
+        /// 今天我们的轨迹：当天共同经历的滚动实时样本（约500字内），
+        /// 实时对话中由 Brain 高频写回；只在对应日复盘成功后退出。
         /// </summary>
         private sealed class DayTrajectoryFacet : ITraceMountedFacet
         {
@@ -367,7 +385,7 @@ namespace TraceSoul2.Plugins.Builtin
                 OutputJsonSchema = "{changed:boolean,summary:string,fields:[trajectory]}",
                 RefreshMode = TraceFacetRefreshValues.OncePerTurn,
                 Priority = 80,
-                MaxContextChars = 320,
+                MaxContextChars = 620,
                 HasInternalMutation = true
             };
 
@@ -394,7 +412,7 @@ namespace TraceSoul2.Plugins.Builtin
             {
                 if (output == null || !output.changed)
                     return Task.FromResult<TraceCapabilityResultData>(null);
-                var text = LimitSentence(output.GetField("trajectory", output.summary), 200).Trim();
+                var text = LimitSentence(output.GetField("trajectory", output.summary), 500).Trim();
                 if (text.Length == 0)
                     return Task.FromResult<TraceCapabilityResultData>(null);
                 var dayKey = MemoryDayKey(DateTimeOffset.Now);

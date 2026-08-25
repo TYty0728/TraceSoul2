@@ -1,0 +1,18 @@
+<Project Sdk="Microsoft.NET.Sdk">
+  <PropertyGroup>
+    <TargetFramework>net8.0</TargetFramework>
+    <ImplicitUsings>disable</ImplicitUsings>
+    <NoWarn>$(NoWarn);NETSDK1206</NoWarn>
+    <Nullable>disable</Nullable>
+    <AssemblyName>TraceSoul2.Plugin.GameSession</AssemblyName>
+    <RootNamespace>TraceSoul2.ExternalPlugins.GameSession</RootNamespace>
+  </PropertyGroup>
+  <ItemGroup>
+    <ProjectReference Include="..\..\Tools\PluginApi\TraceSoul2.PluginApi.csproj"
+                      Private="false" PrivateAssets="all" />
+    <PackageReference Include="sqlite-net-pcl" Version="1.9.172" />
+    <None Update="plugin.json" CopyToOutputDirectory="PreserveNewest" />
+    <None Update="config_schema.json" CopyToOutputDirectory="PreserveNewest" />
+    <None Update="protocol\**" CopyToOutputDirectory="PreserveNewest" />
+  </ItemGroup>
+</Project>

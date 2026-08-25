@@ -548,32 +548,33 @@ app.MapPost("/platforms/onebot/napcat/start", (SoulRuntime runtime) =>
     }
 });
 
-// 插件声明的 WebSocket 入口（OneBot 反向 WS 等）。
-var pluginWsEndpoints = app.Services.GetRequiredService<SoulRuntime>().WebSocketEndpoints();
-if (pluginWsEndpoints.Count > 0)
+// 插件声明的 WebSocket 入口（OneBot 反向 WS、游戏桥接等）。
+// 每次握手都从 Runtime 取当前实例：外部插件重扫、配置保存或新安装后无需重启宿主。
+app.UseWebSockets();
+app.Use(async (HttpContext context, RequestDelegate next) =>
 {
-    app.UseWebSockets();
-    foreach (var endpoint in pluginWsEndpoints)
+    var runtime = context.RequestServices.GetRequiredService<SoulRuntime>();
+    var endpoint = runtime.FindWebSocketEndpoint(context.Request.Path.Value);
+    if (endpoint == null)
     {
-        app.Map(endpoint.Path, async (HttpContext context) =>
-        {
-            if (!context.WebSockets.IsWebSocketRequest)
-            {
-                context.Response.StatusCode = StatusCodes.Status400BadRequest;
-                return;
-            }
-            if (!endpoint.Accept(
-                    context.Request.Headers.Authorization.ToString(),
-                    context.Request.QueryString.HasValue ? context.Request.QueryString.Value : string.Empty))
-            {
-                context.Response.StatusCode = StatusCodes.Status401Unauthorized;
-                return;
-            }
-            using (var socket = await context.WebSockets.AcceptWebSocketAsync())
-                await endpoint.OnConnectedAsync(socket, context.RequestAborted);
-        });
+        await next(context);
+        return;
     }
-}
+    if (!context.WebSockets.IsWebSocketRequest)
+    {
+        context.Response.StatusCode = StatusCodes.Status400BadRequest;
+        return;
+    }
+    if (!endpoint.Accept(
+            context.Request.Headers.Authorization.ToString(),
+            context.Request.QueryString.HasValue ? context.Request.QueryString.Value : string.Empty))
+    {
+        context.Response.StatusCode = StatusCodes.Status401Unauthorized;
+        return;
+    }
+    using (var socket = await context.WebSockets.AcceptWebSocketAsync())
+        await endpoint.OnConnectedAsync(socket, context.RequestAborted);
+});
 
 app.MapPut("/memory/nerve", (SoulRuntime runtime, NerveWrite body) =>
     Results.Json(runtime.UpdateNerve(body.top_k, body.provider_id)));

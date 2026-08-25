@@ -1,0 +1,19 @@
+{
+  "$schema": "https://json-schema.org/draft/2020-12/schema",
+  "$id": "https://tracesoul.local/schemas/game-event-v1.schema.json",
+  "title": "TraceSoul game.session event v1",
+  "type": "object",
+  "required": ["op", "session_id", "kind", "actor", "content"],
+  "properties": {
+    "op": { "const": "event" },
+    "request_id": { "type": "string" },
+    "session_id": { "type": "string", "minLength": 1 },
+    "kind": { "type": "string", "minLength": 1, "maxLength": 40 },
+    "actor": { "enum": ["user", "companion", "world"] },
+    "content": { "type": "string", "minLength": 1, "maxLength": 12000 },
+    "payload": { "type": ["object", "array", "string", "number", "boolean", "null"] },
+    "state": { "type": ["object", "array", "string", "number", "boolean", "null"] },
+    "occurred_unix_ms": { "type": "integer", "minimum": 0 }
+  },
+  "additionalProperties": false
+}

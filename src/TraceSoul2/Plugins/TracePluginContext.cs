@@ -15,6 +15,7 @@ namespace TraceSoul2.Plugins
         void RegisterMountedFacet(string pluginId, ITraceMountedFacet facet);
         void RegisterMomentSource(string pluginId, ITraceMomentSource source);
         void RegisterBackgroundService(string pluginId, ITraceBackgroundService service);
+        void RegisterWebSocketEndpoint(string pluginId, ITraceWebSocketEndpoint endpoint);
     }
     /// <summary>
     /// 插件声明的 WebSocket 入口：平台插件（如 OneBot 反向 WS）把自己的端点挂到宿主 HTTP 服务器上。
@@ -253,6 +254,15 @@ namespace TraceSoul2.Plugins
         public void AddBackgroundService(ITraceBackgroundService service)
         {
             registrar.RegisterBackgroundService(Plugin.Id, service);
+        }
+
+        /// <summary>
+        /// 注册插件自己的 WebSocket 入口。宿主按插件生命周期移除旧端点，
+        /// 因此外部插件热重载后不会继续命中已经卸载的实例。
+        /// </summary>
+        public void AddWebSocketEndpoint(ITraceWebSocketEndpoint endpoint)
+        {
+            registrar.RegisterWebSocketEndpoint(Plugin.Id, endpoint);
         }
     }
 }

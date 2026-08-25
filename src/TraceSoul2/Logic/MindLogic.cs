@@ -43,15 +43,19 @@ namespace TraceSoul2.Logic
             var embedding = turn.Services == null ? null : turn.Services.Embedding;
             var templates = await MindTemplateLogic.SelectAsync(
                 query, embedding, MindTemplateLogic.CandidateCap, cancellationToken);
-            var system = BuildFoundationPrompt(turn).TrimEnd() + "\n\n" +
-                         BuildTurnPrompt(turn, leaveResult, alreadyLeft, templates, naturallyAwakenedPast).TrimEnd();
-            var messages = AssembleTurnMessages(system, turn, query);
+            var shared = LlmContextPackLogic.SharedSystem(llm, turn);
+            var role = BuildMindRolePrompt(
+                turn, leaveResult, alreadyLeft, templates).TrimEnd();
+            var messages = LlmContextPackLogic.AssembleMind(
+                llm, shared, turn, naturallyAwakenedPast, query, role);
+            var promptCacheKey = LlmContextPackLogic.BuildPromptCacheKey(llm, turn.ConversationId);
             var decided = await DeepSeekStructuredOutputLogic.CompleteAsync<MindDecisionData>(
                 llm,
                 messages,
                 x => x != null && !string.IsNullOrWhiteSpace(Normalize(x).beat),
                 CorePrompts.Mind.MissingBeat,
-                cancellationToken);
+                cancellationToken,
+                promptCacheKey);
             return Normalize(decided, alreadyLeft);
         }
 
@@ -70,11 +74,13 @@ namespace TraceSoul2.Logic
             output.new_fact = Limit((output.new_fact ?? string.Empty).Trim(), 40);
             output.leave = Limit((output.leave ?? string.Empty).Trim(), 80);
             output.note = (output.note ?? string.Empty).Trim();
-            output.today = Limit((output.today ?? string.Empty).Trim(), 200);
+            output.today = Limit((output.today ?? string.Empty).Trim(), 500);
             output.inner = OneLine(output.inner);
             output.scene = Limit(OneLine(output.scene), 160);
             output.speak_center = Limit(OneLine(output.speak_center), 100);
-            output.cognition = Limit(OneLine(output.cognition), 19);
+            // 长期认知只允许日终复盘产出；白天字段保留仅为旧模型 JSON 兼容。
+            output.cognition = string.Empty;
+            output.archive = false;
             output.heartbeat_intent = Limit(OneLine(output.heartbeat_intent), 120);
             output.next_heartbeat_plan = Limit(OneLine(output.next_heartbeat_plan), 120);
             if (output.ClearsAttention())
@@ -107,6 +113,22 @@ namespace TraceSoul2.Logic
             }
             if (output.WantsImage()) output.sticker = MindAtmosphereValues.None;
             return output;
+        }
+
+        private static string BuildMindRolePrompt(
+            TraceTurnContext turn,
+            string leaveResult,
+            bool alreadyLeft,
+            IReadOnlyList<MindTemplate> templates)
+        {
+            var builder = new StringBuilder();
+            builder.AppendLine(CorePrompts.Mind.HowToThinkHeader);
+            CorePrompts.Write(builder, CorePrompts.Mind.Foundation);
+            InjectMindJsonFields(builder, turn);
+            AppendOrganMindPrompts(builder, turn);
+            builder.AppendLine();
+            builder.Append(BuildTurnPrompt(turn, leaveResult, alreadyLeft, templates, string.Empty));
+            return builder.ToString();
         }
 
         private static string BuildFoundationPrompt(TraceTurnContext turn)

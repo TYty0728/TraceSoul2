@@ -164,7 +164,11 @@ namespace TraceSoul2.Migrate
             string expressionCard,
             string userProfileCard,
             List<EventIndexRecord> dayIndexes,
-            List<EventEntryRecord> dayEntries)
+            List<EventEntryRecord> dayEntries,
+            string dayTrajectory,
+            List<TodayNewItemRecord> todayNewItems,
+            string currentInner,
+            string currentLife)
         {
             pair = pair ?? PairIdentity.Missing;
             var builder = new StringBuilder();
@@ -181,6 +185,15 @@ namespace TraceSoul2.Migrate
             builder.AppendLine(pair.Apply(CorePrompts.Migration.DayCardOtherHeader) + (string.IsNullOrWhiteSpace(otherCard) ? CorePrompts.Migration.BlankCard : otherCard));
             builder.AppendLine(CorePrompts.Migration.DayCardRelationHeader + (string.IsNullOrWhiteSpace(relationCard) ? CorePrompts.Migration.BlankCard : relationCard));
             builder.AppendLine(CorePrompts.Migration.DayCardHabitHeader + (string.IsNullOrWhiteSpace(expressionCard) ? CorePrompts.Migration.BlankCard : expressionCard));
+            builder.AppendLine();
+            builder.AppendLine("本日实时样本（只作为完整复盘证据，复盘成功后退出）：");
+            builder.AppendLine("- 本日轨迹：" + (string.IsNullOrWhiteSpace(dayTrajectory) ? CorePrompts.Migration.Empty : dayTrajectory.Trim()));
+            builder.AppendLine("- 今日新识：");
+            var todayItems = todayNewItems ?? new List<TodayNewItemRecord>();
+            if (todayItems.Count == 0) builder.AppendLine("  " + CorePrompts.Migration.Empty);
+            else foreach (var item in todayItems) builder.AppendLine("  - " + item.Content);
+            builder.AppendLine("- 复盘前内心运行态：" + (string.IsNullOrWhiteSpace(currentInner) ? CorePrompts.Migration.Empty : currentInner.Trim()));
+            builder.AppendLine("- 复盘前生活状态：" + (string.IsNullOrWhiteSpace(currentLife) ? CorePrompts.Migration.Empty : currentLife.Trim()));
             builder.AppendLine();
             builder.AppendLine(CorePrompts.Migration.DayCardEventsHeader);
             var entriesByIndex = (dayEntries ?? new List<EventEntryRecord>())

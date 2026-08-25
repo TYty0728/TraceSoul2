@@ -107,7 +107,7 @@ namespace TraceSoul2.Plugins.Builtin
                     throw new InvalidOperationException("复盘没有可用的语言模型。请在「大脑 · LLM」里指定复盘槽或对话开口。");
                 var review = new IdentityReviewLogic(llm);
                 var output = await review.AnalyzeAsync(
-                    pair, cards, moments, inner.Narrative, cancellationToken);
+                    pair, cards, moments, inner.Narrative, context.ConversationId, cancellationToken);
                 output = IdentityCardLogic.Normalize(output, cards, pair);
                 var changed = context.Services.Storage.ApplyIdentityReview(
                     context.ConversationId, context.Moment.Id, output);

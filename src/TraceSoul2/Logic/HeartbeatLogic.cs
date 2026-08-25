@@ -19,9 +19,11 @@ namespace TraceSoul2.Logic
         public const string HeartbeatContent = "心跳";
         public const string PlanSeparator = "｜醒来计划：";
         public const string DefaultNextPlan = "重新看看时间、她有没有新消息和近期计划，再决定是否联系";
+        public const string DefaultLongFollowUpPlan = "隔几个小时再看看时间、她有没有新消息和近期计划";
         public const int DefaultMinMinutes = 10;
         public const int DefaultMaxMinutes = 20;
-        public const int MinuteCap = 180;
+        public const int DefaultLongFollowUpMinutes = 240;
+        public const int MinuteCap = 720;
 
         private static readonly Random Random = new Random();
 
@@ -74,6 +76,17 @@ namespace TraceSoul2.Logic
         {
             if (minutes <= 0) return 0;
             return minutes > MinuteCap ? MinuteCap : minutes;
+        }
+
+        /// <summary>
+        /// 心跳醒着时必须留下下一次检查；只有明确睡下才真正停跳。
+        /// 模型没有给出分钟数时拉长到数小时，避免短周期打扰，也避免链路意外中断。
+        /// </summary>
+        public static int ResolveFollowUpMinutes(bool sleep, int requestedMinutes)
+        {
+            if (sleep) return 0;
+            var requested = ClampMinutes(requestedMinutes);
+            return requested > 0 ? requested : DefaultLongFollowUpMinutes;
         }
 
         public static void NormalizeRange(ref int minMinutes, ref int maxMinutes)

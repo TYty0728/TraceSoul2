@@ -16,6 +16,8 @@
 - 每个包加载进**独立的可回收 AssemblyLoadContext**：坏插件只报错；卸载即释放；进程不崩。
 - 程序集**从内存流加载**（不占文件句柄）：运行中直接覆盖 dll → 控制台「重新扫描」→ 热更新。
 - `TraceSoul2.PluginApi` 共享契约回落默认上下文：插件与宿主共用同一份类型。
+- WebSocket 入口用 `context.AddWebSocketEndpoint(...)` 注册；宿主按插件归属移除旧端点，并在每次新握手时解析当前实例，所以配置保存/重扫不会继续命中死对象。
+- `PluginApi 1.1` 起包含上述 WebSocket 生命周期注册口；只使用旧贡献接口的插件无需改源码。
 - 安装 = 丢代码文件夹；卸载只把代码移入 `plugins-uninstalled/`，对应 `plugins_data` 不删除。
 
 ## PluginApi 契约（外部插件只依赖它）
@@ -122,6 +124,8 @@ public sealed class XxxEffector : ITraceCallableContribution
 
 - 出站表达**必须**经平台适配器并带 `ProducedEvent`；实际文字进入 `moments`，图片、表情、语音等动作回执进入 `operational_events`；
 - 未配置（如缺 api_key）时让 `IsAvailable` 返回 false，该器官自动从身体上消失。
+
+平台无关的器官（如 `game.session`）不要声明 `PlatformId` / `BodyId`，控制台会把它收在“独立 / 跨平台”；它的 Facet、后台服务和神经在 QQ、其它平台或独立壳上共用同一份状态。
 
 ## 已交付的四个包（家目录 `plugins/`）
 

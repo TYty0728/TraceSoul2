@@ -23,6 +23,7 @@ namespace TraceSoul2.Migrate
         public LlmProviderStore Providers { get; private set; }
         public ILlmClient Llm { get; private set; }
         public SqliteVectorManager Vectors { get; private set; }
+        public ILifeStateStore LifeState { get; private set; }
         public string MigrationProviderId { get; private set; }
         public string MigrationModel { get; private set; }
         private OnnxBgeEncoder encoder;
@@ -38,6 +39,7 @@ namespace TraceSoul2.Migrate
             context.DataDirectory = dataDir;
             context.BrainframePath = Path.Combine(dataDir, "tracesoul2-brainframe.sqlite3");
             context.Store = new SqliteMemoryManager(context.BrainframePath);
+            context.LifeState = new JsonLifeStateStore(dataDir);
             // 迁移复盘跨度大，扩大候选窗口，防止早期事实被新事实挤出唤醒候选。
             context.Store.CandidateWindow = 2000;
             context.Migration = new MigrationDb(

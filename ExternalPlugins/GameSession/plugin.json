@@ -1,0 +1,13 @@
+{
+  "dll": "TraceSoul2.Plugin.GameSession.dll",
+  "websocket_path": "/plugins/game-session/ws",
+  "access_token": "",
+  "summary_event_count": 30,
+  "summary_char_count": 8000,
+  "summary_idle_minutes": 20,
+  "sync_mode": "timed",
+  "sync_interval_minutes": 60,
+  "session_timeout_minutes": 120,
+  "facet_max_chars": 1200,
+  "profiles_json": "[{\"id\":\"stardew-valley\",\"title\":\"星露谷物语\",\"game_id\":\"stardew-valley\",\"adapter_id\":\"stardew-mcp-bridge@0.3\",\"source_url\":\"https://github.com/amarisaster/StardewValley-MCP\",\"capabilities\":[\"follow\",\"farm\",\"mine\",\"fish\",\"player\"],\"default_mode\":\"player\",\"identity_slots\":[\"personality\",\"self\",\"other\",\"relation\",\"expression_habit\",\"user_profile\"],\"identity_budget_chars\":2400,\"role_instruction\":\"你是她在农场里的玩家 2 与同行者。只把游戏工具实际确认的结果当作已经发生；以自己的身份陪她生活、劳作与探索，不替她决定重要选择。\",\"sync_mode\":\"timed\",\"sync_interval_minutes\":30,\"session_timeout_minutes\":180},{\"id\":\"generic\",\"title\":\"通用游戏\",\"adapter_id\":\"generic\",\"identity_slots\":[\"personality\",\"self\"],\"identity_budget_chars\":1600,\"role_instruction\":\"你是她的游戏观察者与副驾驶；只依据游戏工具回报理解局面。\"}]"
+}

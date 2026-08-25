@@ -123,18 +123,20 @@ namespace TraceSoul2.Logic
                     new List<BrainFacetOutputData>(),
                     new List<TraceCapabilityResultData>());
             }
-            var recent = contextInjectionCount <= 0
+            // 原始对话只承担语言衔接：最多滚动 3 轮（约 6 条人/伴侣消息）。
+            var recentMomentLimit = Math.Min(Math.Max(0, contextInjectionCount), 6);
+            var recent = recentMomentLimit <= 0
                 ? new List<MomentRecord>()
                 : storage.GetRecentMoments(conversationId, 200)
                     .Where(x => x.Id != triggerMoment.Id &&
                                 (pair.IsHumanMoment(x.Role) || pair.IsCompanionMoment(x.Role)))
-                    .TakeLast(contextInjectionCount)
+                    .TakeLast(recentMomentLimit)
                     .ToList();
             var turn = new TraceTurnContext(
                 conversationId,
                 triggerMoment,
                 recent,
-                contextInjectionCount,
+                recentMomentLimit,
                 wake == KernelWakeValues.Dialogue && pair.IsHumanMoment(source.Role),
                 plugins.Services,
                 wake,
@@ -294,7 +296,8 @@ namespace TraceSoul2.Logic
                 await RunExpressionStartingHooksAsync(turn);
                 var waitingTimer = Stopwatch.StartNew();
                 var waiting = await expressor.ExpressAsync(
-                    turn, pluginList, expressionCatalog, blocks, decision, string.Empty, true, null, cancellationToken);
+                    turn, pluginList, expressionCatalog, blocks, decision,
+                    naturallyAwakenedPast, true, null, cancellationToken);
                 plugins.Services.LogTiming(turn.TraceId, "离场前表达生成完成", waitingTimer.ElapsedMilliseconds);
                 waiting = ExpressorLogic.NormalizeStep(
                     waiting, expressionCatalog, true, true, ResolveReplyChannel(turn));
@@ -336,11 +339,15 @@ namespace TraceSoul2.Logic
                 await RunExpressionStartingHooksAsync(turn);
                 var expressTimer = Stopwatch.StartNew();
                 final = await expressor.ExpressAsync(
-                    turn, pluginList, expressionCatalog, blocks, decision, memoryFlesh, false,
+                    turn, pluginList, expressionCatalog, blocks, decision,
+                    naturallyAwakenedPast, false,
                     leaveResult, cancellationToken);
                 plugins.Services.LogTiming(turn.TraceId, "表达生成完成", expressTimer.ElapsedMilliseconds);
                 final = ExpressorLogic.NormalizeStep(
                     final, expressionCatalog, true, needsReply, ResolveReplyChannel(turn));
+                if (ExpressorLogic.EnsureMindImageExpression(final, decision, expressionCatalog))
+                    plugins.Services.LogTiming(turn.TraceId, "TA的相机 Kernel出图硬兜底", 0,
+                        "mind=" + decision.ImageValue());
                 StampDecision(final, decision);
                 CloseReplyChannel(final, turn, expressionCatalog);
                 MergePrivateFacets(final, decision, turn);
@@ -381,13 +388,10 @@ namespace TraceSoul2.Logic
             }
 
             var persistTimer = Stopwatch.StartNew();
-            // 默认对话只保留 Mind + Expressor 两次 LLM。即时事实直接使用 Mind 已给出的
-            // new_fact 落库；逐句 MemoryObservation 不再启动第三次 LLM。
-            MemoryLiveWriteLogic.TryCommitNewFact(turn, decision);
-            CognitionLiveWriteLogic.TryCommit(turn, decision);
+            // 白天只维护本日实时样本（内心/生活/轨迹/今日新识）。长期事件、认知与身份卡
+            // 统一留给完整日终复盘，避免同一批 Moment 被多条归档旁路提前消费。
             await SyncHeartbeatAsync(turn, catalog, decision, cancellationToken);
-            await RunPostSpeakAsync(decision, turn, catalog, cancellationToken);
-            plugins.Services.LogTiming(turn.TraceId, "轮后记忆/认知处理完成", persistTimer.ElapsedMilliseconds);
+            plugins.Services.LogTiming(turn.TraceId, "轮后实时状态处理完成", persistTimer.ElapsedMilliseconds);
             return new LivedMindTurn(final, expression, responseFlushed, decision);
         }
 
@@ -1112,16 +1116,23 @@ namespace TraceSoul2.Logic
             }
             if (heartbeatTurn)
             {
-                var minutes = decision == null ? 0 : HeartbeatLogic.ClampMinutes(decision.next_heartbeat_minutes);
-                if (minutes <= 0)
+                var requestedMinutes = decision == null ? 0 : decision.next_heartbeat_minutes;
+                var minutes = HeartbeatLogic.ResolveFollowUpMinutes(false, requestedMinutes);
+                var nextPlan = decision == null ? string.Empty : decision.next_heartbeat_plan;
+                if (requestedMinutes <= 0)
                 {
-                    await TryExecuteNerveAsync("time.continue.clear", "心跳后不再续跳", turn, catalog,
-                        new List<BrainCallArgumentData>(), cancellationToken);
-                    return;
+                    if (string.IsNullOrWhiteSpace(nextPlan))
+                        nextPlan = HeartbeatLogic.DefaultLongFollowUpPlan;
+                    // 审查快照和控制台应显示实际排下的兜底值，而不是误导性的“0 / 不再自醒”。
+                    if (decision != null)
+                    {
+                        decision.next_heartbeat_minutes = minutes;
+                        decision.next_heartbeat_plan = nextPlan;
+                    }
                 }
                 var due = HeartbeatLogic.DueFromMinutes(minutes, DateTimeOffset.Now);
                 await TryExecuteNerveAsync("time.continue", "心跳后续跳", turn, catalog,
-                    HeartbeatDueArgs(due, decision.next_heartbeat_plan), cancellationToken);
+                    HeartbeatDueArgs(due, nextPlan), cancellationToken);
                 return;
             }
             var min = turn.Services.HeartbeatMinMinutes;

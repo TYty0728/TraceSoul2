@@ -35,23 +35,33 @@ namespace TraceSoul2.Logic
         {
             var proactive = !waitOnly && !turn.RequiresExpression && mind != null && mind.speak;
             var needsReply = waitOnly || turn.RequiresExpression || proactive;
-            var system = BuildFoundationPrompt(turn, contextBlocks).TrimEnd() + "\n\n" +
-                         BuildTurnPrompt(
-                             turn, plugins, contextBlocks, mind, memoryFlesh, waitOnly, leaveResult).TrimEnd();
-            var messages = AssembleExpressionMessages(system, turn);
+            var shared = LlmContextPackLogic.SharedSystem(llm, turn);
+            var current = turn == null || turn.Moment == null
+                ? string.Empty
+                : turn.Moment.Content ?? string.Empty;
+            var role = BuildExpressRolePrompt(
+                turn, plugins, contextBlocks, mind, memoryFlesh, waitOnly, leaveResult).TrimEnd();
+            var messages = LlmContextPackLogic.AssembleExpress(
+                llm, shared, turn, memoryFlesh, current, role);
+            var promptCacheKey = LlmContextPackLogic.BuildPromptCacheKey(
+                llm, turn == null ? string.Empty : turn.ConversationId);
             var raw = await DeepSeekStructuredOutputLogic.CompletePlainAsync(
                 llm,
                 messages,
                 text => ReplyCarriesMind(ParseSpoken(text), mind, needsReply),
                 waitOnly ? CorePrompts.Expressor.MissingWait
                     : CorePrompts.Expressor.MissingSpeak,
-                cancellationToken);
+                cancellationToken,
+                promptCacheKey);
             var expressed = ParseSpoken(raw);
             ApplyMindAtmosphere(expressed, mind, turn, waitOnly, catalog);
             EnsureExplicitImageRequest(expressed, turn, catalog);
             var mapped = MapExpressor(
                 expressed, catalog, needsReply, waitOnly ? new MindDecisionData() : mind,
                 includeAutoSticker: !waitOnly);
+            if (EnsureMindImageExpression(mapped, waitOnly ? null : mind, catalog))
+                turn.Services?.LogTiming(turn.TraceId, "TA的相机 心智出图硬兜底", detail:
+                    "capability=" + mapped.expressions.First(x => IsImageExpression(x)).capability_id);
             var stickerCalls = (mapped.expressions ?? new List<BrainCapabilityCallData>())
                 .Where(x => x != null && string.Equals(x.purpose, BodyOrganValues.Sticker, StringComparison.Ordinal))
                 .ToList();
@@ -132,6 +142,10 @@ namespace TraceSoul2.Logic
             if (text.IndexOf('[') < 0) return text.Trim();
             text = Regex.Replace(text, @"\[QQ[^\]]*\]", " ", RegexOptions.IgnoreCase);
             text = Regex.Replace(text, @"\[CQ:[^\]]*\]", " ", RegexOptions.IgnoreCase);
+            // 生图是结构化附加表达，裸占位符不是要对她说的话。
+            text = Regex.Replace(text,
+                @"(?im)^[ \t]*\[(?:图片|照片|自拍|image|photo|selfie)\][ \t]*$", " ",
+                RegexOptions.IgnoreCase);
             text = Regex.Replace(text, @"[ \t]+\n", "\n");
             text = Regex.Replace(text, @"\n{3,}", "\n\n");
             return text.Trim();
@@ -275,6 +289,28 @@ namespace TraceSoul2.Logic
                 if (IsImageExpression(extra)) images.Add(extra);
                 else immediate.Add(extra);
             }
+        }
+
+        /// <summary>
+        /// 最后一道出图不变式：心智已经选择出图且相机可用时，不允许开口模型的
+        /// 文本格式、漏字段或映射抖动把图片 expression 吞掉。
+        /// </summary>
+        internal static bool EnsureMindImageExpression(
+            BrainStructuredOutputData output,
+            MindDecisionData mind,
+            IEnumerable<TraceContributionDescriptorData> catalog)
+        {
+            if (output == null || mind == null || !MindLogic.Normalize(mind).WantsImage()) return false;
+            output.expressions = output.expressions ?? new List<BrainCapabilityCallData>();
+            if (output.expressions.Any(IsImageExpression)) return false;
+            var effectors = (catalog ?? Enumerable.Empty<TraceContributionDescriptorData>())
+                .Where(x => x != null && x.Kind == TraceContributionKindValues.Effector)
+                .ToList();
+            var before = output.expressions.Count;
+            AddImage(output.expressions, effectors,
+                SceneFromMind(mind, "这一拍要给她看的画面，神情与当前对话氛围一致"),
+                "auto", null, null, null);
+            return output.expressions.Count > before;
         }
 
         public static BrainStructuredOutputData MapExpressor(
@@ -633,9 +669,57 @@ namespace TraceSoul2.Logic
         }
 
         /// <summary>
-        /// 身份短卡（含表达习惯）、持续状态、开口格式。不含工具目录。
-        /// 心智决策与记忆血肉在 BuildTurnPrompt，再与这里拼成同一条 system。
+        /// 开口格式、持续状态与本轮心智。不含工具目录；身份和记忆正文由公共装配器放在前缀中。
         /// </summary>
+        private static string BuildExpressRolePrompt(
+            TraceTurnContext turn,
+            IEnumerable<TracePluginMetadataData> plugins,
+            IEnumerable<TraceContextBlockData> contextBlocks,
+            MindDecisionData mind,
+            string memoryFlesh,
+            bool waitOnly,
+            string leaveResult)
+        {
+            var pair = turn.Services.Storage.LoadPairIdentity();
+            var builder = new StringBuilder();
+            var blocks = (contextBlocks ?? Enumerable.Empty<TraceContextBlockData>())
+                .Where(x => x != null && !IsRedundantProtocolFacet(x.FacetId) &&
+                            !IsTurnDynamicFacet(x.FacetId) &&
+                            !string.Equals(x.FacetId, "identity.base", StringComparison.Ordinal))
+                .OrderByDescending(x => x.Priority)
+                .ThenBy(x => x.FacetId, StringComparer.Ordinal)
+                .ToList();
+            if (blocks.Count > 0)
+            {
+                builder.AppendLine(CorePrompts.Expressor.ContinuingHeader);
+                builder.AppendLine(CorePrompts.Expressor.ContinuingHint);
+                foreach (var block in blocks)
+                {
+                    builder.AppendLine(block.Content);
+                    builder.AppendLine();
+                }
+            }
+            builder.AppendLine(CorePrompts.Expressor.ExpressionPosture);
+            builder.AppendLine();
+            AppendOutputFormat(builder);
+            builder.AppendLine();
+            if (!string.IsNullOrWhiteSpace(memoryFlesh))
+            {
+                builder.AppendLine(pair.Apply(CorePrompts.Expressor.MemoryFlesh));
+                builder.AppendLine();
+            }
+            builder.AppendLine(BuildTurnPrompt(
+                turn, plugins, contextBlocks, mind, string.Empty, waitOnly, leaveResult));
+            var current = turn == null || turn.Moment == null
+                ? string.Empty
+                : turn.Moment.Content ?? string.Empty;
+            if (HeartbeatLogic.IsHeartbeatContent(current))
+                builder.AppendLine(pair.Apply(CorePrompts.Expressor.HeartbeatRequest));
+            else
+                builder.AppendLine(pair.Apply(CorePrompts.Expressor.ExpressionRequest));
+            return builder.ToString();
+        }
+
         private static string BuildFoundationPrompt(
             TraceTurnContext turn,
             IEnumerable<TraceContextBlockData> contextBlocks)

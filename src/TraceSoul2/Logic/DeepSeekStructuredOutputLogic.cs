@@ -17,10 +17,11 @@ namespace TraceSoul2.Logic
             List<DeepSeekMessageData> messages,
             Func<T, bool> validator,
             string missingMessage,
-            CancellationToken cancellationToken)
+            CancellationToken cancellationToken,
+            string promptCacheKey = null)
             where T : class
         {
-            var raw = await client.CompleteJsonAsync(messages, cancellationToken);
+            var raw = await client.CompleteJsonAsync(messages, cancellationToken, promptCacheKey);
             Exception firstError;
             T parsed;
             try
@@ -41,7 +42,7 @@ namespace TraceSoul2.Logic
                     "user",
                     CorePrompts.Retry.JsonRepairUser(missingMessage))
             };
-            var repairedRaw = await client.CompleteJsonAsync(repair, cancellationToken);
+            var repairedRaw = await client.CompleteJsonAsync(repair, cancellationToken, promptCacheKey);
             try
             {
                 parsed = Parse<T>(repairedRaw);
@@ -62,9 +63,10 @@ namespace TraceSoul2.Logic
             List<DeepSeekMessageData> messages,
             Func<string, bool> validator,
             string missingMessage,
-            CancellationToken cancellationToken)
+            CancellationToken cancellationToken,
+            string promptCacheKey = null)
         {
-            var raw = await client.CompleteTextAsync(messages, cancellationToken);
+            var raw = await client.CompleteTextAsync(messages, cancellationToken, promptCacheKey);
             if (validator == null || validator(raw)) return raw ?? string.Empty;
 
             var repair = new List<DeepSeekMessageData>(messages)
@@ -74,7 +76,7 @@ namespace TraceSoul2.Logic
                     "user",
                     CorePrompts.Retry.SpeakRepairUser(missingMessage))
             };
-            var repaired = await client.CompleteTextAsync(repair, cancellationToken);
+            var repaired = await client.CompleteTextAsync(repair, cancellationToken, promptCacheKey);
             if (validator == null || validator(repaired)) return repaired ?? string.Empty;
             throw new InvalidOperationException(
                 "语言模型连续两次没有把话说出来。首次：" + missingMessage);
