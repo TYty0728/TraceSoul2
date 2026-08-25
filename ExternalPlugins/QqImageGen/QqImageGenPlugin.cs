@@ -464,7 +464,8 @@ namespace TraceSoul2.ExternalPlugins
                         new DeepSeekMessageData("system", QqImageGenPrompts.ScenePlanSystem),
                         new DeepSeekMessageData("user", user)
                     },
-                    cancellationToken);
+                    cancellationToken,
+                    null);
                 var parsed = ParseScenePlan(planned, fallback.Scene);
                 if (parsed.Scene.Length < 12)
                 {

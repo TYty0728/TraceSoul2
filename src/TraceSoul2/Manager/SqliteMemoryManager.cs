@@ -424,10 +424,9 @@ namespace TraceSoul2.Manager
             return updated;
         }
 
-        /// <summary>读取某记忆日的轨迹；顺带清掉其它日期的旧行（新的一天=清空）。</summary>
+        /// <summary>读取某记忆日的轨迹。旧日样本只能在对应日复盘成功后显式退出，不能在跨日时抢先删除。</summary>
         public DayTrajectoryRecord LoadDayTrajectory(string dayKey)
         {
-            connection.Execute("DELETE FROM day_trajectory WHERE DayKey!=?", dayKey);
             return connection.Find<DayTrajectoryRecord>(dayKey);
         }
 
@@ -449,6 +448,37 @@ namespace TraceSoul2.Manager
                 .OrderBy(x => x.CreatedUnixMs)
                 .Take(Math.Max(1, Math.Min(20, take)))
                 .ToList();
+        }
+
+        /// <summary>读取指定记忆日的全部今日新识，供日终完整复盘使用；不做展示层数量截断。</summary>
+        public List<TodayNewItemRecord> GetTodayNewItemsByDay(string conversationId, string dayKey)
+        {
+            return connection.Table<TodayNewItemRecord>()
+                .Where(x => x.ConversationId == conversationId && x.DayKey == dayKey)
+                .OrderBy(x => x.CreatedUnixMs)
+                .ToList();
+        }
+
+        /// <summary>日终复盘成功后的提交动作：退出已经被完整消费的临时日样本。</summary>
+        public void RetireDayRuntimeSamples(string conversationId, string dayKey)
+        {
+            connection.RunInTransaction(() =>
+            {
+                connection.Execute("DELETE FROM day_trajectory WHERE DayKey=?", dayKey);
+                connection.Execute(
+                    "DELETE FROM today_new_items WHERE ConversationId=? AND DayKey=?",
+                    conversationId, dayKey);
+            });
+        }
+
+        /// <summary>找出截止边界前仍未被日终管线消费的记忆日，供 Host 重启补偿。</summary>
+        public List<string> GetUnbuiltMemoryDayKeysBefore(long endUnixMs)
+        {
+            return connection.QueryScalars<string>(
+                "SELECT DISTINCT strftime('%Y-%m-%d', datetime(CreatedUnixMs/1000, 'unixepoch', '+8 hours', '-4 hours')) " +
+                "FROM moments WHERE CreatedUnixMs<? " +
+                "AND (MemoryStatus IS NULL OR MemoryStatus NOT IN ('built','operational')) ORDER BY 1",
+                endUnixMs);
         }
 
         /// <summary>批量写入今日新识便签：同日同内容去重；返回实际新增条数。</summary>

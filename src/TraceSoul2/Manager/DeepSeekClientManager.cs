@@ -3,6 +3,9 @@ using System.Collections.Generic;
 using System.Net.Http;
 using System.Net.Http.Headers;
 using System.Text;
+using System.Text.Encodings.Web;
+using System.Text.Json;
+using System.Text.Json.Serialization;
 using System.Threading;
 using System.Threading.Tasks;
 using TraceSoul2.Data;
@@ -16,7 +19,7 @@ namespace TraceSoul2.Manager
     /// OpenAI 兼容 ChatCompletions 客户端。DeepSeek 是默认口，不是唯一口。
     /// API Key 只进入 Authorization header，不写日志，也不写数据库。
     /// </summary>
-    public sealed class DeepSeekClientManager : ILlmClient
+    public sealed class DeepSeekClientManager : ILlmClient, ILlmUsageReporter, ILlmEndpoint
     {
         private static readonly HttpClient Http = new HttpClient
         {
@@ -24,11 +27,18 @@ namespace TraceSoul2.Manager
         };
 
         private readonly DeepSeekConfigData config;
+        private LlmUsageData lastUsage;
 
         /// <summary>按需 LLM 原文导出：设置 TRACESOUL2_LLM_DUMP_DIR 后，每次调用把请求/响应原文落盘（不含 API Key）。</summary>
         private static readonly string LlmDumpDir =
             Environment.GetEnvironmentVariable("TRACESOUL2_LLM_DUMP_DIR");
         private static int llmDumpCounter;
+        private static readonly JsonSerializerOptions OmitNullJson = new JsonSerializerOptions
+        {
+            IncludeFields = true,
+            DefaultIgnoreCondition = JsonIgnoreCondition.WhenWritingNull,
+            Encoder = JavaScriptEncoder.UnsafeRelaxedJsonEscaping
+        };
 
         public string ProviderId
         {
@@ -36,6 +46,13 @@ namespace TraceSoul2.Manager
         }
 
         public string Model { get { return config.Model; } }
+
+        public string BaseUrl { get { return config.BaseUrl; } }
+
+        public LlmUsageData LastUsage { get { return lastUsage; } }
+
+        /// <summary>只读快照，供 Kimi 策略包识别官网渠道。</summary>
+        public DeepSeekConfigData ConfigSnapshot { get { return config; } }
 
         public DeepSeekClientManager(DeepSeekConfigData config)
         {
@@ -78,37 +95,194 @@ namespace TraceSoul2.Manager
             return ids;
         }
 
+        /// <summary>
+        /// 按供应商拼 Chat Completions 请求体。Kimi 官网固定 temperature/top_p，K3 走 reasoning_effort。
+        /// </summary>
+        public static string BuildChatRequestJson(
+            DeepSeekConfigData config,
+            List<DeepSeekMessageData> messages,
+            float temperature,
+            bool json,
+            bool useJsonResponseFormat,
+            string promptCacheKey = null)
+        {
+            if (config == null) throw new ArgumentNullException("config");
+            var model = ResolveRequestModel(config);
+            if (UsesKimiOfficialApi(config))
+                return JsonSerializer.Serialize(
+                    BuildKimiChatRequest(config, model, messages, json, useJsonResponseFormat, promptCacheKey),
+                    OmitNullJson);
+            if (UsesDeepSeekExtensions(config))
+            {
+                if (json)
+                {
+                    return TraceJson.ToJson(new DeepSeekChatRequestData
+                    {
+                        model = model,
+                        messages = messages,
+                        response_format = useJsonResponseFormat ? new DeepSeekResponseFormatData() : null,
+                        thinking = new DeepSeekThinkingData
+                        {
+                            type = config.ThinkingEnabled ? "enabled" : "disabled"
+                        },
+                        reasoning_effort = config.ThinkingEnabled ? config.ReasoningEffort : "none",
+                        temperature = temperature,
+                        top_p = config.TopP,
+                        max_tokens = config.MaxTokens
+                    });
+                }
+                return TraceJson.ToJson(new GlmChatRequestData
+                {
+                    model = model,
+                    messages = messages,
+                    thinking = new DeepSeekThinkingData
+                    {
+                        type = config.ThinkingEnabled ? "enabled" : "disabled"
+                    },
+                    reasoning_effort = config.ThinkingEnabled ? config.ReasoningEffort : "none",
+                    temperature = temperature,
+                    top_p = config.TopP,
+                    max_tokens = config.MaxTokens
+                });
+            }
+            if (UsesGlmExtensions(model))
+            {
+                return TraceJson.ToJson(new GlmChatRequestData
+                {
+                    model = model,
+                    messages = messages,
+                    thinking = new DeepSeekThinkingData
+                    {
+                        type = config.ThinkingEnabled ? "enabled" : "disabled"
+                    },
+                    reasoning_effort = config.ThinkingEnabled ? config.ReasoningEffort : "none",
+                    temperature = temperature,
+                    top_p = config.TopP,
+                    max_tokens = config.MaxTokens
+                });
+            }
+            return JsonSerializer.Serialize(
+                new OpenAiChatRequestData
+                {
+                    model = model,
+                    messages = messages,
+                    response_format = json && useJsonResponseFormat
+                        ? new DeepSeekResponseFormatData()
+                        : null,
+                    temperature = temperature,
+                    top_p = config.TopP,
+                    max_tokens = config.MaxTokens
+                },
+                OmitNullJson);
+        }
+
+        public static bool UsesKimiOfficialApi(DeepSeekConfigData config)
+        {
+            return OfficialLlmChannelLogic.Resolve(config) == OfficialLlmChannel.Kimi;
+        }
+
+        private static KimiChatRequestData BuildKimiChatRequest(
+            DeepSeekConfigData config,
+            string model,
+            List<DeepSeekMessageData> messages,
+            bool json,
+            bool useJsonResponseFormat,
+            string promptCacheKey)
+        {
+            var request = new KimiChatRequestData
+            {
+                model = model,
+                messages = messages,
+                response_format = json && useJsonResponseFormat ? new DeepSeekResponseFormatData() : null,
+                max_completion_tokens = config.MaxTokens > 0 ? config.MaxTokens : (int?)null,
+                prompt_cache_key = NormalizePromptCacheKey(promptCacheKey)
+            };
+            if (IsKimiK3Model(model))
+            {
+                // K3 始终思考，没有 thinking 开关；关思考槽时降到 low，禁止传 none。
+                request.reasoning_effort = config.ThinkingEnabled
+                    ? NormalizeReasoningEffort(config.ReasoningEffort)
+                    : "low";
+            }
+            else if (IsKimiK2ThinkingToggleModel(model))
+            {
+                request.thinking = new DeepSeekThinkingData
+                {
+                    type = config.ThinkingEnabled ? "enabled" : "disabled"
+                };
+            }
+            return request;
+        }
+
+        private static bool IsKimiK3Model(string model)
+        {
+            model = (model ?? string.Empty).Trim().ToLowerInvariant();
+            return model == "kimi-k3" ||
+                   model.StartsWith("kimi-k3-", StringComparison.Ordinal) ||
+                   model.StartsWith("kimi-k3/", StringComparison.Ordinal);
+        }
+
+        private static bool IsKimiK2ThinkingToggleModel(string model)
+        {
+            model = (model ?? string.Empty).Trim().ToLowerInvariant();
+            if (model.IndexOf("kimi-k2.7-code", StringComparison.Ordinal) >= 0) return false;
+            return model.IndexOf("kimi-k2.6", StringComparison.Ordinal) >= 0 ||
+                   model.IndexOf("kimi-k2.5", StringComparison.Ordinal) >= 0;
+        }
+
         public Task<string> CompleteJsonAsync(
             List<DeepSeekMessageData> messages,
-            CancellationToken cancellationToken = default(CancellationToken))
+            CancellationToken cancellationToken = default(CancellationToken),
+            string promptCacheKey = null)
         {
-            return CompleteCoreAsync(messages, true, cancellationToken);
+            return CompleteCoreAsync(messages, true, cancellationToken, promptCacheKey);
         }
 
         public Task<string> CompleteTextAsync(
             List<DeepSeekMessageData> messages,
-            CancellationToken cancellationToken = default(CancellationToken))
+            CancellationToken cancellationToken = default(CancellationToken),
+            string promptCacheKey = null)
         {
-            return CompleteCoreAsync(messages, false, cancellationToken);
+            return CompleteCoreAsync(messages, false, cancellationToken, promptCacheKey);
         }
 
         private async Task<string> CompleteCoreAsync(
             List<DeepSeekMessageData> messages,
             bool json,
-            CancellationToken cancellationToken)
+            CancellationToken cancellationToken,
+            string promptCacheKey)
         {
             if (string.IsNullOrWhiteSpace(config.ApiKey))
                 throw new InvalidOperationException("语言模型 API Key 尚未填写。");
 
             // 官方文档提示 JSON Output 偶尔可能返回空 content。第二次请求追加纠偏指令，
             // 避免把完全相同的请求盲目重放后再次命中相同结果。
+            // OpenCode 等中转站还会在 json_object 上直接 500 / Internal server error，
+            // 那种失败原先会整轮炸掉，这里用同一次额度再打一枪，并摘掉 response_format。
             var diagnostics = new List<string>();
             var attempts = 1 + config.EmptyContentRetries;
             var current = messages;
             var useJsonResponseFormat = json;
             for (var attempt = 0; attempt < attempts; attempt++)
             {
-                var result = await SendOnceAsync(current, json, useJsonResponseFormat, cancellationToken);
+                CompletionAttempt result;
+                try
+                {
+                    result = await SendOnceAsync(current, json, useJsonResponseFormat, cancellationToken, promptCacheKey);
+                }
+                catch (OperationCanceledException) when (cancellationToken.IsCancellationRequested)
+                {
+                    throw;
+                }
+                catch (Exception exception) when (
+                    attempt < attempts - 1 && IsRetryableProviderException(exception))
+                {
+                    diagnostics.Add("第" + (attempt + 1) + "次上游失败：" + exception.Message);
+                    if (json && useJsonResponseFormat)
+                        useJsonResponseFormat = false;
+                    current = messages;
+                    continue;
+                }
                 var incomplete = json && DeepSeekStructuredOutputLogic.LooksIncompleteJson(result.Content);
                 if (!incomplete && !string.IsNullOrWhiteSpace(result.Content)) return result.Content;
                 diagnostics.Add("第" + (attempt + 1) + "次：" + result.Diagnostic);
@@ -137,18 +311,21 @@ namespace TraceSoul2.Manager
             List<DeepSeekMessageData> messages,
             bool json,
             bool useJsonResponseFormat,
-            CancellationToken cancellationToken)
+            CancellationToken cancellationToken,
+            string promptCacheKey)
         {
             var temperature = ResolveTemperature();
             try
             {
-                return await PostOnceAsync(messages, temperature, json, useJsonResponseFormat, cancellationToken);
+                return await PostOnceAsync(
+                    messages, temperature, json, useJsonResponseFormat, cancellationToken, promptCacheKey);
             }
             catch (InvalidOperationException exception)
             {
                 if (Math.Abs(temperature - 1f) > 0.001f &&
                     LooksLikeUnitTemperatureOnly(exception.Message))
-                    return await PostOnceAsync(messages, 1f, json, useJsonResponseFormat, cancellationToken);
+                    return await PostOnceAsync(
+                        messages, 1f, json, useJsonResponseFormat, cancellationToken, promptCacheKey);
                 throw;
             }
         }
@@ -158,74 +335,11 @@ namespace TraceSoul2.Manager
             float temperature,
             bool json,
             bool useJsonResponseFormat,
-            CancellationToken cancellationToken)
+            CancellationToken cancellationToken,
+            string promptCacheKey)
         {
-            string bodyJson;
-            if (UsesDeepSeekExtensions())
-            {
-                if (json)
-                {
-                    bodyJson = TraceJson.ToJson(new DeepSeekChatRequestData
-                    {
-                        model = ResolveModel(),
-                        messages = messages,
-                        response_format = useJsonResponseFormat ? new DeepSeekResponseFormatData() : null,
-                        thinking = new DeepSeekThinkingData
-                        {
-                            type = config.ThinkingEnabled ? "enabled" : "disabled"
-                        },
-                        reasoning_effort = config.ThinkingEnabled ? config.ReasoningEffort : "none",
-                        temperature = temperature,
-                        top_p = config.TopP,
-                        max_tokens = config.MaxTokens
-                    });
-                }
-                else
-                {
-                    bodyJson = TraceJson.ToJson(new GlmChatRequestData
-                    {
-                        model = ResolveModel(),
-                        messages = messages,
-                        thinking = new DeepSeekThinkingData
-                        {
-                            type = config.ThinkingEnabled ? "enabled" : "disabled"
-                        },
-                        reasoning_effort = config.ThinkingEnabled ? config.ReasoningEffort : "none",
-                        temperature = temperature,
-                        top_p = config.TopP,
-                        max_tokens = config.MaxTokens
-                    });
-                }
-            }
-            else if (UsesGlmExtensions())
-            {
-                // GLM-5.x 默认开启 Thinking。OpenCode Go 也是 OpenAI-compatible 转发，
-                // 必须把该扩展字段真正发出去，不能只在 WebUI 中保存开关。
-                bodyJson = TraceJson.ToJson(new GlmChatRequestData
-                {
-                    model = ResolveModel(),
-                    messages = messages,
-                    thinking = new DeepSeekThinkingData
-                    {
-                        type = config.ThinkingEnabled ? "enabled" : "disabled"
-                    },
-                    reasoning_effort = config.ThinkingEnabled ? config.ReasoningEffort : "none",
-                    temperature = temperature,
-                    top_p = config.TopP,
-                    max_tokens = config.MaxTokens
-                });
-            }
-            else
-            {
-                bodyJson = TraceJson.ToJson(new OpenAiChatRequestData
-                {
-                    model = ResolveModel(),
-                    messages = messages,
-                    temperature = temperature,
-                    top_p = config.TopP,
-                    max_tokens = config.MaxTokens
-                });
-            }
+            var bodyJson = BuildChatRequestJson(
+                config, messages, temperature, json, useJsonResponseFormat, promptCacheKey);
             var endpoint = config.BaseUrl.TrimEnd('/') + "/chat/completions";
 
             using (var request = new HttpRequestMessage(HttpMethod.Post, endpoint))
@@ -236,7 +350,9 @@ namespace TraceSoul2.Manager
                 using (var response = await SendWithTimeoutAsync(request, cancellationToken))
                 {
                     var body = await response.Content.ReadAsStringAsync();
-                    DumpCall(bodyJson, body);
+                    lastUsage = LlmUsageLogic.Parse(body);
+                    var httpStatus = (int)response.StatusCode;
+                    DumpCall(bodyJson, body, httpStatus);
                     DeepSeekChatResponseData parsed = null;
                     try
                     {
@@ -246,7 +362,7 @@ namespace TraceSoul2.Manager
                     {
                         throw new InvalidOperationException(
                             "语言模型返回了无法解析的响应，HTTP " +
-                            (int)response.StatusCode + "，body长度=" + body.Length + "。",
+                            httpStatus + "，body长度=" + body.Length + "。",
                             exception);
                     }
                     if (!response.IsSuccessStatusCode)
@@ -255,13 +371,23 @@ namespace TraceSoul2.Manager
                             ? parsed.error.message
                             : ExtractErrorMessage(body);
                         throw new InvalidOperationException(
-                            "语言模型 API " + (int)response.StatusCode + ": " + detail);
+                            "语言模型 API " + httpStatus + ": " + detail);
+                    }
+
+                    if (IsErrorOnlyChatResponse(parsed, body))
+                    {
+                        var detail = parsed != null && parsed.error != null &&
+                                     !string.IsNullOrWhiteSpace(parsed.error.message)
+                            ? parsed.error.message
+                            : ExtractErrorMessage(body);
+                        throw new InvalidOperationException(
+                            "语言模型上游失败 HTTP " + httpStatus + ": " + detail);
                     }
 
                     if (parsed == null || parsed.choices == null || parsed.choices.Count == 0 ||
                         parsed.choices[0].message == null)
                         throw new InvalidOperationException(
-                            "语言模型返回结构不完整，HTTP " + (int)response.StatusCode +
+                            "语言模型返回结构不完整，HTTP " + httpStatus +
                             "，request_id=" + GetRequestId(response) +
                             "，body长度=" + body.Length + "。");
 
@@ -275,7 +401,7 @@ namespace TraceSoul2.Manager
             }
         }
 
-        private static void DumpCall(string requestJson, string responseBody)
+        private static void DumpCall(string requestJson, string responseBody, int httpStatus)
         {
             var dir = LlmDumpDir;
             if (string.IsNullOrWhiteSpace(dir)) return;
@@ -290,8 +416,8 @@ namespace TraceSoul2.Manager
                     ParseRequestText(requestJson), enc);
                 System.IO.File.WriteAllText(
                     System.IO.Path.Combine(dir, name + "-response.txt"),
-                    ParseResponseText(responseBody), enc);
-                var usage = ParseUsageText(responseBody);
+                    "http=" + httpStatus + Environment.NewLine + ParseResponseText(responseBody), enc);
+                var usage = LlmUsageLogic.FormatDump(LlmUsageLogic.Parse(responseBody));
                 if (!string.IsNullOrWhiteSpace(usage))
                     System.IO.File.WriteAllText(
                         System.IO.Path.Combine(dir, name + "-usage.txt"), usage, enc);
@@ -306,21 +432,53 @@ namespace TraceSoul2.Manager
         {
             try
             {
-            var parsed = TraceJson.FromJson<DeepSeekChatRequestData>(requestJson);
+                if ((requestJson ?? string.Empty).IndexOf("max_completion_tokens", StringComparison.Ordinal) >= 0 ||
+                    (requestJson ?? string.Empty).IndexOf("prompt_cache_key", StringComparison.Ordinal) >= 0)
+                    return FormatKimiRequestText(TraceJson.FromJson<KimiChatRequestData>(requestJson));
+                var parsed = TraceJson.FromJson<DeepSeekChatRequestData>(requestJson);
                 var builder = new StringBuilder();
                 builder.Append("model=").AppendLine(parsed == null ? "?" : parsed.model);
-                foreach (var m in (parsed == null || parsed.messages == null)
-                         ? new List<DeepSeekMessageData>() : parsed.messages)
-                {
-                    builder.Append("【").Append(m.role ?? "?").Append("】").AppendLine();
-                    builder.AppendLine(m.content ?? string.Empty);
-                    builder.AppendLine();
-                }
+                if (parsed != null && parsed.response_format != null &&
+                    !string.IsNullOrWhiteSpace(parsed.response_format.type))
+                    builder.Append("response_format=").AppendLine(parsed.response_format.type);
+                if (parsed != null && !string.IsNullOrWhiteSpace(parsed.reasoning_effort))
+                    builder.Append("reasoning_effort=").AppendLine(parsed.reasoning_effort);
+                AppendMessagesDump(builder, parsed == null ? null : parsed.messages);
                 return builder.ToString();
             }
             catch
             {
                 return requestJson ?? string.Empty;
+            }
+        }
+
+        private static string FormatKimiRequestText(KimiChatRequestData parsed)
+        {
+            var builder = new StringBuilder();
+            builder.Append("model=").AppendLine(parsed == null ? "?" : parsed.model);
+            if (parsed != null && parsed.response_format != null &&
+                !string.IsNullOrWhiteSpace(parsed.response_format.type))
+                builder.Append("response_format=").AppendLine(parsed.response_format.type);
+            if (parsed != null && !string.IsNullOrWhiteSpace(parsed.reasoning_effort))
+                builder.Append("reasoning_effort=").AppendLine(parsed.reasoning_effort);
+            if (parsed != null && !string.IsNullOrWhiteSpace(parsed.prompt_cache_key))
+                builder.Append("prompt_cache_key=").AppendLine(parsed.prompt_cache_key);
+            AppendMessagesDump(builder, parsed == null ? null : parsed.messages);
+            return builder.ToString();
+        }
+
+        private static void AppendMessagesDump(StringBuilder builder, List<DeepSeekMessageData> messages)
+        {
+            foreach (var m in messages ?? new List<DeepSeekMessageData>())
+            {
+                builder.Append("【").Append(m.role ?? "?").Append("】").AppendLine();
+                if (!string.IsNullOrWhiteSpace(m.reasoning_content))
+                {
+                    builder.Append("[reasoning]").AppendLine();
+                    builder.AppendLine(m.reasoning_content);
+                }
+                builder.AppendLine(m.content ?? string.Empty);
+                builder.AppendLine();
             }
         }
 
@@ -338,31 +496,6 @@ namespace TraceSoul2.Manager
                 /* 解析失败退回原文 */
             }
             return responseBody ?? string.Empty;
-        }
-
-        private static string ParseUsageText(string responseBody)
-        {
-            try
-            {
-            var parsed = TraceJson.FromJson<DeepSeekChatResponseData>(responseBody);
-                var usage = parsed == null ? null : parsed.usage;
-                if (usage == null || usage.total_tokens <= 0) return string.Empty;
-                var input = Math.Max(0, usage.prompt_cache_hit_tokens) +
-                            Math.Max(0, usage.prompt_cache_miss_tokens);
-                var rate = input == 0 ? 0d : usage.prompt_cache_hit_tokens * 100d / input;
-                var builder = new StringBuilder();
-                builder.Append("prompt_tokens=").AppendLine(usage.prompt_tokens.ToString());
-                builder.Append("prompt_cache_hit_tokens=").AppendLine(usage.prompt_cache_hit_tokens.ToString());
-                builder.Append("prompt_cache_miss_tokens=").AppendLine(usage.prompt_cache_miss_tokens.ToString());
-                builder.Append("prompt_cache_hit_rate=").Append(rate.ToString("0.0")).AppendLine("%");
-                builder.Append("completion_tokens=").AppendLine(usage.completion_tokens.ToString());
-                builder.Append("total_tokens=").AppendLine(usage.total_tokens.ToString());
-                return builder.ToString();
-            }
-            catch
-            {
-                return string.Empty;
-            }
         }
 
         private static List<DeepSeekMessageData> BuildTruncationRetryMessages(
@@ -404,17 +537,22 @@ namespace TraceSoul2.Manager
         /// </summary>
         private string ResolveModel()
         {
+            return ResolveRequestModel(config);
+        }
+
+        public static string ResolveRequestModel(DeepSeekConfigData config)
+        {
             var model = (config.Model ?? string.Empty).Trim();
             var prefix = (config.ProviderId ?? string.Empty).Trim() + "/";
             if (prefix.Length > 1 &&
                 model.StartsWith(prefix, StringComparison.OrdinalIgnoreCase))
                 model = model.Substring(prefix.Length);
-            if (IsOpenCodeZen())
+            if (IsOpenCodeZen(config))
                 model = NormalizeOpenCodeModel(model);
             return model;
         }
 
-        private bool IsOpenCodeZen()
+        private static bool IsOpenCodeZen(DeepSeekConfigData config)
         {
             var url = config.BaseUrl ?? string.Empty;
             return url.IndexOf("opencode.ai/zen", StringComparison.OrdinalIgnoreCase) >= 0 ||
@@ -467,7 +605,82 @@ namespace TraceSoul2.Manager
             return body.Substring(start, end - start);
         }
 
-        private bool UsesDeepSeekExtensions()
+        /// <summary>
+        /// OpenCode 等中转站会用 HTTP 200 包一层 <c>{"type":"error"}</c>，没有 choices。
+        /// </summary>
+        public static bool IsErrorOnlyChatResponse(DeepSeekChatResponseData parsed, string body)
+        {
+            if (parsed != null && parsed.error != null &&
+                (parsed.choices == null || parsed.choices.Count == 0))
+                return true;
+            return LooksLikeErrorOnlyBody(body);
+        }
+
+        public static bool IsRetryableProviderFailure(int httpStatus, string body)
+        {
+            if (httpStatus == 401 || httpStatus == 403 || httpStatus == 404)
+                return false;
+            if (httpStatus == 429 || httpStatus >= 500)
+                return true;
+            return LooksLikeErrorOnlyBody(body) || LooksLikeTransientUpstream(body);
+        }
+
+        public static bool IsRetryableProviderException(Exception exception)
+        {
+            if (exception == null) return false;
+            if (exception is TimeoutException || exception is HttpRequestException)
+                return true;
+            var message = exception.Message ?? string.Empty;
+            if (message.IndexOf("API Key", StringComparison.OrdinalIgnoreCase) >= 0 ||
+                message.IndexOf("尚未填写", StringComparison.Ordinal) >= 0)
+                return false;
+            return message.IndexOf("上游失败", StringComparison.Ordinal) >= 0 ||
+                   message.IndexOf("结构不完整", StringComparison.Ordinal) >= 0 ||
+                   message.IndexOf("Internal server error", StringComparison.OrdinalIgnoreCase) >= 0 ||
+                   message.IndexOf("Upstream request failed", StringComparison.OrdinalIgnoreCase) >= 0 ||
+                   message.IndexOf("Floating point NaN", StringComparison.OrdinalIgnoreCase) >= 0 ||
+                   message.IndexOf("API 429", StringComparison.Ordinal) >= 0 ||
+                   message.IndexOf("API 5", StringComparison.Ordinal) >= 0 ||
+                   (message.IndexOf("超过", StringComparison.Ordinal) >= 0 &&
+                    message.IndexOf("秒", StringComparison.Ordinal) >= 0);
+        }
+
+        private static bool LooksLikeErrorOnlyBody(string body)
+        {
+            if (string.IsNullOrWhiteSpace(body)) return false;
+            try
+            {
+                using (var doc = JsonDocument.Parse(body))
+                {
+                    var root = doc.RootElement;
+                    if (root.ValueKind != JsonValueKind.Object) return false;
+                    var type = root.TryGetProperty("type", out var typeEl) &&
+                               typeEl.ValueKind == JsonValueKind.String
+                        ? typeEl.GetString()
+                        : string.Empty;
+                    var hasChoices = root.TryGetProperty("choices", out var choices) &&
+                                     choices.ValueKind == JsonValueKind.Array &&
+                                     choices.GetArrayLength() > 0;
+                    var hasError = root.TryGetProperty("error", out _);
+                    if (hasChoices) return false;
+                    return hasError || string.Equals(type, "error", StringComparison.OrdinalIgnoreCase);
+                }
+            }
+            catch (JsonException)
+            {
+                return LooksLikeTransientUpstream(body);
+            }
+        }
+
+        private static bool LooksLikeTransientUpstream(string body)
+        {
+            var text = body ?? string.Empty;
+            return text.IndexOf("Internal server error", StringComparison.OrdinalIgnoreCase) >= 0 ||
+                   text.IndexOf("Upstream request failed", StringComparison.OrdinalIgnoreCase) >= 0 ||
+                   text.IndexOf("Floating point NaN", StringComparison.OrdinalIgnoreCase) >= 0;
+        }
+
+        private static bool UsesDeepSeekExtensions(DeepSeekConfigData config)
         {
             var type = (config.Type ?? string.Empty).Trim().ToLowerInvariant();
             if (type.IndexOf("deepseek", StringComparison.Ordinal) >= 0) return true;
@@ -475,10 +688,9 @@ namespace TraceSoul2.Manager
             return url.IndexOf("deepseek.com", StringComparison.OrdinalIgnoreCase) >= 0;
         }
 
-        private bool UsesGlmExtensions()
+        private static bool UsesGlmExtensions(string model)
         {
-            var model = ResolveModel();
-            return model.StartsWith("glm-", StringComparison.OrdinalIgnoreCase);
+            return (model ?? string.Empty).StartsWith("glm-", StringComparison.OrdinalIgnoreCase);
         }
 
         private async Task<HttpResponseMessage> SendWithTimeoutAsync(
@@ -520,6 +732,12 @@ namespace TraceSoul2.Manager
         {
             value = (value ?? string.Empty).Trim().ToLowerInvariant();
             return value == "low" || value == "max" ? value : "high";
+        }
+
+        private static string NormalizePromptCacheKey(string value)
+        {
+            value = (value ?? string.Empty).Trim();
+            return value.Length == 0 ? null : value;
         }
 
         private static string GetRequestId(HttpResponseMessage response)

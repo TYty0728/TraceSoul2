@@ -115,10 +115,10 @@ namespace TraceSoul2.Host
 
         public int SetContextInjectionCount(int value)
         {
-            ContextInjectionCount = Math.Max(0, Math.Min(100, value));
+            ContextInjectionCount = Math.Max(0, Math.Min(6, value));
             runtimeSettings.ContextInjectionCount = ContextInjectionCount;
             runtimeSettings.Save(Path.Combine(DataDirectory, "runtime-settings.json"));
-            Emit("上下文拼接已更新：最近 " + ContextInjectionCount + " 条对话原文");
+            Emit("上下文拼接已更新：最近 " + ContextInjectionCount + " 条对话原文（最多 3 轮）");
             return ContextInjectionCount;
         }
 
@@ -971,9 +971,26 @@ namespace TraceSoul2.Host
         /// <summary>插件声明的 WebSocket 入口（宿主 HTTP 服务器逐个挂载）。</summary>
         public List<ITraceWebSocketEndpoint> WebSocketEndpoints()
         {
-            return liveServices == null
-                ? new List<ITraceWebSocketEndpoint>()
-                : liveServices.WebSocketEndpoints.ToList();
+            if (liveServices == null) return new List<ITraceWebSocketEndpoint>();
+            lock (liveServices.WebSocketEndpoints)
+                return liveServices.WebSocketEndpoints.ToList();
+        }
+
+        /// <summary>按当前已加载插件解析端点；外部插件重扫后新连接会命中新实例。</summary>
+        public ITraceWebSocketEndpoint FindWebSocketEndpoint(string path)
+        {
+            path = NormalizeEndpointPath(path);
+            if (liveServices == null || string.IsNullOrEmpty(path)) return null;
+            lock (liveServices.WebSocketEndpoints)
+                return liveServices.WebSocketEndpoints.FirstOrDefault(x => x != null &&
+                    string.Equals(NormalizeEndpointPath(x.Path), path, StringComparison.OrdinalIgnoreCase));
+        }
+
+        private static string NormalizeEndpointPath(string value)
+        {
+            var path = (value ?? string.Empty).Trim();
+            if (path.Length > 1) path = path.TrimEnd('/');
+            return path;
         }
 
         private static bool SafeConnected(PlatformHandle handle)
@@ -1019,7 +1036,7 @@ namespace TraceSoul2.Host
     /// <summary>角色运行设置；与调试分支目录一起隔离，不写进循的主数据库。</summary>
     public sealed class SoulRuntimeSettings
     {
-        public int ContextInjectionCount { get; set; }
+        public int ContextInjectionCount { get; set; } = 6;
         public int HeartbeatMinMinutes { get; set; } = HeartbeatLogic.DefaultMinMinutes;
         public int HeartbeatMaxMinutes { get; set; } = HeartbeatLogic.DefaultMaxMinutes;
         public bool HeartbeatRangeSpecified { get; set; }
@@ -1039,7 +1056,7 @@ namespace TraceSoul2.Host
                 var loaded = JsonSerializer.Deserialize<SoulRuntimeSettings>(File.ReadAllText(path), JsonOptions);
                 if (loaded != null)
                 {
-                    settings.ContextInjectionCount = Math.Max(0, Math.Min(100, loaded.ContextInjectionCount));
+                    settings.ContextInjectionCount = Math.Max(0, Math.Min(6, loaded.ContextInjectionCount));
                     if (loaded.HeartbeatRangeSpecified)
                     {
                         var min = loaded.HeartbeatMinMinutes;

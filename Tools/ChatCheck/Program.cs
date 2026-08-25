@@ -2,6 +2,7 @@ using System;
 using System.Collections.Generic;
 using System.IO;
 using System.Linq;
+using System.Text.Json;
 using System.Threading;
 using System.Threading.Tasks;
 using TraceSoul2.Data;
@@ -9,7 +10,9 @@ using TraceSoul2.Logic;
 using TraceSoul2.Manager;
 using TraceSoul2.Plugins;
 using TraceSoul2.Plugins.Builtin;
+using TraceSoul2.Prompts;
 using TraceSoul2.ExternalPlugins;
+using TraceSoul2.ExternalPlugins.GameSession;
 using TraceSoul2.Util;
 
 internal static class Program
@@ -19,8 +22,14 @@ internal static class Program
         SQLitePCL.Batteries_V2.Init();
         RunTagRankCheck();
         RunMindTemplateCheck();
+        RunKimiOfficialRequestCheck();
+        RunOfficialChannelCheck();
+        RunCommonContextPackCheck();
+        RunProviderRetryCheck();
+        RunLlmUsageParseCheck();
         RunMemoryArchivePolicyCheck();
         RunMemoryDayCheck();
+        RunDailyRuntimeSampleCheck();
         RunJsonControlCharCheck();
         RunFlexibleMindJsonCheck();
         RunKernelWakeCheck();
@@ -31,6 +40,7 @@ internal static class Program
         RunExpressorImageRoutingCheck();
         RunMindAtmosphereCheck();
         RunRecentDialogueContextCheck();
+        RunGameSessionPluginCheck();
         if ((args ?? Array.Empty<string>()).Contains("--prompt-layout"))
         {
             RunPromptLayoutCheck();
@@ -199,10 +209,8 @@ internal static class Program
                     capability_id = "time.list",
                     arguments = new List<BrainCallArgumentData>()
                 }, facetTurn, default).GetAwaiter().GetResult();
-                Require(listed.Status == "success" && listed.Payload.Contains("每日复盘") &&
-                        listed.Payload.Contains("daily") &&
-                        listed.Payload.Contains(KernelWakeValues.Subconscious),
-                    "时间插件应在首次挂载时落下每日复盘调度，并叫醒潜意识");
+                Require(listed.Status == "success" && !listed.Payload.Contains("每日复盘"),
+                    "旧的独立每日身份复盘调度应停用，由 Host 完整日终管线唯一负责长期沉淀");
                 Require(ExpressorLogic.IsDailyReview(new MomentRecord { Content = "时间任务到期：每日复盘" }) &&
                         !ExpressorLogic.IsDailyReview(new MomentRecord { Content = "今天天气好好哦" }),
                     "每日复盘 Moment 应能被中枢识别为潜意识轨道");
@@ -521,18 +529,15 @@ internal static class Program
                     });
                 store.SaveInnerRuntime(nextRuntime);
                 Require(changed.Count == 1 && changed[0].OwnerId == "ass", "只有 Brain 应写入第一人称认知");
-                var cogServices = new TracePluginServices(store, router);
-                var cogTurn = new TraceTurnContext(
-                    conversationId, secondMoment, new List<MomentRecord>(), 0, true, cogServices);
-                var liveCog = CognitionLiveWriteLogic.TryCommit(cogTurn, new MindDecisionData
+                var normalizedDaytimeMind = MindLogic.Normalize(new MindDecisionData
                 {
                     beat = MindBeatValues.Now,
-                    tags = "明确表达喜欢",
+                    archive = true,
                     cognition = "她愿意被认真听"
                 });
-                Require(liveCog != null && liveCog.Count == 1 && liveCog[0].Summary.Contains("认真听"),
-                    "这一拍改了看法时应当场写入认知切片");
-                Require(store.CountCognitions() == 3, "应保存独立认知切片与痕迹认知，以及活体看法");
+                Require(!normalizedDaytimeMind.archive && string.IsNullOrEmpty(normalizedDaytimeMind.cognition),
+                    "白天不得触发小复盘或即时长期认知，统一留给完整日终复盘");
+                Require(store.CountCognitions() == 2, "这里只应保存显式构筑的独立认知切片与痕迹认知");
                 Require(store.GetCognitionCandidates(new[] { "concept.life.unrelated" }, 10).Count == 0,
                     "不共享 Tag 的认知不得混入候选");
                 store.SaveMoment(new MomentRecord
@@ -570,7 +575,7 @@ internal static class Program
                 var runtime = reopened.LoadOrCreateInnerRuntime(conversationId);
                 Require(!reopened.LoadPluginEnabled("builtin.onebot", true), "身体开关应在重启后恢复");
                 Require(runtime.Revision == 1 && runtime.Mood == "温暖", "重启后应恢复完整内心 Runtime");
-                Require(reopened.CountFacts() == 2 && reopened.CountCognitions() == 3, "事实网与认知网应独立恢复");
+                Require(reopened.CountFacts() == 2 && reopened.CountCognitions() == 2, "事实网与认知网应独立恢复");
                 Require(reopened.GetCognitionCandidates(new[] { tagId }, 10)
                         .Any(x => x.Summary == "我感到她在主动亲近我"),
                     "同一第三层 Tag 应能导航到 Brain 认知");
@@ -637,15 +642,17 @@ internal static class Program
                 Require(fake.Requests.Count == 2, "无历史时心智应各打一轮");
                 RequireAstrBotChatShape(fake.Requests[0], first.Moment.Content, "心智");
                 RequireAstrBotChatShape(fake.Requests[1], second.Moment.Content, "心智");
-                var mindSystem = fake.Requests[0][0].content;
-                Require(mindSystem.Contains("现在是 "),
-                    "心智：当前时间在唯一的 system 里");
+                var firstMindMessages = fake.Requests[0];
+                var mindSystem = VisiblePrompt(firstMindMessages);
+                Require(mindSystem.Contains("现在是 ") &&
+                        !firstMindMessages[0].content.Contains("现在是 "),
+                    "心智：当前时间在末尾专属指令，不污染公共 system");
                 Require(mindSystem.Contains("【我的人格】") && mindSystem.Contains("【我是谁】") &&
-                        !mindSystem.Contains("【表达习惯】") &&
+                        mindSystem.Contains("【表达习惯】") &&
                         !mindSystem.Contains("【我现在可以怎样表达】") &&
                         !mindSystem.Contains("【需要时可做的事】") &&
                         !mindSystem.Contains("我现在可以使用的表达通道"),
-                    "心智只有思考用短卡，不含表达习惯、通道清单和工具表");
+                    "公共 system 使用同一套身份卡；心智尾部不含通道清单和工具表");
                 Require(mindSystem.Contains("我先让这件事在心里发生") && mindSystem.Contains("\"beat\"") &&
                         mindSystem.Contains("\"inner\"") && mindSystem.Contains("\"attention\"") &&
                         mindSystem.Contains("\"review\"") && mindSystem.Contains("\"cognition\""),
@@ -664,13 +671,15 @@ internal static class Program
                         mindSystem.Contains("刚才心里还停着的") &&
                         mindSystem.Contains("刚才浮起过的") &&
                         mindSystem.Contains("【此刻自然浮起的过去】"),
-                    "自然浮起的过去、标签候选、上一拍心里状态与浮动碎片应在心智 system");
+                    "自然浮起的过去、标签候选、上一拍心里状态与浮动碎片应在心智请求尾部");
                 Require(mindSystem.Contains("没有值得留下的就写「无」") &&
                         mindSystem.Contains("旧碎片都重新和眼前相处合在一起"),
                     "心智应让旧碎片随眼前相处更新，不要照抄上一拍");
                 var mindNormalized = mindSystem.Replace("\r\n", "\n");
                 Require(mindNormalized.StartsWith("我是小光。\n【我的人格】", StringComparison.Ordinal),
-                    "心智 system 必须直接从第一人称身份进入人格卡");
+                    "心智公共前缀必须直接从第一人称身份进入人格卡");
+                Require(firstMindMessages[0].content == fake.Requests[1][0].content,
+                    "不同 Moment 的公共 system 必须字节稳定");
 
                 var dummyMind = new MindDecisionData
                 {
@@ -691,9 +700,11 @@ internal static class Program
                 Require(fake.Requests.Count == 4, "无历史时外显应各打一轮");
                 RequireExpressorChatShape(fake.Requests[2], first.Moment.Content, "外显");
                 RequireExpressorChatShape(fake.Requests[3], second.Moment.Content, "外显");
-                var expressSystem = fake.Requests[2][0].content;
-                Require(expressSystem.Contains("现在是 "),
-                    "外显：当前时间在唯一的 system 里");
+                var firstExpressMessages = fake.Requests[2];
+                var expressSystem = VisiblePrompt(firstExpressMessages);
+                Require(expressSystem.Contains("现在是 ") &&
+                        !firstExpressMessages[0].content.Contains("现在是 "),
+                    "外显：当前时间在末尾专属指令，不污染公共 system");
                 Require(!expressSystem.Contains("callable_nerve") && !expressSystem.Contains("mounted_facet") &&
                         !expressSystem.Contains("explicit_dialogue") && !expressSystem.Contains("unclassified"),
                     "模型可见提示词不应泄漏无意义的内部枚举");
@@ -725,7 +736,7 @@ internal static class Program
                         expressSystem.Contains(dummyMind.inner) &&
                         expressSystem.Contains("我和她一起经历过的事") &&
                         expressSystem.Contains("我们自己的称呼、意象和说法"),
-                    "身份、本轮内心与自然浮起的共同过去都在同一条 system");
+                    "身份、本轮内心与自然浮起的共同过去都在同一请求中");
                 Require(!expressSystem.Contains("这一拍我选") &&
                         !expressSystem.Contains("把日子说出来") &&
                         !expressSystem.Contains("进入方式：") &&
@@ -735,7 +746,9 @@ internal static class Program
                     "外显不要框架套话，只确认消息落到手里并开口");
                 var expressNormalized = expressSystem.Replace("\r\n", "\n");
                 Require(expressNormalized.StartsWith("我是小光。\n【我的人格】", StringComparison.Ordinal),
-                    "外显 system 必须直接从第一人称身份进入人格卡");
+                    "外显公共前缀必须直接从第一人称身份进入人格卡");
+                Require(firstMindMessages[0].content == firstExpressMessages[0].content,
+                    "心智和开口必须共用字节相同的 system");
                 Require(!expressSystem.Contains("你是 TraceSoul") &&
                         !expressSystem.Contains("唯一拥有第一人称的 Brain"),
                     "主线 Prompt 不应以框架 Brain 身份覆盖第一人称自我");
@@ -761,7 +774,7 @@ internal static class Program
                 };
                 expressor.ExpressAsync(first, plugins, catalog, blocks, waitMind, string.Empty,
                     true, null, default).GetAwaiter().GetResult();
-                var waitSystem = fake.Requests[4][0].content;
+                var waitSystem = VisiblePrompt(fake.Requests[4]);
                 Require(waitSystem.Contains("出门办事") && waitSystem.Contains("查一下天气"),
                     "出门时应让外显先说等一下，并看见心智要办的事");
                 RequireExpressorChatShape(fake.Requests[4], first.Moment.Content, "出门等待外显");
@@ -771,10 +784,13 @@ internal static class Program
                 var heartTurn = new TraceTurnContext("prompt-layout", heartMoment,
                     new List<MomentRecord>(), 0, false, services, KernelWakeValues.Mind);
                 mind.DecideAsync(heartTurn, null, false, default).GetAwaiter().GetResult();
-                var heartSystem = fake.Requests[fake.Requests.Count - 1][0].content;
+                var heartSystem = VisiblePrompt(fake.Requests[fake.Requests.Count - 1]);
                 Require(heartSystem.Contains("独立意图") &&
                         heartSystem.Contains("heartbeat_intent") &&
-                        heartSystem.Contains("不要因为上次有一句话没有得到完整回答") &&
+                        heartSystem.Contains("普通消息没有得到完整回答，不等于紧急") &&
+                        heartSystem.Contains("180–480 分钟") &&
+                        heartSystem.Contains("10–60 分钟") &&
+                        heartSystem.Contains("醒着时不要填 0") &&
                         heartSystem.Contains("next_heartbeat_plan") &&
                         heartSystem.Contains("next_heartbeat_minutes") &&
                         heartSystem.Contains("睡下") &&
@@ -795,7 +811,7 @@ internal static class Program
                         scene = "她靠在我肩头，我给她暖着小腹。",
                         heartbeat_intent = "陪她歇着，暖着她的小腹，让她安心。"
                     }, string.Empty, false, null, default).GetAwaiter().GetResult();
-                var pulseSpeak = fake.Requests[fake.Requests.Count - 1][0].content;
+                var pulseSpeak = VisiblePrompt(fake.Requests[fake.Requests.Count - 1]);
                 Require(pulseSpeak.Contains("小雨此刻没有刚发来新消息"),
                     "心跳开口应明确对方没有刚发来新消息");
                 Require(pulseSpeak.Contains("视角坐标") &&
@@ -869,11 +885,12 @@ internal static class Program
                 mind.DecideAsync(closeTurn, null, false, default).GetAwaiter().GetResult();
                 var closeMessages = fake.Requests[fake.Requests.Count - 1];
                 RequireAstrBotChatShape(closeMessages, closeCurrent, "带历史的心智");
-                Require(closeMessages.Count == 4 &&
+                Require(closeMessages.Count == 5 &&
                         closeMessages[1].role == "user" && closeMessages[1].content == "昨天那句" &&
                         closeMessages[2].role == "assistant" && closeMessages[2].content == "嗯" &&
-                        closeMessages[3].role == "user" && closeMessages[3].content == closeCurrent,
-                    "历史必须是真正的 user/assistant，最后一条 user 才是当前这句话");
+                        closeMessages[3].content.StartsWith(CommonContextPackLogic.MindRoleHeader, StringComparison.Ordinal) &&
+                        closeMessages[4].role == "user" && closeMessages[4].content == closeCurrent,
+                    "历史必须是真正的 user/assistant，心智专属指令之后由当前原话收尾");
                 Require(!closeMessages[0].content.Contains("昨天那句") &&
                         !closeMessages[0].content.Contains("【最近对话原文】"),
                     "对话原文不得再塞进 system");
@@ -881,9 +898,9 @@ internal static class Program
                     false, null, default).GetAwaiter().GetResult();
                 RequireExpressorChatShape(fake.Requests[fake.Requests.Count - 1], closeCurrent, "带历史的外显");
 
-                Console.WriteLine("Prompt layout passed: mind-system=" + mindSystem.Length +
-                                  " chars, express-system=" + expressSystem.Length +
-                                  " chars, one system then real history/current Moment, expression request last.");
+                Console.WriteLine("Prompt layout passed: mind-prompt=" + mindSystem.Length +
+                                  " chars, express-prompt=" + expressSystem.Length +
+                                  " chars, stable system then history, role-specific instructions, and current Moment.");
                 pluginManager.Dispose();
             }
         }
@@ -1004,6 +1021,14 @@ internal static class Program
         Require(slept.asleep == true && InnerLifeLogic.HasProposedWrite(slept),
             "决策睡下应写入内心睡着");
         Require(HeartbeatLogic.IsHeartbeatContent("时间任务到期：心跳"), "到期心跳应识别为心跳");
+        Require(HeartbeatLogic.ResolveFollowUpMinutes(true, 30) == 0,
+            "明确睡下后应停止心跳");
+        Require(HeartbeatLogic.ResolveFollowUpMinutes(false, 0) == 240,
+            "醒着却未安排分钟时应兜底到数小时后，不能让心跳链路中断");
+        Require(HeartbeatLogic.ResolveFollowUpMinutes(false, 45) == 45,
+            "紧急未回复时心智安排的短期复查应被保留");
+        Require(HeartbeatLogic.ClampMinutes(600) == 600 && HeartbeatLogic.ClampMinutes(900) == 720,
+            "心跳应允许数小时等待，并保留合理上限");
         Require(HeartbeatLogic.ShouldSkipWhileAsleep(new PluginEventData
         {
             Role = "system_event",
@@ -1088,6 +1113,367 @@ internal static class Program
         Require(MemoryDayLogic.ClosedDayKey(midMorning) == "2026-08-21",
             "手动日构建默认也应跑刚合上的那天");
         Require(LlmSlotNames.Review == "review", "复盘用途槽名应稳定为 review");
+    }
+
+    private static void RunDailyRuntimeSampleCheck()
+    {
+        var root = Path.Combine(Path.GetTempPath(), "tracesoul2-day-sample-" + Guid.NewGuid().ToString("N"));
+        Directory.CreateDirectory(root);
+        try
+        {
+            var db = Path.Combine(root, "brain.sqlite3");
+            using (var store = new SqliteMemoryManager(db))
+            {
+                const string conversationId = "day-sample-check";
+                const string oldDay = "2026-08-20";
+                const string newDay = "2026-08-21";
+                store.SaveDayTrajectory(oldDay, "旧日仍待完整复盘");
+                store.SaveDayTrajectory(newDay, "新日正在发生");
+                store.AddTodayNewItems(conversationId, new[] { "今天知道她喜欢桂花" },
+                    "sample-source", oldDay, DateTimeOffset.UtcNow.ToUnixTimeMilliseconds());
+                Require(store.LoadDayTrajectory(newDay) != null && store.LoadDayTrajectory(oldDay) != null,
+                    "跨日读取不能在复盘成功前抢先删除旧日本日样本");
+
+                var occurred = new DateTimeOffset(2026, 8, 20, 12, 0, 0, TimeSpan.FromHours(8));
+                store.SaveMoment(new MomentRecord
+                {
+                    Id = "pending-day-moment",
+                    ConversationId = conversationId,
+                    Role = "user",
+                    Content = "这条必须被重启补偿发现",
+                    Realm = TraceRealmValues.ExternalWorld,
+                    EvidenceType = EvidenceTypeValues.DialogueExplicit,
+                    SourcePluginId = "builtin.dialogue",
+                    SourceEventId = "pending-day-event",
+                    MemoryStatus = "live",
+                    CreatedUnixMs = occurred.ToUnixTimeMilliseconds()
+                });
+                var pending = store.GetUnbuiltMemoryDayKeysBefore(
+                    new DateTimeOffset(2026, 8, 21, 4, 0, 0, TimeSpan.FromHours(8)).ToUnixTimeMilliseconds());
+                Require(pending.SequenceEqual(new[] { oldDay }),
+                    "启动补偿必须按 04:00 记忆日边界找出全部未消费日期");
+
+                store.RetireDayRuntimeSamples(conversationId, oldDay);
+                Require(store.LoadDayTrajectory(oldDay) == null &&
+                        store.GetTodayNewItemsByDay(conversationId, oldDay).Count == 0 &&
+                        store.LoadDayTrajectory(newDay) != null,
+                    "复盘成功只退出目标日的轨迹/今日新识，不得误删次日实时状态");
+            }
+        }
+        finally
+        {
+            if (Directory.Exists(root)) Directory.Delete(root, true);
+        }
+    }
+
+    private static void RunKimiOfficialRequestCheck()
+    {
+        var messages = new List<DeepSeekMessageData> { new DeepSeekMessageData("user", "hi") };
+        var kimi = new DeepSeekConfigData
+        {
+            ProviderId = "moonshot",
+            BaseUrl = "https://api.moonshot.cn/v1",
+            Model = "kimi-k3",
+            ApiKey = "x",
+            ThinkingEnabled = true,
+            ReasoningEffort = "high",
+            MaxTokens = 8192,
+            TopP = 1f,
+            Temperature = 0.7f
+        };
+        using (var doc = JsonDocument.Parse(
+            DeepSeekClientManager.BuildChatRequestJson(kimi, messages, 0.7f, true, true, "tracesoul2:conv:mind")))
+        {
+            var root = doc.RootElement;
+            Require(root.GetProperty("prompt_cache_key").GetString() == "tracesoul2:conv:mind",
+                "Kimi 官网应发送 prompt_cache_key");
+        }
+
+        using (var doc = JsonDocument.Parse(
+            DeepSeekClientManager.BuildChatRequestJson(kimi, messages, 0.7f, true, true)))
+        {
+            var root = doc.RootElement;
+            Require(root.GetProperty("model").GetString() == "kimi-k3", "Kimi 官网应发送 kimi-k3");
+            Require(root.GetProperty("reasoning_effort").GetString() == "high", "K3 思考槽开启时应发 reasoning_effort");
+            Require(root.GetProperty("response_format").GetProperty("type").GetString() == "json_object",
+                "Kimi JSON 口应带 json_object");
+            Require(root.GetProperty("max_completion_tokens").GetInt32() == 8192,
+                "Kimi 官网应使用 max_completion_tokens");
+            Require(!root.TryGetProperty("temperature", out _), "kimi-k3 不应显式传 temperature");
+            Require(!root.TryGetProperty("top_p", out _), "kimi-k3 不应显式传 top_p");
+            Require(!root.TryGetProperty("thinking", out _), "kimi-k3 不应传 thinking");
+            Require(!root.TryGetProperty("max_tokens", out _), "Kimi 官网不要再用已弃用的 max_tokens");
+        }
+
+        kimi.ThinkingEnabled = false;
+        using (var doc = JsonDocument.Parse(
+            DeepSeekClientManager.BuildChatRequestJson(kimi, messages, 1f, false, false)))
+        {
+            Require(doc.RootElement.GetProperty("reasoning_effort").GetString() == "low",
+                "关闭思考槽时 K3 应降到 low，不能传 none");
+            Require(!doc.RootElement.TryGetProperty("response_format", out _),
+                "文本口不应带 response_format");
+        }
+
+        var k26 = new DeepSeekConfigData
+        {
+            BaseUrl = "https://api.moonshot.cn/v1",
+            Model = "kimi-k2.6",
+            ApiKey = "x",
+            ThinkingEnabled = false,
+            MaxTokens = 4096
+        };
+        using (var doc = JsonDocument.Parse(
+            DeepSeekClientManager.BuildChatRequestJson(k26, messages, 0.6f, false, false)))
+        {
+            Require(doc.RootElement.GetProperty("thinking").GetProperty("type").GetString() == "disabled",
+                "kimi-k2.6 应能关掉 thinking");
+            Require(!doc.RootElement.TryGetProperty("reasoning_effort", out _),
+                "kimi-k2.6 不应传 reasoning_effort");
+        }
+
+        var k27 = new DeepSeekConfigData
+        {
+            BaseUrl = "https://api.moonshot.ai/v1",
+            Model = "kimi-k2.7-code-highspeed",
+            ApiKey = "x",
+            ThinkingEnabled = true,
+            MaxTokens = 4096
+        };
+        using (var doc = JsonDocument.Parse(
+            DeepSeekClientManager.BuildChatRequestJson(k27, messages, 1f, false, false)))
+        {
+            Require(!doc.RootElement.TryGetProperty("thinking", out _),
+                "kimi-k2.7-code 不要传 thinking");
+            Require(!doc.RootElement.TryGetProperty("reasoning_effort", out _),
+                "kimi-k2.7-code 不应传 reasoning_effort");
+        }
+
+        var relay = new DeepSeekConfigData
+        {
+            ProviderId = "opencode-go",
+            BaseUrl = "https://opencode.ai/zen/go/v1",
+            Model = "kimi-k3",
+            ApiKey = "x",
+            TopP = 0.95f,
+            Temperature = 1f,
+            MaxTokens = 1024
+        };
+        using (var doc = JsonDocument.Parse(
+            DeepSeekClientManager.BuildChatRequestJson(relay, messages, 1f, true, true)))
+        {
+            Require(doc.RootElement.TryGetProperty("temperature", out _),
+                "中转站仍走普通 OpenAI 兼容口");
+            Require(!doc.RootElement.TryGetProperty("reasoning_effort", out _),
+                "中转站不要带 Kimi 官网扩展字段");
+            Require(doc.RootElement.GetProperty("response_format").GetProperty("type").GetString() ==
+                    "json_object",
+                "中转站 JSON 口也必须带 json_object，否则心智会把对白说出来再重试");
+        }
+
+        using (var doc = JsonDocument.Parse(
+            DeepSeekClientManager.BuildChatRequestJson(relay, messages, 1f, false, false)))
+        {
+            Require(!doc.RootElement.TryGetProperty("response_format", out _),
+                "中转站文本口不应带 response_format");
+        }
+    }
+
+    private static void RunCommonContextPackCheck()
+    {
+        var path = Path.Combine(Path.GetTempPath(), "tracesoul2-common-pack-" + Guid.NewGuid().ToString("N") + ".sqlite3");
+        try
+        {
+            using (var store = new SqliteMemoryManager(path))
+            {
+                store.SavePairIdentity("田园", "阿循", "循循");
+                var services = new TracePluginServices(store, new HierarchicalVectorRouterLogic(new FakeEncoder()));
+                var recent = new List<MomentRecord>
+                {
+                    new MomentRecord { Role = "田园", Content = "循循，买了蓝莓" },
+                    new MomentRecord
+                    {
+                        Role = "阿循",
+                        Content = "好，蓝莓补血。",
+                        PayloadJson = "{\"reasoning_content\":\"她主动说想吃，心里一软。\"}"
+                    }
+                };
+                var turn = new TraceTurnContext("common-pack", Moment("common-pack", "慢点走"),
+                    recent, 6, true, services);
+                var shared = CommonContextPackLogic.SharedSystem(turn);
+                Require(shared.Contains("【我的人格】") && shared.Contains("【表达习惯】"),
+                    "公共 system 是同一套身份卡，心智也带表达习惯");
+                Require(!shared.Contains("现在是") && !shared.Contains("【此刻怎么想】"),
+                    "公共 system 不得写入时钟或心智专属指令");
+
+                var memory = "【此刻自然浮起的过去】\n- 她说过想吃水果。";
+                var kimi = new DeepSeekClientManager(new DeepSeekConfigData
+                {
+                    BaseUrl = "https://api.moonshot.cn/v1",
+                    ApiKey = "test",
+                    Model = "kimi-k3"
+                });
+                var mind = LlmContextPackLogic.AssembleMind(
+                    kimi, shared, turn, memory, "慢点走", "只输出 JSON。现在是下午。");
+                var express = LlmContextPackLogic.AssembleExpress(
+                    kimi, shared, turn, memory, "慢点走", "直接开口。现在是下午。");
+
+                Require(mind[0].role == "system" && mind[0].content == shared,
+                    "心智第一条是公共身份卡");
+                Require(express[0].content == mind[0].content,
+                    "心智和开口的 system 必须字节相同");
+                Require(mind[1].role == "user" && mind[2].role == "assistant" &&
+                        !string.IsNullOrWhiteSpace(mind[2].reasoning_content),
+                    "历史在 system 之后，assistant 回传 reasoning");
+                Require(mind[3].content.StartsWith(CommonContextPackLogic.MemoryHeader, StringComparison.Ordinal) &&
+                        express[3].content == mind[3].content,
+                    "相关记忆在历史之后，两边相同");
+                Require(mind[4].content.StartsWith(CommonContextPackLogic.MindRoleHeader, StringComparison.Ordinal) &&
+                        express[4].content.StartsWith(CommonContextPackLogic.ExpressRoleHeader, StringComparison.Ordinal),
+                    "专属指令在当前用户消息之前，这是 LPM 允许的第一处分叉");
+                Require(mind[mind.Count - 1].content == "慢点走" &&
+                        express[express.Count - 1].content == "慢点走",
+                    "当前用户消息必须最后入场，两边原文相同");
+                Require(CommonContextPackLogic.SharedPrefixCount(mind, express) == 4,
+                    "LPM：心智/开口在专属指令处分叉，当前原话保持最后一条");
+                Require(CommonContextPackLogic.BuildConversationCacheKey("common-pack") == "tracesoul2:common-pack",
+                    "公共装配器生成稳定的会话缓存键基底");
+
+                var review = CommonContextPackLogic.AssembleReview(
+                    shared, "修订短卡。", CorePrompts.IdentityReview.UserAsk);
+                Require(review[0].content == shared &&
+                        review[1].content.StartsWith(CommonContextPackLogic.ReviewRoleHeader, StringComparison.Ordinal) &&
+                        review[review.Count - 1].content == CorePrompts.IdentityReview.UserAsk,
+                    "复盘也复用公共 system，专属指令在前，当前复盘请求在末尾");
+            }
+        }
+        finally
+        {
+            Delete(path);
+        }
+    }
+
+    private static void RunOfficialChannelCheck()
+    {
+        Require(OfficialLlmChannelLogic.Resolve("https://api.deepseek.com") ==
+                OfficialLlmChannel.DeepSeek,
+            "deepseek.com 是 DeepSeek 官网渠道");
+        Require(OfficialLlmChannelLogic.Resolve("https://api.moonshot.cn/v1") ==
+                OfficialLlmChannel.Kimi,
+            "moonshot.cn 是 Kimi 官网渠道");
+        Require(OfficialLlmChannelLogic.Resolve("https://open.bigmodel.cn/api/paas/v4") ==
+                OfficialLlmChannel.Glm,
+            "bigmodel.cn 是 GLM 官网渠道");
+        Require(OfficialLlmChannelLogic.Resolve("https://opencode.ai/zen/go/v1") ==
+                OfficialLlmChannel.None,
+            "OpenCode 仍识别为非官网渠道");
+
+        var deepSeek = new DeepSeekClientManager(new DeepSeekConfigData
+        {
+            BaseUrl = "https://api.deepseek.com",
+            ApiKey = "test",
+            Model = "deepseek-chat"
+        });
+        var kimi = new DeepSeekClientManager(new DeepSeekConfigData
+        {
+            BaseUrl = "https://api.moonshot.cn/v1",
+            ApiKey = "test",
+            Model = "kimi-k3"
+        });
+        var glm = new DeepSeekClientManager(new DeepSeekConfigData
+        {
+            BaseUrl = "https://open.bigmodel.cn/api/paas/v4",
+            ApiKey = "test",
+            Model = "glm-5"
+        });
+        var relay = new DeepSeekClientManager(new DeepSeekConfigData
+        {
+            BaseUrl = "https://opencode.ai/zen/go/v1",
+            ApiKey = "test",
+            Model = "kimi-k3"
+        });
+        Require(new ILlmClient[] { deepSeek, kimi, glm, relay }
+                .All(x => LlmContextPackLogic.ResolvePack(x) == LlmContextPackKind.Common),
+            "官网与中转当前都默认走公共上下文装配器");
+        Require(LlmContextPackLogic.BuildPromptCacheKey(kimi, "route-check") ==
+                "tracesoul2:route-check" &&
+                LlmContextPackLogic.BuildPromptCacheKey(deepSeek, "route-check") == null &&
+                LlmContextPackLogic.BuildPromptCacheKey(glm, "route-check") == null &&
+                LlmContextPackLogic.BuildPromptCacheKey(relay, "route-check") == null,
+            "公共形状不妨碍 Kimi 保留显式缓存键，其他渠道继续使用隐式缓存");
+    }
+
+    private static void RunProviderRetryCheck()
+    {
+        const string opencodeError =
+            "{\"type\":\"error\",\"error\":{\"type\":\"error\",\"message\":\"Internal server error\"}}";
+        Require(DeepSeekClientManager.IsRetryableProviderFailure(500, opencodeError),
+            "OpenCode HTTP 500 应再打一次");
+        Require(DeepSeekClientManager.IsRetryableProviderFailure(200, opencodeError),
+            "HTTP 200 但只有 error 体也应再打一次");
+        Require(DeepSeekClientManager.IsErrorOnlyChatResponse(
+                TraceJson.FromJson<DeepSeekChatResponseData>(opencodeError),
+                opencodeError),
+            "OpenCode error 包应识别为只有错误、没有 choices");
+        Require(!DeepSeekClientManager.IsRetryableProviderFailure(401, opencodeError),
+            "401 不要重试");
+        Require(!DeepSeekClientManager.IsRetryableProviderFailure(
+                200,
+                "{\"choices\":[{\"message\":{\"content\":\"{\\\"beat\\\":\\\"当下\\\"}\"}}]}"),
+            "正常 JSON 回复不要当成上游失败");
+        Require(DeepSeekClientManager.IsRetryableProviderException(
+                new InvalidOperationException("语言模型上游失败 HTTP 200: Internal server error")),
+            "上游失败异常应可重试");
+        Require(!DeepSeekClientManager.IsRetryableProviderException(
+                new InvalidOperationException("语言模型 API Key 尚未填写。")),
+            "缺 Key 不要重试");
+        Require(DeepSeekClientManager.IsRetryableProviderException(
+                new TimeoutException("语言模型请求超过 120 秒：opencode-go/kimi-k3。")),
+            "超时应再打一次");
+    }
+
+    private static void RunLlmUsageParseCheck()
+    {
+        var deepseek = LlmUsageLogic.Parse(
+            "{\"usage\":{\"prompt_tokens\":4000,\"completion_tokens\":200,\"total_tokens\":4200,\"prompt_cache_hit_tokens\":1792,\"prompt_cache_miss_tokens\":2208}}");
+        Require(deepseek.CacheReported && deepseek.CacheHitTokens == 1792 &&
+                deepseek.CacheMissTokens == 2208 && LlmUsageLogic.FormatRate(deepseek) == "44.8%",
+            "DeepSeek 应读 prompt_cache_hit_tokens");
+        Require(LlmUsageLogic.FormatLog(deepseek).IndexOf("命中 1792", StringComparison.Ordinal) >= 0,
+            "时序日志应打出命中条数");
+
+        var kimi = LlmUsageLogic.Parse(
+            "{\"usage\":{\"prompt_tokens\":4477,\"completion_tokens\":1207,\"total_tokens\":5684,\"cached_tokens\":1792}}");
+        Require(kimi.CacheReported && kimi.CacheHitTokens == 1792 && kimi.CacheMissTokens == 2685 &&
+                kimi.CacheField == "cached_tokens" && LlmUsageLogic.FormatRate(kimi) == "40.0%",
+            "Kimi 官网应读 cached_tokens，未命中用输入减去命中");
+        var dump = LlmUsageLogic.FormatDump(kimi);
+        Require(dump.IndexOf("cache_reported=true", StringComparison.Ordinal) >= 0 &&
+                dump.IndexOf("cache_field=cached_tokens", StringComparison.Ordinal) >= 0,
+            "落盘应标明读的是哪家字段");
+
+        var openai = LlmUsageLogic.Parse(
+            "{\"usage\":{\"prompt_tokens\":1000,\"completion_tokens\":50,\"total_tokens\":1050,\"prompt_tokens_details\":{\"cached_tokens\":800},\"completion_tokens_details\":{\"reasoning_tokens\":30}}}");
+        Require(openai.CacheHitTokens == 800 && openai.ReasoningTokens == 30 &&
+                openai.CacheField == "prompt_tokens_details.cached_tokens",
+            "OpenAI 兼容口应读 prompt_tokens_details.cached_tokens");
+
+        var gemini = LlmUsageLogic.Parse(
+            "{\"usageMetadata\":{\"promptTokenCount\":900,\"candidatesTokenCount\":40,\"totalTokenCount\":940,\"cachedContentTokenCount\":100,\"thoughtsTokenCount\":12}}");
+        Require(gemini.PromptTokens == 900 && gemini.CacheHitTokens == 100 && gemini.ReasoningTokens == 12 &&
+                gemini.CacheReported,
+            "Gemini 原生口应读 usageMetadata.cachedContentTokenCount");
+
+        var silent = LlmUsageLogic.Parse(
+            "{\"usage\":{\"prompt_tokens\":4105,\"completion_tokens\":901,\"total_tokens\":5006}}");
+        Require(!silent.CacheReported && LlmUsageLogic.FormatRate(silent) == "未上报" &&
+                LlmUsageLogic.FormatLog(silent).IndexOf("缓存未上报", StringComparison.Ordinal) >= 0,
+            "没有缓存字段时应写未上报，不能写成 0%");
+
+        var zero = LlmUsageLogic.Parse(
+            "{\"usage\":{\"prompt_tokens\":2000,\"completion_tokens\":10,\"total_tokens\":2010,\"cached_tokens\":0}}");
+        Require(zero.CacheReported && zero.CacheHitTokens == 0 && LlmUsageLogic.FormatRate(zero) == "0.0%",
+            "明确上报 cached_tokens=0 才是 0% 命中");
     }
 
     private static void RunJsonControlCharCheck()
@@ -1348,6 +1734,33 @@ internal static class Program
         generator.ParametersJsonSchema =
             "{prompt:string,mode?:selfie|photo|draw|edit|url,refs?:string,aspect_ratio?:string,url?:string}";
 
+        var spokenWithPlaceholder = ExpressorLogic.ParseSpoken(
+            "我拍好了。\n\n[图片]\n\n看见了吗？");
+        Require(!spokenWithPlaceholder.reply.Contains("[图片]") &&
+                spokenWithPlaceholder.reply.Contains("我拍好了") &&
+                spokenWithPlaceholder.reply.Contains("看见了吗"),
+            "开口不得把裸 [图片] 占位符当成 QQ 台词发出");
+
+        var guarded = new BrainStructuredOutputData
+        {
+            reply = spokenWithPlaceholder.reply,
+            should_express = true,
+            expressions = new List<BrainCapabilityCallData>()
+        };
+        var guardedMind = new MindDecisionData
+        {
+            image = "有",
+            scene = "朝西的窗边，夕阳照亮书架"
+        };
+        Require(ExpressorLogic.EnsureMindImageExpression(guarded, guardedMind, new[] { direct, generator }) &&
+                guarded.expressions.Count == 1 &&
+                guarded.expressions[0].capability_id == "qq.imagegen.generate" &&
+                guarded.expressions[0].GetArgument("prompt").Contains("朝西的窗边"),
+            "心智已选出图时，即使开口漏掉图片 expression 也必须由生图器硬兜底");
+        Require(!ExpressorLogic.EnsureMindImageExpression(guarded, guardedMind, new[] { direct, generator }) &&
+                guarded.expressions.Count == 1,
+            "出图硬兜底必须幂等，不得重复生图");
+
         var mapped = ExpressorLogic.MapExpressor(new ExpressorOutputData
         {
             reply = "给你。",
@@ -1575,6 +1988,144 @@ internal static class Program
         }
     }
 
+    private static void RunGameSessionPluginCheck()
+    {
+        var dir = Path.Combine(Path.GetTempPath(), "tracesoul2-game-session-" + Guid.NewGuid().ToString("N"));
+        Directory.CreateDirectory(dir);
+        try
+        {
+            using (var store = new SqliteMemoryManager(Path.Combine(dir, "brain.sqlite3")))
+            {
+                const string conversationId = "game-check";
+                store.SavePairIdentity("小雨", "小光", "雨雨");
+                store.SaveIdentityCard(conversationId, IdentityCardSlotValues.Personality,
+                    "真诚、安静，有自己的判断。", "seed");
+                store.SaveIdentityCard(conversationId, IdentityCardSlotValues.Self,
+                    "我是小光，会认真看见她正在做的事。", "seed");
+                var services = new TracePluginServices(store,
+                    new HierarchicalVectorRouterLogic(new FakeEncoder()))
+                {
+                    ReviewLlm = new GameSessionLlm(),
+                    DataDirectory = dir
+                };
+                using (var manager = new TracePluginManager(store, services))
+                {
+                    var package = Path.GetFullPath(Path.Combine("ExternalPlugins", "GameSession"));
+                    var pluginData = Path.Combine(dir, "plugins_data", "game-session");
+                    manager.RegisterExternal(new GameSessionPlugin(), package, pluginData);
+                    Require(manager.GetPlugins().Any(x => x.Id == "game.session" &&
+                                                         string.IsNullOrEmpty(x.PlatformId)),
+                        "游戏会话插件必须保持平台无关，不挂到 QQ 身体");
+                    Require(services.WebSocketEndpoints.Count == 1 &&
+                            services.WebSocketEndpoints[0].Path == "/plugins/game-session/ws",
+                        "游戏翻译器应通过固定 WebSocket 协议接入");
+
+                    var turn = new TraceTurnContext(conversationId,
+                        Moment(conversationId, "从插件界面开始游戏"), new List<MomentRecord>(),
+                        0, false, services, KernelWakeValues.Mind);
+                    var started = manager.ExecuteAsync(new BrainCapabilityCallData
+                    {
+                        capability_id = "game.session.start",
+                        arguments = new List<BrainCallArgumentData>
+                        {
+                            new BrainCallArgumentData { name = "title", value = "星露谷物语" },
+                            new BrainCallArgumentData { name = "game_id", value = "stardew-valley" }
+                        }
+                    }, turn, default).GetAwaiter().GetResult();
+                    var startedJson = JsonDocument.Parse(started.Payload).RootElement;
+                    Require(started.Status == "success" &&
+                            startedJson.GetProperty("identity_base").GetString().Contains("真诚、安静") &&
+                            started.ProducedEvent != null &&
+                            started.ProducedEvent.IsOperational,
+                        "开始会话应返回一次性身份基底，并只产生运行通知");
+
+                    var sessionId = startedJson.GetProperty("session_id").GetString();
+                    var appended = manager.ExecuteAsync(new BrainCapabilityCallData
+                    {
+                        capability_id = "game.session.event",
+                        arguments = new List<BrainCallArgumentData>
+                        {
+                            new BrainCallArgumentData { name = "session_id", value = sessionId },
+                            new BrainCallArgumentData { name = "kind", value = "choice" },
+                            new BrainCallArgumentData { name = "actor", value = "user" },
+                            new BrainCallArgumentData { name = "content", value = "在矿井 40 层选择了战士职业" }
+                        }
+                    }, turn, default).GetAwaiter().GetResult();
+                    Require(appended.Status == "success" && appended.ProducedEvent == null,
+                        "游戏原始事件只能写插件私库，不能逐条产生主库 Moment");
+                    var blocks = manager.BuildContextBlocksAsync(turn, default).GetAwaiter().GetResult();
+                    Require(blocks.Any(x => x.FacetId == "game.session.current" &&
+                                            x.Content.Contains("星露谷物语") &&
+                                            x.Content.Contains("战士职业")),
+                        "进行中的游戏应通过有上限 facet 提供连续感");
+
+                    var ended = manager.ExecuteAsync(new BrainCapabilityCallData
+                    {
+                        capability_id = "game.session.end",
+                        arguments = new List<BrainCallArgumentData>()
+                    }, turn, default).GetAwaiter().GetResult();
+                    Require(ended.Status == "success" && ended.ProducedEvent != null &&
+                            !ended.ProducedEvent.IsOperational &&
+                            ended.ProducedEvent.Realm == TraceRealmValues.SharedScene &&
+                            ended.ProducedEvent.EvidenceType == EvidenceTypeValues.PluginObserved &&
+                            ended.ProducedEvent.Content.Contains("星露谷物语") &&
+                            ended.ProducedEvent.Content.Contains("从游戏里出来") &&
+                            ended.ProducedEvent.Content.Contains("战士职业") &&
+                            !ended.ProducedEvent.Content.Contains("当前目标") &&
+                            !ended.ProducedEvent.Content.Contains("下次") &&
+                            !ended.ProducedEvent.Content.Contains("&#x20;") &&
+                            JsonDocument.Parse(ended.ProducedEvent.PayloadJson).RootElement
+                                .GetProperty("transition").GetString() == "left_game",
+                        "正常结束只能产生一条同时记录共同经历与离开游戏的 Moment");
+
+                    var shortStarted = manager.ExecuteAsync(new BrainCapabilityCallData
+                    {
+                        capability_id = "game.session.start",
+                        arguments = new List<BrainCallArgumentData>
+                        {
+                            new BrainCallArgumentData { name = "title", value = "星露谷物语" },
+                            new BrainCallArgumentData { name = "game_id", value = "stardew-valley" }
+                        }
+                    }, turn, default).GetAwaiter().GetResult();
+                    var shortSessionId = JsonDocument.Parse(shortStarted.Payload).RootElement
+                        .GetProperty("session_id").GetString();
+                    manager.ExecuteAsync(new BrainCapabilityCallData
+                    {
+                        capability_id = "game.session.event",
+                        arguments = new List<BrainCallArgumentData>
+                        {
+                            new BrainCallArgumentData { name = "session_id", value = shortSessionId },
+                            new BrainCallArgumentData { name = "kind", value = "bridge_connected" },
+                            new BrainCallArgumentData { name = "actor", value = "system" },
+                            new BrainCallArgumentData { name = "content", value =
+                                "阿循（Companion1）已由 SMAPI Mod 生成并进入 Follow 模式，继续等待指令。" }
+                        }
+                    }, turn, default).GetAwaiter().GetResult();
+                    var shortEnded = manager.ExecuteAsync(new BrainCapabilityCallData
+                    {
+                        capability_id = "game.session.end",
+                        arguments = new List<BrainCallArgumentData>()
+                    }, turn, default).GetAwaiter().GetResult();
+                    Require(shortEnded.ProducedEvent.Content.Contains("短暂进入") &&
+                            shortEnded.ProducedEvent.Content.Contains("还没来得及留下具体的游戏进度") &&
+                            !shortEnded.ProducedEvent.Content.Contains("Companion") &&
+                            !shortEnded.ProducedEvent.Content.Contains("SMAPI") &&
+                            !shortEnded.ProducedEvent.Content.Contains("等待指令"),
+                        "只有连接日志的短会话应收束成共同经历，不能把内部运行状态写进 Moment");
+                    Require(File.Exists(Path.Combine(pluginData, "game-session.sqlite3")),
+                        "游戏原始事件与阶段摘要应留在独立 SQLite 私库");
+                    manager.Unregister("game.session");
+                    Require(services.WebSocketEndpoints.Count == 0,
+                        "插件卸载或重扫时必须移除旧 WebSocket 端点");
+                }
+            }
+        }
+        finally
+        {
+            try { Directory.Delete(dir, true); } catch { }
+        }
+    }
+
     private static TraceContributionDescriptorData BodyEffector(
         string id, string pluginId, string bodyId, string tier, string organ)
     {
@@ -1716,14 +2267,20 @@ internal static class Program
     private static void RequireAstrBotChatShape(
         IReadOnlyList<DeepSeekMessageData> messages, string currentUser, string label)
     {
-        Require(messages != null && messages.Count >= 2, label + "：至少一条 system 和一条当前 user");
+        Require(messages != null && messages.Count >= 3,
+            label + "：至少一条 system、当前 user 和心智专属尾部");
         Require(messages.Count(x => string.Equals(x.role, "system", StringComparison.OrdinalIgnoreCase)) == 1,
             label + "：只能有一条 system");
         Require(string.Equals(messages[0].role, "system", StringComparison.OrdinalIgnoreCase),
             label + "：第一条必须是 system");
         var last = messages[messages.Count - 1];
-        Require(string.Equals(last.role, "user", StringComparison.OrdinalIgnoreCase) && last.content == currentUser,
-            label + "：最后一条必须是当前这句话");
+        Require(string.Equals(last.role, "user", StringComparison.OrdinalIgnoreCase) &&
+                last.content == currentUser,
+            label + "：最后一条必须是当前真实原话");
+        Require(messages.Take(messages.Count - 1)
+                .Any(x => x.role == "user" &&
+                          x.content.StartsWith(CommonContextPackLogic.MindRoleHeader, StringComparison.Ordinal)),
+            label + "：当前原话之前必须有心智专属指令");
         Require(!messages[0].content.Contains(currentUser),
             label + "：当前原话不得写入 system");
         for (var i = 1; i < messages.Count; i++)
@@ -1737,21 +2294,22 @@ internal static class Program
         IReadOnlyList<DeepSeekMessageData> messages, string currentUser, string label)
     {
         Require(messages != null && messages.Count >= 3,
-            label + "：至少一条 system、当前原话和表达请求");
+            label + "：至少一条 system、当前原话和开口专属尾部");
         Require(messages.Count(x => string.Equals(x.role, "system", StringComparison.OrdinalIgnoreCase)) == 1 &&
                 string.Equals(messages[0].role, "system", StringComparison.OrdinalIgnoreCase),
             label + "：只能有一条且第一条必须是 system");
-        Require(messages[messages.Count - 2].role == "user" &&
-                messages[messages.Count - 2].content == currentUser,
-            label + "：表达请求前必须保留当前真实原话");
-        var request = messages[messages.Count - 1];
+        Require(messages[messages.Count - 1].role == "user" &&
+                messages[messages.Count - 1].content == currentUser,
+            label + "：当前真实原话必须收尾");
+        var request = messages[messages.Count - 2];
         Require(request.role == "user" &&
+                request.content.StartsWith(CommonContextPackLogic.ExpressRoleHeader, StringComparison.Ordinal) &&
                 request.content.Contains("表达请求") &&
                 request.content.Contains("继续作为小光") &&
                 request.content.Contains("发给小雨的第一人称视角") &&
                 request.content.Contains("第一人称是小光") &&
                 request.content.Contains("不是小雨的补充发言"),
-            label + "：最后必须是明确身份与视角的表达请求");
+            label + "：当前原话之前必须是明确身份与视角的表达请求");
         Require(!messages[0].content.Contains(currentUser),
             label + "：当前原话不得写入 system");
         for (var i = 1; i < messages.Count; i++)
@@ -1760,6 +2318,13 @@ internal static class Program
             Require(role == "user" || role == "assistant",
                 label + "：system 之后只能是 user/assistant");
         }
+    }
+
+    private static string VisiblePrompt(IReadOnlyList<DeepSeekMessageData> messages)
+    {
+        return string.Join("\n", (messages ?? new List<DeepSeekMessageData>())
+            .Where(x => x != null)
+            .Select(x => x.content ?? string.Empty));
     }
 
     private static void Delete(string path)
@@ -1796,11 +2361,16 @@ internal static class Program
 
         public Task<string> CompleteJsonAsync(
             List<DeepSeekMessageData> messages,
-            CancellationToken cancellationToken = default)
+            CancellationToken cancellationToken = default,
+            string promptCacheKey = null)
         {
-            Requests.Add(messages.Select(x => new DeepSeekMessageData(x.role, x.content)).ToList());
-            var first = messages != null && messages.Count > 0 ? messages[0].content ?? string.Empty : string.Empty;
-            if (first.IndexOf("我先让这件事在心里发生", StringComparison.Ordinal) >= 0)
+            Requests.Add(messages.Select(x => new DeepSeekMessageData(x.role, x.content)
+            {
+                reasoning_content = x.reasoning_content
+            }).ToList());
+            var prompt = string.Join("\n", (messages ?? new List<DeepSeekMessageData>())
+                .Select(x => x == null ? string.Empty : x.content ?? string.Empty));
+            if (prompt.IndexOf("我先让这件事在心里发生", StringComparison.Ordinal) >= 0)
             {
                 return Task.FromResult(
                     "{\"beat\":\"当下\",\"tags\":\"\",\"query\":\"\",\"mood\":\"平静\"," +
@@ -1813,13 +2383,42 @@ internal static class Program
 
         public Task<string> CompleteTextAsync(
             List<DeepSeekMessageData> messages,
-            CancellationToken cancellationToken = default)
+            CancellationToken cancellationToken = default,
+            string promptCacheKey = null)
         {
-            return CompleteJsonAsync(messages, cancellationToken);
+            return CompleteJsonAsync(messages, cancellationToken, promptCacheKey);
         }
 
         public Task<IReadOnlyList<string>> ListModelsAsync(
             CancellationToken cancellationToken = default)
+        {
+            return Task.FromResult<IReadOnlyList<string>>(new[] { Model });
+        }
+    }
+
+    private sealed class GameSessionLlm : ILlmClient
+    {
+        public string ProviderId { get { return "game-check"; } }
+        public string Model { get { return "game-check"; } }
+
+        public Task<string> CompleteJsonAsync(List<DeepSeekMessageData> messages,
+            CancellationToken cancellationToken = default,
+            string promptCacheKey = null)
+        {
+            return Task.FromResult(
+                "{\"summary\":\"两人在矿井推进到40层，并选择了战士职业\"," +
+                "\"objective\":\"回农场整理背包\",\"state\":{\"location\":\"矿井40层\"}," +
+                "\"open_threads\":[\"下次继续下矿\"]}");
+        }
+
+        public Task<string> CompleteTextAsync(List<DeepSeekMessageData> messages,
+            CancellationToken cancellationToken = default,
+            string promptCacheKey = null)
+        {
+            return Task.FromResult("两人在矿井推进到40层，并选择了战士职业；下次还可以继续下矿。");
+        }
+
+        public Task<IReadOnlyList<string>> ListModelsAsync(CancellationToken cancellationToken = default)
         {
             return Task.FromResult<IReadOnlyList<string>>(new[] { Model });
         }

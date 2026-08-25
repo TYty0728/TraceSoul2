@@ -16,6 +16,7 @@
     <Compile Include="../Host/LlmProviderCatalog.cs" />
     <Compile Include="../Host/GeminiClientManager.cs" />
     <Compile Include="../Host/TraceHome.cs" />
+    <Compile Include="../Host/LifeStateStore.cs" />
     <Content Include="../../models/BgeSmallZh/bge-small-zh-v1.5.onnx" CopyToOutputDirectory="PreserveNewest" Link="Models/BgeSmallZh/bge-small-zh-v1.5.onnx" />
     <Content Include="../../models/BgeSmallZh/vocab.txt" CopyToOutputDirectory="PreserveNewest" Link="Models/BgeSmallZh/vocab.txt" />
   </ItemGroup>

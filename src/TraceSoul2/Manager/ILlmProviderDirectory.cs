@@ -49,6 +49,8 @@ namespace TraceSoul2.Manager
         LlmEndpointData Resolve(string providerId, string model = null);
         LlmEndpointData ResolveSlot(string slot);
         IReadOnlyList<LlmProviderBriefData> ListBrief();
+        /// <summary>按供应商和模型创建隔离客户端；插件可借此使用专用模型而不替换主对话模型。</summary>
+        ILlmClient CreateClient(string providerId, string model = null, bool? thinkingOverride = null);
         /// <summary>复盘槽客户端（关闭思考）。槽未指定时用对话开口关思考。无 Key 返回 null。</summary>
         ILlmClient CreateReviewClient();
     }

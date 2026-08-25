@@ -85,8 +85,8 @@ namespace TraceSoul2.Data
     }
 
     /// <summary>
-    /// 今天我们的轨迹：当天两人共同经历的滚动摘要（约200字内），
-    /// 实时对话中由 Brain 维护，新的一天（复盘边界）清空。按记忆日键一行。
+    /// 今天我们的轨迹：当天两人共同经历的滚动实时样本（约500字内），
+    /// 实时对话中由 Brain 高频维护；对应日复盘成功后才退出。按记忆日键一行。
     /// </summary>
     [Table("day_trajectory")]
     public sealed class DayTrajectoryRecord
@@ -160,6 +160,8 @@ namespace TraceSoul2.Data
     {
         public string role;
         public string content;
+        /// <summary>Kimi K3 多轮需原样回传；DeepSeek 无工具时可省略。</summary>
+        public string reasoning_content;
         public DeepSeekMessageData() { }
         public DeepSeekMessageData(string role, string content)
         {
@@ -201,15 +203,35 @@ namespace TraceSoul2.Data
         public int max_tokens;
     }
 
-    /// <summary>非 DeepSeek 的 OpenAI 兼容口：不带 thinking / reasoning_effort，避免 Gemini 等中转站拒收。</summary>
+    /// <summary>
+    /// 非 DeepSeek 的 OpenAI 兼容口：不带 thinking / reasoning_effort，避免 Gemini 等中转站拒收。
+    /// response_format 仍要保留：心智是 JSON 口，缺 json_object 时 K3 会把身份卡当成对白直接说完。
+    /// </summary>
     [Serializable]
     public sealed class OpenAiChatRequestData
     {
         public string model;
         public List<DeepSeekMessageData> messages;
+        public DeepSeekResponseFormatData response_format;
         public float temperature;
         public float top_p;
         public int max_tokens;
+    }
+
+    /// <summary>
+    /// Kimi 开放平台（api.moonshot.cn / api.moonshot.ai）。
+    /// K3 用顶层 reasoning_effort；K2.x 用 thinking；temperature / top_p 为固定值，不要显式传入。
+    /// </summary>
+    [Serializable]
+    public sealed class KimiChatRequestData
+    {
+        public string model;
+        public List<DeepSeekMessageData> messages;
+        public DeepSeekResponseFormatData response_format;
+        public DeepSeekThinkingData thinking;
+        public string reasoning_effort;
+        public int? max_completion_tokens;
+        public string prompt_cache_key;
     }
 
     /// <summary>

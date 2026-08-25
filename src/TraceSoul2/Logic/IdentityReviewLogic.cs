@@ -27,17 +27,43 @@ namespace TraceSoul2.Logic
             string innerNarrative,
             CancellationToken cancellationToken)
         {
-            var messages = new List<DeepSeekMessageData>
-            {
-                new DeepSeekMessageData("system", BuildPrompt(pair, cards, dayMoments, innerNarrative)),
-                new DeepSeekMessageData("user", CorePrompts.IdentityReview.UserAsk)
-            };
+            return AnalyzeAsync(pair, cards, dayMoments, innerNarrative, null, cancellationToken);
+        }
+
+        public Task<IdentityReviewOutputData> AnalyzeAsync(
+            PairIdentity pair,
+            IReadOnlyList<IdentityCardRecord> cards,
+            IEnumerable<MomentRecord> dayMoments,
+            string innerNarrative,
+            string conversationId,
+            CancellationToken cancellationToken)
+        {
+            var shared = IdentityCardLogic.FormatForExpressor(cards, pair);
+            var role = BuildReviewRole(pair, dayMoments, innerNarrative);
+            var messages = LlmContextPackLogic.AssembleReview(
+                llm, shared, role, CorePrompts.IdentityReview.UserAsk);
+            var promptCacheKey = LlmContextPackLogic.BuildPromptCacheKey(llm, conversationId);
             return DeepSeekStructuredOutputLogic.CompleteAsync<IdentityReviewOutputData>(
                 llm,
                 messages,
                 x => x != null && !string.IsNullOrWhiteSpace(x.summary),
                 CorePrompts.IdentityReview.MissingSummary,
-                cancellationToken);
+                cancellationToken,
+                promptCacheKey);
+        }
+
+        private static string BuildReviewRole(
+            PairIdentity pair,
+            IEnumerable<MomentRecord> dayMoments,
+            string innerNarrative)
+        {
+            pair = pair ?? PairIdentity.Missing;
+            var builder = new StringBuilder();
+            builder.AppendLine(pair.Apply(CorePrompts.IdentityReview.Role));
+            CorePrompts.Write(builder, pair.Apply(CorePrompts.IdentityReview.Rules));
+            builder.AppendLine();
+            AppendReviewEvidence(builder, pair, dayMoments, innerNarrative);
+            return builder.ToString();
         }
 
         private static string BuildPrompt(
@@ -54,8 +80,20 @@ namespace TraceSoul2.Logic
             builder.AppendLine(CorePrompts.IdentityReview.CurrentCardsHeader);
             builder.AppendLine(IdentityCardLogic.FormatForExpressor(cards, pair));
             builder.AppendLine();
+            AppendReviewEvidence(builder, pair, dayMoments, innerNarrative);
+            return builder.ToString();
+        }
+
+        private static void AppendReviewEvidence(
+            StringBuilder builder,
+            PairIdentity pair,
+            IEnumerable<MomentRecord> dayMoments,
+            string innerNarrative)
+        {
             builder.AppendLine(CorePrompts.IdentityReview.InnerHeader);
-            builder.AppendLine(string.IsNullOrWhiteSpace(innerNarrative) ? CorePrompts.IdentityReview.EmptyInner : innerNarrative.Trim());
+            builder.AppendLine(string.IsNullOrWhiteSpace(innerNarrative)
+                ? CorePrompts.IdentityReview.EmptyInner
+                : innerNarrative.Trim());
             builder.AppendLine();
             builder.AppendLine(CorePrompts.IdentityReview.MomentsHeader);
             var moments = (dayMoments ?? Enumerable.Empty<MomentRecord>()).ToList();
@@ -68,7 +106,6 @@ namespace TraceSoul2.Logic
             }
             builder.AppendLine();
             CorePrompts.Write(builder, CorePrompts.IdentityReview.JsonSchema);
-            return builder.ToString();
         }
     }
 }

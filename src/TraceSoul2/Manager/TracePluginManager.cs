@@ -34,6 +34,8 @@ namespace TraceSoul2.Manager
             new Dictionary<string, ITraceMountedFacet>(StringComparer.OrdinalIgnoreCase);
         private readonly Dictionary<string, ITraceBackgroundService> backgroundServices =
             new Dictionary<string, ITraceBackgroundService>(StringComparer.OrdinalIgnoreCase);
+        private readonly Dictionary<ITraceWebSocketEndpoint, string> webSocketEndpointOwners =
+            new Dictionary<ITraceWebSocketEndpoint, string>();
 
         public TracePluginServices Services { get { return services; } }
 
@@ -394,6 +396,23 @@ namespace TraceSoul2.Manager
             backgroundServices.Add(service.Descriptor.Id, service);
         }
 
+        public void RegisterWebSocketEndpoint(string pluginId, ITraceWebSocketEndpoint endpoint)
+        {
+            if (endpoint == null) throw new ArgumentNullException("endpoint");
+            var path = (endpoint.Path ?? string.Empty).Trim();
+            if (path.Length < 2 || path[0] != '/')
+                throw new ArgumentException("WebSocket 端点必须是以 / 开头的非根路径。", "endpoint");
+            lock (services.WebSocketEndpoints)
+            {
+                if (services.WebSocketEndpoints.Any(x => x != null &&
+                    string.Equals(NormalizeEndpointPath(x.Path), NormalizeEndpointPath(path),
+                        StringComparison.OrdinalIgnoreCase)))
+                    throw new InvalidOperationException("WebSocket 端点路径重复：" + path);
+                services.WebSocketEndpoints.Add(endpoint);
+                webSocketEndpointOwners.Add(endpoint, pluginId);
+            }
+        }
+
         public void Dispose()
         {
             foreach (var id in plugins.Keys.ToList()) Deactivate(id);
@@ -418,6 +437,16 @@ namespace TraceSoul2.Manager
             RemoveOwned(momentSources, id, x => x.Descriptor.PluginId);
             RemoveOwned(facets, id, x => x.Descriptor.PluginId);
             RemoveOwned(backgroundServices, id, x => x.Descriptor.PluginId);
+            lock (services.WebSocketEndpoints)
+            {
+                foreach (var endpoint in webSocketEndpointOwners
+                             .Where(x => string.Equals(x.Value, id, StringComparison.OrdinalIgnoreCase))
+                             .Select(x => x.Key).ToList())
+                {
+                    services.WebSocketEndpoints.Remove(endpoint);
+                    webSocketEndpointOwners.Remove(endpoint);
+                }
+            }
             try { loaded.Instance.Shutdown(); }
             catch (Exception exception)
             {
@@ -429,6 +458,13 @@ namespace TraceSoul2.Manager
         {
             foreach (var key in values.Where(x => owner(x.Value) == pluginId).Select(x => x.Key).ToList())
                 values.Remove(key);
+        }
+
+        private static string NormalizeEndpointPath(string value)
+        {
+            var path = (value ?? string.Empty).Trim();
+            if (path.Length > 1) path = path.TrimEnd('/');
+            return path;
         }
 
         private static void ValidateDescriptor(string pluginId, TraceContributionDescriptorData descriptor)

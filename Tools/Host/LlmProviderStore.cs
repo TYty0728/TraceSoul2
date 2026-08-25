@@ -134,6 +134,16 @@ namespace TraceSoul2.Host
                     maxTokens = template.maxTokens,
                     timeout = 120
                 };
+                if (string.Equals(template.id, "moonshot", StringComparison.OrdinalIgnoreCase))
+                {
+                    item.thinkingEnabled = true;
+                    // K3 关不掉思考；日常陪伴默认 low，不要用官网缺省的 max。
+                    item.reasoningEffort = "low";
+                    item.timeout = 300;
+                }
+                // Ollama 的 OpenAI 兼容接口不校验 Key；给通用客户端一个本地占位值，
+                // 避免把“无须密钥”误判成“尚未配置”。这个值只发往 loopback。
+                if (IsLocalOllama(item)) item.apiKey = "ollama";
                 if (!string.IsNullOrWhiteSpace(item.model))
                     EnsureModel(item, item.model, LlmSlotNames.Chat);
                 data.providers.Add(item);
@@ -471,6 +481,8 @@ namespace TraceSoul2.Host
         private static void NormalizeProvider(LlmProviderRecord item)
         {
             if (item.models == null) item.models = new List<LlmModelEntry>();
+            if (IsLocalOllama(item) && string.IsNullOrWhiteSpace(item.apiKey))
+                item.apiKey = "ollama";
             item.models.RemoveAll(x => x == null || string.IsNullOrWhiteSpace(x.id));
             foreach (var model in item.models)
             {
@@ -488,6 +500,17 @@ namespace TraceSoul2.Host
                 EnsureModel(item, item.model, LlmSlotNames.Chat);
             if (item.timeout <= 0) item.timeout = 120;
             if (item.proxy == null) item.proxy = string.Empty;
+        }
+
+        private static bool IsLocalOllama(LlmProviderRecord item)
+        {
+            if (item == null) return false;
+            var url = (item.baseUrl ?? string.Empty).Trim().ToLowerInvariant();
+            var name = ((item.id ?? string.Empty) + " " + (item.displayName ?? string.Empty)).ToLowerInvariant();
+            return name.Contains("ollama") &&
+                   (url.StartsWith("http://127.0.0.1:11434") ||
+                    url.StartsWith("http://localhost:11434") ||
+                    url.StartsWith("http://[::1]:11434"));
         }
 
         private static LlmModelEntry EnsureModel(LlmProviderRecord item, string modelId, string extraRole)

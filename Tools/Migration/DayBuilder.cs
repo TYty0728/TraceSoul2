@@ -28,6 +28,40 @@ namespace TraceSoul2.Migrate
             var dayKey = CliArgs.Value(args, "--day");
             if (string.IsNullOrWhiteSpace(dayKey))
                 throw new InvalidOperationException("需要 --day yyyy-MM-dd。");
+            if (context.Migration.IsDayCompleted(dayKey))
+            {
+                // 完成标记早于临时样本清理：即使上次进程恰好在两者之间退出，也能在这里补清理。
+                context.Store.RetireDayRuntimeSamples(MigrationContext.ConversationId, dayKey);
+                Console.WriteLine("日终复盘已完成，跳过重复构筑：" + dayKey);
+                return 0;
+            }
+            context.Migration.SaveReviewState(new ReviewStateRecord
+            {
+                DayKey = dayKey,
+                Status = "running",
+                Error = string.Empty
+            });
+            try
+            {
+                return await RunCoreAsync(context, args, dayKey);
+            }
+            catch (Exception exception)
+            {
+                // 完成标记是提交点。提交后的样本清理/打印即使异常，也不能把已成功复盘改回 failed；
+                // 下次启动会走完成分支重试清理，而不会重复长期沉淀。
+                if (!context.Migration.IsDayCompleted(dayKey))
+                    context.Migration.SaveReviewState(new ReviewStateRecord
+                {
+                    DayKey = dayKey,
+                    Status = "failed",
+                    Error = Limit(exception.Message, 1000)
+                });
+                throw;
+            }
+        }
+
+        private static async Task<int> RunCoreAsync(MigrationContext context, string[] args, string dayKey)
+        {
             var day = DateTime.ParseExact(dayKey, "yyyy-MM-dd", CultureInfo.InvariantCulture);
             var range = DateRange.Parse(new[] { "--from", dayKey, "--to", dayKey });
             var moments = context.Migration.GetUnbuiltMomentsInRange(
@@ -254,6 +288,7 @@ namespace TraceSoul2.Migrate
                 range.DayStartMs(day), range.DayEndMs(day));
             if (markedBuilt > 0) Console.WriteLine("  已标记 " + markedBuilt + " 条 Moment 为已归档（built）。");
             context.Migration.MarkDayCompleted(dayKey);
+            context.Store.RetireDayRuntimeSamples(MigrationContext.ConversationId, dayKey);
 
             var cardsAfter = context.Store.LoadIdentityCards(MigrationContext.ConversationId);
             PrintCards("构筑后四张卡", cardsAfter, pair);
@@ -283,6 +318,7 @@ namespace TraceSoul2.Migrate
                 context, pair, llm, dayKey, new List<EventIndexRecord>(), dayCognitions);
             await DayLadderLogic.PromoteAsync(context, pair, dayKey, llm);
             context.Migration.MarkDayCompleted(dayKey);
+            context.Store.RetireDayRuntimeSamples(MigrationContext.ConversationId, dayKey);
             PrintCards("空天复盘后四张卡", context.Store.LoadIdentityCards(MigrationContext.ConversationId), pair);
             return 0;
         }
@@ -301,9 +337,19 @@ namespace TraceSoul2.Migrate
             var otherCard = Card(cardsNow, IdentityCardSlotValues.Other).Body;
             var relationCard = Card(cardsNow, IdentityCardSlotValues.Relation).Body;
             var expressionCard = Card(cardsNow, IdentityCardSlotValues.ExpressionHabit).Body;
+            var trajectory = context.Store.LoadDayTrajectory(dayKey);
+            var todayNewItems = context.Store.GetTodayNewItemsByDay(
+                MigrationContext.ConversationId, dayKey);
+            var currentInner = context.Store.LoadOrCreateInnerRuntime(MigrationContext.ConversationId);
+            var currentLife = context.LifeState == null
+                ? null : context.LifeState.Load(MigrationContext.ConversationId);
             var reviewPrompt = ReplayPrompts.BuildDayCardReviewPrompt(
                 pair, dayKey, selfCard, otherCard, relationCard, expressionCard,
-                userProfileCard, dayIndexes, dayEntries);
+                userProfileCard, dayIndexes, dayEntries,
+                trajectory == null ? string.Empty : trajectory.Text,
+                todayNewItems,
+                InnerLifeLogic.FormatForMind(currentInner),
+                FormatLifeState(currentLife));
             var reviewMessages = new List<DeepSeekMessageData>
             {
                 new DeepSeekMessageData("system", reviewPrompt),
@@ -316,6 +362,15 @@ namespace TraceSoul2.Migrate
             LogCall(context, dayKey, "card_review", 0,
                 "三卡复盘：" + Limit(output.summary, 60), TraceJson.ToJson(output));
             return output;
+        }
+
+        private static string FormatLifeState(LifeStateData life)
+        {
+            if (life == null) return string.Empty;
+            var location = string.IsNullOrWhiteSpace(life.location) ? "未知" : BodySceneValues.Label(life.location);
+            var activity = string.IsNullOrWhiteSpace(life.activity) ? "空闲" : life.activity;
+            return "位置=" + location + "；活动=" + activity +
+                   (string.IsNullOrWhiteSpace(life.activity_detail) ? string.Empty : "｜" + life.activity_detail);
         }
 
         /// <summary>应用复盘输出：三卡只写真正变化的；内心全字段经 Reduce 同步（空字段=保留现状）。空天不清手上未结束的事。</summary>

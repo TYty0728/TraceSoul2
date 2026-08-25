@@ -18,7 +18,7 @@ namespace TraceSoul2.Host
     /// system_instruction + contents(user/model) + generationConfig + safetySettings。
     /// 陪伴场景默认 BLOCK_NONE；撞到 RECITATION 时按 AstrBot 把温度 +0.2 重试。
     /// </summary>
-    public sealed class GeminiClientManager : ILlmClient
+    public sealed class GeminiClientManager : ILlmClient, ILlmUsageReporter, ILlmEndpoint
     {
         private static readonly HttpClient Http = new HttpClient
         {
@@ -26,6 +26,7 @@ namespace TraceSoul2.Host
         };
 
         private readonly DeepSeekConfigData config;
+        private LlmUsageData lastUsage;
 
         private static readonly string LlmDumpDir =
             Environment.GetEnvironmentVariable("TRACESOUL2_LLM_DUMP_DIR");
@@ -37,6 +38,10 @@ namespace TraceSoul2.Host
         }
 
         public string Model { get { return config.Model; } }
+
+        public string BaseUrl { get { return config.BaseUrl; } }
+
+        public LlmUsageData LastUsage { get { return lastUsage; } }
 
         public GeminiClientManager(DeepSeekConfigData config)
         {
@@ -68,14 +73,16 @@ namespace TraceSoul2.Host
 
         public Task<string> CompleteJsonAsync(
             List<DeepSeekMessageData> messages,
-            CancellationToken cancellationToken = default(CancellationToken))
+            CancellationToken cancellationToken = default(CancellationToken),
+            string promptCacheKey = null)
         {
             return CompleteCoreAsync(messages, true, cancellationToken);
         }
 
         public Task<string> CompleteTextAsync(
             List<DeepSeekMessageData> messages,
-            CancellationToken cancellationToken = default(CancellationToken))
+            CancellationToken cancellationToken = default(CancellationToken),
+            string promptCacheKey = null)
         {
             return CompleteCoreAsync(messages, false, cancellationToken);
         }
@@ -142,6 +149,7 @@ namespace TraceSoul2.Host
                 using (var response = await Http.SendAsync(request, cancellationToken))
                 {
                     var body = await response.Content.ReadAsStringAsync();
+                    lastUsage = LlmUsageLogic.Parse(body);
                     DumpCall(payload, body);
                     if (!response.IsSuccessStatusCode)
                         throw new InvalidOperationException(
@@ -328,6 +336,10 @@ namespace TraceSoul2.Host
                 System.IO.File.WriteAllText(
                     System.IO.Path.Combine(dir, name + "-response.txt"),
                     ParseAttempt(responseBody).Content ?? responseBody ?? string.Empty, enc);
+                var usage = LlmUsageLogic.FormatDump(LlmUsageLogic.Parse(responseBody));
+                if (!string.IsNullOrWhiteSpace(usage))
+                    System.IO.File.WriteAllText(
+                        System.IO.Path.Combine(dir, name + "-usage.txt"), usage, enc);
             }
             catch
             {

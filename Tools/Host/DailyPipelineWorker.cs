@@ -1,6 +1,7 @@
 using System;
 using System.Diagnostics;
 using System.IO;
+using System.Linq;
 using System.Threading;
 using System.Threading.Tasks;
 using Microsoft.Extensions.Hosting;
@@ -17,6 +18,7 @@ namespace TraceSoul2.Host
     {
         private readonly SoulRuntime runtime;
         private readonly string migrateDll;
+        private readonly SemaphoreSlim buildGate = new SemaphoreSlim(1, 1);
 
         public DailyPipelineWorker(SoulRuntime runtime)
         {
@@ -26,6 +28,8 @@ namespace TraceSoul2.Host
 
         protected override async Task ExecuteAsync(CancellationToken stoppingToken)
         {
+            // 重启不是新的时间线：先补齐所有已经越过 04:00、但仍有未消费 Moment 的记忆日。
+            await CatchUpAsync(stoppingToken);
             while (!stoppingToken.IsCancellationRequested)
             {
                 var now = DateTimeOffset.Now.ToOffset(MemoryDayLogic.ChinaOffset);
@@ -41,9 +45,7 @@ namespace TraceSoul2.Host
                 {
                     return;
                 }
-                var dayKey = MemoryDayLogic.ClosedDayKey(DateTimeOffset.Now);
-                StartDayBuild(dayKey);
-                // 构建本身可能超过一分钟；等下一个边界再跑，不会重复（build 幂等且只消费未归档 Moment）。
+                await CatchUpAsync(stoppingToken);
             }
         }
 
@@ -53,38 +55,75 @@ namespace TraceSoul2.Host
             var target = string.IsNullOrWhiteSpace(dayKey)
                 ? MemoryDayLogic.ClosedDayKey(DateTimeOffset.Now)
                 : dayKey.Trim();
-            StartDayBuild(target);
+            _ = RunDayBuildAsync(target, CancellationToken.None);
             return target;
         }
 
         public bool IsAvailable { get { return !string.IsNullOrWhiteSpace(migrateDll); } }
         public string MigrateDll { get { return migrateDll; } }
 
-        private void StartDayBuild(string dayKey)
+        private async Task CatchUpAsync(CancellationToken cancellationToken)
+        {
+            var now = DateTimeOffset.Now.ToOffset(MemoryDayLogic.ChinaOffset);
+            var currentStart = MemoryDayLogic.CurrentStart(now);
+            var closedDay = MemoryDayLogic.ClosedDayKey(now);
+            var days = runtime.Store.GetUnbuiltMemoryDayKeysBefore(currentStart.ToUnixTimeMilliseconds())
+                .Where(x => string.Compare(x, closedDay, StringComparison.Ordinal) <= 0)
+                .Append(closedDay)
+                .Distinct(StringComparer.Ordinal)
+                .OrderBy(x => x, StringComparer.Ordinal)
+                .ToList();
+            if (days.Count > 1)
+                runtime.Emit("检测到待补日终复盘：" + string.Join("、", days));
+            foreach (var day in days)
+            {
+                var exitCode = await RunDayBuildAsync(day, cancellationToken);
+                // 旧日失败时不能越过它更新后续卡片；留到下次启动/边界继续补偿。
+                if (exitCode != 0) break;
+            }
+        }
+
+        private async Task<int> RunDayBuildAsync(string dayKey, CancellationToken cancellationToken)
         {
             if (string.IsNullOrWhiteSpace(migrateDll))
             {
                 runtime.Emit("自动日构建不可用：找不到 TraceSoul2.Migrate.dll。");
-                return;
+                return -1;
             }
-            runtime.Emit("日构建启动：" + dayKey + "（未归档 Moment → 事件/条目/向量 → 复盘 → 日榜）");
-            var startInfo = new ProcessStartInfo
-            {
-                FileName = "dotnet",
-                Arguments = "\"" + migrateDll + "\" build --day " + dayKey,
-                UseShellExecute = false
-            };
-            startInfo.Environment["TRACESOUL2_DATA"] = runtime.DataDirectory;
+            await buildGate.WaitAsync(cancellationToken);
             try
             {
-                var process = Process.Start(startInfo);
-                process.EnableRaisingEvents = true;
-                process.Exited += (sender, args) =>
-                    runtime.Emit("日构建结束（exit " + process.ExitCode + "）：" + dayKey);
+                runtime.Emit("日构建启动：" + dayKey + "（全天分批 → 长期沉淀 → 次日继承 → 退出本日切片）");
+                var startInfo = new ProcessStartInfo
+                {
+                    FileName = "dotnet",
+                    Arguments = "\"" + migrateDll + "\" build --day " + dayKey,
+                    UseShellExecute = false
+                };
+                startInfo.Environment["TRACESOUL2_DATA"] = runtime.DataDirectory;
+                try
+                {
+                    using (var process = Process.Start(startInfo))
+                    {
+                        if (process == null) throw new InvalidOperationException("无法启动日构建进程。");
+                        await process.WaitForExitAsync(cancellationToken);
+                        runtime.Emit("日构建结束（exit " + process.ExitCode + "）：" + dayKey);
+                        return process.ExitCode;
+                    }
+                }
+                catch (OperationCanceledException) when (cancellationToken.IsCancellationRequested)
+                {
+                    return -1;
+                }
+                catch (Exception exception)
+                {
+                    runtime.Emit("日构建启动失败：" + exception.Message);
+                    return -1;
+                }
             }
-            catch (Exception exception)
+            finally
             {
-                runtime.Emit("日构建启动失败：" + exception.Message);
+                buildGate.Release();
             }
         }
 

@@ -180,7 +180,7 @@ namespace TraceSoul2.Plugins.Builtin
             waitingSinceUnixMs = DateTimeOffset.UtcNow.ToUnixTimeMilliseconds();
             if (IsReverseMode)
             {
-                context.Services.WebSocketEndpoints.Add(new ReverseWsEndpoint(this));
+                context.AddWebSocketEndpoint(new ReverseWsEndpoint(this));
             }
             else if (!string.IsNullOrWhiteSpace(config.ws_url))
             {

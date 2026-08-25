@@ -25,7 +25,7 @@ namespace TraceSoul2.Host
                     "https://generativelanguage.googleapis.com/v1beta/openai/", "gemini-2.5-flash", 0.7f),
                 T("AIHubMix", "aihubmix", OpenAiChat, "https://aihubmix.com/v1", "", 0.7f),
                 T("OpenRouter", "openrouter", OpenAiChat, "https://openrouter.ai/api/v1", "", 0.7f),
-                T("Moonshot", "moonshot", OpenAiChat, "https://api.moonshot.cn/v1", "", 0.6f),
+                T("Kimi 官方", "moonshot", OpenAiChat, "https://api.moonshot.cn/v1", "kimi-k3", 1f, 0.95f, 32768),
                 T("Ollama", "ollama", OpenAiChat, "http://127.0.0.1:11434/v1", "", 0.7f)
             };
         }
@@ -36,6 +36,11 @@ namespace TraceSoul2.Host
             {
                 if (string.Equals(item.key, key, StringComparison.OrdinalIgnoreCase) ||
                     string.Equals(item.id, key, StringComparison.OrdinalIgnoreCase))
+                    return item;
+                if (string.Equals(item.id, "moonshot", StringComparison.OrdinalIgnoreCase) &&
+                    (string.Equals(key, "Moonshot", StringComparison.OrdinalIgnoreCase) ||
+                     string.Equals(key, "kimi", StringComparison.OrdinalIgnoreCase) ||
+                     string.Equals(key, "kmi", StringComparison.OrdinalIgnoreCase)))
                     return item;
             }
             return null;
@@ -70,6 +75,11 @@ namespace TraceSoul2.Host
                 roles.Add("image");
             if (ContainsAny(id, "reasoner", "thinking", "-r1", "r1-", "o1-", "o3-", "o4-mini", "qwq"))
                 roles.Add("thinking");
+            if (ContainsAny(id, "kimi-k3", "kimi-k2"))
+            {
+                if (!roles.Contains("thinking")) roles.Add("thinking");
+                if (!roles.Contains("multimodal")) roles.Add("multimodal");
+            }
             if (ContainsAny(id, "vision", "-vl", "vl-", "gpt-4o", "gpt-4.1", "gpt-5", "gemini",
                     "claude-3", "claude-sonnet", "claude-opus", "qwen-vl", "multimodal"))
                 roles.Add("multimodal");
@@ -100,7 +110,8 @@ namespace TraceSoul2.Host
         }
 
         private static LlmProviderTemplate T(
-            string key, string id, string type, string baseUrl, string model, float temperature)
+            string key, string id, string type, string baseUrl, string model, float temperature,
+            float topP = 1f, int maxTokens = 8192)
         {
             return new LlmProviderTemplate
             {
@@ -111,8 +122,8 @@ namespace TraceSoul2.Host
                 baseUrl = baseUrl,
                 model = model,
                 temperature = temperature,
-                topP = 1f,
-                maxTokens = 8192
+                topP = topP,
+                maxTokens = maxTokens
             };
         }
     }

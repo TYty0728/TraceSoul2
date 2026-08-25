@@ -1,0 +1,15 @@
+{
+  "hint": "平台无关的游戏会话引擎。MCP/游戏翻译器连接本地 WebSocket，原始事件只写插件私库；开始、阶段同步和结束再进入 Soul。",
+  "fields": [
+    { "key": "websocket_path", "label": "桥接 WebSocket 路径", "type": "string", "default": "/plugins/game-session/ws", "description": "修改后插件会热重载，新连接立即使用新路径。" },
+    { "key": "access_token", "label": "桥接 Token", "type": "password", "description": "留空只适合受信任的本机环境；支持 Authorization: Bearer 或 access_token 查询参数。" },
+    { "key": "summary_event_count", "label": "阶段摘要事件数", "type": "number", "min": 5, "max": 500, "default": 30 },
+    { "key": "summary_char_count", "label": "阶段摘要字符数", "type": "number", "min": 500, "max": 100000, "default": 8000 },
+    { "key": "summary_idle_minutes", "label": "尾段收束分钟", "type": "number", "min": 1, "max": 240, "default": 20 },
+    { "key": "sync_mode", "label": "默认同步模式", "type": "select", "options": ["timed", "end_only"], "default": "timed" },
+    { "key": "sync_interval_minutes", "label": "默认同步间隔（分钟）", "type": "number", "min": 5, "max": 1440, "default": 60 },
+    { "key": "session_timeout_minutes", "label": "无事件自动结束（分钟）", "type": "number", "min": 15, "max": 2880, "default": 120 },
+    { "key": "facet_max_chars", "label": "当前游戏上下文上限", "type": "number", "min": 300, "max": 4000, "default": 1200 },
+    { "key": "profiles_json", "label": "游戏档案 JSON", "type": "textarea", "description": "JSON 数组。每项可配 id/title/game_id/adapter_id/source_url/capabilities/default_mode/identity_slots/identity_budget_chars/role_instruction/sync_mode/sync_interval_minutes/session_timeout_minutes。" }
+  ]
+}

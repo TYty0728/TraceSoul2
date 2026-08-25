@@ -11,6 +11,7 @@
     <PackageReference Include="sqlite-net-pcl" Version="1.9.172" />
     <PackageReference Include="Microsoft.ML.OnnxRuntime" Version="1.19.2" />
     <ProjectReference Include="../PluginApi/TraceSoul2.PluginApi.csproj" />
+    <ProjectReference Include="../../ExternalPlugins/GameSession/TraceSoul2.Plugin.GameSession.csproj" />
     <Compile Include="Program.cs" />
     <Compile Include="../../ExternalPlugins/QqImageGen/QqImageGenPrompts.cs" />
     <Content Include="../../resources/identity_cards.json" CopyToOutputDirectory="PreserveNewest" Link="identity_cards.json" />
