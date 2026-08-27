@@ -1,11 +1,11 @@
 # 插件体系（身体上的器官包）
 
-插件不是内核。身份、内心、记忆、时间、控制台壳挂在贡献总线上，但**不是可关的插件**。控制台「插件」页按 **平台 → 器官** 分层：上层是 QQ 这类平台，下面才是表情 / 语音 / 生图 / 说说。
+插件不是内核。身份、内心、记忆、时间、感官目录挂在贡献总线上，但**不是可关的插件**。控制台「插件」页按 **平台 → 器官** 分层：上层是 QQ / 游戏这类身体，下面才是表情 / 语音 / 生图 / 说说 / 签名。三层定义与休眠规则见 [PLUGIN_LAYERS.md](PLUGIN_LAYERS.md)。
 
 两类东西：
 
-1. **内核 / 平台**（`src/TraceSoul2/Plugins/Builtin/`）：与宿主一起编译。内核不可关闭；QQ 平台的启用/回发在「平台 · QQ」。
-2. **器官包**（`plugins/` + 同级 `plugins_data/`）：主项目之外，运行时加载，**安装/卸载/更新都不需要编译宿主**。
+1. **与宿主一起编译**（`src/TraceSoul2/Plugins/Builtin/`）：内核组件不可关闭；console / OneBot 平台的启用与回发在控制台对应页。
+2. **运行时包**（`plugins/` + 同级 `plugins_data/`）：主项目之外加载，**安装/卸载/更新都不需要编译宿主**。可以是平台（如 `game.session`）或器官（如 `qq.qzone`）。
 
 元数据 `Role`：`kernel` / `platform` / `organ`。`PlatformId` 标明器官属于哪座平台（QQ = `onebot`）。空则按 Id 推断。
 
@@ -127,16 +127,20 @@ public sealed class XxxEffector : ITraceCallableContribution
 - 出站表达**必须**经平台适配器并带 `ProducedEvent`；`moments` 是她在这个世界的**物理痕迹**——她真说了什么（文字，伴侣角色）、真做了什么（图片/表情/语音/改签名/发说说，`system_event` 角色，不进对话流）、真看到了什么，都要进 `moments`；`operational_events` 只留纯系统机制痕迹（定时器触发、console 观察窗镜像、闸门拦截日志）；
 - 未配置（如缺 api_key）时让 `IsAvailable` 返回 false，该器官自动从身体上消失。
 
-平台无关的器官（如 `game.session`）不要声明 `PlatformId` / `BodyId`，控制台会把它收在“独立 / 跨平台”；它的 Facet、后台服务和神经在 QQ、其它平台或独立壳上共用同一份状态。
+`game.session` 是游戏平台（不是跨平台器官）：注册 PlatformHandle 与适配器，星露谷/通用游戏目前以包内 profile 存在。器官只通过 `PlatformAdapters` / `Platforms` 与身体协作，不要实例化平台类、不要假设平台一定在线。
 
-## 已交付的四个包（家目录 `plugins/`）
+## 已交付的包（家目录 `plugins/`）
 
-| 包 | 插件 id | 功能 | 配置（plugins_data/<包名>/config.json） | 库 |
+| 包 | 插件 id | 角色 | 功能 | 配置（plugins_data/<包名>/config.json） |
 |---|---|---|---|---|
-| `qq-sticker` | qq.sticker | 情绪词 → 语义/标签匹配 → 图片/GIF 发到 QQ | `threshold`（语义阈值）、`personas`（人格目录列表，默认 `_default`） | `emojis/<人格>/emoji_index.json` + 图片（兼容老 smartemoji 结构）；无图库时退回内置 face `stickers.json` |
-| `qq-tts` | qq.tts | 要念的话 + 情绪词 → 情感语音（OpenAI 兼容 speech 接口） | `api_key`、`api_url`、`model`、`voice`、`audio_format`、`max_text_length`、`timeout` | 生成音频落 `plugins_data/qq-tts/generated/` |
-| `qq-imagegen` | qq.imagegen | 画面关键词 + 可配置角色风格模板 → 生图发 QQ | `api_key`/`base_url`/`model`、`size` | 生成图片落 `plugins_data/qq-imagegen/generated/` |
-| `qq-qzone` | qq.qzone | 全文 → 发一条机器人 QQ 空间说说 | 无需配置（Cookie 自动经 NapCat `get_cookies` 获取，p_skey 算 g_tk） | — |
+| `qq-sticker` | qq.sticker | QQ 器官 | 情绪词 → 语义/标签匹配 → 图片/GIF 发到 QQ | `threshold`、`personas`；图库在 `emojis/<人格>/`（兼容老 smartemoji） |
+| `qq-tts` | qq.tts | QQ 器官 | 要念的话 + 情绪词 → 情感语音 | `api_key`、`api_url`、`model`、`voice`；生成落 `plugins_data/qq-tts/generated/` |
+| `qq-imagegen` | qq.imagegen | QQ 器官 | 心智只决定发不发；画面规划在插件内，生图发 QQ | 供应商槽或包内 `api_key`/`base_url`/`model`；生成落 `generated/` |
+| `qq-qzone` | qq.qzone | QQ 器官 | 发/看说说；空闲按日限抽签 | Cookie 经 NapCat `get_cookies` 自动取；`her_uin`、`publish_daily_cap`、`read_daily_cap` |
+| `qq-status` | qq.status | QQ 器官 | 改签名 / 在线状态；空闲按日限抽签 | `mood_daily_cap` |
+| `game-session` | game.session | 游戏平台 | 一起玩的临时工作台；原始事件不进主记忆 | 见 [GAME_SESSION_PLUGIN.md](GAME_SESSION_PLUGIN.md) |
+
+本仓库 `ExternalPlugins/` 含 TTS / 生图 / 说说 / 签名 / game.session 的源码。`qq-sticker` 仍可独立仓库交付，运行时同样丢进 `plugins/`。
 
 插件源码使用独立仓库或独立源码目录。运行时包默认放在 `%TRACESOUL2_HOME%\plugins`，数据默认放在同级 `plugins_data`；可通过 `pluginsDirectory` / `pluginsDataDirectory` 或对应环境变量分别覆盖。
 
