@@ -42,6 +42,13 @@ namespace TraceSoul2.ExternalPlugins.GameSession
         private readonly GameSessionConfig config;
         private readonly GameSessionController controller;
         private readonly StardewInstaller stardewInstaller;
+        private int activeConnections;
+
+        /// <summary>当前连在 WS 桥上的游戏 mod 数；平台句柄据此报告连接状态。</summary>
+        public int ActiveConnections
+        {
+            get { return System.Threading.Volatile.Read(ref activeConnections); }
+        }
         private static readonly JsonSerializerOptions JsonOptions = new JsonSerializerOptions
         {
             PropertyNameCaseInsensitive = true
@@ -84,6 +91,9 @@ namespace TraceSoul2.ExternalPlugins.GameSession
 
         public async Task OnConnectedAsync(WebSocket socket, CancellationToken token)
         {
+            System.Threading.Interlocked.Increment(ref activeConnections);
+            try
+            {
             using (var linked = CancellationTokenSource.CreateLinkedTokenSource(
                        token, controller.ShutdownToken))
             {
@@ -122,6 +132,11 @@ namespace TraceSoul2.ExternalPlugins.GameSession
                         }, activeToken);
                     }
                 }
+            }
+            }
+            finally
+            {
+                System.Threading.Interlocked.Decrement(ref activeConnections);
             }
         }
 

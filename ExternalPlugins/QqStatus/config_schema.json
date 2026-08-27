@@ -1,0 +1,12 @@
+{
+  "hint": "经 NapCat 改 QQ 个性签名（set_self_longnick）和在线状态（set_online_status）。进入空闲时系统会按日限随机抽一次。",
+  "fields": [
+    {
+      "key": "mood_daily_cap",
+      "label": "空闲改心情每日上限",
+      "type": "number",
+      "placeholder": "1",
+      "description": "进入空闲时抽签改签名/状态的每天次数。0 表示不参加抽签。"
+    }
+  ]
+}

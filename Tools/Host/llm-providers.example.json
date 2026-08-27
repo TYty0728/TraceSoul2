@@ -16,6 +16,7 @@
       "topP": 1,
       "maxTokens": 8192,
       "timeout": 120,
+      "transientRetries": 3,
       "proxy": "",
       "thinkingEnabled": false,
       "reasoningEffort": "high",

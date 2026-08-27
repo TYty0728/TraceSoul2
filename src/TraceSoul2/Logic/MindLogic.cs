@@ -44,10 +44,11 @@ namespace TraceSoul2.Logic
             var templates = await MindTemplateLogic.SelectAsync(
                 query, embedding, MindTemplateLogic.CandidateCap, cancellationToken);
             var shared = LlmContextPackLogic.SharedSystem(llm, turn);
-            var role = BuildMindRolePrompt(
-                turn, leaveResult, alreadyLeft, templates).TrimEnd();
+            var roleStable = BuildMindStablePrompt(turn).TrimEnd();
+            var roleDynamic = BuildTurnPrompt(
+                turn, leaveResult, alreadyLeft, templates, string.Empty).TrimEnd();
             var messages = LlmContextPackLogic.AssembleMind(
-                llm, shared, turn, naturallyAwakenedPast, query, role);
+                llm, shared, turn, naturallyAwakenedPast, query, roleStable, roleDynamic);
             var promptCacheKey = LlmContextPackLogic.BuildPromptCacheKey(llm, turn.ConversationId);
             var decided = await DeepSeekStructuredOutputLogic.CompleteAsync<MindDecisionData>(
                 llm,
@@ -71,7 +72,7 @@ namespace TraceSoul2.Logic
             output.tags = string.Join("、", output.ParseTags());
             output.query = Limit((output.query ?? string.Empty).Trim(), 80);
             output.mood = OneLine(output.mood);
-            output.new_fact = Limit((output.new_fact ?? string.Empty).Trim(), 40);
+            output.new_fact = Limit((output.new_fact ?? string.Empty).Trim(), TodayNewItemRecord.MaxContentChars);
             output.leave = Limit((output.leave ?? string.Empty).Trim(), 80);
             output.note = (output.note ?? string.Empty).Trim();
             output.today = Limit((output.today ?? string.Empty).Trim(), 500);
@@ -99,6 +100,9 @@ namespace TraceSoul2.Logic
             }
             output.next_heartbeat_minutes = HeartbeatLogic.ClampMinutes(output.next_heartbeat_minutes);
             if (output.sleep) output.next_heartbeat_minutes = 0;
+            output.tool_call = Limit((output.tool_call ?? string.Empty).Trim(), 80);
+            output.tool_input = Limit((output.tool_input ?? string.Empty).Trim(), 500);
+            if (output.tool_call.Length == 0) output.tool_input = string.Empty;
             output.sticker = output.StickerValue();
             output.image = output.ImageValue();
             output.location = output.LocationValue();
@@ -115,19 +119,17 @@ namespace TraceSoul2.Logic
             return output;
         }
 
-        private static string BuildMindRolePrompt(
-            TraceTurnContext turn,
-            string leaveResult,
-            bool alreadyLeft,
-            IReadOnlyList<MindTemplate> templates)
+        /// <summary>
+        /// 心智稳定段：思考方式、JSON 输出模板与器官附加提示。跨轮字节级稳定，供前缀缓存命中；
+        /// 时间、身体场景、检索结果等轮内变化内容都在 BuildTurnPrompt（动态段）。
+        /// </summary>
+        private static string BuildMindStablePrompt(TraceTurnContext turn)
         {
             var builder = new StringBuilder();
             builder.AppendLine(CorePrompts.Mind.HowToThinkHeader);
             CorePrompts.Write(builder, CorePrompts.Mind.Foundation);
             InjectMindJsonFields(builder, turn);
             AppendOrganMindPrompts(builder, turn);
-            builder.AppendLine();
-            builder.Append(BuildTurnPrompt(turn, leaveResult, alreadyLeft, templates, string.Empty));
             return builder.ToString();
         }
 
@@ -159,16 +161,16 @@ namespace TraceSoul2.Logic
             builder.AppendLine(CorePrompts.Mind.NowPrefix + TimeLanguageUtil.NaturalNow(now) + "。");
             var bodyScene = MouthLogic.LoadState(
                 turn == null || turn.Services == null ? null : turn.Services.DataDirectory).scene;
+            var life = turn != null && turn.Services != null && turn.Services.LifeState != null
+                ? turn.Services.LifeState.Load(turn.ConversationId)
+                : null;
+            if (life != null && !string.IsNullOrWhiteSpace(life.location))
+                bodyScene = life.location;
             builder.AppendLine(CorePrompts.Mind.BodyScenePrefix + BodySceneValues.Label(bodyScene) + "。这是物理所在，不是我们共同的文字场景；它只作为当前生活上下文参考。");
-            if (turn != null && turn.Services != null && turn.Services.LifeState != null)
-            {
-                var life = turn.Services.LifeState.Load(turn.ConversationId);
-                if (life != null)
-                    builder.AppendLine("【当前活动】" +
-                                      (string.IsNullOrWhiteSpace(life.activity) ? "空闲" : life.activity) +
-                                      (string.IsNullOrWhiteSpace(life.activity_detail) ? string.Empty : "｜" + life.activity_detail) +
-                                      "。这是可变化的生活状态；没有明确变化不要擅自改写。");
-            }
+            var doing = LifeStateLogic.FormatDoing(life);
+            builder.AppendLine(CorePrompts.Mind.DoingPrefix +
+                              (doing.Length == 0 ? "空闲" : doing) +
+                              "。这是可变化的生活状态；没有明确变化不要擅自改写。");
             var lastReal = storage.GetRecentMoments(turn.ConversationId, 200)
                 .Where(x => x != null &&
                             (pair.IsHumanMoment(x.Role) || pair.IsCompanionMoment(x.Role)) &&
@@ -217,6 +219,22 @@ namespace TraceSoul2.Logic
                 builder.AppendLine();
                 builder.AppendLine(CorePrompts.Mind.LeaveResultHeader);
                 builder.AppendLine(leaveResult.Trim());
+            }
+            var qzoneSeen = turn == null || turn.Workspace == null ? string.Empty : turn.Workspace.QzoneSeen;
+            if (!string.IsNullOrWhiteSpace(qzoneSeen))
+            {
+                builder.AppendLine();
+                builder.AppendLine(CorePrompts.Mind.QzoneResultHeader);
+                builder.AppendLine(qzoneSeen.Trim());
+            }
+            var toolCandidates = turn == null || turn.Workspace == null
+                ? null
+                : turn.Workspace.ToolCandidates;
+            var toolList = ToolLookupLogic.FormatForMind(toolCandidates);
+            if (!string.IsNullOrWhiteSpace(toolList))
+            {
+                builder.AppendLine();
+                builder.AppendLine(toolList);
             }
             if (alreadyLeft)
                 builder.AppendLine(CorePrompts.Mind.AlreadyLeft);
@@ -277,12 +295,18 @@ namespace TraceSoul2.Logic
                 turn.RecentMoments.Count == 0 || turn.Services == null || turn.Services.Storage == null)
                 return result;
             var pair = turn.Services.Storage.LoadPairIdentity();
-            var lines = turn.RecentMoments
+            var align = turn.HistoryWindowAlign > 0
+                ? turn.HistoryWindowAlign
+                : CommonContextPackLogic.HistoryWindowAlign;
+            var filtered = turn.RecentMoments
                 .Where(x => x != null &&
                             (pair.IsHumanMoment(x.Role) || pair.IsCompanionMoment(x.Role)) &&
                             !string.IsNullOrWhiteSpace(x.Content) &&
                             !IsOutboundProtocolMoment(x.Content))
-                .TakeLast(turn.RawHistoryLimit)
+                .ToList();
+            var lines = filtered
+                .Skip(CommonContextPackLogic.AlignedWindowStart(
+                    filtered.Count, turn.RawHistoryLimit, align))
                 .ToList();
             foreach (var item in lines)
             {

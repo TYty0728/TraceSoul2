@@ -243,6 +243,7 @@
       box-shadow: 0 9px 22px rgba(77, 89, 224, .25); flex: 0 0 auto;
     }
     .live-orb.sleep { background: linear-gradient(145deg, #77839c, #4f5971); box-shadow: 0 9px 22px rgba(76, 88, 116, .2); }
+    .live-orb.idle { background: linear-gradient(145deg, #8a93a8, #6b7386); box-shadow: 0 9px 22px rgba(107, 115, 134, .18); }
     .live-state-title { font-size: 20px; font-weight: 800; line-height: 1.2; }
     .live-state-sub { color: var(--muted); margin-top: 5px; line-height: 1.5; }
     .live-metric .lab { color: var(--muted); font-size: 11px; }
@@ -717,12 +718,12 @@
         <div class="section-head"><h1>大脑 · LLM</h1><span class="muted">多种供应商同时在线；用途槽给灵魂和器官用</span></div>
         <div class="box">
           <h2>默认用途槽</h2>
-          <p class="muted">对话开口是灵魂说话用的。开口勾了「开启思考」时，改走思考槽（可换供应商/模型）。<b>复盘</b>给每日身份复盘和日构建用（关思考、稳 JSON）；留空则跟对话开口但关掉思考。语音、生图器官可跟对应槽，也可在插件齿轮里指定供应商。</p>
+          <p class="muted">对话开口是灵魂说话用的。开口勾了「开启思考」时，改走思考槽（可换供应商/模型）。<b>复盘</b>给每日身份复盘和日构建用（关思考、稳 JSON）；留空则跟对话开口但关掉思考。<b>识图多模态</b>专门看她发来的图，看见的结果再交给心智；留空则只知道发了图，不会假装看见。语音、生图器官可跟对应槽，也可在插件齿轮里指定供应商。</p>
           <div class="slot-grid">
             <div><label>对话开口</label><select id="slotChat"></select></div>
             <div><label>默认思考</label><select id="slotThinking"></select></div>
             <div><label>复盘</label><select id="slotReview"></select></div>
-            <div><label>多模态</label><select id="slotMultimodal"></select></div>
+            <div><label>识图多模态</label><select id="slotMultimodal"></select></div>
             <div><label>语音</label><select id="slotSpeech"></select></div>
             <div><label>生图</label><select id="slotImage"></select></div>
             <div><label>&nbsp;</label><button class="primary" onclick="saveSlots()">保存槽位</button></div>
@@ -764,9 +765,12 @@
                 <div class="row">
                   <div class="nogrow"><label>超时（秒）</label>
                     <input id="timeout" type="number" min="10" max="600" style="width:90px" /></div>
+                  <div class="nogrow"><label>过载退避重试（次）</label>
+                    <input id="transientRetries" type="number" min="0" max="6" style="width:90px" /></div>
                   <div><label>代理地址（暂存，HTTP 客户端稍后接入）</label>
                     <input id="proxy" placeholder="http://127.0.0.1:7890" /></div>
                 </div>
+                <p class="muted" style="margin:4px 0 8px">仅用于 429、5xx、请求超时等瞬时故障；优先采用 Retry-After，否则按 2、4、8…秒指数退避，单次最多等待 60 秒。0 为关闭，最多 6 次。</p>
                 <div class="row">
                   <div class="slider">
                     <label>冷暖（温度）<span id="tempVal" class="slider-val"></span></label>
@@ -791,11 +795,16 @@
                 <p class="muted" style="margin:4px 0 0">kimi-k3 不能关思考，最低是 low。平时聊天选 low；只有要推敲、出门办事时再加到 high / max。这个值只对 Kimi 官网生效，OpenCode 中转站不会带出去。</p>
               </details>
               <div class="row" style="align-items:flex-end;margin-top:12px">
-                <div><label>上下文拼接（最近对话条数，0-100）</label>
-                  <input id="ctxLimit" type="number" min="0" max="100" /></div>
-                <div class="nogrow"><button onclick="saveContextLimit()">保存上下文拼接</button></div>
+                <div class="nogrow"><label>拼接最高条数</label>
+                  <input id="ctxMax" type="number" min="0" max="100" style="width:90px"
+                         oninput="updateHistoryWindowHint()" /></div>
+                <div class="nogrow"><label>滑动条数</label>
+                  <input id="ctxAlign" type="number" min="1" max="100" style="width:90px"
+                         oninput="updateHistoryWindowHint()" /></div>
+                <div class="nogrow"><label>&nbsp;</label>
+                  <button onclick="saveContextLimit()">保存上下文拼接</button></div>
               </div>
-              <p class="muted" style="margin-top:4px">按时间顺序把当前消息之前的真实对话原文同时交给心智层和表达层；0 为关闭。设置保存在当前角色/调试分支，重启后仍保留。</p>
+              <p class="muted" style="margin-top:4px" id="ctxWindowHint"></p>
               <div class="row" style="align-items:flex-end;margin-top:8px">
                 <div class="nogrow"><label>心跳最短（分钟）</label>
                   <input id="hbMin" type="number" min="0" max="180" style="width:90px" /></div>
@@ -803,7 +812,7 @@
                   <input id="hbMax" type="number" min="0" max="180" style="width:90px" /></div>
                 <div class="nogrow"><label>&nbsp;</label><button class="primary" onclick="saveHeartbeat()">保存心跳</button></div>
               </div>
-              <p class="muted" style="margin-top:4px">入站 Moment 处理完后，在此范围内随机排一次心跳。到期他自己想：要不要说、办事、睡下、多久后再跳。两端都填 0 则关闭。睡着后心跳停，直到她再发来才醒来。</p>
+              <p class="muted" style="margin-top:4px">入站 Moment 处理完后，在此范围内随机排一次心跳。到期他自己想：要不要说、办事、睡下、多久后再跳。两端都填 0 则关闭。睡着或空闲后心跳停；睡着要等她发来才醒，空闲还会被以前约好的时间任务叫醒。</p>
               <h2>已配置的模型</h2>
               <div class="model-bar">
                 <input id="modelSearch" placeholder="搜索模型或 ID" oninput="renderModelList()" />
@@ -812,7 +821,7 @@
               </div>
               <div class="role-filter" id="roleFilter"></div>
               <div id="modelBox"></div>
-              <p class="muted" style="margin-top:8px">点「获取模型列表」会打供应商的 /models。给模型打上对话 / 思考 / 多模态 / 语音 / 生图，再在上方用途槽里选默认。Google Gemini 走原生 generateContent；其余走 OpenAI 兼容。</p>
+              <p class="muted" style="margin-top:8px">点「获取模型列表」会打供应商的 /models。给模型打上对话 / 思考 / 识图多模态 / 语音 / 生图，再在上方用途槽里选默认。Google Gemini 走原生 generateContent；其余走 OpenAI 兼容。</p>
             </div>
           </div>
         </div>
@@ -889,7 +898,7 @@
             <button class="primary" onclick="rescanExternal()">重新扫描</button>
           </div>
           <p class="muted" style="margin-top:0">上层是平台（QQ），下面是器官包。点齿轮填写配置；配置和运行数据保存在 plugins_data，卸载代码包不会删除。</p>
-          <div id="pluginsBox"></div>
+          <div id="pluginsBox" class="muted">加载中…</div>
         </div>
       </section>
 
@@ -1310,12 +1319,11 @@
     const inner = await api("/inner");
     const att = (inner.attention || []).map(a => "[" + esc(a.kind) + "] " + esc(a.content)).join("；") || "（无）";
     $("inner").textContent = "revision " + inner.revision +
-      "\n状态：" + (inner.asleep ? "睡着" : "醒着") +
+      "\n状态：" + (inner.asleep ? "睡着" : (inner.idle ? "空闲" : "醒着")) +
       "\n下次心跳：" + formatHeartbeatDue(inner.nextHeartbeatUnixMs) +
       "\n此刻：" + (inner.narrative || "—") +
       "\n心情：" + (inner.mood || "—") +
       "\n关系视角：" + (inner.relationshipLens || "—") +
-      "\n共享场景：" + (inner.ongoingActivity || inner.sharedScene || "—") +
       "\n浮着的碎片：" + att +
       "\nsnapshot：" + (inner.snapshotId || "—") + " · 来源moment：" + (inner.sourceMomentId || "无");
   }
@@ -1356,7 +1364,7 @@
   }
 
   /* ================= 大脑 · LLM ================= */
-  const ROLE_LABELS = { chat: "对话", thinking: "思考", multimodal: "多模态", speech: "语音", image: "生图" };
+  const ROLE_LABELS = { chat: "对话", thinking: "思考", multimodal: "识图多模态", speech: "语音", image: "生图" };
   const ROLE_KEYS = ["chat", "thinking", "multimodal", "speech", "image"];
   let providerCache = [];
   let slotCache = {};
@@ -1408,7 +1416,9 @@
   }
   async function loadBrain() {
     const st = await api("/status");
-    $("ctxLimit").value = st.contextInjectionCount || 0;
+    $("ctxMax").value = st.historyWindowMax != null ? st.historyWindowMax : (st.contextInjectionCount || 0);
+    $("ctxAlign").value = st.historyWindowAlign || 4;
+    updateHistoryWindowHint();
     $("hbMin").value = st.heartbeatMinMinutes == null ? 10 : st.heartbeatMinMinutes;
     $("hbMax").value = st.heartbeatMaxMinutes == null ? 20 : st.heartbeatMaxMinutes;
     const templates = await api("/providers/templates");
@@ -1445,6 +1455,7 @@
     $("displayName").value = cur.displayName || "";
     $("baseUrl").value = cur.baseUrl || "";
     $("timeout").value = cur.timeout > 0 ? cur.timeout : 120;
+    $("transientRetries").value = cur.transientRetries == null ? 3 : cur.transientRetries;
     $("proxy").value = cur.proxy || "";
     const t = cur.temperature > 0 ? cur.temperature : 0.3;
     $("tempSlider").value = t; $("tempVal").textContent = t;
@@ -1527,6 +1538,7 @@
       topP: parseFloat($("topPSlider").value),
       maxTokens: parseInt($("maxTokens").value) || 0,
       timeout: parseInt($("timeout").value) || 120,
+      transientRetries: Math.max(0, Math.min(6, parseInt($("transientRetries").value) || 0)),
       proxy: $("proxy").value,
       thinkingEnabled: $("thinking").checked,
       reasoningEffort: $("effort").value
@@ -1619,10 +1631,36 @@
     logLine("已删除模型：" + modelId);
     await refreshProviders($("providerId").value);
   }
+  function historyWindowMin(max, align) {
+    max = Math.max(0, Math.min(100, parseInt(max, 10) || 0));
+    if (max === 0) return 0;
+    align = Math.max(1, Math.min(max, parseInt(align, 10) || 4));
+    return max - align + 1;
+  }
+  function updateHistoryWindowHint() {
+    const el = $("ctxWindowHint");
+    if (!el) return;
+    const max = parseInt($("ctxMax").value, 10) || 0;
+    const rawAlign = parseInt($("ctxAlign").value, 10) || 4;
+    const min = historyWindowMin(max, rawAlign);
+    const align = max === 0 ? Math.max(1, rawAlign) : Math.max(1, Math.min(max, rawAlign));
+    el.textContent = max === 0
+      ? "0 为关闭，心智和开口都不带最近对话原文。设置保存在当前角色/调试分支。"
+      : "窗口在 " + min + "～" + max + " 条之间浮动。新对话攒满 " + align +
+        " 条才整体前移一次，Kimi 前缀缓存才不会每轮都断。滑动填 1 则每轮固定 " + max +
+        " 条（缓存几乎用不上）。0 为关闭。";
+  }
   async function saveContextLimit() {
-    const r = await api("/settings/context-limit", "PUT", { limit: parseInt($("ctxLimit").value) || 0 });
-    $("ctxLimit").value = r.limit;
-    logLine("上下文拼接 = 最近 " + r.limit + " 条对话");
+    const r = await api("/settings/context-limit", "PUT", {
+      max: parseInt($("ctxMax").value, 10) || 0,
+      align: parseInt($("ctxAlign").value, 10) || 4
+    });
+    $("ctxMax").value = r.max;
+    $("ctxAlign").value = r.align;
+    updateHistoryWindowHint();
+    logLine(r.max === 0
+      ? "上下文拼接已关闭"
+      : "上下文拼接 = 最高 " + r.max + " 条，滑动 " + r.align + " 条（窗口 " + r.min + "～" + r.max + "）");
   }
   async function saveHeartbeat() {
     const r = await api("/settings/heartbeat", "PUT", {
@@ -1680,11 +1718,15 @@
     const life = d.lifeState || {};
     const decision = d.decision || (d.latestTurn && d.latestTurn.mindDecision) || {};
     const asleep = !!r.asleep;
-    $("liveOrb").className = "live-orb" + (asleep ? " sleep" : "");
-    $("liveOrb").textContent = asleep ? "☾" : "✦";
-    $("liveStateTitle").textContent = asleep ? "睡着了" : "醒着，正在生活";
-    const lifeActivity = life.activity || (d.body && d.body.activity) || "空闲";
-    $("liveStateSub").textContent = liveText(d.assname, "TraceSoul") + " · " + liveText(life.locationLabel || (d.body && d.body.scene), "位置未知") + " · " + lifeActivity + " · " + new Date(d.hostTime).toLocaleTimeString();
+    const idle = !asleep && !!r.idle;
+    $("liveOrb").className = "live-orb" + (asleep ? " sleep" : (idle ? " idle" : ""));
+    $("liveOrb").textContent = asleep ? "☾" : (idle ? "◇" : "✦");
+    $("liveStateTitle").textContent = asleep ? "睡着了" : (idle ? "空闲中" : "醒着，正在生活");
+    const lifeAct = String(life.activity || "").trim();
+    const lifeDetail = String(life.activityDetail || "").trim();
+    const doingText = lifeAct ? (lifeDetail ? lifeAct + "｜" + lifeDetail : lifeAct)
+      : (lifeDetail || String((d.body && d.body.activity) || "").trim());
+    $("liveStateSub").textContent = liveText(d.assname, "TraceSoul") + " · " + liveText(life.locationLabel || (d.body && d.body.scene), "位置未知") + " · " + (doingText || "空闲") + " · " + new Date(d.hostTime).toLocaleTimeString();
     const locationInput = $("liveLifeLocation"), activityInput = $("liveLifeActivity"), detailInput = $("liveLifeActivityDetail");
     if (locationInput && document.activeElement !== locationInput) locationInput.value = life.location === "out" ? "out" : "home";
     if (activityInput && document.activeElement !== activityInput) activityInput.value = life.activity || "";
@@ -1704,7 +1746,6 @@
     $("liveRuntime").innerHTML =
       liveField("此刻", r.narrative) +
       liveField("关系视角", r.relationshipLens) +
-      liveField("共享场景", r.ongoingActivity || r.sharedScene) +
       liveFieldHtml("浮着的碎片", liveAttention(r.attention), !(r.attention || []).length);
     $("liveDecision").innerHTML =
       liveField("判断轨道", decision.beat) +
@@ -1721,14 +1762,12 @@
       liveField("查询 / 认知", [decision.query, decision.cognition].filter(Boolean).join("｜"));
     $("liveContext").innerHTML =
       liveField("记忆日", c.day) +
-      liveField("身体场景", d.body && d.body.scene) +
-      liveField("当前活动", lifeActivity) +
-      liveField("活动补充", life.activityDetail) +
+      liveField("正在做", doingText || "空闲") +
       liveField("今日轨迹", c.trajectory) +
       `<div class="live-field"><div class="key">今日新识</div><div class="value">${c.todayNewItems && c.todayNewItems.length ? c.todayNewItems.map(x => esc(x.content)).join("；") : "—"}</div></div>` +
-      `<div class="live-field"><div class="key">活跃事件</div><div class="value">${c.activeEvents && c.activeEvents.length ? c.activeEvents.map(x => esc(x.eventSummary || x.id)).join("；") : "—"}</div></div>`;
+      `<div class="live-field"><div class="key">活跃事件</div><div class="value">${c.activeEvents && c.activeEvents.length ? c.activeEvents.map(x => esc((x.time ? x.time + " · " : "") + (x.eventSummary || x.id))).join("；") : "—"}</div></div>`;
     $("liveHeartbeatBox").innerHTML =
-      liveField("当前状态", asleep ? "睡着后停止自醒" : (h.enabled ? "等待下一次醒来" : "当前没有心跳任务")) +
+      liveField("当前状态", asleep ? "睡着后停止自醒" : (idle ? "空闲，等她再来或约定时间到" : (h.enabled ? "等待下一次醒来" : "当前没有心跳任务"))) +
       liveField("时间范围", (h.minMinutes || 0) + "–" + (h.maxMinutes || 0) + " 分钟") +
       liveField("下次时间", formatHeartbeatDue(h.dueUnixMs)) +
       liveField("醒来计划", h.nextPlan) +
@@ -2027,6 +2066,8 @@
   }
   function platformLabel(id, displayName) {
     if (id === "onebot" || id === "builtin.onebot") return "QQ";
+    if (id === "console" || id === "builtin.dialogue") return "console（保底对话）";
+    if (id === "game.session") return "游戏";
     if (id === "other") return "独立 / 跨平台";
     return displayName || id || "未归类";
   }
@@ -2036,8 +2077,9 @@
     if (organ === "voice") return "🎙️";
     if (organ === "image") return "🖼️";
     if (organ === "qzone") return "📝";
-    if (p.role === "platform" || p.id === "builtin.onebot") return "🔌";
     if (p.id === "game.session") return "🎮";
+    if (p.id === "builtin.dialogue") return "💬";
+    if (p.role === "platform" || p.id === "builtin.onebot") return "🔌";
     return "🧩";
   }
   function renderPlugins(plugins, packages) {
@@ -2084,6 +2126,13 @@
         gear.onclick = () => openPluginModal(plat.id || "builtin.onebot");
         title.appendChild(gear);
       }
+      if (plat.id === "game.session" && plat.enabled && !plat.loadError) {
+        const play = document.createElement("button");
+        play.className = "primary";
+        play.textContent = "打开工作台";
+        play.onclick = openGameSessionModal;
+        title.appendChild(play);
+      }
       wrap.appendChild(title);
       const grid = document.createElement("div");
       grid.className = "plugin-grid";
@@ -2111,7 +2160,8 @@
     const meta = document.createElement("div");
     meta.className = "meta";
     meta.innerHTML = "<div class='title'>" + esc(p.displayName || p.id) +
-      "<span class='ver'>v" + esc(String(p.version || "")) + "</span></div>" +
+      "<span class='ver'>v" + esc(String(p.version || "")) + "</span>" +
+      (p.dormant ? "<span class='pill off' style='margin-left:6px'>休眠中</span>" : "") + "</div>" +
       "<div class='muted' style='font-size:11px'>" + esc(p.id) + "</div>";
     const sw = document.createElement("label");
     sw.className = "sw";
@@ -2133,9 +2183,10 @@
     const about = document.createElement("div");
     about.className = "about";
     const organs = (p.contributions || []).map(c => organLabel(c.organ, c.displayName)).filter(Boolean);
-    about.textContent = p.note || p.description ||
+    about.textContent = (p.dormant ? "所属平台不在或未连接，器官休眠中；平台回来会自动醒。" : null) ||
+      p.note || p.description ||
       (organs.length ? ("器官：" + organs.join(" · ")) : "");
-    if (p.note) about.style.color = "#a56a00";
+    if (p.note || p.dormant) about.style.color = "#a56a00";
     card.appendChild(about);
     if (p.loadError) {
       const err = document.createElement("div");
@@ -2153,13 +2204,6 @@
       gear.textContent = "⚙️";
       gear.onclick = () => openPluginModal(p.id);
       foot.appendChild(gear);
-    }
-    if (p.id === "game.session" && p.enabled && !p.loadError) {
-      const play = document.createElement("button");
-      play.className = "primary";
-      play.textContent = "打开工作台";
-      play.onclick = openGameSessionModal;
-      foot.appendChild(play);
     }
     const refresh = document.createElement("button");
     refresh.className = "icon-btn";

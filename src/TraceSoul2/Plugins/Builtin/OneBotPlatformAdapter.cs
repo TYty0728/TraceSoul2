@@ -102,12 +102,30 @@ namespace TraceSoul2.Plugins.Builtin
                                 !string.Equals(type.GetString(), "image", StringComparison.OrdinalIgnoreCase) ||
                                 !segment.TryGetProperty("data", out var data) ||
                                 data.ValueKind != JsonValueKind.Object) continue;
-                            foreach (var key in new[] { "url", "file", "path" })
+                            var segmentLocations = new List<string>();
+                            if (data.TryGetProperty("base64", out var encoded) &&
+                                encoded.ValueKind == JsonValueKind.String)
+                            {
+                                var raw = (encoded.GetString() ?? string.Empty).Trim();
+                                if (raw.Length > 80)
+                                {
+                                    segmentLocations.Add(raw.StartsWith("data:", StringComparison.OrdinalIgnoreCase)
+                                        ? raw
+                                        : "base64://" + raw);
+                                }
+                            }
+                            foreach (var key in new[] { "url", "file", "path", "file_id", "file_unique" })
                             {
                                 if (!data.TryGetProperty(key, out var value) || value.ValueKind != JsonValueKind.String)
                                     continue;
                                 var location = (value.GetString() ?? string.Empty).Trim();
-                                if (location.Length > 0 && !result.Contains(location, StringComparer.OrdinalIgnoreCase))
+                                if (location.Length > 0 &&
+                                    !segmentLocations.Contains(location, StringComparer.OrdinalIgnoreCase))
+                                    segmentLocations.Add(location);
+                            }
+                            foreach (var location in segmentLocations)
+                            {
+                                if (!result.Contains(location, StringComparer.OrdinalIgnoreCase))
                                     result.Add(location);
                             }
                         }
@@ -288,14 +306,16 @@ namespace TraceSoul2.Plugins.Builtin
                 deferred ? "QQ 出站已暂存" : "QQ 出站动作完成",
                 timer.ElapsedMilliseconds, "kind=" + message.Kind);
 
-            // 规范「已发送」事件：实际文字进 Moment，非文字动作只进运行回执。
+            // 「已发送」是她在世界的物理痕迹：文字是她的话（伴侣角色，进对话流）；
+            // 表情/图片等附件也真实发出去了，以事件角色进 Moment——痕迹在，但不混进对话历史。
             var pair = context.Services.Storage.LoadPairIdentity();
+            var isText = string.Equals(message.Kind, TraceOutboundKinds.Text, StringComparison.Ordinal);
             var canonical = new PluginEventData
             {
                 TraceId = context.TraceId,
                 PluginId = PlatformId,
                 ExternalEventId = Guid.NewGuid().ToString("N"),
-                Role = pair.IsComplete ? pair.Assname : "assistant",
+                Role = isText ? (pair.IsComplete ? pair.Assname : "assistant") : "system_event",
                 Content = canonicalContent,
                 Realm = TraceRealmValues.Unclassified,
                 EvidenceType = EvidenceTypeValues.AssPerformed,
@@ -304,10 +324,9 @@ namespace TraceSoul2.Plugins.Builtin
                     { "kind", message.Kind ?? string.Empty },
                     { "session_type", sessionType ?? string.Empty },
                     { "session_id", sessionId ?? string.Empty },
-                    { "asset_ref", string.Equals(message.Kind, TraceOutboundKinds.Text,
-                        StringComparison.Ordinal) ? string.Empty : (message.File ?? string.Empty) }
+                    { "asset_ref", isText ? string.Empty : (message.File ?? string.Empty) }
                 }),
-                IsOperational = IsOperationalReceipt(message.Kind),
+                IsOperational = false,
                 OccurredUnixMs = DateTimeOffset.UtcNow.ToUnixTimeMilliseconds()
             };
             return new TraceCapabilityResultData
@@ -324,11 +343,6 @@ namespace TraceSoul2.Plugins.Builtin
         {
             var path = (file ?? string.Empty).Trim().Replace('\\', '/');
             return path.IndexOf("/qq-sticker/", StringComparison.OrdinalIgnoreCase) >= 0;
-        }
-
-        internal static bool IsOperationalReceipt(string kind)
-        {
-            return !string.Equals(kind, TraceOutboundKinds.Text, StringComparison.Ordinal);
         }
     }
 

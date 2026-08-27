@@ -1,0 +1,26 @@
+{
+  "hint": "Cookie 经 NapCat get_cookies 自动取，p_skey 算 g_tk。假失败不会重发。看她的说说时可填她的 QQ 号；私聊里留空也会用当前会话号。进入空闲时系统会按日限随机抽发/看说说。",
+  "fields": [
+    {
+      "key": "her_uin",
+      "label": "她的 QQ 号（看说说默认对象）",
+      "type": "string",
+      "placeholder": "例如 123456789",
+      "description": "看她空间时用。当前是私聊也可留空，会用这次对话的 QQ 号。"
+    },
+    {
+      "key": "publish_daily_cap",
+      "label": "空闲发说说每日上限",
+      "type": "number",
+      "placeholder": "1",
+      "description": "进入空闲时抽签发说说的每天次数。0 表示不参加抽签。"
+    },
+    {
+      "key": "read_daily_cap",
+      "label": "空闲看说说每日上限",
+      "type": "number",
+      "placeholder": "2",
+      "description": "进入空闲时抽签看说说的每天次数。0 表示不参加抽签。"
+    }
+  ]
+}

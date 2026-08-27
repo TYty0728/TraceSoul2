@@ -12,6 +12,7 @@ namespace TraceSoul2.Host
     /// <summary>
     /// 自动日构建循环：每天 04:00（+08:00 记忆日边界）自动把刚结束的那天
     /// 未归档 Moment 构筑成结构性记忆（索引/条目/向量）并做复盘与日榜。
+    /// 成功后若仍在后半夜窗口，再漏一句夜里的余温给她。
     /// 用数据目录里用户填写的 API Key；每次构建的 LLM 调用可到 5090 实时监视台观看。
     /// </summary>
     public sealed class DailyPipelineWorker : BackgroundService
@@ -28,24 +29,37 @@ namespace TraceSoul2.Host
 
         protected override async Task ExecuteAsync(CancellationToken stoppingToken)
         {
-            // 重启不是新的时间线：先补齐所有已经越过 04:00、但仍有未消费 Moment 的记忆日。
-            await CatchUpAsync(stoppingToken);
+            var lastSucceededClosedDay = string.Empty;
+            var lastAttemptFailed = false;
             while (!stoppingToken.IsCancellationRequested)
             {
                 var now = DateTimeOffset.Now.ToOffset(MemoryDayLogic.ChinaOffset);
-                var nextBoundary = MemoryDayLogic.CurrentStart(now).AddDays(1);
-                runtime.Emit("下次自动日构建：" + nextBoundary.ToString("yyyy-MM-dd HH:mm") +
-                             "（+08:00 记忆日边界）");
-                var wait = nextBoundary - now;
+                var unbuilt = runtime.Store.GetUnbuiltMemoryDayKeysBefore(
+                    MemoryDayLogic.CurrentStart(now).ToUnixTimeMilliseconds());
+                if (DailyPipelineScheduleLogic.ShouldCatchUp(
+                        now, lastSucceededClosedDay, lastAttemptFailed, unbuilt))
+                {
+                    var ok = await CatchUpAsync(stoppingToken);
+                    lastAttemptFailed = !ok;
+                    if (ok)
+                        lastSucceededClosedDay = MemoryDayLogic.ClosedDayKey(now);
+                    var nextBoundary = MemoryDayLogic.CurrentStart(now).AddDays(1);
+                    runtime.Emit(ok
+                        ? "下次自动日构建：" + nextBoundary.ToString("yyyy-MM-dd HH:mm") +
+                          "（+08:00 记忆日边界，墙钟每分钟核对）"
+                        : "日构建未完成，" +
+                          ((int)DailyPipelineScheduleLogic.RetryInterval.TotalMinutes) +
+                          " 分钟后重试（不会等到明天）");
+                }
+                var wait = DailyPipelineScheduleLogic.NextWait(now, lastAttemptFailed);
                 try
                 {
-                    await Task.Delay(wait > TimeSpan.Zero ? wait : TimeSpan.FromSeconds(30), stoppingToken);
+                    await Task.Delay(wait, stoppingToken);
                 }
                 catch (OperationCanceledException)
                 {
                     return;
                 }
-                await CatchUpAsync(stoppingToken);
             }
         }
 
@@ -62,7 +76,7 @@ namespace TraceSoul2.Host
         public bool IsAvailable { get { return !string.IsNullOrWhiteSpace(migrateDll); } }
         public string MigrateDll { get { return migrateDll; } }
 
-        private async Task CatchUpAsync(CancellationToken cancellationToken)
+        private async Task<bool> CatchUpAsync(CancellationToken cancellationToken)
         {
             var now = DateTimeOffset.Now.ToOffset(MemoryDayLogic.ChinaOffset);
             var currentStart = MemoryDayLogic.CurrentStart(now);
@@ -78,9 +92,10 @@ namespace TraceSoul2.Host
             foreach (var day in days)
             {
                 var exitCode = await RunDayBuildAsync(day, cancellationToken);
-                // 旧日失败时不能越过它更新后续卡片；留到下次启动/边界继续补偿。
-                if (exitCode != 0) break;
+                // 旧日失败时不能越过它更新后续卡片；短间隔重试，不再干等到下一个 04:00。
+                if (exitCode != 0) return false;
             }
+            return true;
         }
 
         private async Task<int> RunDayBuildAsync(string dayKey, CancellationToken cancellationToken)
@@ -91,6 +106,7 @@ namespace TraceSoul2.Host
                 return -1;
             }
             await buildGate.WaitAsync(cancellationToken);
+            var exitCode = -1;
             try
             {
                 runtime.Emit("日构建启动：" + dayKey + "（全天分批 → 长期沉淀 → 次日继承 → 退出本日切片）");
@@ -108,7 +124,7 @@ namespace TraceSoul2.Host
                         if (process == null) throw new InvalidOperationException("无法启动日构建进程。");
                         await process.WaitForExitAsync(cancellationToken);
                         runtime.Emit("日构建结束（exit " + process.ExitCode + "）：" + dayKey);
-                        return process.ExitCode;
+                        exitCode = process.ExitCode;
                     }
                 }
                 catch (OperationCanceledException) when (cancellationToken.IsCancellationRequested)
@@ -125,6 +141,9 @@ namespace TraceSoul2.Host
             {
                 buildGate.Release();
             }
+            if (exitCode == 0)
+                await runtime.TrySpeakNightResidueAsync(dayKey, cancellationToken);
+            return exitCode;
         }
 
         private static string ResolveMigrateDll()

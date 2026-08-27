@@ -108,7 +108,7 @@ namespace TraceSoul2.Data
         public bool IsOperational { get; set; }
         /// <summary>入站器官；只给身体路由用，不写入 Moment。</summary>
         public string Organ { get; set; }
-        /// <summary>中枢叫醒谁：dialogue / mind / subconscious。空则由角色与内容推断。</summary>
+        /// <summary>中枢叫醒谁：dialogue / mind / subconscious / night_residue。空则由角色与内容推断。</summary>
         public string Wake { get; set; }
         /// <summary>打破性 Moment：睡着时也能把他叫醒。用户发来的话现在都是。</summary>
         public bool Breaking { get; set; }

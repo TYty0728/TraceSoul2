@@ -60,7 +60,7 @@ namespace TraceSoul2.Host
             return string.Equals(NormalizeType(type), GoogleGenAi, StringComparison.OrdinalIgnoreCase);
         }
 
-        /// <summary>按模型 id 猜用途：对话 / 思考 / 多模态 / 生图 / 语音。嵌入与重排不标对话。</summary>
+        /// <summary>按模型 id 猜用途：对话 / 思考 / 识图多模态 / 生图 / 语音。嵌入与重排不标对话。</summary>
         public static List<string> GuessRoles(string modelId)
         {
             var id = (modelId ?? string.Empty).Trim().ToLowerInvariant();

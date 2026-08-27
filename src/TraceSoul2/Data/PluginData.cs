@@ -139,6 +139,16 @@ namespace TraceSoul2.Data
         public long location_updated_unix_ms;
         public long activity_updated_unix_ms;
         public long activity_started_unix_ms;
+
+        /// <summary>正在做的唯一注入句：活动名｜补充。都空则空串。</summary>
+        public string FormatDoing()
+        {
+            var act = (activity ?? string.Empty).Trim();
+            var detail = (activity_detail ?? string.Empty).Trim();
+            if (act.Length == 0) return detail;
+            if (detail.Length == 0) return act;
+            return act + "｜" + detail;
+        }
     }
 
     [Serializable]
@@ -156,6 +166,8 @@ namespace TraceSoul2.Data
     {
         public const string Console = "console";
         public const string Qq = "onebot";
+        /// <summary>游戏身体：game-session 平台（自研 WS 桥）。平台 id 与归属键同形。</summary>
+        public const string Game = "game.session";
     }
 
     /// <summary>器官是开放类型；说话（文字/语音）才移动激活的身体。</summary>
@@ -222,11 +234,14 @@ namespace TraceSoul2.Data
             if (role == Body) role = Platform;
             if (role == Kernel || role == Platform || role == Organ) return role;
             pluginId = pluginId ?? string.Empty;
-            if (pluginId == "builtin.dialogue" || pluginId == "builtin.identity" ||
+            if (pluginId == "builtin.identity" ||
                 pluginId == "builtin.inner-life" || pluginId == "builtin.memory" ||
                 pluginId == "builtin.time" || pluginId == "builtin.senses")
                 return Kernel;
-            if (pluginId == "builtin.onebot") return Platform;
+            // console 是保底对话平台（不可关由管理器特判），game-session 是自研游戏身体。
+            if (pluginId == "builtin.dialogue" || pluginId == "builtin.onebot" ||
+                pluginId == BodyIds.Game)
+                return Platform;
             return Organ;
         }
 
@@ -237,6 +252,10 @@ namespace TraceSoul2.Data
             if (pluginId == "builtin.onebot" ||
                 pluginId.StartsWith("qq.", StringComparison.OrdinalIgnoreCase))
                 return BodyIds.Qq;
+            if (pluginId == "builtin.dialogue") return BodyIds.Console;
+            if (pluginId == BodyIds.Game ||
+                pluginId.StartsWith("game.", StringComparison.OrdinalIgnoreCase))
+                return BodyIds.Game;
             return string.Empty;
         }
     }
@@ -287,6 +306,11 @@ namespace TraceSoul2.Data
         public int MaxContextChars { get; set; }
         public bool HasInternalMutation { get; set; }
         public bool HasExternalSideEffect { get; set; }
+        /// <summary>
+        /// 进入空闲时参与系统抽签的每日上限。大于 0 才进池；达上限后当天不再抽到。
+        /// 抽签由内核完成，不是模型自己选活动。
+        /// </summary>
+        public int IdleDailyCap { get; set; }
     }
 
     [Table("plugin_states")]
@@ -402,6 +426,19 @@ namespace TraceSoul2.Data
     /// 心智只组织这一拍怎么想，不写对她说的台词。
     /// </summary>
     [Serializable]
+    /// <summary>本轮向量检索入选的长尾工具：描述 + 相似度。</summary>
+    public sealed class ToolCandidateData
+    {
+        public TraceContributionDescriptorData Descriptor { get; private set; }
+        public float Score { get; private set; }
+
+        public ToolCandidateData(TraceContributionDescriptorData descriptor, float score)
+        {
+            Descriptor = descriptor;
+            Score = score;
+        }
+    }
+
     public sealed class MindDecisionData
     {
         /// <summary>当下 / 旧事 / 出门</summary>
@@ -441,7 +478,7 @@ namespace TraceSoul2.Data
         public string next_heartbeat_plan;
         /// <summary>要睡下。睡着后心跳停，直到打破性 Moment 才醒来。</summary>
         public bool sleep;
-        /// <summary>心跳想完后：多少分钟后再跳一次。0 表示不再跳，等下一个入站。</summary>
+        /// <summary>心跳想完后：多少分钟后再跳一次。安静且要等很久时系统会进入空闲，不再跳。</summary>
         public int next_heartbeat_minutes;
         /// <summary>旧兼容字段。表情现在由外显自动尝试，插件按相关度决定是否发。</summary>
         public string sticker;
@@ -454,6 +491,10 @@ namespace TraceSoul2.Data
         public string activity_detail;
         /// <summary>用户明确要求改变生活状态时为 true；普通推断不得强行覆盖插件/传感器。</summary>
         public bool state_force;
+        /// <summary>本轮入选工具里现在就要做的一件事：原样填清单里的能力 id；不做留空。</summary>
+        public string tool_call;
+        /// <summary>做这件事要用的内容（比如说说正文）；空则由插件按场景自组织。</summary>
+        public string tool_input;
 
         public bool WantsMemory()
         {
@@ -598,12 +639,13 @@ namespace TraceSoul2.Data
         public const string Photo = "照片";
     }
 
-    /// <summary>中枢按入口换轨：叫醒心智、叫醒潜意识、或她正在说话。</summary>
+    /// <summary>中枢按入口换轨：叫醒心智、叫醒潜意识、夜里余温开口、或她正在说话。</summary>
     public static class KernelWakeValues
     {
         public const string Dialogue = "dialogue";
         public const string Mind = "mind";
         public const string Subconscious = "subconscious";
+        public const string NightResidue = "night_residue";
 
         public static string Normalize(string wake)
         {
@@ -613,6 +655,9 @@ namespace TraceSoul2.Data
                 string.Equals(value, "review", StringComparison.OrdinalIgnoreCase) ||
                 value == "潜意识" || value == "复盘")
                 return Subconscious;
+            if (string.Equals(value, NightResidue, StringComparison.OrdinalIgnoreCase) ||
+                value == "夜间余温" || value == "日终余温")
+                return NightResidue;
             if (string.Equals(value, Mind, StringComparison.OrdinalIgnoreCase) ||
                 string.Equals(value, "inner", StringComparison.OrdinalIgnoreCase) ||
                 value == "心智")
@@ -626,7 +671,10 @@ namespace TraceSoul2.Data
 
         public static string InferFromContent(string content)
         {
-            return (content ?? string.Empty).IndexOf("每日复盘", StringComparison.Ordinal) >= 0
+            var value = content ?? string.Empty;
+            if (value.IndexOf("日终余温", StringComparison.Ordinal) >= 0)
+                return NightResidue;
+            return value.IndexOf("每日复盘", StringComparison.Ordinal) >= 0
                 ? Subconscious
                 : Mind;
         }

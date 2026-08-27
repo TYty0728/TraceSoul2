@@ -23,6 +23,8 @@ namespace TraceSoul2.ExternalPlugins
             RegexOptions.IgnoreCase | RegexOptions.Compiled);
 
         private string providerId = string.Empty;
+        private string plannerProviderId = string.Empty;
+        private string plannerModel = string.Empty;
         private string configApiKey = string.Empty;
         private readonly List<string> configApiKeys = new List<string>();
         private string configBaseUrl = string.Empty;
@@ -65,7 +67,7 @@ namespace TraceSoul2.ExternalPlugins
         {
             Id = PluginId,
             DisplayName = "QQ 相机与生图",
-            Version = "2.1.0",
+            Version = "2.2.0",
             Author = "TraceSoul2",
             Role = PluginRoleValues.Organ,
             PlatformId = BodyIds.Qq,
@@ -85,6 +87,8 @@ namespace TraceSoul2.ExternalPlugins
             context.Services.LogTiming(null, "TA的相机 插件已加载", detail:
                 "version=" + Metadata.Version + "｜model=" + (runtime.Model ?? "(空)") +
                 "｜base_url=" + SafeEndpoint(runtime.BaseUrl) + "｜api_keys=" + runtime.ApiKeys.Count +
+                "｜planner=" + (string.IsNullOrWhiteSpace(plannerProviderId)
+                    ? "(开口模型)" : plannerProviderId + "/" + plannerModel) +
                 "｜图库=" + references.Describe());
             context.AddCallable(new ImageEffector(this));
             AttachMindHooks(context.Services);
@@ -156,6 +160,8 @@ namespace TraceSoul2.ExternalPlugins
             {
                 var root = doc.RootElement;
                 providerId = ReadString(root, "provider_id") ?? ReadString(root, "image_provider_id") ?? providerId;
+                plannerProviderId = ReadString(root, "planner_provider_id") ?? plannerProviderId;
+                plannerModel = ReadString(root, "planner_model") ?? plannerModel;
                 configApiKey = ReadString(root, "api_key") ?? configApiKey;
                 ReplaceList(configApiKeys, ReadStrings(root, "api_keys"));
                 configBaseUrl = ReadString(root, "base_url") ?? configBaseUrl;
@@ -452,20 +458,19 @@ namespace TraceSoul2.ExternalPlugins
             CancellationToken cancellationToken)
         {
             var fallback = new ScenePlanResult { Mode = "selfie", Scene = (seed ?? string.Empty).Trim() };
-            var llm = context == null || context.Services == null ? null : context.Services.Llm;
+            var llm = ResolvePlannerLlm(context);
             if (llm == null) return fallback;
-            var user = BuildPlanUser(fallback.Scene, context);
+            var messages = BuildPlanMessages(fallback.Scene, context, llm);
+            var cacheKey = TryPromptCacheKey(context, llm);
             var timer = Stopwatch.StartNew();
             try
             {
-                var planned = await llm.CompleteTextAsync(
-                    new List<DeepSeekMessageData>
-                    {
-                        new DeepSeekMessageData("system", QqImageGenPrompts.ScenePlanSystem),
-                        new DeepSeekMessageData("user", user)
-                    },
-                    cancellationToken,
-                    null);
+                context.Services.LogTiming(context.TraceId, "TA的相机 画面规划请求",
+                    detail: "provider=" + (llm.ProviderId ?? string.Empty) +
+                            "｜model=" + (llm.Model ?? string.Empty) +
+                            "｜messages=" + messages.Count +
+                            "｜cache_key=" + (cacheKey ?? "(无)"));
+                var planned = await llm.CompleteTextAsync(messages, cancellationToken, cacheKey);
                 var parsed = ParseScenePlan(planned, fallback.Scene);
                 if (parsed.Scene.Length < 12)
                 {
@@ -487,105 +492,112 @@ namespace TraceSoul2.ExternalPlugins
             }
         }
 
-        private string BuildPlanUser(string seed, TraceTurnContext context)
+        private ILlmClient ResolvePlannerLlm(TraceTurnContext context)
         {
-            var builder = new System.Text.StringBuilder();
-            builder.AppendLine(QqImageGenPrompts.ScenePlanChoose);
-            builder.AppendLine(QqImageGenPrompts.ScenePlanSelfie);
-            builder.AppendLine(QqImageGenPrompts.ScenePlanPhoto);
-            builder.AppendLine(QqImageGenPrompts.ScenePlanDraw);
-            if (!string.IsNullOrWhiteSpace(characterDetails))
-                builder.AppendLine(QqImageGenPrompts.ScenePlanLookPrefix + Truncate(characterDetails.Trim(), 400));
-            if (references != null && references.Categories.Count > 0)
+            var services = context == null ? null : context.Services;
+            if (services == null) return null;
+            if (services.Providers != null && !string.IsNullOrWhiteSpace(plannerProviderId))
             {
-                builder.AppendLine(QqImageGenPrompts.ScenePlanReferencesHeader);
-                builder.AppendLine(QqImageGenPrompts.ScenePlanReferencesHint);
-                builder.AppendLine(references.Describe());
+                try
+                {
+                    var client = services.Providers.CreateClient(
+                        plannerProviderId,
+                        string.IsNullOrWhiteSpace(plannerModel) ? null : plannerModel,
+                        false);
+                    if (client != null) return client;
+                    services.LogTiming(context.TraceId, "TA的相机 画面描述 LLM 不可用，回退开口模型",
+                        detail: "provider=" + plannerProviderId + "｜model=" + plannerModel);
+                }
+                catch (Exception exception)
+                {
+                    services.LogTiming(context.TraceId, "TA的相机 画面描述 LLM 创建失败，回退开口模型",
+                        detail: SafeMessage(exception));
+                }
             }
-            var storage = context.Services == null ? null : context.Services.Storage;
+            return services.Llm;
+        }
+
+        private static string TryPromptCacheKey(TraceTurnContext context, ILlmClient llm)
+        {
+            if (context == null || context.Services == null || llm == null) return null;
+            try
+            {
+                var packer = context.Services.ContextPack;
+                return packer == null ? null : packer.BuildPromptCacheKey(llm, context.ConversationId);
+            }
+            catch (MissingFieldException)
+            {
+                return null;
+            }
+            catch (MissingMemberException)
+            {
+                return null;
+            }
+        }
+
+        private List<DeepSeekMessageData> BuildPlanMessages(
+            string seed, TraceTurnContext context, ILlmClient llm)
+        {
+            var role = BuildPlanRole(seed, context);
+            ILlmContextAssembler packer = null;
+            try
+            {
+                packer = context == null || context.Services == null ? null : context.Services.ContextPack;
+            }
+            catch (MissingFieldException)
+            {
+                packer = null;
+            }
+            catch (MissingMemberException)
+            {
+                packer = null;
+            }
+            if (packer != null && context != null)
+            {
+                var current = context.Moment == null ? string.Empty : (context.Moment.Content ?? string.Empty);
+                var memory = string.Empty;
+                try
+                {
+                    memory = context.Workspace == null ? string.Empty : context.Workspace.SharedMemory;
+                }
+                catch (MissingFieldException) { }
+                catch (MissingMemberException) { }
+                return packer.Assemble(
+                    llm, context, memory, current, QqImageGenPrompts.ScenePlanRoleHeader, role);
+            }
+            return new List<DeepSeekMessageData>
+            {
+                new DeepSeekMessageData("system", QqImageGenPrompts.ScenePlanSystem),
+                new DeepSeekMessageData("user", role)
+            };
+        }
+
+        private string BuildPlanRole(string seed, TraceTurnContext context)
+        {
+            string mood = null;
+            string activity = null;
+            string inner = null;
+            var services = context == null ? null : context.Services;
+            if (services != null && services.LifeState != null)
+            {
+                var life = services.LifeState.Load(context.ConversationId);
+                if (life != null) activity = life.FormatDoing();
+            }
+            var storage = services == null ? null : services.Storage;
             if (storage != null)
             {
-                var pair = storage.LoadPairIdentity() ?? PairIdentity.Missing;
-                var cards = storage.LoadIdentityCards(context.ConversationId);
-                var cardText = FormatCardsForPlan(cards, pair);
-                if (cardText.Length > 0)
+                var state = storage.LoadOrCreateInnerRuntime(context.ConversationId);
+                if (state != null)
                 {
-                    builder.AppendLine(QqImageGenPrompts.ScenePlanCardsHeader);
-                    builder.AppendLine(cardText);
-                }
-                var inner = storage.LoadOrCreateInnerRuntime(context.ConversationId);
-                builder.AppendLine(QqImageGenPrompts.ScenePlanNowHeader);
-                if (inner != null)
-                {
-                    if (!string.IsNullOrWhiteSpace(inner.Mood))
-                        builder.AppendLine(QqImageGenPrompts.ScenePlanMoodPrefix + Truncate(inner.Mood, 120));
-                    if (!string.IsNullOrWhiteSpace(inner.OngoingActivity))
-                        builder.AppendLine(QqImageGenPrompts.ScenePlanActivityPrefix + Truncate(inner.OngoingActivity, 160));
-                    if (!string.IsNullOrWhiteSpace(inner.Narrative))
-                        builder.AppendLine(QqImageGenPrompts.ScenePlanInnerPrefix + Truncate(inner.Narrative, 280));
+                    mood = state.Mood;
+                    if (string.IsNullOrWhiteSpace(activity)) activity = state.OngoingActivity;
+                    inner = state.Narrative;
                 }
             }
-            else builder.AppendLine(QqImageGenPrompts.ScenePlanNowHeader);
-            var spoken = context.Moment == null ? string.Empty : (context.Moment.Content ?? string.Empty).Trim();
-            if (spoken.Length > 0 && !LooksLikeProtocol(spoken))
-                builder.AppendLine(QqImageGenPrompts.ScenePlanSpeakPrefix + Truncate(spoken, 240));
-            if (seed.Length > 0)
-                builder.AppendLine(QqImageGenPrompts.ScenePlanSeedPrefix + Truncate(seed, 300));
-            var recent = FormatRecentForPlan(context);
-            if (recent.Length > 0)
-            {
-                builder.AppendLine(QqImageGenPrompts.ScenePlanRecentHeader);
-                builder.AppendLine(recent);
-            }
-            return builder.ToString().Trim();
-        }
-
-        private static string FormatCardsForPlan(IEnumerable<IdentityCardRecord> cards, PairIdentity pair)
-        {
-            pair = pair ?? PairIdentity.Missing;
-            var map = (cards ?? Enumerable.Empty<IdentityCardRecord>())
-                .Where(x => x != null && IdentityCardSlotValues.IsKnown(x.Slot) &&
-                            x.Slot != IdentityCardSlotValues.ExpressionHabit &&
-                            !string.IsNullOrWhiteSpace(x.Body))
-                .GroupBy(x => x.Slot, StringComparer.OrdinalIgnoreCase)
-                .ToDictionary(x => x.Key, x => x.First().Body.Trim(), StringComparer.OrdinalIgnoreCase);
-            var builder = new System.Text.StringBuilder();
-            if (pair.IsComplete) builder.AppendLine("我是" + pair.Assname + "。");
-            foreach (var slot in new[]
-                     {
-                         IdentityCardSlotValues.Personality,
-                         IdentityCardSlotValues.Self,
-                         IdentityCardSlotValues.Other,
-                         IdentityCardSlotValues.Relation,
-                         IdentityCardSlotValues.UserProfile
-                     })
-            {
-                string body;
-                if (!map.TryGetValue(slot, out body) || string.IsNullOrWhiteSpace(body)) continue;
-                builder.Append("【").Append(IdentityCardSlotValues.Title(slot, pair)).Append("】")
-                    .Append(Truncate(body, 400)).AppendLine();
-            }
-            return builder.ToString().Trim();
-        }
-
-        private static string FormatRecentForPlan(TraceTurnContext context)
-        {
-            if (context == null || context.RecentMoments == null) return string.Empty;
-            var pair = context.Services != null && context.Services.Storage != null
-                ? context.Services.Storage.LoadPairIdentity() ?? PairIdentity.Missing
-                : PairIdentity.Missing;
-            var lines = new List<string>();
-            foreach (var item in context.RecentMoments)
-            {
-                if (item == null || string.IsNullOrWhiteSpace(item.Content)) continue;
-                var text = item.Content.Trim();
-                if (LooksLikeProtocol(text)) continue;
-                if (!pair.IsHumanMoment(item.Role) && !pair.IsCompanionMoment(item.Role)) continue;
-                var name = pair.CanonicalMomentRole(item.Role);
-                lines.Add(name + "：" + Truncate(text, 80));
-            }
-            if (lines.Count > 6) lines = lines.Skip(lines.Count - 6).ToList();
-            return string.Join("\n", lines);
+            var catalog = references != null && references.Categories.Count > 0
+                ? references.Describe() : string.Empty;
+            return QqImageGenPrompts.BuildScenePlanRole(
+                characterDetails, catalog, mood, activity, inner, seed);
         }
 
         private static ScenePlanResult ParseScenePlan(string raw, string seed)
@@ -674,13 +686,6 @@ namespace TraceSoul2.ExternalPlugins
                 (text.StartsWith("“") && text.EndsWith("”")))
                 text = text.Substring(1, Math.Max(0, text.Length - 2)).Trim();
             return Truncate(text.Replace("\r\n", "\n").Trim(), 800);
-        }
-
-        private static bool LooksLikeProtocol(string text)
-        {
-            text = (text ?? string.Empty).Trim();
-            return text.StartsWith("[QQ ", StringComparison.Ordinal) ||
-                   text.StartsWith("[CQ:", StringComparison.OrdinalIgnoreCase);
         }
 
         private static string Truncate(string value, int max)

@@ -18,6 +18,7 @@
 - `TraceSoul2.PluginApi` 共享契约回落默认上下文：插件与宿主共用同一份类型。
 - WebSocket 入口用 `context.AddWebSocketEndpoint(...)` 注册；宿主按插件归属移除旧端点，并在每次新握手时解析当前实例，所以配置保存/重扫不会继续命中死对象。
 - `PluginApi 1.1` 起包含上述 WebSocket 生命周期注册口；只使用旧贡献接口的插件无需改源码。
+- `PluginApi 1.2` 起包含 `Services.ContextPack`（公共上下文装配器）。专用对话模型应走这里，与心智/开口共享身份卡和历史前缀。
 - 安装 = 丢代码文件夹；卸载只把代码移入 `plugins-uninstalled/`，对应 `plugins_data` 不删除。
 
 ## PluginApi 契约（外部插件只依赖它）
@@ -27,7 +28,7 @@
 `Tools/PluginApi/TraceSoul2.PluginApi.csproj`，与宿主共编同一批源文件（`PluginApiSources.props`），类型天然一致。包含：
 
 - 数据 POCO：`MomentRecord`、`PairIdentity`、六张短卡、内心、轨迹、阶梯、事件索引、向量节点、`DeepSeekMessageData` 等；
-- 接口：`ITracePlugin` / `ITraceMountedFacet` / `ITraceCallableContribution` / `ITraceMomentSource` / `ITraceBackgroundService`、`ITracePluginRegistrar`、`ITracePlatformAdapter`、`IMemoryStore`、`ILlmClient`、`IEmbeddingService`、`IMemoryRecallEngine`、`IHierarchicalVectorRouter`、`ITraceWebSocketEndpoint`；
+- 接口：`ITracePlugin` / `ITraceMountedFacet` / `ITraceCallableContribution` / `ITraceMomentSource` / `ITraceBackgroundService`、`ITracePluginRegistrar`、`ITracePlatformAdapter`、`IMemoryStore`、`ILlmClient`、`ILlmContextAssembler`、`IEmbeddingService`、`IMemoryRecallEngine`、`IHierarchicalVectorRouter`、`ITraceWebSocketEndpoint`；
 - 上下文：`TracePluginContext`（含只读的 `PackageDirectory` 和可写的 `PluginDataDirectory`）、`TracePluginServices`、`TraceTurnContext`。
 
 ## 平台注入机制（器官包可用的宿主服务）
@@ -38,6 +39,7 @@
 | `Services.TurnCompleteHooks` | 整轮表达结束后的收尾钩子（QQ 用它把暂存文字与结尾表情合并成一条消息） |
 | `Services.Embedding` | 文本语义向量（Host 侧 ONNX BGE），表情匹配等语义任务用 |
 | `Services.Llm` / `NerveLlm` | 语言模型口 |
+| `Services.ContextPack` | 公共上下文装配器；插件专用对话模型走这里，不要自己截断身份卡和历史 |
 | `Services.Storage` | 记忆存取面（LoadPairIdentity 等） |
 | `Services.LifeState` | 当前生活状态（位置 + 活动）的读写面；更新必须带 `source/source_id`，按来源优先级仲裁 |
 
@@ -122,7 +124,7 @@ public sealed class XxxEffector : ITraceCallableContribution
 
 其余约定：
 
-- 出站表达**必须**经平台适配器并带 `ProducedEvent`；实际文字进入 `moments`，图片、表情、语音等动作回执进入 `operational_events`；
+- 出站表达**必须**经平台适配器并带 `ProducedEvent`；`moments` 是她在这个世界的**物理痕迹**——她真说了什么（文字，伴侣角色）、真做了什么（图片/表情/语音/改签名/发说说，`system_event` 角色，不进对话流）、真看到了什么，都要进 `moments`；`operational_events` 只留纯系统机制痕迹（定时器触发、console 观察窗镜像、闸门拦截日志）；
 - 未配置（如缺 api_key）时让 `IsAvailable` 返回 false，该器官自动从身体上消失。
 
 平台无关的器官（如 `game.session`）不要声明 `PlatformId` / `BodyId`，控制台会把它收在“独立 / 跨平台”；它的 Facet、后台服务和神经在 QQ、其它平台或独立壳上共用同一份状态。

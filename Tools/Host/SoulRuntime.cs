@@ -48,7 +48,9 @@ namespace TraceSoul2.Host
         public SqliteMemoryManager Store { get; private set; }
         public TracePluginManager Plugins { get; private set; }
         public LlmProviderStore Providers { get; private set; }
-        public int ContextInjectionCount { get; private set; }
+        public int HistoryWindowMax { get; private set; }
+        public int HistoryWindowAlign { get; private set; }
+        public int HistoryWindowMin { get; private set; }
         public int HeartbeatMinMinutes { get; private set; }
         public int HeartbeatMaxMinutes { get; private set; }
         public ChatTurnResultData LastTurn { get; private set; }
@@ -62,7 +64,9 @@ namespace TraceSoul2.Host
             DataDirectory = dataDirectory ?? throw new ArgumentNullException("dataDirectory");
             Directory.CreateDirectory(DataDirectory);
             runtimeSettings = SoulRuntimeSettings.Load(Path.Combine(DataDirectory, "runtime-settings.json"));
-            ContextInjectionCount = runtimeSettings.ContextInjectionCount;
+            HistoryWindowMax = runtimeSettings.HistoryWindowMax;
+            HistoryWindowAlign = runtimeSettings.HistoryWindowAlign;
+            HistoryWindowMin = runtimeSettings.ContextInjectionCount;
             HeartbeatMinMinutes = runtimeSettings.HeartbeatMinMinutes;
             HeartbeatMaxMinutes = runtimeSettings.HeartbeatMaxMinutes;
             Store = new SqliteMemoryManager(Path.Combine(DataDirectory, "tracesoul2-brainframe.sqlite3"));
@@ -78,6 +82,7 @@ namespace TraceSoul2.Host
             Providers = new LlmProviderStore(Path.Combine(DataDirectory, "llm-providers.json"));
             services.Providers = Providers;
             services.ReviewLlm = Providers.CreateReviewClient();
+            services.ContextPack = new LlmContextAssembler();
             Plugins = new TracePluginManager(Store, services);
             Plugins.Discover(typeof(DialogueTracePlugin).Assembly);
             IdentityCardLogic.PreferDataDirectory(DataDirectory);
@@ -113,13 +118,31 @@ namespace TraceSoul2.Host
             Emit("host 已启动");
         }
 
-        public int SetContextInjectionCount(int value)
+        public object SetHistoryWindow(int max, int align)
         {
-            ContextInjectionCount = Math.Max(0, Math.Min(6, value));
-            runtimeSettings.ContextInjectionCount = ContextInjectionCount;
+            if (align <= 0)
+                align = HistoryWindowAlign > 0
+                    ? HistoryWindowAlign
+                    : CommonContextPackLogic.HistoryWindowAlign;
+            var window = CommonContextPackLogic.NormalizeHistoryWindow(max, align);
+            HistoryWindowMax = window.Max;
+            HistoryWindowAlign = window.Align;
+            HistoryWindowMin = window.Min;
+            runtimeSettings.HistoryWindowMax = window.Max;
+            runtimeSettings.HistoryWindowAlign = window.Align;
+            runtimeSettings.ContextInjectionCount = window.Min;
             runtimeSettings.Save(Path.Combine(DataDirectory, "runtime-settings.json"));
-            Emit("上下文拼接已更新：最近 " + ContextInjectionCount + " 条对话原文（最多 3 轮）");
-            return ContextInjectionCount;
+            Emit(window.Max == 0
+                ? "上下文拼接已关闭"
+                : "上下文拼接已更新：最高 " + window.Max + " 条，滑动 " + window.Align +
+                  " 条（窗口 " + window.Min + "～" + window.Max + "）");
+            return new
+            {
+                max = window.Max,
+                align = window.Align,
+                min = window.Min,
+                limit = window.Max
+            };
         }
 
         public object SetHeartbeatRange(int minMinutes, int maxMinutes)
@@ -191,6 +214,7 @@ namespace TraceSoul2.Host
                 TopP = record.topP <= 0 ? 1f : record.topP,
                 MaxTokens = 4096,
                 TimeoutSeconds = record.timeout <= 0 ? 120 : record.timeout,
+                TransientErrorRetries = record.transientRetries,
                 ThinkingEnabled = false,
                 ReasoningEffort = string.Empty,
                 EmptyContentRetries = 1
@@ -365,6 +389,7 @@ namespace TraceSoul2.Host
             var pair = Store.LoadPairIdentity();
             var current = Providers.Get(Providers.CurrentId);
             var home = TraceHome.Current;
+            var inner = Store.LoadOrCreateInnerRuntime(ConversationId);
             return new
             {
                 alive = true,
@@ -389,10 +414,14 @@ namespace TraceSoul2.Host
                     hasApiKey = !string.IsNullOrWhiteSpace(current.apiKey)
                 },
                 slots = PublicSlots(),
-                contextInjectionCount = ContextInjectionCount,
+                contextInjectionCount = HistoryWindowMax,
+                historyWindowMax = HistoryWindowMax,
+                historyWindowAlign = HistoryWindowAlign,
+                historyWindowMin = HistoryWindowMin,
                 heartbeatMinMinutes = HeartbeatMinMinutes,
                 heartbeatMaxMinutes = HeartbeatMaxMinutes,
-                asleep = Store.LoadOrCreateInnerRuntime(ConversationId).Asleep,
+                asleep = inner.Asleep,
+                idle = inner.Idle,
                 nextHeartbeatUnixMs = HeartbeatLogic.NextDueUnixMs(Store, ConversationId)
             };
         }
@@ -428,7 +457,14 @@ namespace TraceSoul2.Host
                 .Select(x => new { x.Content, x.SourceMomentId, x.CreatedUnixMs }).ToList();
             var latest = LastTurnPayload();
             var activeEvents = Store.GetActiveEventIndexes().Take(8)
-                .Select(x => new { x.Id, x.EventSummary, x.MoodLabel, x.TimeLabel, x.UpdatedUnixMs })
+                .Select(x => new
+                {
+                    x.Id,
+                    x.EventSummary,
+                    time = TimeLanguageUtil.RelativeWhen(x.TimeUnixMs, now),
+                    x.MoodLabel,
+                    x.UpdatedUnixMs
+                })
                 .ToList();
             return new
             {
@@ -457,7 +493,7 @@ namespace TraceSoul2.Host
                 },
                 runtime = new
                 {
-                    state = inner.Asleep ? "睡着" : "醒着",
+                    state = InnerLifeLogic.PresenceLabel(inner),
                     inner.Narrative,
                     inner.Mood,
                     inner.Revision,
@@ -465,6 +501,7 @@ namespace TraceSoul2.Host
                     inner.OngoingActivity,
                     sharedScene = inner.OngoingActivity,
                     inner.Asleep,
+                    inner.Idle,
                     attention = (inner.Attention ?? new List<AttentionItemData>()).Take(3)
                         .Select(x => new { kind = x.kind ?? string.Empty, content = x.content ?? string.Empty, updatedUnixMs = x.UpdatedUnixMs }).ToList(),
                     inner.SnapshotId,
@@ -561,7 +598,7 @@ namespace TraceSoul2.Host
                 var chat = new KernelLogic(Store, client, Plugins);
                 var result = await chat.ChatAsync(
                     ConversationId, text.Trim(), "dialogue.receive",
-                    ContextInjectionCount, cancellationToken, traceId);
+                    HistoryWindowMax, cancellationToken, traceId, HistoryWindowAlign);
                 deferred = chat.TakeDeferredWork();
                 LastTurn = result;
                 foreach (var memoryResult in result.ContributionResults
@@ -600,12 +637,57 @@ namespace TraceSoul2.Host
                     var result = await chat.ProcessPluginEventAsync(
                         string.IsNullOrWhiteSpace(source.ConversationId)
                             ? ConversationId : source.ConversationId,
-                        source, ContextInjectionCount, cancellationToken);
+                        source, HistoryWindowMax, cancellationToken, HistoryWindowAlign);
                     QueueDeferredTurn(chat.TakeDeferredWork());
                     LastTurn = result;
                     RebuildOntology();
                     Emit("后台 Moment：" + Truncate(source.Content, 40));
                 }
+            }
+            finally { gate.Release(); }
+        }
+
+        /// <summary>
+        /// 日终复盘成功后：后半夜窗口里，把当天余温漏一句给她。空天、过了窗口或已经留过，都沉默。
+        /// </summary>
+        public async Task TrySpeakNightResidueAsync(string dayKey, CancellationToken cancellationToken)
+        {
+            if (!Store.LoadPairIdentity().IsComplete) return;
+            var now = DateTimeOffset.Now;
+            var decision = NightResidueLogic.Evaluate(Store, ConversationId, dayKey, now);
+            Emit("夜间余温：" + dayKey + "｜" + decision.Action + "｜" + decision.Reason);
+            if (!string.IsNullOrWhiteSpace(decision.RememberStatus))
+                NightResidueLogic.Remember(Store, dayKey, decision.RememberStatus);
+            if (!decision.ShouldSpeak) return;
+
+            var rawClient = Providers.CreateCurrentClient();
+            if (rawClient == null)
+            {
+                Emit("夜间余温：开口槽还没有 API Key，这一次先不留。");
+                return;
+            }
+
+            var traceId = NewTraceId();
+            var lockTimer = Stopwatch.StartNew();
+            await gate.WaitAsync(cancellationToken);
+            try
+            {
+                EmitTiming(traceId, "夜间余温取得运行锁", lockTimer.ElapsedMilliseconds);
+                var source = NightResidueLogic.CreateTrigger(ConversationId, dayKey, traceId);
+                var client = new TimedLlmClient(rawClient, traceId, Emit);
+                var chat = new KernelLogic(Store, client, Plugins);
+                var result = await chat.ProcessPluginEventAsync(
+                    ConversationId, source, HistoryWindowMax, cancellationToken, HistoryWindowAlign);
+                QueueDeferredTurn(chat.TakeDeferredWork());
+                LastTurn = result;
+                RebuildOntology();
+                Emit("夜间余温已处理：" + (string.IsNullOrWhiteSpace(result.Reply)
+                    ? result.DecisionSummary
+                    : Truncate(result.Reply, 40)));
+            }
+            catch (Exception exception)
+            {
+                Emit("夜间余温失败：" + exception.Message);
             }
             finally { gate.Release(); }
         }
@@ -811,6 +893,7 @@ namespace TraceSoul2.Host
                 record.topP,
                 record.maxTokens,
                 timeout = record.timeout <= 0 ? 120 : record.timeout,
+                transientRetries = record.transientRetries,
                 proxy = record.proxy ?? string.Empty,
                 record.thinkingEnabled,
                 record.reasoningEffort,
@@ -1037,6 +1120,8 @@ namespace TraceSoul2.Host
     public sealed class SoulRuntimeSettings
     {
         public int ContextInjectionCount { get; set; } = 6;
+        public int HistoryWindowMax { get; set; }
+        public int HistoryWindowAlign { get; set; }
         public int HeartbeatMinMinutes { get; set; } = HeartbeatLogic.DefaultMinMinutes;
         public int HeartbeatMaxMinutes { get; set; } = HeartbeatLogic.DefaultMaxMinutes;
         public bool HeartbeatRangeSpecified { get; set; }
@@ -1050,29 +1135,51 @@ namespace TraceSoul2.Host
         public static SoulRuntimeSettings Load(string path)
         {
             var settings = new SoulRuntimeSettings();
-            if (!File.Exists(path)) return settings;
-            try
+            if (File.Exists(path))
             {
-                var loaded = JsonSerializer.Deserialize<SoulRuntimeSettings>(File.ReadAllText(path), JsonOptions);
-                if (loaded != null)
+                try
                 {
-                    settings.ContextInjectionCount = Math.Max(0, Math.Min(6, loaded.ContextInjectionCount));
-                    if (loaded.HeartbeatRangeSpecified)
+                    var loaded = JsonSerializer.Deserialize<SoulRuntimeSettings>(
+                        File.ReadAllText(path), JsonOptions);
+                    if (loaded != null)
                     {
-                        var min = loaded.HeartbeatMinMinutes;
-                        var max = loaded.HeartbeatMaxMinutes;
-                        HeartbeatLogic.NormalizeRange(ref min, ref max);
-                        settings.HeartbeatMinMinutes = min;
-                        settings.HeartbeatMaxMinutes = max;
-                        settings.HeartbeatRangeSpecified = true;
+                        settings.ContextInjectionCount = loaded.ContextInjectionCount;
+                        settings.HistoryWindowMax = loaded.HistoryWindowMax;
+                        settings.HistoryWindowAlign = loaded.HistoryWindowAlign;
+                        if (loaded.HeartbeatRangeSpecified)
+                        {
+                            var min = loaded.HeartbeatMinMinutes;
+                            var max = loaded.HeartbeatMaxMinutes;
+                            HeartbeatLogic.NormalizeRange(ref min, ref max);
+                            settings.HeartbeatMinMinutes = min;
+                            settings.HeartbeatMaxMinutes = max;
+                            settings.HeartbeatRangeSpecified = true;
+                        }
                     }
                 }
+                catch
+                {
+                    /* 损坏按默认值处理 */
+                }
             }
-            catch
-            {
-                /* 损坏按默认值处理 */
-            }
+            ApplyHistoryWindow(settings);
             return settings;
+        }
+
+        /// <summary>
+        /// 旧文件只有 contextInjectionCount（窗口下限，默认 6）。
+        /// 新文件写最高条数；没写过则 Max = 旧下限 + 滑动 - 1。
+        /// </summary>
+        private static void ApplyHistoryWindow(SoulRuntimeSettings settings)
+        {
+            var window = settings.HistoryWindowMax > 0
+                ? CommonContextPackLogic.NormalizeHistoryWindow(
+                    settings.HistoryWindowMax, settings.HistoryWindowAlign)
+                : CommonContextPackLogic.FromLegacyInjectionCount(
+                    settings.ContextInjectionCount, settings.HistoryWindowAlign);
+            settings.HistoryWindowMax = window.Max;
+            settings.HistoryWindowAlign = window.Align;
+            settings.ContextInjectionCount = window.Min;
         }
 
         public void Save(string path)

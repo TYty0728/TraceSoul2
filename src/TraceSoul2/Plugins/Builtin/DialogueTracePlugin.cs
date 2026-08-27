@@ -8,17 +8,22 @@ using TraceSoul2.Data;
 
 namespace TraceSoul2.Plugins.Builtin
 {
-    /// <summary>一个插件同时提供文字输入、定向历史神经和文字表达器。</summary>
+    /// <summary>
+    /// console 平台：系统最后的对话面。平台身份（连接桥 + 翻译，不做决策），
+    /// 但不可禁用——管理器对它施加与内核组件相同的关闭保护。
+    /// 内置编译，同时提供文字输入、定向历史神经和文字表达器。
+    /// </summary>
     public sealed class DialogueTracePlugin : ITracePlugin
     {
         public TracePluginMetadataData Metadata { get; } = new TracePluginMetadataData
         {
             Id = "builtin.dialogue",
-            DisplayName = "本地文字对话",
+            DisplayName = "console（本地文字）",
             Version = "1.0.0",
             Author = "TraceSoul2",
-            Role = PluginRoleValues.Kernel,
-            Description = "接收本地文字 Moment，按需提供受限的近期原文，并执行 Brain 的文字表达。"
+            Role = PluginRoleValues.Platform,
+            PlatformId = BodyIds.Console,
+            Description = "保底对话平台：接收本地文字 Moment，按需提供受限的近期原文，并执行 Brain 的文字表达。"
         };
 
         public void Register(TracePluginContext context)
@@ -32,6 +37,7 @@ namespace TraceSoul2.Plugins.Builtin
             context.AddMomentSource(new DialogueSource());
             context.AddCallable(new DialogueHistoryNerve());
             context.AddCallable(new DialogueEffector());
+            context.AddCallable(new ConsolePrintEffector());
         }
 
         public void Shutdown() { }
@@ -158,6 +164,65 @@ namespace TraceSoul2.Plugins.Builtin
                 {
                     Status = "success",
                     Summary = "已通过本地文字对话表达。",
+                    Payload = text,
+                    ProducedEvent = produced,
+                    EvidenceRefs = new List<string>()
+                });
+            }
+        }
+
+        /// <summary>
+        /// 观察窗打印：任何来源的入站消息、任何身体的出站文字，都在 console 留一份运行痕迹。
+        /// 痕迹是 operational 事件（运行留痕），不进语义 Moment，不进对话历史。
+        /// Shell 层 + 独立 print 器官：不参与路由竞争，只由内核直接调用。
+        /// </summary>
+        private sealed class ConsolePrintEffector : ITraceCallableContribution
+        {
+            public TraceContributionDescriptorData Descriptor { get; } = new TraceContributionDescriptorData
+            {
+                Id = "dialogue.print",
+                Kind = TraceContributionKindValues.Effector,
+                DisplayName = "console 打印",
+                Description = "观察窗打印：把收发在 console 留一份运行痕迹，不进对话历史。",
+                Provides = "console.print",
+                Boundary = "控制台运行痕迹｜自由文本",
+                BodyId = BodyIds.Console,
+                BodyTier = BodyTierValues.Shell,
+                Organ = "print",
+                ParametersJsonSchema = "{text:string,direction?:in|out,via?:string,role?:string}",
+                HasExternalSideEffect = false
+            };
+
+            public bool IsAvailable(TraceTurnContext context) { return context != null; }
+
+            public Task<TraceCapabilityResultData> ExecuteAsync(
+                BrainCapabilityCallData call,
+                TraceTurnContext context,
+                CancellationToken cancellationToken)
+            {
+                var text = (call.GetArgument("text") ?? string.Empty).Trim();
+                if (text.Length == 0) throw new InvalidOperationException("打印内容不能为空。");
+                var direction = (call.GetArgument("direction") ?? "out").Trim();
+                var via = (call.GetArgument("via") ?? string.Empty).Trim();
+                var role = (call.GetArgument("role") ?? string.Empty).Trim();
+                var arrow = string.Equals(direction, "in", StringComparison.Ordinal) ? "←" : "→";
+                var label = string.IsNullOrWhiteSpace(via) ? "console" : via;
+                var produced = new PluginEventData
+                {
+                    PluginId = Descriptor.PluginId,
+                    ExternalEventId = Guid.NewGuid().ToString("N"),
+                    Role = string.IsNullOrWhiteSpace(role) ? "system_event" : role,
+                    Content = "[console 打印 " + arrow + " " + label + "] " + text,
+                    Realm = TraceRealmValues.Meta,
+                    EvidenceType = EvidenceTypeValues.PluginObserved,
+                    PayloadJson = string.Empty,
+                    IsOperational = true,
+                    OccurredUnixMs = DateTimeOffset.UtcNow.ToUnixTimeMilliseconds()
+                };
+                return Task.FromResult(new TraceCapabilityResultData
+                {
+                    Status = "success",
+                    Summary = "已在 console 打印。",
                     Payload = text,
                     ProducedEvent = produced,
                     EvidenceRefs = new List<string>()

@@ -37,6 +37,8 @@ namespace TraceSoul2.Data
         public long UpdatedUnixMs { get; set; }
         /// <summary>睡着后心跳停，非打破性 Moment 不跑心智。</summary>
         public bool Asleep { get; set; }
+        /// <summary>空闲后心跳停，直到她发来或以前约好的时间任务到期才再醒。</summary>
+        public bool Idle { get; set; }
     }
 
     [Table("inner_runtime")]
@@ -55,6 +57,7 @@ namespace TraceSoul2.Data
         public string SourceMomentId { get; set; }
         public long UpdatedUnixMs { get; set; }
         public bool Asleep { get; set; }
+        public bool Idle { get; set; }
     }
 
     [Serializable]
@@ -77,5 +80,7 @@ namespace TraceSoul2.Data
         public List<AttentionWriteData> attention;
         /// <summary>null=不改睡眠；true=睡下；false=醒来。</summary>
         public bool? asleep;
+        /// <summary>null=不改空闲；true=进入空闲；false=退出空闲。</summary>
+        public bool? idle;
     }
 }

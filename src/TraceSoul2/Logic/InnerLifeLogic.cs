@@ -32,7 +32,8 @@ namespace TraceSoul2.Logic
                 Attention = new List<AttentionItemData>(),
                 SourceMomentId = string.Empty,
                 UpdatedUnixMs = nowUnixMs,
-                Asleep = false
+                Asleep = false,
+                Idle = false
             };
         }
 
@@ -62,7 +63,8 @@ namespace TraceSoul2.Logic
                     : NormalizeAttention(proposed.attention, current.Attention, sourceMomentId, nowUnixMs),
                 SourceMomentId = sourceMomentId,
                 UpdatedUnixMs = nowUnixMs,
-                Asleep = proposed != null && proposed.asleep.HasValue ? proposed.asleep.Value : current.Asleep
+                Asleep = ResolveAsleep(current, proposed),
+                Idle = ResolveIdle(current, proposed)
             };
         }
 
@@ -108,7 +110,11 @@ namespace TraceSoul2.Logic
                     }).ToList();
                 }
             }
-            if (mind.sleep) proposed.asleep = true;
+            if (mind.sleep)
+            {
+                proposed.asleep = true;
+                proposed.idle = false;
+            }
             return proposed;
         }
 
@@ -121,7 +127,8 @@ namespace TraceSoul2.Logic
                    proposed.ongoing_activity != null ||
                    proposed.unfinished_intent != null ||
                    proposed.attention != null ||
-                   proposed.asleep.HasValue;
+                   proposed.asleep.HasValue ||
+                   proposed.idle.HasValue;
         }
 
         public static string Format(InnerRuntimeData runtime)
@@ -132,29 +139,35 @@ namespace TraceSoul2.Logic
             builder.Append(CorePrompts.InnerLife.MoodPrefix).AppendLine(Blank(runtime.Mood));
             builder.Append(CorePrompts.InnerLife.RelationshipPrefix).AppendLine(Blank(runtime.RelationshipLens));
             builder.Append(CorePrompts.InnerLife.OngoingPrefix).AppendLine(Blank(runtime.OngoingActivity));
-            builder.Append(CorePrompts.InnerLife.StatePrefix).AppendLine(runtime.Asleep ? CorePrompts.InnerLife.Asleep : CorePrompts.InnerLife.Awake);
+            builder.Append(CorePrompts.InnerLife.StatePrefix).AppendLine(PresenceLabel(runtime));
             builder.Append(CorePrompts.InnerLife.AttentionPrefix).AppendLine();
             builder.Append(FormatFragments(runtime, DateTimeOffset.UtcNow.ToUnixTimeMilliseconds()));
             return builder.ToString().TrimEnd();
         }
 
-        /// <summary>心智动态段：上一拍的感受、共享场景和仍浮着的碎片；碎片带着时间感自然沉下去。</summary>
+        /// <summary>心智动态段：上一拍的感受和仍浮着的碎片；正在做改走生活状态，这里不再平行复述。</summary>
         public static string FormatForMind(InnerRuntimeData runtime)
         {
             var builder = new StringBuilder();
             var narrative = runtime == null ? string.Empty : OneLine(runtime.Narrative);
             var mood = runtime == null ? string.Empty : (runtime.Mood ?? string.Empty).Trim();
-            var ongoing = runtime == null ? string.Empty : OneLine(runtime.OngoingActivity);
             builder.Append(CorePrompts.InnerLife.LastInnerPrefix).Append(narrative.Length == 0 ? CorePrompts.InnerLife.Empty : narrative);
             if (mood.Length > 0) builder.Append(CorePrompts.InnerLife.LastMoodWrapPrefix).Append(mood).Append("）");
             builder.AppendLine();
-            if (ongoing.Length > 0 && !string.Equals(ongoing, narrative, StringComparison.Ordinal))
-                builder.Append(CorePrompts.InnerLife.LastOngoingPrefix).AppendLine(ongoing);
             builder.Append(CorePrompts.InnerLife.LastHoldPrefix).AppendLine();
             builder.Append(FormatFragments(runtime, DateTimeOffset.UtcNow.ToUnixTimeMilliseconds()));
             if (runtime != null && runtime.Asleep)
                 builder.AppendLine().Append(CorePrompts.InnerLife.LastAsleep);
+            else if (runtime != null && runtime.Idle)
+                builder.AppendLine().Append(CorePrompts.InnerLife.LastIdle);
             return builder.ToString().TrimEnd();
+        }
+
+        public static string PresenceLabel(InnerRuntimeData runtime)
+        {
+            if (runtime != null && runtime.Asleep) return CorePrompts.InnerLife.Asleep;
+            if (runtime != null && runtime.Idle) return CorePrompts.InnerLife.Idle;
+            return CorePrompts.InnerLife.Awake;
         }
 
         public static InnerRuntimeData WithAsleep(
@@ -164,11 +177,44 @@ namespace TraceSoul2.Logic
             long nowUnixMs)
         {
             if (current == null) throw new ArgumentNullException("current");
-            if (current.Asleep == asleep) return current;
-            var source = sourceMomentId;
-            if (string.IsNullOrWhiteSpace(source)) source = current.SourceMomentId;
-            if (string.IsNullOrWhiteSpace(source)) source = "sleep-state";
-            return Reduce(current, new InnerRuntimeWriteData { asleep = asleep }, source, nowUnixMs);
+            if (asleep)
+            {
+                if (current.Asleep && !current.Idle) return current;
+                return Reduce(current, new InnerRuntimeWriteData { asleep = true, idle = false },
+                    PresenceSource(current, sourceMomentId, "sleep-state"), nowUnixMs);
+            }
+            if (!current.Asleep) return current;
+            return Reduce(current, new InnerRuntimeWriteData { asleep = false },
+                PresenceSource(current, sourceMomentId, "sleep-state"), nowUnixMs);
+        }
+
+        public static InnerRuntimeData WithIdle(
+            InnerRuntimeData current,
+            bool idle,
+            string sourceMomentId,
+            long nowUnixMs)
+        {
+            if (current == null) throw new ArgumentNullException("current");
+            if (idle)
+            {
+                if (current.Idle && !current.Asleep) return current;
+                return Reduce(current, new InnerRuntimeWriteData { idle = true, asleep = false },
+                    PresenceSource(current, sourceMomentId, "idle-state"), nowUnixMs);
+            }
+            if (!current.Idle) return current;
+            return Reduce(current, new InnerRuntimeWriteData { idle = false },
+                PresenceSource(current, sourceMomentId, "idle-state"), nowUnixMs);
+        }
+
+        public static InnerRuntimeData WithAwake(
+            InnerRuntimeData current,
+            string sourceMomentId,
+            long nowUnixMs)
+        {
+            if (current == null) throw new ArgumentNullException("current");
+            if (!current.Asleep && !current.Idle) return current;
+            return Reduce(current, new InnerRuntimeWriteData { asleep = false, idle = false },
+                PresenceSource(current, sourceMomentId, "awake-state"), nowUnixMs);
         }
 
         public static string FormatHold(InnerRuntimeData runtime)
@@ -339,6 +385,29 @@ namespace TraceSoul2.Logic
             if (minutes < 60) return minutes + "分钟前浮起";
             var hours = minutes / 60L;
             return hours + "小时前浮起";
+        }
+
+        private static bool ResolveAsleep(InnerRuntimeData current, InnerRuntimeWriteData proposed)
+        {
+            if (proposed != null && proposed.asleep.HasValue) return proposed.asleep.Value;
+            if (proposed != null && proposed.idle == true) return false;
+            return current.Asleep;
+        }
+
+        private static bool ResolveIdle(InnerRuntimeData current, InnerRuntimeWriteData proposed)
+        {
+            var asleep = ResolveAsleep(current, proposed);
+            if (asleep) return false;
+            if (proposed != null && proposed.idle.HasValue) return proposed.idle.Value;
+            return current.Idle;
+        }
+
+        private static string PresenceSource(InnerRuntimeData current, string sourceMomentId, string fallback)
+        {
+            if (!string.IsNullOrWhiteSpace(sourceMomentId)) return sourceMomentId.Trim();
+            if (current != null && !string.IsNullOrWhiteSpace(current.SourceMomentId))
+                return current.SourceMomentId;
+            return fallback;
         }
 
         private static string KeepOrLimit(string proposed, string current, int max, bool allowExplicitEmpty = false)

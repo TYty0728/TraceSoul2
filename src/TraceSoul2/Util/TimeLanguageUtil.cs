@@ -55,6 +55,40 @@ namespace TraceSoul2.Util
                    WeekZh(now) + "·" + DayKindZh(now) + "）" + PeriodZh(now) + " " + timeText;
         }
 
+        /// <summary>事件锚点相对现在：今天早上、昨天晚上、前天傍晚；更早则带日期。</summary>
+        public static string RelativeWhen(long unixMs, DateTimeOffset? now = null)
+        {
+            if (unixMs <= 0) return "时间未知";
+            DateTimeOffset stamp;
+            try
+            {
+                stamp = DateTimeOffset.FromUnixTimeMilliseconds(unixMs);
+            }
+            catch
+            {
+                return "时间未知";
+            }
+            var reference = now ?? DateTimeOffset.Now;
+            stamp = stamp.ToOffset(reference.Offset);
+            var delta = (stamp.Date - reference.Date).Days;
+            string day;
+            switch (delta)
+            {
+                case 0:
+                    day = "今天";
+                    break;
+                case -1:
+                    day = "昨天";
+                    break;
+                case -2:
+                    day = "前天";
+                    break;
+                default:
+                    return stamp.Year + "年" + stamp.Month + "月" + stamp.Day + "日" + PeriodZh(stamp);
+            }
+            return day + PeriodZh(stamp);
+        }
+
         public static string ElapsedZh(long fromUnixMs, long toUnixMs)
         {
             if (fromUnixMs <= 0 || toUnixMs <= fromUnixMs) return "刚才";

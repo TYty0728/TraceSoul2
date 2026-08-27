@@ -54,12 +54,15 @@ namespace TraceSoul2.Plugins.Builtin
             {
                 var runtime = context.Services.Storage.LoadOrCreateInnerRuntime(context.ConversationId);
                 var mood = (runtime.Mood ?? string.Empty).Trim();
-                var scene = OneLine(runtime.OngoingActivity);
+                var life = context.Services.LifeState == null
+                    ? null : context.Services.LifeState.Load(context.ConversationId);
+                var doing = LifeStateLogic.FormatDoing(life);
+                if (doing.Length == 0) doing = OneLine(runtime.OngoingActivity);
                 return Task.FromResult(new TraceContextBlockData
                 {
                     Title = InnerLifePrompts.SnapshotTitle,
                     Content = InnerLifePrompts.SnapshotPrefix +
-                              (scene.Length == 0 ? "（没有固定场景）" : scene) +
+                              (doing.Length == 0 ? "（没有固定场景）" : doing) +
                               (mood.Length == 0 ? string.Empty : InnerLifePrompts.MoodWrapPrefix + mood + "）")
                 });
             }

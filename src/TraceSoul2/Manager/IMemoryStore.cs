@@ -25,6 +25,8 @@ namespace TraceSoul2.Manager
         void SaveMoment(MomentRecord moment);
         void SaveOperationalEvent(OperationalEventRecord operationalEvent);
         List<MomentRecord> GetRecentMoments(string conversationId, int take);
+        int CountDialogueMoments(string conversationId);
+        List<MomentRecord> GetRecentDialogueMoments(string conversationId, int take);
         List<OperationalEventRecord> GetRecentOperationalEvents(string conversationId, int take);
         List<TurnReviewRecord> GetRecentTurnReviews(string conversationId, int take);
         void SeedLifeTags(IEnumerable<VectorIndexNode> ontology);

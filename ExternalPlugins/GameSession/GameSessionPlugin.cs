@@ -9,6 +9,10 @@ using TraceSoul2.Plugins;
 
 namespace TraceSoul2.ExternalPlugins.GameSession
 {
+    /// <summary>
+    /// 游戏会话平台：自研 WS 桥身体。连接桥 + 翻译，不做决策。
+    /// 星露谷 / 通用游戏等 profile 概念上是其下器官（当前随包携带，物理拆包渐进）。
+    /// </summary>
     public sealed class GameSessionPlugin : ITracePlugin
     {
         private const string PluginId = "game.session";
@@ -16,15 +20,17 @@ namespace TraceSoul2.ExternalPlugins.GameSession
         private GameSessionController controller;
         private StardewInstaller stardewInstaller;
         private StardewGameAdapter stardewAdapter;
+        private GameSessionWebSocketEndpoint endpoint;
 
         public TracePluginMetadataData Metadata { get; } = new TracePluginMetadataData
         {
             Id = PluginId,
-            DisplayName = "一起玩游戏",
+            DisplayName = "游戏会话",
             Version = "0.4.3",
             Author = "TraceSoul2",
-            Role = PluginRoleValues.Organ,
-            Description = "平台无关的游戏临时会话：私有事件流、阶段摘要、当前游戏上下文、同步与结束记忆。"
+            Role = PluginRoleValues.Platform,
+            PlatformId = BodyIds.Game,
+            Description = "游戏身体：平台无关的游戏临时会话，等游戏 mod 经 WS 桥连进来。私有事件流、阶段摘要、当前游戏上下文、同步与结束记忆。"
         };
 
         public void Register(TracePluginContext context)
@@ -37,13 +43,25 @@ namespace TraceSoul2.ExternalPlugins.GameSession
             stardewInstaller = new StardewInstaller(dataDirectory);
             stardewAdapter = new StardewGameAdapter(dataDirectory, context.Services);
             controller = new GameSessionController(config, store, context.Services, stardewAdapter);
+            endpoint = new GameSessionWebSocketEndpoint(config, controller, stardewInstaller);
+            context.Services.Platforms.Register(new PlatformHandle
+            {
+                Id = BodyIds.Game,
+                DisplayName = "游戏会话（自研 WS 桥）",
+                IsConnected = () => endpoint != null && endpoint.ActiveConnections > 0,
+                Details = () => new
+                {
+                    connections = endpoint == null ? 0 : endpoint.ActiveConnections,
+                    activeSessions = store == null ? 0 : store.GetActiveSessions().Count
+                }
+            });
             context.AddMountedFacet(new CurrentGameFacet(controller, config.facet_max_chars));
             context.AddCallable(new StartCallable(controller));
             context.AddCallable(new StatusCallable(controller));
             context.AddCallable(new EventCallable(controller));
             context.AddCallable(new EndCallable(controller));
             context.AddBackgroundService(new GameSessionBackgroundService(controller));
-            context.AddWebSocketEndpoint(new GameSessionWebSocketEndpoint(config, controller, stardewInstaller));
+            context.AddWebSocketEndpoint(endpoint);
             Metadata.Note = string.IsNullOrWhiteSpace(config.access_token)
                 ? "桥接 Token 为空；仅建议在受信任的本机环境使用。" : string.Empty;
             context.Services.LogTiming(null, "游戏会话插件已加载", detail:
@@ -58,6 +76,7 @@ namespace TraceSoul2.ExternalPlugins.GameSession
             controller = null;
             stardewInstaller = null;
             stardewAdapter = null;
+            endpoint = null;
             store = null;
         }
 
