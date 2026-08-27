@@ -59,13 +59,13 @@
 |---|---|---|
 | 连接 | 反向 WS 连 NapCat | WS 桥等游戏 mod |
 | 翻译 | QQ 消息 ↔ Moment | 游戏事件 ↔ Moment |
-| 子级器官 | qq.status / qq.qzone / qq.tts / qq.imagegen | game.stardew / game.generic |
+| 子级器官 | qq.sticker / qq.status / qq.qzone / qq.tts / qq.imagegen | game.stardew / game.generic |
 
 ### 第三层：器官（长在平台上的具体能力）
 
 > 一句话：身体上的一只手、一张嘴；可以独立开关；身体不在，它就休眠。
 
-- `qq.status`（签名）、`qq.qzone`（空间）、`qq.tts`（语音）、`qq.imagegen`（生图）：隶属 onebot。
+- `qq.sticker`（表情）、`qq.status`（签名）、`qq.qzone`（空间）、`qq.tts`（语音）、`qq.imagegen`（生图）：隶属 onebot。
 - `game.stardew`（星露谷）、`game.generic`（通用游戏）：隶属 game-session。当前以平台包内 profile 的形态存在，**概念上先升格为器官**，物理拆成独立插件包是后续渐进动作。
 - 每个器官在 `TraceContributionDescriptorData` / 插件元数据里声明 `PlatformId`，指明自己长在哪具身体上。
 - `PlatformId` 为空的器官视为**中枢器官**（直属于灵魂的能力，如将来的网络搜索），不随任何平台休眠。
@@ -87,6 +87,7 @@
 平台层(身体 = 连接桥 + 翻译,不做决策)
 ├─ console        内置保底平台(不可禁用)
 ├─ onebot         QQ 身体
+│   ├─ qq.sticker     表情
 │   ├─ qq.status      签名
 │   ├─ qq.qzone       空间
 │   ├─ qq.tts         语音
@@ -106,14 +107,14 @@
 
 本文档同时正式修订总纲 §25.2 的一句话：「内置身份/内心/时间/记忆/对话仍是 Host 进程内插件，语义上可关」——**修订为：它们是内核组件，语义上与代码上都不可关**。可关的是平台与器官。
 
-## 六、现有十二个插件的归属映射
+## 六、现有插件的归属映射
 
 | 现在 | 归属层 | 动作 |
 |---|---|---|
 | builtin.identity / inner-life / memory / time / senses | 内核组件 | 仅正名，代码不动 |
 | builtin.dialogue | 拆：console 平台（保底）+ 内核残余职责再归位 | 后续整理，概念先定为「console 是平台」 |
 | builtin.onebot | 平台（qq） | 已是 Platform 角色，无需动 |
-| qq.status / qq.qzone / qq.tts / qq.imagegen | onebot 的器官 | 已声明 PlatformId，补休眠约束 |
+| qq.sticker / qq.status / qq.qzone / qq.tts / qq.imagegen | onebot 的器官 | 已声明 PlatformId，补休眠约束 |
 | game.session | **升格为平台**（game） | Role: Organ → Platform，补 PlatformHandle |
 | profiles 里的星露谷 / 通用游戏 | game-session 的器官 | 概念升格；星露谷物理拆包以后再说 |
 
