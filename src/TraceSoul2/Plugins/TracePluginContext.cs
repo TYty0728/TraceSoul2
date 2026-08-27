@@ -54,6 +54,12 @@ namespace TraceSoul2.Plugins
         /// <summary>复盘专用（日构建 / identity.review）。未指定槽时由宿主回落到开口关思考。</summary>
         public ILlmClient ReviewLlm { get; set; }
 
+        /// <summary>
+        /// 公共上下文装配器（宿主注入）。插件的专用对话模型应走这里，
+        /// 与心智/开口共享身份卡和历史前缀，不要自己截断拼接。
+        /// </summary>
+        public ILlmContextAssembler ContextPack { get; set; }
+
         /// <summary>宿主注入的链路时序日志出口；插件只记阶段、耗时和状态，不记密钥。</summary>
         public Action<string> TimingLog { get; set; }
 
@@ -152,6 +158,18 @@ namespace TraceSoul2.Plugins
         public List<BrainFacetOutputData> FacetOutputs { get; private set; } =
             new List<BrainFacetOutputData>();
 
+        /// <summary>本轮心智/开口共用的预激活记忆原文；插件装配上下文时应原样传入。</summary>
+        public string SharedMemory { get; set; }
+
+        /// <summary>本轮已读到的 QQ 说说摘要；心智和开口共用，避免假装看过。</summary>
+        public string QzoneSeen { get; set; }
+
+        /// <summary>本轮向量检索入选的长尾工具；心智动态段注入，tool_call 白名单也用它。</summary>
+        public List<ToolCandidateData> ToolCandidates { get; set; }
+
+        /// <summary>心智选定工具的执行摘要；开口据此自然说出「我先看看 / 发好了」。</summary>
+        public string ToolReport { get; set; }
+
         public T GetOrCreateState<T>(string pluginId, Func<T> factory) where T : class
         {
             object existing;
@@ -178,6 +196,8 @@ namespace TraceSoul2.Plugins
         public MomentRecord Moment { get; private set; }
         public IReadOnlyList<MomentRecord> RecentMoments { get; private set; }
         public int RawHistoryLimit { get; private set; }
+        /// <summary>历史窗口滑动粒度；≤0 时装配器按默认 4 条处理。</summary>
+        public int HistoryWindowAlign { get; private set; }
         public bool RequiresExpression { get; private set; }
         /// <summary>本轮中枢轨道：dialogue / mind / subconscious。</summary>
         public string Wake { get; private set; }
@@ -193,12 +213,14 @@ namespace TraceSoul2.Plugins
             bool requiresExpression,
             TracePluginServices services,
             string wake = null,
-            string traceId = null)
+            string traceId = null,
+            int historyWindowAlign = 0)
         {
             ConversationId = conversationId;
             Moment = moment;
             RecentMoments = recentMoments ?? new List<MomentRecord>();
             RawHistoryLimit = Math.Max(0, rawHistoryLimit);
+            HistoryWindowAlign = Math.Max(0, historyWindowAlign);
             RequiresExpression = requiresExpression;
             Wake = KernelWakeValues.Normalize(wake);
             if (string.IsNullOrEmpty(Wake))

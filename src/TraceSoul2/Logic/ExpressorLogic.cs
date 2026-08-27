@@ -39,10 +39,11 @@ namespace TraceSoul2.Logic
             var current = turn == null || turn.Moment == null
                 ? string.Empty
                 : turn.Moment.Content ?? string.Empty;
-            var role = BuildExpressRolePrompt(
-                turn, plugins, contextBlocks, mind, memoryFlesh, waitOnly, leaveResult).TrimEnd();
+            var roleStable = BuildExpressStablePrompt(turn, contextBlocks).TrimEnd();
+            var roleDynamic = BuildExpressDynamicPrompt(
+                turn, contextBlocks, mind, memoryFlesh, waitOnly, leaveResult).TrimEnd();
             var messages = LlmContextPackLogic.AssembleExpress(
-                llm, shared, turn, memoryFlesh, current, role);
+                llm, shared, turn, memoryFlesh, current, roleStable, roleDynamic);
             var promptCacheKey = LlmContextPackLogic.BuildPromptCacheKey(
                 llm, turn == null ? string.Empty : turn.ConversationId);
             var raw = await DeepSeekStructuredOutputLogic.CompletePlainAsync(
@@ -80,6 +81,92 @@ namespace TraceSoul2.Logic
             return mapped;
         }
 
+        /// <summary>
+        /// 日终余温开口：不走心智卡，只用当天沉下去的余温。允许沉默（只写「无」）。
+        /// 夜里只漏文字，不带图、表情或语音。
+        /// </summary>
+        public async Task<BrainStructuredOutputData> ExpressNightResidueAsync(
+            TraceTurnContext turn,
+            IEnumerable<TraceContextBlockData> contextBlocks,
+            NightResidueSeed seed,
+            IEnumerable<TraceContributionDescriptorData> catalog,
+            CancellationToken cancellationToken)
+        {
+            var shared = LlmContextPackLogic.SharedSystem(llm, turn);
+            var roleStable = BuildNightResidueStablePrompt(turn, contextBlocks).TrimEnd();
+            var roleDynamic = BuildNightResidueDynamicPrompt(turn, seed).TrimEnd();
+            var current = turn == null || turn.Moment == null
+                ? string.Empty
+                : turn.Moment.Content ?? string.Empty;
+            var messages = LlmContextPackLogic.AssembleExpress(
+                llm, shared, turn, string.Empty, current, roleStable, roleDynamic);
+            var promptCacheKey = LlmContextPackLogic.BuildPromptCacheKey(
+                llm, turn == null ? string.Empty : turn.ConversationId);
+            var raw = await DeepSeekStructuredOutputLogic.CompletePlainAsync(
+                llm,
+                messages,
+                text => ExpressorLogic.ParseSpoken(text) != null,
+                CorePrompts.NightResidue.Missing,
+                cancellationToken,
+                promptCacheKey);
+            var expressed = ParseSpoken(raw);
+            expressed.image = string.Empty;
+            expressed.image_mode = string.Empty;
+            expressed.image_refs = string.Empty;
+            expressed.images = new List<ExpressorImageOutputData>();
+            expressed.voice = string.Empty;
+            expressed.voices = new List<ExpressorVoiceOutputData>();
+            expressed.qzone = string.Empty;
+            expressed.sticker = string.Empty;
+            var reply = NightResidueLogic.LimitReply(expressed.reply);
+            expressed.reply = reply;
+            var silent = NightResidueLogic.IsSilentReply(reply);
+            if (silent) expressed.reply = string.Empty;
+            var mapped = MapExpressor(
+                expressed, catalog, false, new MindDecisionData(), includeAutoSticker: false);
+            mapped.expressions = new List<BrainCapabilityCallData>();
+            if (silent)
+            {
+                mapped.should_express = false;
+                mapped.reply = string.Empty;
+                mapped.expression_capability_id = string.Empty;
+            }
+            else
+            {
+                mapped.should_express = true;
+                mapped.reply = reply;
+            }
+            mapped.intent = "夜间余温";
+            mapped.decision_summary = silent ? "夜间余温｜沉默" : "夜间余温｜开口";
+            mapped.mode = BrainModeValues.Deep;
+            return mapped;
+        }
+
+        private static string BuildNightResidueStablePrompt(
+            TraceTurnContext turn,
+            IEnumerable<TraceContextBlockData> contextBlocks)
+        {
+            var pair = turn.Services.Storage.LoadPairIdentity();
+            var builder = new StringBuilder();
+            builder.AppendLine(BuildFoundationPrompt(turn, contextBlocks).TrimEnd());
+            builder.AppendLine();
+            CorePrompts.Write(builder, pair.Apply(CorePrompts.NightResidue.Rules));
+            return builder.ToString();
+        }
+
+        private static string BuildNightResidueDynamicPrompt(TraceTurnContext turn, NightResidueSeed seed)
+        {
+            var pair = turn.Services.Storage.LoadPairIdentity();
+            var builder = new StringBuilder();
+            if (seed != null)
+            {
+                builder.AppendLine(seed.FormatForPrompt());
+                builder.AppendLine();
+            }
+            builder.AppendLine(pair.Apply(CorePrompts.Expressor.NightResidueRequest));
+            return builder.ToString();
+        }
+
         /// <summary>要开口时，至少得真的说出话来。长短冷热由他自己按这一拍判断。</summary>
         public static bool ReplyCarriesMind(ExpressorOutputData expressed, MindDecisionData mind, bool needsReply)
         {
@@ -109,6 +196,13 @@ namespace TraceSoul2.Logic
                 var pair = turn.Services.Storage.LoadPairIdentity();
                 messages.Add(new DeepSeekMessageData(
                     "user", pair.Apply(CorePrompts.Expressor.HeartbeatRequest)));
+            }
+            else if (NightResidueLogic.LooksLike(current) ||
+                     KernelWakeLogic.IsNightResidue(turn.Wake))
+            {
+                var pair = turn.Services.Storage.LoadPairIdentity();
+                messages.Add(new DeepSeekMessageData(
+                    "user", pair.Apply(CorePrompts.Expressor.NightResidueRequest)));
             }
             else
             {
@@ -669,16 +763,12 @@ namespace TraceSoul2.Logic
         }
 
         /// <summary>
-        /// 开口格式、持续状态与本轮心智。不含工具目录；身份和记忆正文由公共装配器放在前缀中。
+        /// 开口稳定段：持续上下文块、表达姿态、输出格式与视角坐标。
+        /// 跨轮字节级稳定，供前缀缓存命中；本轮才变的内容都在 BuildExpressDynamicPrompt。
         /// </summary>
-        private static string BuildExpressRolePrompt(
+        private static string BuildExpressStablePrompt(
             TraceTurnContext turn,
-            IEnumerable<TracePluginMetadataData> plugins,
-            IEnumerable<TraceContextBlockData> contextBlocks,
-            MindDecisionData mind,
-            string memoryFlesh,
-            bool waitOnly,
-            string leaveResult)
+            IEnumerable<TraceContextBlockData> contextBlocks)
         {
             var pair = turn.Services.Storage.LoadPairIdentity();
             var builder = new StringBuilder();
@@ -703,18 +793,90 @@ namespace TraceSoul2.Logic
             builder.AppendLine();
             AppendOutputFormat(builder);
             builder.AppendLine();
+            builder.AppendLine(pair.Apply(CorePrompts.Expressor.SubjectBoundary));
+            return builder.ToString();
+        }
+
+        /// <summary>
+        /// 开口动态段：只放当前轮变化的内容——记忆引导、时间感、心智组织卡、此刻与请求。
+        /// 位于共享记忆之后，它的变化不影响前面 system+历史+稳定指令的缓存命中。
+        /// </summary>
+        private static string BuildExpressDynamicPrompt(
+            TraceTurnContext turn,
+            IEnumerable<TraceContextBlockData> contextBlocks,
+            MindDecisionData mind,
+            string memoryFlesh,
+            bool waitOnly,
+            string leaveResult)
+        {
+            var pair = turn.Services.Storage.LoadPairIdentity();
+            var builder = new StringBuilder();
             if (!string.IsNullOrWhiteSpace(memoryFlesh))
             {
                 builder.AppendLine(pair.Apply(CorePrompts.Expressor.MemoryFlesh));
                 builder.AppendLine();
             }
-            builder.AppendLine(BuildTurnPrompt(
-                turn, plugins, contextBlocks, mind, string.Empty, waitOnly, leaveResult));
+            var time = (contextBlocks ?? Enumerable.Empty<TraceContextBlockData>())
+                .FirstOrDefault(x => x != null &&
+                                     string.Equals(x.FacetId, "time.context", StringComparison.Ordinal));
+            if (time != null && !string.IsNullOrWhiteSpace(time.Content))
+            {
+                builder.AppendLine(time.Content.Trim());
+                builder.AppendLine();
+            }
+            builder.AppendLine(CorePrompts.Expressor.ThoughtHeader);
+            builder.AppendLine(FormatMind(mind));
+            if (!string.IsNullOrWhiteSpace(leaveResult))
+            {
+                builder.AppendLine();
+                builder.AppendLine(CorePrompts.Expressor.LeaveResultHeader);
+                builder.AppendLine(leaveResult.Trim());
+            }
+            var qzoneSeen = turn == null || turn.Workspace == null ? string.Empty : turn.Workspace.QzoneSeen;
+            if (!string.IsNullOrWhiteSpace(qzoneSeen))
+            {
+                builder.AppendLine();
+                builder.AppendLine(CorePrompts.Expressor.QzoneResultHeader);
+                builder.AppendLine(qzoneSeen.Trim());
+            }
+            var toolReport = turn == null || turn.Workspace == null ? string.Empty : turn.Workspace.ToolReport;
+            if (!string.IsNullOrWhiteSpace(toolReport))
+            {
+                builder.AppendLine();
+                builder.AppendLine(CorePrompts.Expressor.ToolReportHeader);
+                builder.AppendLine(CorePrompts.Expressor.ToolReportHint);
+                builder.AppendLine(toolReport.Trim());
+            }
+            builder.AppendLine();
+            builder.AppendLine(CorePrompts.Expressor.NowHeader);
+            if (waitOnly)
+            {
+                builder.AppendLine(CorePrompts.Expressor.LeaveWait);
+            }
+            else if (turn.RequiresExpression)
+            {
+                builder.AppendLine(pair.Apply(CorePrompts.Expressor.PrivateChat));
+            }
+            else if (mind != null && mind.speak)
+            {
+                builder.AppendLine(pair.Apply(CorePrompts.Expressor.Proactive));
+                if (!string.IsNullOrWhiteSpace(mind.heartbeat_intent))
+                    builder.AppendLine("本次醒来的独立意图：" + mind.heartbeat_intent);
+                builder.AppendLine("把这次醒来真正浮出的感觉带到眼前，顺着现在的场景自然开口；旧碎片没有被此刻碰亮，就让它留在背景。");
+            }
+            else
+            {
+                builder.AppendLine(CorePrompts.Expressor.Silent);
+            }
+            builder.AppendLine(CorePrompts.Expressor.SpeakPlain);
             var current = turn == null || turn.Moment == null
                 ? string.Empty
                 : turn.Moment.Content ?? string.Empty;
             if (HeartbeatLogic.IsHeartbeatContent(current))
                 builder.AppendLine(pair.Apply(CorePrompts.Expressor.HeartbeatRequest));
+            else if (NightResidueLogic.LooksLike(current) ||
+                     KernelWakeLogic.IsNightResidue(turn.Wake))
+                builder.AppendLine(pair.Apply(CorePrompts.Expressor.NightResidueRequest));
             else
                 builder.AppendLine(pair.Apply(CorePrompts.Expressor.ExpressionRequest));
             return builder.ToString();
@@ -757,67 +919,6 @@ namespace TraceSoul2.Logic
 
             builder.AppendLine();
             AppendOutputFormat(builder);
-            return builder.ToString();
-        }
-
-        /// <summary>只放当前轮变化内容：时间、心智组织卡、记忆血肉、此刻。</summary>
-        private static string BuildTurnPrompt(
-            TraceTurnContext turn,
-            IEnumerable<TracePluginMetadataData> plugins,
-            IEnumerable<TraceContextBlockData> contextBlocks,
-            MindDecisionData mind,
-            string memoryFlesh,
-            bool waitOnly,
-            string leaveResult)
-        {
-            var pair = turn.Services.Storage.LoadPairIdentity();
-            var builder = new StringBuilder();
-            var time = (contextBlocks ?? Enumerable.Empty<TraceContextBlockData>())
-                .FirstOrDefault(x => x != null &&
-                                     string.Equals(x.FacetId, "time.context", StringComparison.Ordinal));
-            if (time != null && !string.IsNullOrWhiteSpace(time.Content))
-            {
-                builder.AppendLine(time.Content.Trim());
-                builder.AppendLine();
-            }
-            builder.AppendLine(pair.Apply(CorePrompts.Expressor.SubjectBoundary));
-            builder.AppendLine();
-            builder.AppendLine(CorePrompts.Expressor.ThoughtHeader);
-            builder.AppendLine(FormatMind(mind));
-            if (!string.IsNullOrWhiteSpace(memoryFlesh))
-            {
-                builder.AppendLine();
-                builder.AppendLine(memoryFlesh.Trim());
-                builder.AppendLine(pair.Apply(CorePrompts.Expressor.MemoryFlesh));
-            }
-            if (!string.IsNullOrWhiteSpace(leaveResult))
-            {
-                builder.AppendLine();
-                builder.AppendLine(CorePrompts.Expressor.LeaveResultHeader);
-                builder.AppendLine(leaveResult.Trim());
-            }
-            builder.AppendLine();
-            builder.AppendLine(CorePrompts.Expressor.NowHeader);
-            if (waitOnly)
-            {
-                builder.AppendLine(CorePrompts.Expressor.LeaveWait);
-            }
-            else if (turn.RequiresExpression)
-            {
-                builder.AppendLine(pair.Apply(CorePrompts.Expressor.PrivateChat));
-            }
-            else if (mind != null && mind.speak)
-            {
-                builder.AppendLine(pair.Apply(CorePrompts.Expressor.Proactive));
-                if (!string.IsNullOrWhiteSpace(mind.heartbeat_intent))
-                    builder.AppendLine("本次醒来的独立意图：" + mind.heartbeat_intent);
-                builder.AppendLine("把这次醒来真正浮出的感觉带到眼前，顺着现在的场景自然开口；旧碎片没有被此刻碰亮，就让它留在背景。");
-            }
-            else
-            {
-                builder.AppendLine(CorePrompts.Expressor.Silent);
-            }
-            builder.AppendLine(CorePrompts.Expressor.SpeakPlain);
             return builder.ToString();
         }
 

@@ -1,6 +1,8 @@
 {
   "dll": "TraceSoul2.Plugin.QqImageGen.dll",
   "provider_id": "",
+  "planner_provider_id": "",
+  "planner_model": "",
   "api_key": "",
   "api_keys": [],
   "base_url": "",

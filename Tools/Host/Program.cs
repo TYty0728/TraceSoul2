@@ -227,6 +227,7 @@ app.MapGet("/inner", (SoulRuntime runtime) =>
         inner.OngoingActivity,
         sharedScene = inner.OngoingActivity,
         inner.Asleep,
+        inner.Idle,
         nextHeartbeatUnixMs = HeartbeatLogic.NextDueUnixMs(runtime.Store, runtime.ConversationId),
         attention = (inner.Attention ?? new List<AttentionItemData>())
             .Take(3)
@@ -238,36 +239,35 @@ app.MapGet("/inner", (SoulRuntime runtime) =>
     });
 });
 
-app.MapGet("/plugins", async (SoulRuntime runtime, CancellationToken token) =>
+app.MapGet("/plugins", (SoulRuntime runtime) =>
 {
-    var payload = await runtime.ExclusiveAsync(() =>
+    var catalog = runtime.Plugins.GetRegisteredCatalog();
+    var payload = runtime.Plugins.GetPlugins().Select(plugin =>
     {
-        var catalog = runtime.Plugins.GetRegisteredCatalog();
-        return runtime.Plugins.GetPlugins().Select(plugin =>
+        var pack = runtime.FindExternalPackage(plugin.Id);
+        var configurable = pack != null ||
+                           string.Equals(plugin.Id, "builtin.onebot", StringComparison.OrdinalIgnoreCase);
+        return new
         {
-            var pack = runtime.FindExternalPackage(plugin.Id);
-            var configurable = pack != null ||
-                               string.Equals(plugin.Id, "builtin.onebot", StringComparison.OrdinalIgnoreCase);
-            return new
-            {
-                plugin.Id,
-                plugin.DisplayName,
-                plugin.Description,
-                plugin.Version,
-                plugin.Role,
-                plugin.PlatformId,
-                plugin.Enabled,
-                plugin.LoadError,
-                plugin.Note,
-                configurable,
-                folder = pack == null ? string.Empty : pack.Folder,
-                contributions = catalog.Where(x => x.PluginId == plugin.Id &&
-                                                   !MouthLogic.IsProtocolFacet(x.Id) &&
-                                                   x.Kind == TraceContributionKindValues.Effector)
-                    .Select(x => new { x.Id, x.Kind, x.DisplayName, x.Organ, x.BodyId })
-            };
-        }).ToList();
-    }, token);
+            plugin.Id,
+            plugin.DisplayName,
+            plugin.Description,
+            plugin.Version,
+            plugin.Role,
+            plugin.PlatformId,
+            plugin.Enabled,
+            plugin.LoadError,
+            plugin.Note,
+            // 器官休眠 = 开关还开着，但所属平台不在/未连接；界面据此提示「身体不在」。
+            dormant = runtime.Plugins.IsOrganDormant(plugin),
+            configurable,
+            folder = pack == null ? string.Empty : pack.Folder,
+            contributions = catalog.Where(x => x.PluginId == plugin.Id &&
+                                               !MouthLogic.IsProtocolFacet(x.Id) &&
+                                               x.Kind == TraceContributionKindValues.Effector)
+                .Select(x => new { x.Id, x.Kind, x.DisplayName, x.Organ, x.BodyId })
+        };
+    }).ToList();
     return Results.Json(payload);
 });
 
@@ -285,8 +285,8 @@ app.MapPut("/plugins/{id}/enabled", async (SoulRuntime runtime, string id, Enabl
 });
 
 // 外部插件包（主项目之外、运行时插拔）：状态 / 重扫 / 卸载。
-app.MapGet("/plugins/external", async (SoulRuntime runtime, CancellationToken token) =>
-    Results.Json(await runtime.ExclusiveAsync(runtime.ExternalPluginStatus, token)));
+app.MapGet("/plugins/external", (SoulRuntime runtime) =>
+    Results.Json(runtime.ExternalPluginStatus()));
 
 app.MapPost("/plugins/external/rescan", async (SoulRuntime runtime, CancellationToken token) =>
 {
@@ -304,9 +304,9 @@ app.MapDelete("/plugins/external/{id}", async (SoulRuntime runtime, string id, C
     catch (KeyNotFoundException exception) { return Results.NotFound(new { error = exception.Message }); }
 });
 
-app.MapGet("/plugins/{id}/config", async (SoulRuntime runtime, string id, CancellationToken token) =>
+app.MapGet("/plugins/{id}/config", (SoulRuntime runtime, string id) =>
 {
-    try { return Results.Json(await runtime.ExclusiveAsync(() => runtime.ReadPluginConfig(id), token)); }
+    try { return Results.Json(runtime.ReadPluginConfig(id)); }
     catch (KeyNotFoundException exception) { return Results.NotFound(new { error = exception.Message }); }
     catch (InvalidOperationException exception) { return Results.BadRequest(new { error = exception.Message }); }
 });
@@ -388,6 +388,7 @@ app.MapPut("/providers/{id}", (SoulRuntime runtime, string id, ProviderWrite bod
         topP = body.topP,
         maxTokens = body.maxTokens,
         timeout = body.timeout,
+        transientRetries = body.transientRetries ?? -1,
         proxy = body.proxy,
         thinkingEnabled = body.thinkingEnabled,
         reasoningEffort = body.reasoningEffort
@@ -451,7 +452,8 @@ app.MapPut("/providers/slots", (SoulRuntime runtime, SlotBundleWrite body) =>
 
 app.MapPut("/settings/context-limit", (SoulRuntime runtime, LimitWrite body) =>
 {
-    return Results.Json(new { limit = runtime.SetContextInjectionCount(body.limit) });
+    var max = body.max > 0 || body.align > 0 ? body.max : body.limit;
+    return Results.Json(runtime.SetHistoryWindow(max, body.align));
 });
 
 app.MapPut("/settings/heartbeat", (SoulRuntime runtime, HeartbeatWrite body) =>
@@ -465,11 +467,11 @@ app.MapGet("/memory/ladder", (SoulRuntime runtime) => Results.Json(runtime.Ladde
 
 app.MapGet("/memory/day-trajectory", (SoulRuntime runtime) => Results.Json(runtime.DayTrajectoryStatus()));
 
-app.MapGet("/platforms", async (SoulRuntime runtime, CancellationToken token) =>
-    Results.Json(await runtime.ExclusiveAsync(runtime.PlatformStatus, token)));
+app.MapGet("/platforms", (SoulRuntime runtime) =>
+    Results.Json(runtime.PlatformStatus()));
 
-app.MapGet("/mouths", async (SoulRuntime runtime, CancellationToken token) =>
-    Results.Json(await runtime.ExclusiveAsync(runtime.MouthStatus, token)));
+app.MapGet("/mouths", (SoulRuntime runtime) =>
+    Results.Json(runtime.MouthStatus()));
 
 app.MapPut("/mouths", async (SoulRuntime runtime, MouthsWrite body, CancellationToken token) =>
 {
@@ -815,7 +817,12 @@ internal sealed class PluginConfigWrite
 }
 internal sealed class UpdateConfigWrite { public string repository { get; set; } }
 internal sealed class MomentWrite { public string content { get; set; } }
-internal sealed class LimitWrite { public int limit { get; set; } }
+internal sealed class LimitWrite
+{
+    public int limit { get; set; }
+    public int max { get; set; }
+    public int align { get; set; }
+}
 internal sealed class HeartbeatWrite { public int minMinutes { get; set; } public int maxMinutes { get; set; } }
 internal sealed class NerveWrite { public int top_k { get; set; } public string provider_id { get; set; } }
 internal sealed class DailyRunWrite { public string day { get; set; } }
@@ -877,6 +884,7 @@ internal sealed class ProviderWrite
     public float topP { get; set; }
     public int maxTokens { get; set; }
     public int timeout { get; set; }
+    public int? transientRetries { get; set; }
     public string proxy { get; set; }
     public bool thinkingEnabled { get; set; }
     public string reasoningEffort { get; set; }

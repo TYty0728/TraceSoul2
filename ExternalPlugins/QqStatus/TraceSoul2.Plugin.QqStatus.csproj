@@ -1,0 +1,28 @@
+<Project Sdk="Microsoft.NET.Sdk">
+  <PropertyGroup>
+    <TargetFramework>net8.0</TargetFramework>
+    <ImplicitUsings>disable</ImplicitUsings>
+    <Nullable>disable</Nullable>
+    <NoWarn>$(NoWarn);NETSDK1206</NoWarn>
+    <AssemblyName>TraceSoul2.Plugin.QqStatus</AssemblyName>
+    <RootNamespace>TraceSoul2.ExternalPlugins</RootNamespace>
+    <Version>1.0.0</Version>
+    <CopyLocalLockFileAssemblies>false</CopyLocalLockFileAssemblies>
+  </PropertyGroup>
+  <ItemGroup>
+    <ProjectReference Include="..\..\Tools\PluginApi\TraceSoul2.PluginApi.csproj"
+                      Private="false" PrivateAssets="all" />
+    <None Update="plugin.json" CopyToOutputDirectory="PreserveNewest" />
+    <None Update="config_schema.json" CopyToOutputDirectory="PreserveNewest" />
+  </ItemGroup>
+  <Target Name="CopyToPluginFolder" AfterTargets="Build">
+    <PropertyGroup>
+      <QqStatusPluginFolder Condition="'$(TRACESOUL2_PLUGINS)' != ''">$(TRACESOUL2_PLUGINS)\qq-status\</QqStatusPluginFolder>
+      <QqStatusPluginFolder Condition="'$(QqStatusPluginFolder)' == ''">D:\AISoftWare\TraceSoul2\plugins\qq-status\</QqStatusPluginFolder>
+    </PropertyGroup>
+    <MakeDir Directories="$(QqStatusPluginFolder)" />
+    <Copy SourceFiles="$(TargetPath)" DestinationFolder="$(QqStatusPluginFolder)" SkipUnchangedFiles="true" />
+    <Copy SourceFiles="$(ProjectDir)plugin.json;$(ProjectDir)config_schema.json"
+          DestinationFolder="$(QqStatusPluginFolder)" SkipUnchangedFiles="true" />
+  </Target>
+</Project>

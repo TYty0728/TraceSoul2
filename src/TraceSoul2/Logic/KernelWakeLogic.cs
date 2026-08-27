@@ -10,6 +10,8 @@ namespace TraceSoul2.Logic
             if (source == null) return KernelWakeValues.Dialogue;
             if (LooksLikeDailyReview(source.Content))
                 return KernelWakeValues.Subconscious;
+            if (NightResidueLogic.LooksLike(source.Content))
+                return KernelWakeValues.NightResidue;
             if (!string.IsNullOrWhiteSpace(source.Wake))
             {
                 var named = KernelWakeValues.Normalize(source.Wake);
@@ -27,6 +29,7 @@ namespace TraceSoul2.Logic
         public static string Infer(string role, string content)
         {
             if (LooksLikeDailyReview(content)) return KernelWakeValues.Subconscious;
+            if (NightResidueLogic.LooksLike(content)) return KernelWakeValues.NightResidue;
             if (string.Equals(role, "system_event", System.StringComparison.OrdinalIgnoreCase) ||
                 string.Equals(role, "system", System.StringComparison.OrdinalIgnoreCase))
                 return KernelWakeValues.Mind;
@@ -41,6 +44,11 @@ namespace TraceSoul2.Logic
         public static bool IsSubconscious(string wake)
         {
             return wake == KernelWakeValues.Subconscious;
+        }
+
+        public static bool IsNightResidue(string wake)
+        {
+            return wake == KernelWakeValues.NightResidue;
         }
 
         private static string ReadPayloadWake(string payloadJson)

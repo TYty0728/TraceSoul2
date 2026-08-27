@@ -10,7 +10,7 @@ namespace TraceSoul2.Logic
 {
     /// <summary>
     /// 心跳：Moment 处理完后排一次；到期自己想要不要说、办事、睡下、多久后再跳。
-    /// 睡着后停跳，直到打破性 Moment（现在就是她发来的话）才醒来。
+    /// 睡着或空闲后停跳。睡着要等她发来才醒；空闲还会被以前约好的时间任务叫醒。
     /// </summary>
     public static class HeartbeatLogic
     {
@@ -23,6 +23,7 @@ namespace TraceSoul2.Logic
         public const int DefaultMinMinutes = 10;
         public const int DefaultMaxMinutes = 20;
         public const int DefaultLongFollowUpMinutes = 240;
+        public const int IdleMinutesThreshold = 180;
         public const int MinuteCap = 720;
 
         private static readonly Random Random = new Random();
@@ -79,14 +80,47 @@ namespace TraceSoul2.Logic
         }
 
         /// <summary>
-        /// 心跳醒着时必须留下下一次检查；只有明确睡下才真正停跳。
-        /// 模型没有给出分钟数时拉长到数小时，避免短周期打扰，也避免链路意外中断。
+        /// 心跳开口闸门。JSON 示例默认 speak=false，模型常一边写下 speak_center
+        /// 一边保持安静；有想让她现在听见的话就开口。没有独立意图的开口则收回。
+        /// </summary>
+        public static void ApplySpeakGate(MindDecisionData decision)
+        {
+            if (decision == null) return;
+            if (decision.sleep)
+            {
+                decision.speak = false;
+                return;
+            }
+            var center = (decision.speak_center ?? string.Empty).Trim();
+            if (!decision.speak && center.Length > 0)
+            {
+                decision.speak = true;
+                if (string.IsNullOrWhiteSpace(decision.heartbeat_intent))
+                    decision.heartbeat_intent = center;
+                return;
+            }
+            if (decision.speak && string.IsNullOrWhiteSpace(decision.heartbeat_intent))
+                decision.speak = false;
+        }
+
+        /// <summary>
+        /// 心跳醒着时必须留下下一次检查；只有明确睡下或进入空闲才真正停跳。
+        /// 模型没有给出分钟数时拉长到数小时；若同时决定安静，后续会进入空闲。
         /// </summary>
         public static int ResolveFollowUpMinutes(bool sleep, int requestedMinutes)
         {
             if (sleep) return 0;
             var requested = ClampMinutes(requestedMinutes);
             return requested > 0 ? requested : DefaultLongFollowUpMinutes;
+        }
+
+        /// <summary>
+        /// 心跳决定不开口，且下次要等很久：不要空转心跳，进入空闲直到被激活。
+        /// </summary>
+        public static bool ShouldEnterIdle(bool speak, bool sleep, int requestedMinutes)
+        {
+            if (sleep || speak) return false;
+            return ResolveFollowUpMinutes(false, requestedMinutes) >= IdleMinutesThreshold;
         }
 
         public static void NormalizeRange(ref int minMinutes, ref int maxMinutes)
@@ -129,10 +163,19 @@ namespace TraceSoul2.Logic
 
         public static bool ShouldSkipWhileAsleep(PluginEventData source, PairIdentity pair, string wake)
         {
-            if (KernelWakeLogic.IsSubconscious(wake) || KernelWakeLogic.LooksLikeDailyReview(
-                    source == null ? string.Empty : source.Content))
+            if (KernelWakeLogic.IsSubconscious(wake) || KernelWakeLogic.IsNightResidue(wake) ||
+                KernelWakeLogic.LooksLikeDailyReview(
+                    source == null ? string.Empty : source.Content) ||
+                NightResidueLogic.LooksLike(source == null ? string.Empty : source.Content))
                 return false;
             return !IsBreaking(source, pair);
+        }
+
+        /// <summary>空闲只停心跳；她发来的话、约好的时间任务、夜间余温仍会进来。</summary>
+        public static bool ShouldSkipWhileIdle(PluginEventData source, PairIdentity pair)
+        {
+            if (IsBreaking(source, pair)) return false;
+            return IsHeartbeatOrLegacyContinue(source == null ? string.Empty : source.Content);
         }
 
         public static long? NextDueUnixMs(IMemoryStore storage, string conversationId)

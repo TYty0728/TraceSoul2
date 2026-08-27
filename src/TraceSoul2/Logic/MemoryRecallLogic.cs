@@ -329,8 +329,8 @@ namespace TraceSoul2.Logic
                         ? "（相似度 " + scores[entry.Id].ToString("0.00") + "）"
                         : string.Empty;
                     builder.AppendLine("◆ " + (index == null ? "索引未知" :
-                        FormatDate(index.TimeUnixMs) + " · " +
-                        (string.IsNullOrWhiteSpace(index.TimeLabel) ? "时段未知" : index.TimeLabel) +
+                        FormatDate(index.TimeUnixMs) +
+                        (string.IsNullOrWhiteSpace(index.DayKindLabel) ? string.Empty : "（" + index.DayKindLabel + "）") +
                         (string.IsNullOrWhiteSpace(index.PersonLabel) ? string.Empty : " · " + index.PersonLabel) +
                         (string.IsNullOrWhiteSpace(index.MoodLabel) ? string.Empty : " · 心情：" + index.MoodLabel)) +
                         score);
@@ -352,17 +352,7 @@ namespace TraceSoul2.Logic
 
         private static string FormatDate(long unixMs)
         {
-            if (unixMs <= 0) return "时间未知";
-            try
-            {
-                return DateTimeOffset.FromUnixTimeMilliseconds(unixMs)
-                    .ToOffset(TimeSpan.FromHours(8))
-                    .ToString("yyyy年MM月dd日");
-            }
-            catch
-            {
-                return "时间未知";
-            }
+            return TimeLanguageUtil.RelativeWhen(unixMs);
         }
 
         private static string Limit(string value, int max)

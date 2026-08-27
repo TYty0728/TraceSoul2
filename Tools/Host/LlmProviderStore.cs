@@ -101,6 +101,8 @@ namespace TraceSoul2.Host
                 if (incoming.topP > 0) item.topP = incoming.topP;
                 if (incoming.maxTokens > 0) item.maxTokens = incoming.maxTokens;
                 if (incoming.timeout > 0) item.timeout = incoming.timeout;
+                if (incoming.transientRetries >= 0)
+                    item.transientRetries = Math.Max(0, Math.Min(6, incoming.transientRetries));
                 if (incoming.proxy != null) item.proxy = incoming.proxy.Trim();
                 item.thinkingEnabled = incoming.thinkingEnabled;
                 if (!string.IsNullOrWhiteSpace(incoming.reasoningEffort))
@@ -132,7 +134,8 @@ namespace TraceSoul2.Host
                     temperature = template.temperature,
                     topP = template.topP,
                     maxTokens = template.maxTokens,
-                    timeout = 120
+                    timeout = 120,
+                    transientRetries = 3
                 };
                 if (string.Equals(template.id, "moonshot", StringComparison.OrdinalIgnoreCase))
                 {
@@ -407,6 +410,26 @@ namespace TraceSoul2.Host
             }
         }
 
+        public LlmEndpointData ResolveExplicitSlot(string slot)
+        {
+            slot = NormalizeSlot(slot);
+            lock (gate)
+            {
+                if (string.Equals(slot, LlmSlotNames.Chat, StringComparison.OrdinalIgnoreCase))
+                {
+                    var chat = Find(data.currentId) ?? data.providers.FirstOrDefault();
+                    return chat == null || string.IsNullOrWhiteSpace(chat.apiKey)
+                        ? null
+                        : ToEndpoint(chat, chat.model);
+                }
+                var refer = SlotOf(slot);
+                if (refer == null || string.IsNullOrWhiteSpace(refer.providerId)) return null;
+                var item = Find(refer.providerId);
+                if (item == null || string.IsNullOrWhiteSpace(item.apiKey)) return null;
+                return ToEndpoint(item, string.IsNullOrWhiteSpace(refer.model) ? item.model : refer.model);
+            }
+        }
+
         public IReadOnlyList<LlmProviderBriefData> ListBrief()
         {
             lock (gate)
@@ -499,6 +522,7 @@ namespace TraceSoul2.Host
             if (item.models.Count == 0 && !string.IsNullOrWhiteSpace(item.model))
                 EnsureModel(item, item.model, LlmSlotNames.Chat);
             if (item.timeout <= 0) item.timeout = 120;
+            item.transientRetries = Math.Max(0, Math.Min(6, item.transientRetries));
             if (item.proxy == null) item.proxy = string.Empty;
         }
 
@@ -610,6 +634,7 @@ namespace TraceSoul2.Host
                 topP = value.topP,
                 maxTokens = value.maxTokens,
                 timeout = value.timeout,
+                transientRetries = value.transientRetries,
                 proxy = value.proxy,
                 thinkingEnabled = value.thinkingEnabled,
                 reasoningEffort = value.reasoningEffort,
@@ -671,6 +696,7 @@ namespace TraceSoul2.Host
                 TopP = item.topP <= 0 ? 1f : item.topP,
                 MaxTokens = item.maxTokens <= 0 ? 8192 : item.maxTokens,
                 TimeoutSeconds = item.timeout <= 0 ? 120 : item.timeout,
+                TransientErrorRetries = item.transientRetries,
                 ThinkingEnabled = thinkingOverride ?? item.thinkingEnabled,
                 ReasoningEffort = item.reasoningEffort,
                 EmptyContentRetries = 1
@@ -714,6 +740,7 @@ namespace TraceSoul2.Host
         public float topP { get; set; }
         public int maxTokens { get; set; }
         public int timeout { get; set; }
+        public int transientRetries { get; set; } = 3;
         public string proxy { get; set; }
         public bool thinkingEnabled { get; set; }
         public string reasoningEffort { get; set; }

@@ -71,6 +71,28 @@ namespace TraceSoul2.Manager
                 .ToList();
         }
 
+        public int CountDialogueMoments(string conversationId)
+        {
+            return connection.ExecuteScalar<int>(
+                "SELECT COUNT(*) FROM moments WHERE ConversationId=? " +
+                "AND (MemoryStatus IS NULL OR MemoryStatus!='operational') " +
+                "AND IFNULL(Role,'') NOT IN ('system_event','system')",
+                conversationId ?? string.Empty);
+        }
+
+        public List<MomentRecord> GetRecentDialogueMoments(string conversationId, int take)
+        {
+            if (take <= 0) return new List<MomentRecord>();
+            return connection.Query<MomentRecord>(
+                    "SELECT * FROM moments WHERE ConversationId=? " +
+                    "AND (MemoryStatus IS NULL OR MemoryStatus!='operational') " +
+                    "AND IFNULL(Role,'') NOT IN ('system_event','system') " +
+                    "ORDER BY CreatedUnixMs DESC LIMIT ?",
+                    conversationId ?? string.Empty, Math.Min(200, take))
+                .OrderBy(x => x.CreatedUnixMs)
+                .ToList();
+        }
+
         public List<OperationalEventRecord> GetRecentOperationalEvents(string conversationId, int take)
         {
             if (take <= 0) return new List<OperationalEventRecord>();
@@ -498,7 +520,7 @@ namespace TraceSoul2.Manager
             foreach (var raw in contents ?? Enumerable.Empty<string>())
             {
                 var content = (raw ?? string.Empty).Trim();
-                if (content.Length == 0 || content.Length > 40) continue;
+                if (content.Length == 0 || content.Length > TodayNewItemRecord.MaxContentChars) continue;
                 if (!existing.Add(content)) continue;
                 connection.Insert(new TodayNewItemRecord
                 {
@@ -927,6 +949,7 @@ namespace TraceSoul2.Manager
             EnsureColumn("turn_reviews", "PayloadJson", "TEXT");
             EnsureColumn("moments", "MemoryStatus", "TEXT");
             EnsureColumn("inner_runtime", "Asleep", "INTEGER");
+            EnsureColumn("inner_runtime", "Idle", "INTEGER");
             ArchiveLegacyOperationalMoments();
         }
 
@@ -1393,7 +1416,8 @@ namespace TraceSoul2.Manager
                 }),
                 SourceMomentId = data.SourceMomentId ?? string.Empty,
                 UpdatedUnixMs = data.UpdatedUnixMs,
-                Asleep = data.Asleep
+                Asleep = data.Asleep,
+                Idle = data.Idle
             };
         }
 
@@ -1418,7 +1442,8 @@ namespace TraceSoul2.Manager
                     : attention.items,
                 SourceMomentId = record.SourceMomentId,
                 UpdatedUnixMs = record.UpdatedUnixMs,
-                Asleep = record.Asleep
+                Asleep = record.Asleep,
+                Idle = record.Idle
             };
         }
 

@@ -33,5 +33,24 @@ namespace TraceSoul2.Logic
             return CurrentStart(now).AddDays(-1)
                 .ToString("yyyy-MM-dd", CultureInfo.InvariantCulture);
         }
+
+        /// <summary>指定记忆日的起点（该日 04:00）。</summary>
+        public static DateTimeOffset StartOf(string dayKey)
+        {
+            var day = DateTime.ParseExact(dayKey.Trim(), "yyyy-MM-dd", CultureInfo.InvariantCulture);
+            return new DateTimeOffset(day.Date.AddHours(BoundaryHour), ChinaOffset);
+        }
+
+        public static bool TryStartOf(string dayKey, out DateTimeOffset start)
+        {
+            start = default(DateTimeOffset);
+            if (string.IsNullOrWhiteSpace(dayKey)) return false;
+            DateTime day;
+            if (!DateTime.TryParseExact(dayKey.Trim(), "yyyy-MM-dd", CultureInfo.InvariantCulture,
+                    DateTimeStyles.None, out day))
+                return false;
+            start = new DateTimeOffset(day.Date.AddHours(BoundaryHour), ChinaOffset);
+            return true;
+        }
     }
 }

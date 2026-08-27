@@ -1,5 +1,7 @@
 using System;
 using System.Collections.Generic;
+using System.Text.Json;
+using System.Text.Json.Serialization;
 using SQLite;
 
 namespace TraceSoul2.Data
@@ -104,6 +106,8 @@ namespace TraceSoul2.Data
     [Table("today_new_items")]
     public sealed class TodayNewItemRecord
     {
+        public const int MaxContentChars = 80;
+
         [PrimaryKey]
         public string Id { get; set; }
 
@@ -156,17 +160,187 @@ namespace TraceSoul2.Data
     }
 
     [Serializable]
+    public sealed class LlmImagePartData
+    {
+        public string url;
+        public string mime;
+        public byte[] bytes;
+
+        public bool HasPixels()
+        {
+            return (bytes != null && bytes.Length > 0) ||
+                   (!string.IsNullOrWhiteSpace(url) &&
+                    (url.StartsWith("data:", StringComparison.OrdinalIgnoreCase) ||
+                     url.StartsWith("http://", StringComparison.OrdinalIgnoreCase) ||
+                     url.StartsWith("https://", StringComparison.OrdinalIgnoreCase)));
+        }
+
+        public string ToDataUri()
+        {
+            if (!string.IsNullOrWhiteSpace(url) &&
+                url.StartsWith("data:", StringComparison.OrdinalIgnoreCase))
+                return url;
+            if (bytes != null && bytes.Length > 0)
+            {
+                var type = string.IsNullOrWhiteSpace(mime) ? GuessMime(bytes) : mime.Trim();
+                return "data:" + type + ";base64," + Convert.ToBase64String(bytes);
+            }
+            return (url ?? string.Empty).Trim();
+        }
+
+        public byte[] ResolveBytes()
+        {
+            if (bytes != null && bytes.Length > 0) return bytes;
+            var data = (url ?? string.Empty).Trim();
+            var marker = ";base64,";
+            var at = data.IndexOf(marker, StringComparison.OrdinalIgnoreCase);
+            if (at < 0) return null;
+            try { return Convert.FromBase64String(data.Substring(at + marker.Length).Trim()); }
+            catch { return null; }
+        }
+
+        public string ResolveMime()
+        {
+            if (!string.IsNullOrWhiteSpace(mime)) return mime.Trim();
+            var data = (url ?? string.Empty).Trim();
+            if (data.StartsWith("data:", StringComparison.OrdinalIgnoreCase))
+            {
+                var end = data.IndexOf(';', 5);
+                if (end > 5) return data.Substring(5, end - 5);
+            }
+            return GuessMime(ResolveBytes());
+        }
+
+        public static string GuessMime(byte[] data)
+        {
+            if (data == null || data.Length < 4) return "image/jpeg";
+            if (data[0] == 0x89 && data[1] == 0x50 && data[2] == 0x4E && data[3] == 0x47) return "image/png";
+            if (data[0] == 0x47 && data[1] == 0x49 && data[2] == 0x46) return "image/gif";
+            if (data.Length >= 12 && data[0] == 0x52 && data[1] == 0x49 && data[2] == 0x46 && data[3] == 0x46 &&
+                data[8] == 0x57 && data[9] == 0x45 && data[10] == 0x42 && data[11] == 0x50)
+                return "image/webp";
+            return "image/jpeg";
+        }
+    }
+
+    /// <summary>
+    /// 有图时把 content 写成 OpenAI 兼容的 text + image_url 数组；没图时仍是字符串。
+    /// dump 不要打印 images 原始字节。
+    /// </summary>
+    public sealed class DeepSeekMessageJsonConverter : JsonConverter<DeepSeekMessageData>
+    {
+        public override DeepSeekMessageData Read(
+            ref Utf8JsonReader reader, Type typeToConvert, JsonSerializerOptions options)
+        {
+            using (var document = JsonDocument.ParseValue(ref reader))
+            {
+                var root = document.RootElement;
+                var message = new DeepSeekMessageData();
+                if (root.TryGetProperty("role", out var role))
+                    message.role = role.GetString();
+                if (root.TryGetProperty("reasoning_content", out var reasoning) &&
+                    reasoning.ValueKind == JsonValueKind.String)
+                    message.reasoning_content = reasoning.GetString();
+                if (!root.TryGetProperty("content", out var content)) return message;
+                if (content.ValueKind == JsonValueKind.String)
+                {
+                    message.content = content.GetString();
+                    return message;
+                }
+                if (content.ValueKind != JsonValueKind.Array) return message;
+                var texts = new List<string>();
+                var images = new List<LlmImagePartData>();
+                foreach (var part in content.EnumerateArray())
+                {
+                    if (part.ValueKind != JsonValueKind.Object) continue;
+                    if (part.TryGetProperty("text", out var text) && text.ValueKind == JsonValueKind.String)
+                    {
+                        var value = text.GetString();
+                        if (!string.IsNullOrWhiteSpace(value)) texts.Add(value);
+                        continue;
+                    }
+                    if (part.TryGetProperty("image_url", out var imageUrl))
+                    {
+                        var url = imageUrl.ValueKind == JsonValueKind.String
+                            ? imageUrl.GetString()
+                            : (imageUrl.ValueKind == JsonValueKind.Object &&
+                               imageUrl.TryGetProperty("url", out var nested) &&
+                               nested.ValueKind == JsonValueKind.String
+                                ? nested.GetString()
+                                : null);
+                        if (!string.IsNullOrWhiteSpace(url))
+                            images.Add(new LlmImagePartData { url = url });
+                    }
+                }
+                message.content = string.Join("\n", texts);
+                if (images.Count > 0) message.images = images;
+                return message;
+            }
+        }
+
+        public override void Write(
+            Utf8JsonWriter writer, DeepSeekMessageData value, JsonSerializerOptions options)
+        {
+            writer.WriteStartObject();
+            writer.WriteString("role", value == null ? string.Empty : (value.role ?? string.Empty));
+            var images = value == null ? null : value.images;
+            if (images != null && images.Count > 0)
+            {
+                writer.WritePropertyName("content");
+                writer.WriteStartArray();
+                var text = value.content ?? string.Empty;
+                if (text.Trim().Length == 0) text = "（附图）";
+                writer.WriteStartObject();
+                writer.WriteString("type", "text");
+                writer.WriteString("text", text);
+                writer.WriteEndObject();
+                foreach (var image in images)
+                {
+                    if (image == null || !image.HasPixels()) continue;
+                    writer.WriteStartObject();
+                    writer.WriteString("type", "image_url");
+                    writer.WritePropertyName("image_url");
+                    writer.WriteStartObject();
+                    writer.WriteString("url", image.ToDataUri());
+                    writer.WriteEndObject();
+                    writer.WriteEndObject();
+                }
+                writer.WriteEndArray();
+            }
+            else
+            {
+                writer.WriteString("content", value == null ? string.Empty : (value.content ?? string.Empty));
+            }
+            if (value != null && !string.IsNullOrWhiteSpace(value.reasoning_content))
+                writer.WriteString("reasoning_content", value.reasoning_content);
+            writer.WriteEndObject();
+        }
+    }
+
+    [Serializable]
+    [JsonConverter(typeof(DeepSeekMessageJsonConverter))]
     public sealed class DeepSeekMessageData
     {
         public string role;
         public string content;
         /// <summary>Kimi K3 多轮需原样回传；DeepSeek 无工具时可省略。</summary>
         public string reasoning_content;
+        /// <summary>入站识图用的附图。只在请求装配时展开成 image_url，不进对话正文。</summary>
+        [JsonIgnore]
+        public List<LlmImagePartData> images;
         public DeepSeekMessageData() { }
         public DeepSeekMessageData(string role, string content)
         {
             this.role = role;
             this.content = content;
+        }
+
+        public bool HasImages()
+        {
+            if (images == null || images.Count == 0) return false;
+            foreach (var image in images)
+                if (image != null && image.HasPixels()) return true;
+            return false;
         }
     }
 
@@ -334,5 +508,7 @@ namespace TraceSoul2.Data
         public bool ThinkingEnabled { get; set; }
         public string ReasoningEffort { get; set; } = "high";
         public int EmptyContentRetries { get; set; } = 1;
+        /// <summary>429、5xx、超时等瞬时故障的额外退避重试次数；0 表示关闭。</summary>
+        public int TransientErrorRetries { get; set; }
     }
 }

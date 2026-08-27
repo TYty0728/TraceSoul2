@@ -22,7 +22,7 @@ namespace TraceSoul2.Host
     {
         private static readonly HttpClient Http = new HttpClient
         {
-            Timeout = TimeSpan.FromSeconds(300)
+            Timeout = Timeout.InfiniteTimeSpan
         };
 
         private readonly DeepSeekConfigData config;
@@ -53,7 +53,9 @@ namespace TraceSoul2.Host
             this.config.Temperature = Math.Max(0f, Math.Min(2f, this.config.Temperature));
             this.config.TopP = Math.Max(0.01f, Math.Min(1f, this.config.TopP));
             this.config.MaxTokens = Math.Max(128, Math.Min(384000, this.config.MaxTokens));
+            this.config.TimeoutSeconds = Math.Max(5, Math.Min(600, this.config.TimeoutSeconds));
             this.config.EmptyContentRetries = Math.Max(0, Math.Min(3, this.config.EmptyContentRetries));
+            this.config.TransientErrorRetries = Math.Max(0, Math.Min(6, this.config.TransientErrorRetries));
         }
 
         public async Task<IReadOnlyList<string>> ListModelsAsync(
@@ -61,7 +63,8 @@ namespace TraceSoul2.Host
         {
             RequireKey();
             var url = GeminiRoot(config.BaseUrl) + "/models?key=" + Uri.EscapeDataString(config.ApiKey);
-            using (var response = await Http.GetAsync(url, cancellationToken))
+            using (var request = new HttpRequestMessage(HttpMethod.Get, url))
+            using (var response = await SendWithTimeoutAsync(request, cancellationToken))
             {
                 var body = await response.Content.ReadAsStringAsync();
                 if (!response.IsSuccessStatusCode)
@@ -100,7 +103,36 @@ namespace TraceSoul2.Host
             var current = messages;
             for (var attempt = 0; attempt < attempts; )
             {
-                var result = await SendOnceAsync(current, temperature, json, cancellationToken);
+                GeminiAttempt result;
+                var transientRetry = 0;
+                while (true)
+                {
+                    try
+                    {
+                        result = await SendOnceAsync(current, temperature, json, cancellationToken);
+                        break;
+                    }
+                    catch (OperationCanceledException) when (cancellationToken.IsCancellationRequested)
+                    {
+                        throw;
+                    }
+                    catch (Exception exception) when (
+                        transientRetry < config.TransientErrorRetries &&
+                        DeepSeekClientManager.IsRetryableProviderException(exception))
+                    {
+                        transientRetry++;
+                        var delayMs = DeepSeekClientManager.ResolveTransientRetryDelayMilliseconds(
+                            exception, transientRetry);
+                        await Task.Delay(delayMs, cancellationToken);
+                    }
+                    catch (Exception exception) when (
+                        transientRetry > 0 &&
+                        DeepSeekClientManager.IsRetryableProviderException(exception))
+                    {
+                        throw new InvalidOperationException(
+                            exception.Message + "（已按退避策略重试 " + transientRetry + " 次）", exception);
+                    }
+                }
                 if (string.Equals(result.FinishReason, "RECITATION", StringComparison.OrdinalIgnoreCase))
                 {
                     recitationTries++;
@@ -146,15 +178,41 @@ namespace TraceSoul2.Host
             using (var request = new HttpRequestMessage(HttpMethod.Post, url))
             {
                 request.Content = new StringContent(payload, Encoding.UTF8, "application/json");
-                using (var response = await Http.SendAsync(request, cancellationToken))
+                using (var response = await SendWithTimeoutAsync(request, cancellationToken))
                 {
                     var body = await response.Content.ReadAsStringAsync();
                     lastUsage = LlmUsageLogic.Parse(body);
                     DumpCall(payload, body);
                     if (!response.IsSuccessStatusCode)
-                        throw new InvalidOperationException(
+                    {
+                        var failure = new InvalidOperationException(
                             "Gemini API " + (int)response.StatusCode + ": " + TrimError(body));
+                        if (DeepSeekClientManager.IsRetryableProviderFailure((int)response.StatusCode, body))
+                            DeepSeekClientManager.AttachRetryAfter(failure, response);
+                        throw failure;
+                    }
                     return ParseAttempt(body);
+                }
+            }
+        }
+
+        private async Task<HttpResponseMessage> SendWithTimeoutAsync(
+            HttpRequestMessage request,
+            CancellationToken cancellationToken)
+        {
+            using (var timeout = CancellationTokenSource.CreateLinkedTokenSource(cancellationToken))
+            {
+                timeout.CancelAfter(TimeSpan.FromSeconds(config.TimeoutSeconds));
+                try
+                {
+                    return await Http.SendAsync(request, timeout.Token);
+                }
+                catch (OperationCanceledException exception)
+                    when (!cancellationToken.IsCancellationRequested)
+                {
+                    throw new TimeoutException(
+                        "Gemini 请求超过 " + config.TimeoutSeconds + " 秒：" +
+                        ProviderId + "/" + Model + "。", exception);
                 }
             }
         }
@@ -162,7 +220,7 @@ namespace TraceSoul2.Host
         private string BuildPayload(List<DeepSeekMessageData> messages, float temperature, bool json)
         {
             var systems = new List<string>();
-            var turns = new List<KeyValuePair<string, string>>();
+            var turns = new List<GeminiTurn>();
             foreach (var item in messages ?? new List<DeepSeekMessageData>())
             {
                 var role = (item.role ?? string.Empty).Trim().ToLowerInvariant();
@@ -174,19 +232,18 @@ namespace TraceSoul2.Host
                 }
                 var geminiRole = role == "assistant" ? "model" : "user";
                 if (turns.Count == 0 && geminiRole == "model")
-                    turns.Add(new KeyValuePair<string, string>("user", " "));
-                if (turns.Count > 0 && turns[turns.Count - 1].Key == geminiRole)
-                    turns[turns.Count - 1] = new KeyValuePair<string, string>(
-                        geminiRole, turns[turns.Count - 1].Value + "\n" + text);
+                    turns.Add(new GeminiTurn("user", " "));
+                if (turns.Count > 0 && turns[turns.Count - 1].Role == geminiRole)
+                    turns[turns.Count - 1].Append(text, item.images);
                 else
-                    turns.Add(new KeyValuePair<string, string>(geminiRole, text));
+                    turns.Add(new GeminiTurn(geminiRole, text, item.images));
             }
             if (turns.Count == 0)
-                turns.Add(new KeyValuePair<string, string>("user", " "));
+                turns.Add(new GeminiTurn("user", " "));
             var contents = turns.Select(x => (object)new
             {
-                role = x.Key,
-                parts = new[] { new { text = x.Value } }
+                role = x.Role,
+                parts = x.ToParts()
             }).ToList();
 
             var generation = new Dictionary<string, object>
@@ -332,7 +389,8 @@ namespace TraceSoul2.Host
                 var name = DateTime.Now.ToString("yyyyMMdd-HHmmss-fff") + "-" + seq.ToString("D3");
                 var enc = new UTF8Encoding(true);
                 System.IO.File.WriteAllText(
-                    System.IO.Path.Combine(dir, name + "-prompt.txt"), requestJson ?? string.Empty, enc);
+                    System.IO.Path.Combine(dir, name + "-prompt.txt"),
+                    DeepSeekClientManager.SanitizeVisionDump(requestJson ?? string.Empty), enc);
                 System.IO.File.WriteAllText(
                     System.IO.Path.Combine(dir, name + "-response.txt"),
                     ParseAttempt(responseBody).Content ?? responseBody ?? string.Empty, enc);
@@ -344,6 +402,48 @@ namespace TraceSoul2.Host
             catch
             {
                 /* 导出失败不影响主流程 */
+            }
+        }
+
+        private sealed class GeminiTurn
+        {
+            public string Role { get; private set; }
+            public string Text { get; private set; }
+            public List<LlmImagePartData> Images { get; private set; }
+
+            public GeminiTurn(string role, string text, List<LlmImagePartData> images = null)
+            {
+                Role = role;
+                Text = text ?? string.Empty;
+                Images = images == null ? new List<LlmImagePartData>() : new List<LlmImagePartData>(images);
+            }
+
+            public void Append(string text, List<LlmImagePartData> images)
+            {
+                Text = Text + "\n" + (text ?? string.Empty);
+                if (images == null) return;
+                foreach (var image in images)
+                    if (image != null) Images.Add(image);
+            }
+
+            public List<object> ToParts()
+            {
+                var parts = new List<object> { new { text = string.IsNullOrWhiteSpace(Text) ? " " : Text } };
+                foreach (var image in Images)
+                {
+                    if (image == null) continue;
+                    var bytes = image.ResolveBytes();
+                    if (bytes == null || bytes.Length < 32) continue;
+                    parts.Add(new
+                    {
+                        inline_data = new
+                        {
+                            mime_type = image.ResolveMime(),
+                            data = Convert.ToBase64String(bytes)
+                        }
+                    });
+                }
+                return parts;
             }
         }
 

@@ -2,6 +2,7 @@ using System;
 using System.Collections.Generic;
 using System.Diagnostics;
 using System.Linq;
+using System.Text;
 using System.Text.RegularExpressions;
 using System.Threading;
 using System.Threading.Tasks;
@@ -12,7 +13,7 @@ using TraceSoul2.Util;
 
 namespace TraceSoul2.Logic
 {
-    /// <summary>主运转中枢：按入口换轨——心智维护当前时，外显开口，潜意识复盘；出门走代码链。</summary>
+    /// <summary>主运转中枢：按入口换轨——心智维护当前时，外显开口，潜意识复盘，夜里余温漏一句。</summary>
     public sealed class KernelLogic
     {
         private readonly IMemoryStore storage;
@@ -61,15 +62,18 @@ namespace TraceSoul2.Logic
             expressor = new ExpressorLogic(llm);
             plugins = pluginManager ?? throw new ArgumentNullException("pluginManager");
             plugins.Services.Llm = llm;
+            if (plugins.Services.ContextPack == null)
+                plugins.Services.ContextPack = new LlmContextAssembler();
         }
 
         public Task<ChatTurnResultData> ChatAsync(
             string conversationId,
             string userText,
             string sourceId = "dialogue.receive",
-            int contextInjectionCount = 0,
+            int historyWindowMax = 0,
             CancellationToken cancellationToken = default(CancellationToken),
-            string traceId = null)
+            string traceId = null,
+            int historyWindowAlign = 0)
         {
             var pair = storage.LoadPairIdentity();
             if (!pair.IsComplete)
@@ -78,14 +82,15 @@ namespace TraceSoul2.Logic
             source.TraceId = traceId;
             source.Breaking = true;
             return ProcessPluginEventAsync(
-                conversationId, source, contextInjectionCount, cancellationToken);
+                conversationId, source, historyWindowMax, cancellationToken, historyWindowAlign);
         }
 
         public async Task<ChatTurnResultData> ProcessPluginEventAsync(
             string conversationId,
             PluginEventData source,
-            int contextInjectionCount = 0,
-            CancellationToken cancellationToken = default(CancellationToken))
+            int historyWindowMax = 0,
+            CancellationToken cancellationToken = default(CancellationToken),
+            int historyWindowAlign = 0)
         {
             if (string.IsNullOrWhiteSpace(conversationId))
                 throw new ArgumentException("conversationId 不能为空。", "conversationId");
@@ -99,22 +104,16 @@ namespace TraceSoul2.Logic
             var pair = storage.LoadPairIdentity();
             if (!pair.IsComplete)
                 throw new InvalidOperationException("相处开始前，需要先保存两个人的名字。");
-            contextInjectionCount = Math.Max(0, Math.Min(100, contextInjectionCount));
+            var historyWindow = CommonContextPackLogic.NormalizeHistoryWindow(
+                historyWindowMax, historyWindowAlign);
 
             var prepareTimer = Stopwatch.StartNew();
             var wake = KernelWakeLogic.Resolve(source);
-            // 运行事件也会临时成为本轮刺激，但不会进入可复盘的 Moment 账本。
-            var triggerMoment = PersistPluginEvent(conversationId, source);
             var inner = storage.LoadOrCreateInnerRuntime(conversationId);
-            if (inner.Asleep && HeartbeatLogic.IsBreaking(source, pair))
+            if (inner.Asleep && HeartbeatLogic.ShouldSkipWhileAsleep(source, pair, wake) &&
+                !HeartbeatLogic.IsBreaking(source, pair))
             {
-                var woken = InnerLifeLogic.WithAsleep(inner, false, triggerMoment.Id,
-                    DateTimeOffset.UtcNow.ToUnixTimeMilliseconds());
-                if (woken != inner) storage.SaveInnerRuntime(woken);
-                inner = woken;
-            }
-            else if (inner.Asleep && HeartbeatLogic.ShouldSkipWhileAsleep(source, pair, wake))
-            {
+                PersistPluginEvent(conversationId, source);
                 plugins.Services.LogTiming(source.TraceId, "睡着，跳过非打破性 Moment",
                     prepareTimer.ElapsedMilliseconds);
                 return new ChatTurnResultData(
@@ -123,25 +122,69 @@ namespace TraceSoul2.Logic
                     new List<BrainFacetOutputData>(),
                     new List<TraceCapabilityResultData>());
             }
-            // 原始对话只承担语言衔接：最多滚动 3 轮（约 6 条人/伴侣消息）。
-            var recentMomentLimit = Math.Min(Math.Max(0, contextInjectionCount), 6);
-            var recent = recentMomentLimit <= 0
-                ? new List<MomentRecord>()
-                : storage.GetRecentMoments(conversationId, 200)
-                    .Where(x => x.Id != triggerMoment.Id &&
-                                (pair.IsHumanMoment(x.Role) || pair.IsCompanionMoment(x.Role)))
-                    .TakeLast(recentMomentLimit)
-                    .ToList();
+            if (inner.Idle && HeartbeatLogic.ShouldSkipWhileIdle(source, pair) &&
+                !HeartbeatLogic.IsBreaking(source, pair))
+            {
+                PersistPluginEvent(conversationId, source);
+                plugins.Services.LogTiming(source.TraceId, "空闲，跳过心跳",
+                    prepareTimer.ElapsedMilliseconds);
+                return new ChatTurnResultData(
+                    string.Empty, "idle", "空闲", "空闲｜跳过",
+                    new List<TraceContextBlockData>(),
+                    new List<BrainFacetOutputData>(),
+                    new List<TraceCapabilityResultData>());
+            }
+
+            if (VisionLogic.HasInboundImages(source.PayloadJson))
+            {
+                var visionTimer = Stopwatch.StartNew();
+                var seen = await VisionLogic.SeeInboundAsync(source, plugins.Services, cancellationToken);
+                source.Content = VisionLogic.AttachSeen(source.Content, seen);
+                plugins.Services.LogTiming(source.TraceId, "识图完成", visionTimer.ElapsedMilliseconds,
+                    "chars=" + (seen ?? string.Empty).Length);
+            }
+
+            // 运行事件也会临时成为本轮刺激，但不会进入可复盘的 Moment 账本。
+            var triggerMoment = PersistPluginEvent(conversationId, source);
+            if ((inner.Asleep || inner.Idle) && HeartbeatLogic.IsBreaking(source, pair))
+            {
+                var woken = InnerLifeLogic.WithAwake(inner, triggerMoment.Id,
+                    DateTimeOffset.UtcNow.ToUnixTimeMilliseconds());
+                if (woken != inner) storage.SaveInnerRuntime(woken);
+                inner = woken;
+            }
+            else if (inner.Idle &&
+                     !KernelWakeLogic.IsNightResidue(wake) &&
+                     !KernelWakeLogic.IsSubconscious(wake))
+            {
+                var woken = InnerLifeLogic.WithIdle(inner, false, triggerMoment.Id,
+                    DateTimeOffset.UtcNow.ToUnixTimeMilliseconds());
+                if (woken != inner) storage.SaveInnerRuntime(woken);
+                inner = woken;
+            }
+            // 原始对话只承担语言衔接。窗口长度在 [min, max] 之间，每攒满 align 条才整体前移；
+            // 起点必须按全部对话条数算，不能先截成 max 条再对齐，否则每轮都会换掉历史第一条。
+            var recent = LoadAlignedDialogueHistory(
+                storage, pair, conversationId, triggerMoment,
+                historyWindow.Min, historyWindow.Align);
             var turn = new TraceTurnContext(
                 conversationId,
                 triggerMoment,
                 recent,
-                recentMomentLimit,
+                historyWindow.Min,
                 wake == KernelWakeValues.Dialogue && pair.IsHumanMoment(source.Role),
                 plugins.Services,
                 wake,
-                source.TraceId);
+                source.TraceId,
+                historyWindow.Align);
             MouthLogic.NoticeInbound(source, turn);
+            // console 观察窗：任何来源的入站消息都在 console 留一份运行痕迹（不入对话历史）。
+            if (!source.IsOperational &&
+                !string.Equals(source.PluginId, "builtin.dialogue", StringComparison.Ordinal))
+            {
+                await MirrorToConsoleAsync(turn, conversationId, "in",
+                    ConsoleViaLabel(source.PluginId), source.Content, source.Role);
+            }
 
             var turnFinished = false;
             try
@@ -150,7 +193,10 @@ namespace TraceSoul2.Logic
             var catalog = plugins.GetAvailableCatalog(turn);
             plugins.Services.LogTiming(turn.TraceId, "输入落库与轮次准备完成",
                 prepareTimer.ElapsedMilliseconds,
-                "wake=" + wake + "｜catalog=" + catalog.Count + "｜history=" + recent.Count);
+                "wake=" + wake + "｜catalog=" + catalog.Count +
+                "｜history=" + recent.Count +
+                "/" + historyWindow.Min + "-" + historyWindow.Max +
+                " align=" + historyWindow.Align);
             BrainStructuredOutputData final;
             MindDecisionData mindDecision = null;
             TraceCapabilityResultData expression = null;
@@ -161,6 +207,16 @@ namespace TraceSoul2.Logic
                 var branchTimer = Stopwatch.StartNew();
                 final = await RunSubconsciousAsync(turn, catalog, triggerMoment, cancellationToken);
                 plugins.Services.LogTiming(turn.TraceId, "潜意识轨完成", branchTimer.ElapsedMilliseconds);
+            }
+            else if (KernelWakeLogic.IsNightResidue(wake))
+            {
+                var branchTimer = Stopwatch.StartNew();
+                var night = await RunNightResidueAsync(turn, catalog, triggerMoment, cancellationToken);
+                final = night.Final;
+                expression = night.Expression;
+                responseFlushed = night.ResponseFlushed;
+                plugins.Services.LogTiming(turn.TraceId, "夜间余温轨完成", branchTimer.ElapsedMilliseconds,
+                    night.Final == null ? string.Empty : night.Final.decision_summary);
             }
             else
             {
@@ -252,6 +308,76 @@ namespace TraceSoul2.Logic
             return final;
         }
 
+        private async Task<LivedMindTurn> RunNightResidueAsync(
+            TraceTurnContext turn,
+            List<TraceContributionDescriptorData> catalog,
+            MomentRecord triggerMoment,
+            CancellationToken cancellationToken)
+        {
+            var dayKey = NightResidueLogic.DayKeyFromContent(
+                triggerMoment == null ? string.Empty : triggerMoment.Content);
+            var seed = NightResidueLogic.LoadSeed(storage, turn.ConversationId, dayKey);
+            if (!seed.HasWarmth)
+            {
+                NightResidueLogic.Remember(storage, dayKey, NightResidueLogic.StatusSkipped);
+                return new LivedMindTurn(
+                    ExpressorLogic.NormalizeStep(new BrainStructuredOutputData
+                    {
+                        state = BrainStepStateValues.Finish,
+                        mode = BrainModeValues.Deep,
+                        should_express = false,
+                        intent = "夜间余温",
+                        decision_summary = "夜间余温｜空天"
+                    }, catalog, true, false, ResolveReplyChannel(turn)),
+                    null, false, null);
+            }
+
+            var contextTimer = Stopwatch.StartNew();
+            var blocks = await plugins.BuildContextBlocksAsync(turn, cancellationToken);
+            plugins.Services.LogTiming(turn.TraceId, "夜间余温上下文组装完成", contextTimer.ElapsedMilliseconds,
+                "blocks=" + blocks.Count + "｜events=" + seed.Events.Count);
+            var expressionCatalog = FilterNightResidueCatalog(
+                FilterExpressionCatalog(catalog, turn));
+
+            var expressTimer = Stopwatch.StartNew();
+            var final = await expressor.ExpressNightResidueAsync(
+                turn, blocks, seed, expressionCatalog, cancellationToken);
+            plugins.Services.LogTiming(turn.TraceId, "夜间余温表达完成", expressTimer.ElapsedMilliseconds,
+                final.decision_summary);
+            final = ExpressorLogic.NormalizeStep(
+                final, expressionCatalog, true, false, ResolveReplyChannel(turn));
+            CloseReplyChannel(final, turn, expressionCatalog);
+
+            TraceCapabilityResultData expression = null;
+            var responseFlushed = false;
+            if (final.should_express && !string.IsNullOrWhiteSpace(final.reply))
+            {
+                await RunExpressionStartingHooksAsync(turn);
+                var outputTimer = Stopwatch.StartNew();
+                expression = await ExecuteExpressionAsync(final, turn, turn.ConversationId, cancellationToken);
+                plugins.Services.LogTiming(turn.TraceId, "夜间余温对外表达链完成", outputTimer.ElapsedMilliseconds,
+                    "capability=" + final.expression_capability_id);
+                responseFlushed = true;
+                NightResidueLogic.Remember(storage, dayKey, NightResidueLogic.StatusSent);
+            }
+            else
+            {
+                NightResidueLogic.Remember(storage, dayKey, NightResidueLogic.StatusSilent);
+            }
+
+            return new LivedMindTurn(final, expression, responseFlushed, null);
+        }
+
+        private static List<TraceContributionDescriptorData> FilterNightResidueCatalog(
+            IEnumerable<TraceContributionDescriptorData> catalog)
+        {
+            return (catalog ?? Enumerable.Empty<TraceContributionDescriptorData>())
+                .Where(x => x == null ||
+                            x.Kind != TraceContributionKindValues.Effector ||
+                            string.Equals(MouthLogic.OrganOf(x), BodyOrganValues.Text, StringComparison.Ordinal))
+                .ToList();
+        }
+
         private async Task<LivedMindTurn> RunLivedMindAsync(
             TraceTurnContext turn,
             List<TraceContributionDescriptorData> catalog,
@@ -263,12 +389,24 @@ namespace TraceSoul2.Logic
                 "blocks=" + blocks.Count);
             var pluginList = plugins.GetPlugins().Where(x => x.Enabled).ToList();
             var expressionCatalog = FilterExpressionCatalog(catalog, turn);
+            await TryReadQzoneIfAskedAsync(turn, catalog, cancellationToken);
+
+            // 长尾工具向量预选：命中才进心智动态段；不命中则 prompt 与旧形状一致。
+            var lookupTimer = Stopwatch.StartNew();
+            var toolCandidates = await ToolLookupLogic.SelectAsync(
+                ToolLookupLogic.BuildQuery(turn), turn.Services.Embedding, catalog, cancellationToken);
+            turn.Workspace.ToolCandidates = toolCandidates;
+            if (toolCandidates.Count > 0)
+                plugins.Services.LogTiming(turn.TraceId, "工具检索入选", lookupTimer.ElapsedMilliseconds,
+                    string.Join("、", toolCandidates.Select(x =>
+                        x.Descriptor.Id + "(" + x.Score.ToString("0.00") + ")")));
 
             var recallTopK = turn.Services.Recall != null && turn.Services.Recall.DefaultTopK > 0
                 ? Math.Max(1, Math.Min(10, turn.Services.Recall.DefaultTopK))
                 : 3;
             var preludeTimer = Stopwatch.StartNew();
             var naturallyAwakenedPast = MemoryRecallLogic.Preview(turn, recallTopK);
+            turn.Workspace.SharedMemory = naturallyAwakenedPast ?? string.Empty;
             plugins.Services.LogTiming(turn.TraceId, "记忆预激活完成", preludeTimer.ElapsedMilliseconds,
                 "top_k=" + recallTopK + "｜chars=" + naturallyAwakenedPast.Length);
 
@@ -280,14 +418,11 @@ namespace TraceSoul2.Logic
             var mindTimer = Stopwatch.StartNew();
             var decision = await mind.DecideAsync(
                 turn, null, false, naturallyAwakenedPast, cancellationToken);
-            if (HeartbeatLogic.IsHeartbeatContent(turn.Moment == null ? string.Empty : turn.Moment.Content) &&
-                decision.speak && string.IsNullOrWhiteSpace(decision.heartbeat_intent))
-            {
-                decision.speak = false;
-                plugins.Services.LogTiming(turn.TraceId, "心跳无独立意图，保持安静", 0);
-            }
+            ApplyHeartbeatSpeakDecision(turn, decision);
             plugins.Services.LogTiming(turn.TraceId, "心智判断完成", mindTimer.ElapsedMilliseconds,
-                "beat=" + decision.BeatValue() + "｜image=" + decision.ImageValue());
+                "beat=" + decision.BeatValue() + "｜speak=" + decision.speak +
+                "｜image=" + decision.ImageValue());
+            await TryRunMindToolCallAsync(turn, catalog, decision, cancellationToken);
             string leaveResult = null;
             TraceCapabilityResultData expression = null;
             if (decision.WantsLeave())
@@ -309,6 +444,7 @@ namespace TraceSoul2.Logic
                 var secondMindTimer = Stopwatch.StartNew();
                 decision = await mind.DecideAsync(
                     turn, leaveResult, true, naturallyAwakenedPast, cancellationToken);
+                ApplyHeartbeatSpeakDecision(turn, decision);
                 plugins.Services.LogTiming(turn.TraceId, "外出后心智判断完成", secondMindTimer.ElapsedMilliseconds);
             }
 
@@ -527,28 +663,39 @@ namespace TraceSoul2.Logic
             {
                 final.expression_capability_id = replyChannel;
             }
-            var expressionCall = new BrainCapabilityCallData
+            TraceCapabilityResultData expression = null;
+            if (!string.IsNullOrWhiteSpace(final.expression_capability_id))
             {
-                call_id = "expression-" + Guid.NewGuid().ToString("N"),
-                capability_id = final.expression_capability_id,
-                purpose = "执行本轮对外表达",
-                arguments = new List<BrainCallArgumentData>
+                var expressionCall = new BrainCapabilityCallData
                 {
-                    new BrainCallArgumentData { name = "text", value = final.reply }
-                }
-            };
-            var expression = await plugins.ExecuteAsync(expressionCall, turn, cancellationToken);
-            if (expression.Status != "success" || expression.ProducedEvent == null)
-                throw new InvalidOperationException("外部表达器执行失败：" + expression.Summary);
-            turn.Workspace.Results.Add(expression);
-            PersistPluginEvent(conversationId, expression.ProducedEvent);
+                    call_id = "expression-" + Guid.NewGuid().ToString("N"),
+                    capability_id = final.expression_capability_id,
+                    purpose = "执行本轮对外表达",
+                    arguments = new List<BrainCallArgumentData>
+                    {
+                        new BrainCallArgumentData { name = "text", value = final.reply }
+                    }
+                };
+                expression = await plugins.ExecuteAsync(expressionCall, turn, cancellationToken);
+                if (expression.Status != "success" || expression.ProducedEvent == null)
+                    throw new InvalidOperationException("外部表达器执行失败：" + expression.Summary);
+                turn.Workspace.Results.Add(expression);
+                PersistPluginEvent(conversationId, expression.ProducedEvent);
+            }
+            // console 观察窗：她说的每句话都在 console 留一份运行痕迹；
+            // 没有活的真实身体时，这份打印就是保底出口。调试口直答（文字本就走了 console）不重复打印。
+            if (!string.Equals(final.expression_capability_id, "dialogue.send", StringComparison.Ordinal))
+            {
+                await MirrorToConsoleAsync(turn, conversationId, "out",
+                    ConsoleViaLabel(replyChannel), final.reply, null);
+            }
 
             List<BrainCapabilityCallData> immediate;
             List<BrainCapabilityCallData> images;
             ExpressorLogic.PartitionExpressions(final.expressions, out immediate, out images);
             foreach (var extra in immediate)
             {
-                if (IsQzoneCapability(extra.capability_id) && !AllowsQzonePublish(turn))
+                if (IsQzonePublishCapability(extra.capability_id) && !AllowsQzonePublish(turn))
                 {
                     plugins.Services.LogTiming(turn.TraceId, "空间发布已拦截", 0,
                         "当前 Moment 没有明确发布指令");
@@ -558,6 +705,20 @@ namespace TraceSoul2.Logic
                         CapabilityId = extra.capability_id,
                         Status = "skipped",
                         Summary = "空间发布已拦截：用户没有明确要求发布。",
+                        Payload = string.Empty
+                    });
+                    continue;
+                }
+                if (IsQqMoodCapability(extra.capability_id) && !AllowsQqMood(turn))
+                {
+                    plugins.Services.LogTiming(turn.TraceId, "QQ心情已拦截", 0,
+                        "当前 Moment 没有明确改签名/状态指令");
+                    turn.Workspace.Results.Add(new TraceCapabilityResultData
+                    {
+                        CallId = string.IsNullOrWhiteSpace(extra.call_id) ? "expr-mood-blocked" : extra.call_id,
+                        CapabilityId = extra.capability_id,
+                        Status = "skipped",
+                        Summary = "QQ心情已拦截：用户没有明确要求改签名或状态。",
                         Payload = string.Empty
                     });
                     continue;
@@ -756,37 +917,270 @@ namespace TraceSoul2.Logic
             TraceTurnContext turn)
         {
             var items = (catalog ?? Enumerable.Empty<TraceContributionDescriptorData>()).ToList();
-            if (AllowsQzonePublish(turn)) return items;
-            return items.Where(x => x == null || !IsQzoneCapability(x.Id) &&
-                !string.Equals(MouthLogic.OrganOf(x), BodyOrganValues.Qzone, StringComparison.Ordinal)).ToList();
+            if (AllowsQzonePublish(turn) && AllowsQqMood(turn)) return items;
+            return items.Where(x => x == null ||
+                                    (!IsQzonePublish(x) || AllowsQzonePublish(turn)) &&
+                                    (!IsQqMood(x) || AllowsQqMood(turn))).ToList();
         }
 
-        private static bool IsQzoneCapability(string capabilityId)
+        private static bool IsQzonePublish(TraceContributionDescriptorData item)
         {
-            return !string.IsNullOrWhiteSpace(capabilityId) &&
-                   capabilityId.IndexOf("qzone", StringComparison.OrdinalIgnoreCase) >= 0;
+            if (item == null) return false;
+            if (item.Kind == TraceContributionKindValues.Effector &&
+                string.Equals(MouthLogic.OrganOf(item), BodyOrganValues.Qzone, StringComparison.Ordinal))
+                return true;
+            return IsQzonePublishCapability(item.Id);
+        }
+
+        private static bool IsQzonePublishCapability(string capabilityId)
+        {
+            if (string.IsNullOrWhiteSpace(capabilityId)) return false;
+            var id = capabilityId;
+            if (id.IndexOf(".read", StringComparison.OrdinalIgnoreCase) >= 0) return false;
+            return id.IndexOf("qzone.publish", StringComparison.OrdinalIgnoreCase) >= 0 ||
+                   string.Equals(id, "qq.qzone", StringComparison.OrdinalIgnoreCase);
+        }
+
+        private static bool IsQqMood(TraceContributionDescriptorData item)
+        {
+            return item != null && IsQqMoodCapability(item.Id);
+        }
+
+        private static bool IsQqMoodCapability(string capabilityId)
+        {
+            if (string.IsNullOrWhiteSpace(capabilityId)) return false;
+            return string.Equals(capabilityId, "qq.status.mood", StringComparison.OrdinalIgnoreCase);
+        }
+
+        /// <summary>改 QQ 签名/在线状态同样不可逆，只接受当前消息里的明确指令。</summary>
+        private static bool AllowsQqMood(TraceTurnContext turn)
+        {
+            var text = turn == null || turn.Moment == null
+                ? string.Empty
+                : (turn.Moment.Content ?? string.Empty).Trim();
+            if (text.Length == 0) return false;
+            var target = text.IndexOf("签名", StringComparison.Ordinal) >= 0 ||
+                         text.IndexOf("在线状态", StringComparison.Ordinal) >= 0 ||
+                         text.IndexOf("QQ状态", StringComparison.OrdinalIgnoreCase) >= 0 ||
+                         (text.IndexOf("心情", StringComparison.Ordinal) >= 0 &&
+                          (text.IndexOf("QQ", StringComparison.OrdinalIgnoreCase) >= 0 ||
+                           text.IndexOf("空间", StringComparison.Ordinal) >= 0));
+            if (!target) return false;
+            return Regex.IsMatch(text,
+                @"(?:改|换|设|设置|更新|同步).{0,8}(?:签名|状态|心情)") ||
+                   Regex.IsMatch(text,
+                @"(?:签名|状态|心情).{0,6}(?:改|换|设成|换成|更新)");
         }
 
         /// <summary>
         /// 空间发布是不可逆的外部副作用，只接受当前消息中的明确发布指令。
         /// 宁可漏触发并让用户再说清楚，也不能因为模型自由发挥而误发。
         /// </summary>
+        private static bool HasQzoneTarget(string text)
+        {
+            return text.IndexOf("说说", StringComparison.Ordinal) >= 0 ||
+                   text.IndexOf("空间动态", StringComparison.Ordinal) >= 0 ||
+                   text.IndexOf("QQ空间", StringComparison.OrdinalIgnoreCase) >= 0 ||
+                   text.IndexOf("QZone", StringComparison.OrdinalIgnoreCase) >= 0 ||
+                   text.IndexOf("空间", StringComparison.Ordinal) >= 0;
+        }
+
         private static bool AllowsQzonePublish(TraceTurnContext turn)
         {
             var text = turn == null || turn.Moment == null
                 ? string.Empty
                 : (turn.Moment.Content ?? string.Empty).Trim();
             if (text.Length == 0) return false;
-            var target = text.IndexOf("说说", StringComparison.Ordinal) >= 0 ||
-                         text.IndexOf("空间动态", StringComparison.Ordinal) >= 0 ||
-                         text.IndexOf("QQ空间", StringComparison.OrdinalIgnoreCase) >= 0 ||
-                         text.IndexOf("QZone", StringComparison.OrdinalIgnoreCase) >= 0;
-            if (!target) return false;
+            if (!HasQzoneTarget(text)) return false;
 
             return Regex.IsMatch(text,
-                @"^(?:阿循[，,：:\s]*)?(?:请|麻烦)?(?:帮我|替我|给我)?(?:去)?(?:发|发布|发表|更新|同步)") ||
+                @"^(?:阿循|循循|循)?[，,：:\s]*(?:请|麻烦)?(?:帮我|替我|给我)?(?:去)?(?:发|发布|发表|更新|同步)") ||
                    Regex.IsMatch(text,
-                @"(?:帮我|替我|给我|请你|麻烦你).{0,6}(?:发|发布|发表|更新|同步)");
+                @"(?:帮我|替我|给我|请你|麻烦你).{0,6}(?:发|发布|发表|更新|同步)") ||
+                   Regex.IsMatch(text,
+                @"你(?:去|帮我|给我)?(?:发|发布|发表|更新|同步)一?[条个篇段]?");
+        }
+
+        private static bool WantsQzoneRead(TraceTurnContext turn)
+        {
+            if (AllowsQzonePublish(turn)) return false;
+            var text = turn == null || turn.Moment == null
+                ? string.Empty
+                : (turn.Moment.Content ?? string.Empty).Trim();
+            if (text.Length == 0) return false;
+            if (!HasQzoneTarget(text)) return false;
+            return text.IndexOf("看", StringComparison.Ordinal) >= 0 ||
+                   text.IndexOf("瞧", StringComparison.Ordinal) >= 0 ||
+                   text.IndexOf("翻", StringComparison.Ordinal) >= 0 ||
+                   text.IndexOf("刷", StringComparison.Ordinal) >= 0;
+        }
+
+        private async Task RunIdleDeedAsync(
+            TraceTurnContext turn,
+            List<TraceContributionDescriptorData> catalog,
+            CancellationToken cancellationToken)
+        {
+            try
+            {
+                var outcome = await IdleDeedLogic.RunAsync(
+                    turn,
+                    catalog,
+                    (id, args, token) => TryExecuteNerveAsync(id, "空闲生活", turn, catalog, args, token),
+                    cancellationToken);
+                if (outcome != null && !string.IsNullOrWhiteSpace(outcome.Summary))
+                    plugins.Services.LogTiming(turn.TraceId, outcome.Summary, 0);
+                RememberIdleDeedPayload(turn, outcome);
+            }
+            catch (Exception exception)
+            {
+                plugins.Services.LogTiming(turn.TraceId, "空闲生活失败：" + exception.Message, 0);
+            }
+        }
+
+        /// <summary>
+        /// 空闲生活带回实在内容（读到的说说、发出的说说）时，压成一条今日新识便签。
+        /// 不额外打一轮模型；下次心智/外显自然看得见，她可以默默提起。
+        /// 「没有读到…」这类空结果只留运行日志，不占新识。
+        /// </summary>
+        private void RememberIdleDeedPayload(TraceTurnContext turn, IdleDeedOutcome outcome)
+        {
+            if (turn == null || turn.Services == null || turn.Services.Storage == null ||
+                outcome == null || !outcome.Counted)
+                return;
+            var summary = (outcome.Summary ?? string.Empty).Trim();
+            if (summary.IndexOf("没有读到", StringComparison.Ordinal) >= 0) return;
+            var payload = (outcome.Payload ?? string.Empty).Trim();
+            if (payload.Length == 0) return;
+
+            var note = summary.StartsWith("空闲生活：", StringComparison.Ordinal)
+                ? summary.Substring("空闲生活：".Length)
+                : summary;
+            note = Regex.Replace(note, @"QQ\s*\d+", "她的空间").TrimEnd('。', '，', ' ');
+            var firstLine = payload.Split('\n')
+                .Select(x => x.Trim())
+                .FirstOrDefault(x => x.Length > 0) ?? string.Empty;
+            var text = ("空闲时" + note +
+                        (firstLine.Length == 0 ? string.Empty : "：" + firstLine)).Trim();
+            if (text.Length > TodayNewItemRecord.MaxContentChars)
+                text = text.Substring(0, TodayNewItemRecord.MaxContentChars).TrimEnd();
+
+            var now = DateTimeOffset.Now;
+            var added = turn.Services.Storage.AddTodayNewItems(
+                turn.ConversationId,
+                new[] { text },
+                turn.Moment == null ? string.Empty : turn.Moment.Id,
+                MemoryDayLogic.CurrentDayKey(now),
+                now.ToUnixTimeMilliseconds());
+            if (added > 0)
+                plugins.Services.LogTiming(turn.TraceId, "空闲生活写入今日新识", 0, text);
+        }
+
+        /// <summary>
+        /// 心智从本轮入选清单里选了一件事要做：白名单校验后同步执行。
+        /// 清单外的 id（模型编造）直接丢弃；副作用闸门（发空间需明说、签名需说变化）照旧拦。
+        /// 执行摘要写进 Workspace.ToolReport，开口据此照实说；带回实质内容的顺手压成今日新识。
+        /// </summary>
+        private async Task TryRunMindToolCallAsync(
+            TraceTurnContext turn,
+            List<TraceContributionDescriptorData> catalog,
+            MindDecisionData decision,
+            CancellationToken cancellationToken)
+        {
+            if (turn == null || turn.Workspace == null || decision == null) return;
+            var id = (decision.tool_call ?? string.Empty).Trim();
+            if (id.Length == 0) return;
+            var picked = (turn.Workspace.ToolCandidates ?? new List<ToolCandidateData>())
+                .FirstOrDefault(x => x != null && x.Descriptor != null &&
+                                     string.Equals(x.Descriptor.Id, id, StringComparison.Ordinal));
+            if (picked == null)
+            {
+                plugins.Services.LogTiming(turn.TraceId, "心智选了清单外的能力，已丢弃", 0, id);
+                return;
+            }
+            // 闸门拦截必须留下「没做成」的话柄：开口只看到 ToolReport，
+            // 拦截时什么都不写，她就会照心智意图把没做的事说成做了。
+            if (IsQzonePublishCapability(id) && !AllowsQzonePublish(turn))
+            {
+                plugins.Services.LogTiming(turn.TraceId, "心智空间发布被闸门拦截", 0, id);
+                turn.Workspace.ToolReport =
+                    "我想发一条 QQ 空间说说，但这一拍她没有明确说让我发，闸门把它拦下了——说说还没有发出去。";
+                return;
+            }
+            if (IsQqMoodCapability(id) && !AllowsQqMood(turn))
+            {
+                plugins.Services.LogTiming(turn.TraceId, "心智签名更新被闸门拦截", 0, id);
+                turn.Workspace.ToolReport =
+                    "我想改 QQ 签名，但这一拍她没有明确说让我改，闸门把它拦下了——签名还没有变。";
+                return;
+            }
+
+            var input = (decision.tool_input ?? string.Empty).Trim();
+            var args = new List<BrainCallArgumentData>();
+            if (input.Length > 0)
+            {
+                args.Add(new BrainCallArgumentData { name = "content", value = input });
+                args.Add(new BrainCallArgumentData { name = "text", value = input });
+            }
+            var toolTimer = Stopwatch.StartNew();
+            var result = await TryExecuteNerveAsync(id, "心智顺手做的事", turn, catalog, args, cancellationToken);
+            plugins.Services.LogTiming(turn.TraceId, "心智选定能力完成", toolTimer.ElapsedMilliseconds,
+                id + "｜" + (result == null ? "null" : (result.Status ?? "?")));
+
+            var label = string.IsNullOrWhiteSpace(picked.Descriptor.DisplayName)
+                ? id
+                : picked.Descriptor.DisplayName.Trim();
+            var builder = new StringBuilder();
+            builder.Append("我做了「").Append(label).Append("」。");
+            if (result != null && !string.IsNullOrWhiteSpace(result.Summary))
+                builder.Append(result.Summary.Trim());
+            var payload = result == null ? string.Empty : (result.Payload ?? string.Empty).Trim();
+            if (payload.Length > 0)
+                builder.Append(payload.Length <= 200 ? payload : payload.Substring(0, 200).TrimEnd());
+            turn.Workspace.ToolReport = builder.ToString();
+
+            RememberMindToolPayload(turn, label, result);
+        }
+
+        /// <summary>心智选定工具带回实质内容时压成今日新识；与空闲生活共用同一压缩思路。</summary>
+        private void RememberMindToolPayload(
+            TraceTurnContext turn, string label, TraceCapabilityResultData result)
+        {
+            if (turn == null || turn.Services == null || turn.Services.Storage == null || result == null)
+                return;
+            var payload = (result.Payload ?? string.Empty).Trim();
+            if (payload.Length == 0) return;
+            var summary = (result.Summary ?? string.Empty).Trim();
+            if (summary.IndexOf("没有读到", StringComparison.Ordinal) >= 0) return;
+            var firstLine = payload.Split('\n')
+                .Select(x => x.Trim())
+                .FirstOrDefault(x => x.Length > 0) ?? string.Empty;
+            if (firstLine.Length == 0) return;
+            var text = ("顺手" + label + "：" + firstLine).Trim();
+            if (text.Length > TodayNewItemRecord.MaxContentChars)
+                text = text.Substring(0, TodayNewItemRecord.MaxContentChars).TrimEnd();
+            var now = DateTimeOffset.Now;
+            var added = turn.Services.Storage.AddTodayNewItems(
+                turn.ConversationId,
+                new[] { text },
+                turn.Moment == null ? string.Empty : turn.Moment.Id,
+                MemoryDayLogic.CurrentDayKey(now),
+                now.ToUnixTimeMilliseconds());
+            if (added > 0)
+                plugins.Services.LogTiming(turn.TraceId, "心智工具写入今日新识", 0, text);
+        }
+
+        private async Task TryReadQzoneIfAskedAsync(
+            TraceTurnContext turn,
+            List<TraceContributionDescriptorData> catalog,
+            CancellationToken cancellationToken)
+        {
+            if (!WantsQzoneRead(turn)) return;
+            var result = await TryExecuteNerveAsync("qq.qzone.read", "看说说", turn, catalog,
+                new List<BrainCallArgumentData>(), cancellationToken);
+            if (result == null || string.IsNullOrWhiteSpace(result.Payload)) return;
+            turn.Workspace.QzoneSeen = result.Payload;
+            plugins.Services.LogTiming(turn.TraceId, "已读取 QQ 说说", 0,
+                Limit(result.Summary, 80));
         }
 
         private async Task RunPostSpeakAsync(
@@ -828,7 +1222,7 @@ namespace TraceSoul2.Logic
             // 身份短卡复盘只由时间运行事件进入 RunSubconsciousAsync，普通对话不再派出。
         }
 
-        private async Task TryExecuteNerveAsync(
+        private async Task<TraceCapabilityResultData> TryExecuteNerveAsync(
             string capabilityId,
             string purpose,
             TraceTurnContext turn,
@@ -838,7 +1232,7 @@ namespace TraceSoul2.Logic
         {
             if (!(catalog ?? new List<TraceContributionDescriptorData>())
                     .Any(x => x != null && x.Id == capabilityId))
-                return;
+                return null;
             var call = new BrainCapabilityCallData
             {
                 call_id = capabilityId + "-" + Guid.NewGuid().ToString("N"),
@@ -852,17 +1246,20 @@ namespace TraceSoul2.Logic
                 turn.Workspace.Results.Add(result);
                 if (result != null && result.ProducedEvent != null)
                     PersistPluginEvent(turn.ConversationId, result.ProducedEvent);
+                return result;
             }
             catch (Exception exception)
             {
-                turn.Workspace.Results.Add(new TraceCapabilityResultData
+                var failed = new TraceCapabilityResultData
                 {
                     CallId = call.call_id,
                     CapabilityId = capabilityId,
                     Status = "failed",
                     Summary = purpose + "失败：" + exception.Message,
                     Payload = string.Empty
-                });
+                };
+                turn.Workspace.Results.Add(failed);
+                return failed;
             }
         }
 
@@ -1085,6 +1482,20 @@ namespace TraceSoul2.Logic
             snapshot.fields.Add(new BrainFacetFieldData { name = name, value = value });
         }
 
+        private void ApplyHeartbeatSpeakDecision(TraceTurnContext turn, MindDecisionData decision)
+        {
+            if (decision == null || turn == null) return;
+            if (!HeartbeatLogic.IsHeartbeatContent(turn.Moment == null ? string.Empty : turn.Moment.Content))
+                return;
+            var before = decision.speak;
+            HeartbeatLogic.ApplySpeakGate(decision);
+            if (!before && decision.speak)
+                plugins.Services.LogTiming(turn.TraceId, "心跳写下了想让她听见的话，改为开口", 0,
+                    Limit(decision.speak_center, 80));
+            else if (before && !decision.speak)
+                plugins.Services.LogTiming(turn.TraceId, "心跳无独立意图，保持安静", 0);
+        }
+
         private async Task ApplyInnerFacetsAsync(
             MindDecisionData decision,
             TraceTurnContext turn,
@@ -1110,6 +1521,16 @@ namespace TraceSoul2.Logic
                 turn.Moment == null ? string.Empty : turn.Moment.Content);
             if (runtime.Asleep || (decision != null && decision.sleep))
             {
+                if (runtime.Idle)
+                {
+                    var cleared = InnerLifeLogic.WithIdle(runtime, false, MomentId(turn),
+                        DateTimeOffset.UtcNow.ToUnixTimeMilliseconds());
+                    if (cleared != runtime)
+                    {
+                        turn.Services.Storage.SaveInnerRuntime(cleared);
+                        runtime = cleared;
+                    }
+                }
                 await TryExecuteNerveAsync("time.continue.clear", "睡着后停止心跳", turn, catalog,
                     new List<BrainCallArgumentData>(), cancellationToken);
                 return;
@@ -1117,6 +1538,19 @@ namespace TraceSoul2.Logic
             if (heartbeatTurn)
             {
                 var requestedMinutes = decision == null ? 0 : decision.next_heartbeat_minutes;
+                var speak = decision != null && decision.speak;
+                if (HeartbeatLogic.ShouldEnterIdle(speak, false, requestedMinutes))
+                {
+                    var entering = !runtime.Idle;
+                    var idled = InnerLifeLogic.WithIdle(runtime, true, MomentId(turn),
+                        DateTimeOffset.UtcNow.ToUnixTimeMilliseconds());
+                    if (idled != runtime) turn.Services.Storage.SaveInnerRuntime(idled);
+                    await TryExecuteNerveAsync("time.continue.clear", "空闲后停止心跳", turn, catalog,
+                        new List<BrainCallArgumentData>(), cancellationToken);
+                    plugins.Services.LogTiming(turn.TraceId, "心跳安静且下次很久，进入空闲", 0);
+                    if (entering) await RunIdleDeedAsync(turn, catalog, cancellationToken);
+                    return;
+                }
                 var minutes = HeartbeatLogic.ResolveFollowUpMinutes(false, requestedMinutes);
                 var nextPlan = decision == null ? string.Empty : decision.next_heartbeat_plan;
                 if (requestedMinutes <= 0)
@@ -1158,6 +1592,13 @@ namespace TraceSoul2.Logic
             };
         }
 
+        private static string MomentId(TraceTurnContext turn)
+        {
+            if (turn == null || turn.Moment == null || string.IsNullOrWhiteSpace(turn.Moment.Id))
+                return "heartbeat-state";
+            return turn.Moment.Id;
+        }
+
         private static string FormatResults(IEnumerable<TraceCapabilityResultData> values)
         {
             return string.Join("\n", (values ?? Enumerable.Empty<TraceCapabilityResultData>())
@@ -1168,6 +1609,54 @@ namespace TraceSoul2.Logic
         private string ResolveReplyChannel(TraceTurnContext turn)
         {
             return MouthLogic.WinningTextChannel(plugins.GetAvailableCatalog(turn));
+        }
+
+        /// <summary>console 打印的来源/去向标签：插件 id 或通道 id → 人能读的身体名。</summary>
+        private static string ConsoleViaLabel(string pluginOrChannel)
+        {
+            var s = (pluginOrChannel ?? string.Empty).Trim();
+            if (s.Length == 0) return "仅本地";
+            if (s.IndexOf("onebot", StringComparison.OrdinalIgnoreCase) >= 0 ||
+                s.IndexOf("qq", StringComparison.OrdinalIgnoreCase) >= 0) return "QQ";
+            if (s.IndexOf("console", StringComparison.OrdinalIgnoreCase) >= 0 ||
+                s.IndexOf("dialogue", StringComparison.OrdinalIgnoreCase) >= 0) return "console";
+            return s;
+        }
+
+        /// <summary>
+        /// console 观察窗镜像：把一条收/发内容交给 console 平台打印。
+        /// 打印是运行痕迹（operational），不进对话历史；失败只留日志，不打断主流程。
+        /// </summary>
+        private async Task MirrorToConsoleAsync(
+            TraceTurnContext turn, string conversationId,
+            string direction, string via, string text, string role)
+        {
+            text = (text ?? string.Empty).Trim();
+            if (text.Length == 0 || plugins == null) return;
+            try
+            {
+                var call = new BrainCapabilityCallData
+                {
+                    call_id = "console-print-" + Guid.NewGuid().ToString("N"),
+                    capability_id = "dialogue.print",
+                    purpose = "console 观察窗打印",
+                    arguments = new List<BrainCallArgumentData>
+                    {
+                        new BrainCallArgumentData { name = "text", value = text },
+                        new BrainCallArgumentData { name = "direction", value = direction ?? "out" },
+                        new BrainCallArgumentData { name = "via", value = via ?? string.Empty },
+                        new BrainCallArgumentData { name = "role", value = role ?? string.Empty }
+                    }
+                };
+                var printed = await plugins.ExecuteAsync(call, turn, CancellationToken.None);
+                if (printed != null && printed.Status == "success" && printed.ProducedEvent != null)
+                    PersistPluginEvent(conversationId, printed.ProducedEvent);
+            }
+            catch (Exception exception)
+            {
+                plugins.Services.LogTiming(turn == null ? null : turn.TraceId,
+                    "console 打印失败", 0, exception.Message);
+            }
         }
 
         /// <summary>整轮链路快照：挂载块（截断）+ 回调结果（含召回证据），供控制台回看。</summary>
@@ -1197,6 +1686,31 @@ namespace TraceSoul2.Logic
                 });
             }
             return TraceJson.ToJson(snapshot);
+        }
+
+        private static List<MomentRecord> LoadAlignedDialogueHistory(
+            IMemoryStore storage,
+            PairIdentity pair,
+            string conversationId,
+            MomentRecord triggerMoment,
+            int min,
+            int align)
+        {
+            if (storage == null || min <= 0) return new List<MomentRecord>();
+            var total = storage.CountDialogueMoments(conversationId);
+            var triggerIsDialogue = triggerMoment != null &&
+                                    (pair.IsHumanMoment(triggerMoment.Role) ||
+                                     pair.IsCompanionMoment(triggerMoment.Role));
+            if (triggerIsDialogue) total = Math.Max(0, total - 1);
+            var take = CommonContextPackLogic.AlignedWindowTake(total, min, align);
+            if (take <= 0) return new List<MomentRecord>();
+            var extra = triggerIsDialogue ? 1 : 0;
+            return storage.GetRecentDialogueMoments(conversationId, take + extra)
+                .Where(x => x != null &&
+                            (triggerMoment == null || x.Id != triggerMoment.Id) &&
+                            (pair.IsHumanMoment(x.Role) || pair.IsCompanionMoment(x.Role)))
+                .TakeLast(take)
+                .ToList();
         }
 
         private static string Limit(string value, int max)

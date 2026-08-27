@@ -20,6 +20,7 @@
     <Compile Include="$(MSBuildThisFileDirectory)../../src/TraceSoul2/Manager/IEmbeddingService.cs" />
     <Compile Include="$(MSBuildThisFileDirectory)../../src/TraceSoul2/Manager/IVectorEncoder.cs" />
     <Compile Include="$(MSBuildThisFileDirectory)../../src/TraceSoul2/Plugins/ITracePlugin.cs" />
+    <Compile Include="$(MSBuildThisFileDirectory)../../src/TraceSoul2/Plugins/ILlmContextAssembler.cs" />
     <Compile Include="$(MSBuildThisFileDirectory)../../src/TraceSoul2/Plugins/TracePluginContext.cs" />
     <Compile Include="$(MSBuildThisFileDirectory)../../src/TraceSoul2/Plugins/PlatformRegistry.cs" />
     <Compile Include="$(MSBuildThisFileDirectory)../../src/TraceSoul2/Plugins/Platform/ITracePlatformAdapter.cs" />

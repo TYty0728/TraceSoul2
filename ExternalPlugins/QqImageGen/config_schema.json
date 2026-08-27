@@ -3,6 +3,8 @@
   "fields": [
     { "key": "provider_id", "label": "生图供应商", "type": "provider", "role": "image", "description": "留空使用默认生图槽。" },
     { "key": "model", "label": "生图模型", "type": "provider_model", "provider_key": "provider_id", "role": "image" },
+    { "key": "planner_provider_id", "label": "画面描述 LLM", "type": "provider", "role": "chat", "description": "专门把这一拍写成画面描述的对话模型，不要选 gpt-image。留空则用当前开口模型。" },
+    { "key": "planner_model", "label": "画面描述模型", "type": "provider_model", "provider_key": "planner_provider_id", "role": "chat" },
     { "key": "api_key", "label": "API Key（备用）", "type": "password" },
     { "key": "base_url", "label": "API Base URL（备用）", "type": "string", "placeholder": "https://example.com/v1" },
     { "key": "image_api_format", "label": "接口格式", "type": "select", "options": ["auto", "openai", "gemini"] },

@@ -133,10 +133,10 @@ namespace TraceSoul2.Manager
         public List<TraceContributionDescriptorData> GetAvailableCatalog(TraceTurnContext turn)
         {
             return MouthLogic.Apply(
-                callables.Values.Where(x => x.IsAvailable(turn)).Select(x => Bind(x.Descriptor))
-                .Concat(facets.Values.Where(x => x.IsAvailable(turn)).Select(x => Bind(x.Descriptor)))
-                .Concat(momentSources.Values.Where(x => x.IsAvailable).Select(x => Bind(x.Descriptor)))
-                .Concat(backgroundServices.Values.Where(x => x.IsAvailable).Select(x => Bind(x.Descriptor))),
+                callables.Values.Where(x => x.IsAvailable(turn) && !IsDormantPlugin(x.Descriptor.PluginId)).Select(x => Bind(x.Descriptor))
+                .Concat(facets.Values.Where(x => x.IsAvailable(turn) && !IsDormantPlugin(x.Descriptor.PluginId)).Select(x => Bind(x.Descriptor)))
+                .Concat(momentSources.Values.Where(x => x.IsAvailable && !IsDormantPlugin(x.Descriptor.PluginId)).Select(x => Bind(x.Descriptor)))
+                .Concat(backgroundServices.Values.Where(x => x.IsAvailable && !IsDormantPlugin(x.Descriptor.PluginId)).Select(x => Bind(x.Descriptor))),
                 turn);
         }
 
@@ -149,12 +149,57 @@ namespace TraceSoul2.Manager
                 .OrderBy(x => x.Kind).ThenBy(x => x.Id).ToList();
         }
 
-        /// <summary>仅启用插件的贡献目录（感官目录等基础设施用）。</summary>
+        /// <summary>仅启用插件的贡献目录（感官目录等基础设施用）。休眠器官仍在册——它是「身体不在」不是「被关掉」。</summary>
         public List<TraceContributionDescriptorData> GetEnabledCatalog()
         {
             return GetRegisteredCatalog()
                 .Where(x => plugins.Values.Any(p => p.Metadata.Enabled && p.Metadata.Id == x.PluginId))
                 .ToList();
+        }
+
+        /// <summary>平台插件的归属键：器官在元数据里声明的 PlatformId 要与它对上才算长在这具身体上。</summary>
+        public static string PlatformKeyOf(TracePluginMetadataData metadata)
+        {
+            if (metadata == null) return string.Empty;
+            return string.IsNullOrWhiteSpace(metadata.PlatformId)
+                ? (metadata.Id ?? string.Empty).Trim()
+                : metadata.PlatformId.Trim();
+        }
+
+        /// <summary>
+        /// 器官休眠：所属平台不存在、未启用、加载失败，或平台报了连接句柄却当前未连接。
+        /// 内核、平台自身、中枢器官（PlatformId 为空，直属于灵魂）永不休眠。
+        /// 休眠是派生态：不改器官的启用开关，身体回来了自动醒。
+        /// </summary>
+        public bool IsOrganDormant(TracePluginMetadataData metadata)
+        {
+            if (metadata == null ||
+                PluginRoleValues.IsKernel(metadata.Role) ||
+                PluginRoleValues.IsPlatform(metadata.Role))
+                return false;
+            var platformKey = (metadata.PlatformId ?? string.Empty).Trim();
+            if (platformKey.Length == 0) return false;
+
+            var platform = plugins.Values.FirstOrDefault(x =>
+                PluginRoleValues.IsPlatform(x.Metadata.Role) &&
+                string.Equals(PlatformKeyOf(x.Metadata), platformKey, StringComparison.OrdinalIgnoreCase));
+            if (platform == null || !platform.Metadata.Enabled ||
+                !string.IsNullOrWhiteSpace(platform.Metadata.LoadError))
+                return true;
+            if (services.Platforms == null) return false;
+            var handle = services.Platforms.List()
+                .FirstOrDefault(x => x != null &&
+                                     string.Equals(x.Id, platformKey, StringComparison.OrdinalIgnoreCase));
+            if (handle != null && handle.IsConnected != null && !handle.IsConnected()) return true;
+            return false;
+        }
+
+        /// <summary>按插件 id 查休眠；查无此插件按不休眠处理（目录条目可能在重扫间隙）。</summary>
+        public bool IsDormantPlugin(string pluginId)
+        {
+            LoadedPlugin loaded;
+            if (pluginId == null || !plugins.TryGetValue(pluginId, out loaded)) return false;
+            return IsOrganDormant(loaded.Metadata);
         }
 
         private TraceContributionDescriptorData Bind(TraceContributionDescriptorData source)
@@ -182,8 +227,16 @@ namespace TraceSoul2.Manager
                 Priority = source.Priority,
                 MaxContextChars = source.MaxContextChars,
                 HasInternalMutation = source.HasInternalMutation,
-                HasExternalSideEffect = source.HasExternalSideEffect
+                HasExternalSideEffect = source.HasExternalSideEffect,
+                IdleDailyCap = source.IdleDailyCap
             };
+        }
+
+        /// <summary>console 是系统最后的对话面：平台身份，但和内核组件一样不提供关闭路径。</summary>
+        public static bool IsUndisableable(string pluginId, string role)
+        {
+            return PluginRoleValues.IsKernel(role) ||
+                   string.Equals(pluginId, "builtin.dialogue", StringComparison.OrdinalIgnoreCase);
         }
 
         public void SetEnabled(string pluginId, bool enabled)
@@ -192,7 +245,9 @@ namespace TraceSoul2.Manager
             if (!plugins.TryGetValue(pluginId ?? string.Empty, out plugin))
                 throw new KeyNotFoundException("没有插件：" + pluginId);
             if (!enabled && PluginRoleValues.IsKernel(plugin.Metadata.Role))
-                throw new InvalidOperationException("内核不能关闭：" + pluginId);
+                throw new InvalidOperationException("内核组件不能关闭：" + pluginId);
+            if (!enabled && string.Equals(pluginId, "builtin.dialogue", StringComparison.OrdinalIgnoreCase))
+                throw new InvalidOperationException("console 是保底对话平台，不能关闭：" + pluginId);
             if (plugin.Metadata.Enabled == enabled) return;
             if (enabled)
             {
@@ -223,13 +278,16 @@ namespace TraceSoul2.Manager
                 throw new InvalidOperationException("Moment 来源当前不可用：" + sourceId);
             if (!source.IsAvailable)
                 throw new InvalidOperationException("Moment 来源当前离线：" + sourceId);
+            if (IsDormantPlugin(source.Descriptor == null ? null : source.Descriptor.PluginId))
+                throw new InvalidOperationException("来源所属平台不在，器官休眠中：" + sourceId);
             return source.Receive(role, content, payloadJson);
         }
 
         public List<PluginEventData> PollBackgroundServices(long nowUnixMs)
         {
             var result = new List<PluginEventData>();
-            foreach (var service in backgroundServices.Values.Where(x => x.IsAvailable).ToList())
+            foreach (var service in backgroundServices.Values
+                         .Where(x => x.IsAvailable && !IsDormantPlugin(x.Descriptor.PluginId)).ToList())
             {
                 try
                 {
@@ -250,7 +308,8 @@ namespace TraceSoul2.Manager
         {
             var blocks = new List<TraceContextBlockData>();
             foreach (var facet in facets.Values.Where(x => x.IsAvailable(turn) &&
-                                                           !MouthLogic.IsProtocolFacet(x.Descriptor.Id))
+                                                           !MouthLogic.IsProtocolFacet(x.Descriptor.Id) &&
+                                                           !IsDormantPlugin(x.Descriptor.PluginId))
                          .OrderByDescending(x => x.Descriptor.Priority))
             {
                 var timer = Stopwatch.StartNew();
@@ -339,6 +398,8 @@ namespace TraceSoul2.Manager
             if (!callables.TryGetValue(call.capability_id ?? string.Empty, out contribution) ||
                 !contribution.IsAvailable(turn))
                 return Failed(call, "能力当前不可用。");
+            if (IsDormantPlugin(contribution.Descriptor == null ? null : contribution.Descriptor.PluginId))
+                return Failed(call, "所属平台不在，器官休眠中。");
             var timer = Stopwatch.StartNew();
             services.LogTiming(turn == null ? null : turn.TraceId,
                 "能力执行开始 " + contribution.Descriptor.Id);
@@ -447,6 +508,9 @@ namespace TraceSoul2.Manager
                     webSocketEndpointOwners.Remove(endpoint);
                 }
             }
+            // 平台注销自己的连接句柄：感官目录与器官休眠判定都以注册表为准。
+            if (PluginRoleValues.IsPlatform(loaded.Metadata.Role) && services.Platforms != null)
+                services.Platforms.Unregister(PlatformKeyOf(loaded.Metadata));
             try { loaded.Instance.Shutdown(); }
             catch (Exception exception)
             {
@@ -512,7 +576,7 @@ namespace TraceSoul2.Manager
 
         private bool ResolveEnabled(TracePluginMetadataData metadata)
         {
-            if (PluginRoleValues.IsKernel(metadata.Role))
+            if (IsUndisableable(metadata.Id, metadata.Role))
             {
                 if (!storage.LoadPluginEnabled(metadata.Id, true))
                     storage.SavePluginEnabled(metadata.Id, true);

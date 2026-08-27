@@ -310,19 +310,20 @@ namespace TraceSoul2.Plugins.Builtin
                 var now = DateTimeOffset.Now;
                 var routing = MouthLogic.LoadState(
                     context == null || context.Services == null ? null : context.Services.DataDirectory);
-                var scene = BodySceneValues.Label(routing.scene);
+                var scene = routing.scene;
+                var life = context == null || context.Services == null || context.Services.LifeState == null
+                    ? null : context.Services.LifeState.Load(context.ConversationId);
+                if (life != null && !string.IsNullOrWhiteSpace(life.location))
+                    scene = life.location;
                 var builder = new StringBuilder();
                 builder.Append(TimeSchedulerPrompts.NowPrefix)
                     .Append(TimeLanguageUtil.NaturalNow(now))
                     .Append("。身体场景：")
-                    .Append(scene)
+                    .Append(BodySceneValues.Label(scene))
                     .Append("。");
-                var life = context == null || context.Services == null || context.Services.LifeState == null
-                    ? null : context.Services.LifeState.Load(context.ConversationId);
-                if (life != null && !string.IsNullOrWhiteSpace(life.activity))
-                    builder.Append("当前活动：").Append(life.activity)
-                        .Append(string.IsNullOrWhiteSpace(life.activity_detail) ? string.Empty : "｜" + life.activity_detail)
-                        .Append("。");
+                var doing = LifeStateLogic.FormatDoing(life);
+                if (doing.Length > 0)
+                    builder.Append("正在做：").Append(doing).Append("。");
                 if (context != null && context.Services != null && context.Services.Storage != null)
                 {
                     var pair = context.Services.Storage.LoadPairIdentity();

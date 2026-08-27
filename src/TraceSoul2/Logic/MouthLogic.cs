@@ -11,12 +11,27 @@ namespace TraceSoul2.Logic
     /// <summary>
     /// 身体路由：跨层近的压过远的；同层才打分。控制台是最低的文字壳。
     /// 说话才移动激活的身体。缺的器官才往更远的身体下滑。模型只负责说什么，不挑通道。
+    /// console 特例：它是观察窗与调试口——不参选、不挪激活身体、所有收发都在它那打印一份；
+    /// 只有当轮消息来自 console 时，说话才只回 console（调试口直答，不打扰生活身体）。
     /// </summary>
     public static class MouthLogic
     {
         public const string FileName = "bodies.json";
         public const string LegacyFileName = "mouths.json";
         public const int DefaultScore = 50;
+
+        /// <summary>console 是观察窗/调试口，不是可被激活的身体。</summary>
+        public static bool IsConsoleBody(string bodyId)
+        {
+            return string.Equals(bodyId, BodyIds.Console, StringComparison.Ordinal);
+        }
+
+        /// <summary>本轮消息来自 console 调试口：说话只回 console。</summary>
+        public static bool IsConsoleTurn(TraceTurnContext turn)
+        {
+            var src = turn == null || turn.Moment == null ? null : turn.Moment.SourcePluginId;
+            return string.Equals(src, "builtin.dialogue", StringComparison.Ordinal);
+        }
 
         public static bool IsProtocolFacet(string facetId)
         {
@@ -125,12 +140,13 @@ namespace TraceSoul2.Logic
             catch { return false; }
         }
 
-        /// <summary>说话才改激活的身体；图/视频只在还没有激活身体时冷启动。</summary>
+        /// <summary>说话才改激活的身体；图/视频只在还没有激活身体时冷启动。
+        /// console 是观察窗：它的发言不挪动激活身体，免得调试一句话把她的主动开口带跑。</summary>
         public static void NoticeInbound(PluginEventData source, TraceTurnContext turn)
         {
             if (source == null || turn == null || turn.Services == null) return;
             var body = BodyOfPlugin(source.PluginId);
-            if (string.IsNullOrWhiteSpace(body)) return;
+            if (string.IsNullOrWhiteSpace(body) || IsConsoleBody(body)) return;
             var organ = string.IsNullOrWhiteSpace(source.Organ)
                 ? ClassifyInboundOrgan(source.Content)
                 : source.Organ.Trim();
@@ -158,15 +174,50 @@ namespace TraceSoul2.Logic
             var rest = source.Where(x => x.Kind != TraceContributionKindValues.Effector).ToList();
             var effectors = source.Where(x => x.Kind == TraceContributionKindValues.Effector).ToList();
             var winners = new List<TraceContributionDescriptorData>();
-            foreach (var group in effectors.GroupBy(OrganOf, StringComparer.Ordinal))
+            var consoleTurn = IsConsoleTurn(turn);
+            var groups = effectors.GroupBy(OrganOf, StringComparer.Ordinal)
+                // 先定说话的身体：表情是它的附件，得知道锚在哪。
+                .OrderByDescending(g => string.Equals(g.Key, BodyOrganValues.Text, StringComparison.Ordinal))
+                .ToList();
+            var textBody = string.Empty;
+            foreach (var group in groups)
             {
                 if (string.IsNullOrWhiteSpace(group.Key))
                 {
                     winners.AddRange(group);
                     continue;
                 }
-                var chosen = RouteEffector(group.Key, group, turn);
-                if (chosen != null) winners.Add(chosen);
+                // 调试口直答：console 里发来的话，回复只回 console，不打扰生活身体。
+                if (string.Equals(group.Key, BodyOrganValues.Text, StringComparison.Ordinal) && consoleTurn)
+                {
+                    var console = group.FirstOrDefault(x => IsConsoleBody(BodyOf(x)));
+                    if (console != null)
+                    {
+                        winners.Add(console);
+                        textBody = BodyOf(console);
+                    }
+                    continue;
+                }
+                // Shell 层（console）不参与滑落计算：它打印一切，但不竞争任何器官。
+                var contenders = group
+                    .Where(x => !string.Equals(TierOf(x), BodyTierValues.Shell, StringComparison.Ordinal))
+                    .ToList();
+                // 附件锚定：表情不是独立内容，它附在文字结尾——只跟随说话的身体；
+                // 那个身体没有表情器官（或本轮无处说话），就安静不戴，不裸发到别的身体。
+                if (string.Equals(group.Key, BodyOrganValues.Sticker, StringComparison.Ordinal))
+                {
+                    contenders = string.IsNullOrWhiteSpace(textBody)
+                        ? new List<TraceContributionDescriptorData>()
+                        : contenders.Where(x => string.Equals(BodyOf(x), textBody, StringComparison.Ordinal)).ToList();
+                }
+                if (contenders.Count == 0) continue;
+                var chosen = RouteEffector(group.Key, contenders, turn);
+                if (chosen != null)
+                {
+                    winners.Add(chosen);
+                    if (string.Equals(group.Key, BodyOrganValues.Text, StringComparison.Ordinal))
+                        textBody = BodyOf(chosen);
+                }
             }
             return rest.Concat(winners)
                 .OrderBy(x => x.Kind, StringComparer.Ordinal)

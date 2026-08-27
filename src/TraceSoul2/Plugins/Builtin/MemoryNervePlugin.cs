@@ -55,12 +55,12 @@ namespace TraceSoul2.Plugins.Builtin
                 Id = "memory.today.new",
                 Kind = TraceContributionKindValues.MountedFacet,
                 DisplayName = "今日新识",
-                Description = "今天刚知道的事（最小便签，每条一句话）。实时写入、当天每轮注入；日复盘再加工成正式记忆。",
+                Description = "今天刚知道的事（最小便签，每条最多80字）。实时写入、当天每轮注入；日复盘再加工成正式记忆。",
                 Provides = "brain.memory.today_new",
                 OutputJsonSchema = "{changed:boolean,summary:string,fields:[items]}",
                 RefreshMode = TraceFacetRefreshValues.OncePerTurn,
                 Priority = 89,
-                MaxContextChars = 500,
+                MaxContextChars = 1000,
                 HasInternalMutation = true
             };
 
@@ -94,7 +94,7 @@ namespace TraceSoul2.Plugins.Builtin
                 var lines = (raw ?? string.Empty)
                     .Split(new[] { '\r', '\n' }, StringSplitOptions.RemoveEmptyEntries)
                     .Select(x => x.Trim())
-                    .Where(x => x.Length > 0 && x.Length <= 40)
+                    .Where(x => x.Length > 0 && x.Length <= TodayNewItemRecord.MaxContentChars)
                     .ToList();
                 if (lines.Count == 0)
                     return Task.FromResult<TraceCapabilityResultData>(null);
@@ -639,8 +639,7 @@ namespace TraceSoul2.Plugins.Builtin
                     if (!byId.TryGetValue(hit.EntryId, out entry)) continue;
                     indexById.TryGetValue(entry.IndexId, out index);
                     builder.AppendLine("◆ " + (index == null ? "索引未知" :
-                        FormatDate(index.TimeUnixMs) + " · " +
-                        (string.IsNullOrWhiteSpace(index.TimeLabel) ? "时段未知" : index.TimeLabel) +
+                        FormatDate(index.TimeUnixMs) +
                         (string.IsNullOrWhiteSpace(index.DayKindLabel) ? string.Empty : "（" + index.DayKindLabel + "）") +
                         " · " + (string.IsNullOrWhiteSpace(index.PersonLabel) ? "人物未知" : index.PersonLabel) +
                         (string.IsNullOrWhiteSpace(index.MoodLabel) ? string.Empty : " · 心情：" + index.MoodLabel)) +
@@ -886,8 +885,7 @@ namespace TraceSoul2.Plugins.Builtin
                 foreach (var group in picked)
                 {
                     var index = group.Index;
-                    builder.AppendLine((group.Routed ? "★" : string.Empty) + "◆ " + FormatDate(index.TimeUnixMs) + " · " +
-                        (string.IsNullOrWhiteSpace(index.TimeLabel) ? "时段未知" : index.TimeLabel) +
+                    builder.AppendLine((group.Routed ? "★" : string.Empty) + "◆ " + FormatDate(index.TimeUnixMs) +
                         (string.IsNullOrWhiteSpace(index.DayKindLabel) ? string.Empty : "（" + index.DayKindLabel + "）") +
                         " · " + (string.IsNullOrWhiteSpace(index.PersonLabel) ? "人物未知" : index.PersonLabel) +
                         (string.IsNullOrWhiteSpace(index.MoodLabel) ? string.Empty : " · 心情：" + index.MoodLabel));
@@ -902,17 +900,7 @@ namespace TraceSoul2.Plugins.Builtin
 
             private static string FormatDate(long unixMs)
             {
-                if (unixMs <= 0) return "时间未知";
-                try
-                {
-                    return DateTimeOffset.FromUnixTimeMilliseconds(unixMs)
-                        .ToOffset(TimeSpan.FromHours(8))
-                        .ToString("yyyy年MM月dd日");
-                }
-                catch
-                {
-                    return "时间未知";
-                }
+                return TimeLanguageUtil.RelativeWhen(unixMs);
             }
 
             private static string Normalize(string value)

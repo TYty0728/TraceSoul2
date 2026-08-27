@@ -41,15 +41,12 @@ namespace TraceSoul2.Logic
             TraceTurnContext turn,
             string sharedMemory,
             string currentUserContent,
-            string roleInstructions)
+            string roleStable,
+            string roleDynamic)
         {
-            switch (ResolvePack(llm))
-            {
-                default:
-                    return CommonContextPackLogic.AssembleMind(
-                        sharedSystem, turn, sharedMemory, currentUserContent, roleInstructions,
-                        IncludeAssistantReasoning(llm));
-            }
+            return Assemble(
+                llm, sharedSystem, turn, sharedMemory, currentUserContent,
+                CommonContextPackLogic.MindRoleHeader, roleStable, roleDynamic);
         }
 
         public static List<DeepSeekMessageData> AssembleExpress(
@@ -58,14 +55,36 @@ namespace TraceSoul2.Logic
             TraceTurnContext turn,
             string sharedMemory,
             string currentUserContent,
-            string roleInstructions)
+            string roleStable,
+            string roleDynamic)
+        {
+            return Assemble(
+                llm, sharedSystem, turn, sharedMemory, currentUserContent,
+                CommonContextPackLogic.ExpressRoleHeader, roleStable, roleDynamic);
+        }
+
+        /// <summary>
+        /// 通用形状：稳定 system → 量化对齐的历史窗口 → 专属稳定指令 → 共享记忆 →
+        /// 轮内动态指令 → 当前用户消息。插件只更换 roleHeader / 稳定与动态指令。
+        /// 插件旧用法（单段 roleInstructions）走 ILlmContextAssembler.Assemble，
+        /// 作为 roleDynamic 传入，消息顺序与旧形状一致。
+        /// </summary>
+        public static List<DeepSeekMessageData> Assemble(
+            ILlmClient llm,
+            string sharedSystem,
+            TraceTurnContext turn,
+            string sharedMemory,
+            string currentUserContent,
+            string roleHeader,
+            string roleStable,
+            string roleDynamic)
         {
             switch (ResolvePack(llm))
             {
                 default:
-                    return CommonContextPackLogic.AssembleExpress(
-                        sharedSystem, turn, sharedMemory, currentUserContent, roleInstructions,
-                        IncludeAssistantReasoning(llm));
+                    return CommonContextPackLogic.Assemble(
+                        sharedSystem, turn, sharedMemory, currentUserContent,
+                        roleHeader, roleStable, roleDynamic, IncludeAssistantReasoning(llm));
             }
         }
 

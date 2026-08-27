@@ -1,3 +1,5 @@
+using System.Text;
+
 namespace TraceSoul2.ExternalPlugins
 {
     /// <summary>QQ 相机生图提示词。装配代码只引用这里。</summary>
@@ -41,9 +43,10 @@ namespace TraceSoul2.ExternalPlugins
             "心智只判断这一拍要不要出图。自拍还是情景、画面怎么拍，相机自己会想，不要选种类。" +
             "只有画面没有新增、纯交谈或重复上一张照片时才填无。不说话时不发图。";
 
+        public const string ScenePlanRoleHeader = "【画面】";
         public const string ScenePlanSystem =
             "你是这台相机的画面导演，不是在替角色写情书。\n" +
-            "这一拍已经确定要出图。由你决定怎么拍：自拍、生活情景照，还是画。\n" +
+            "人物卡和刚才的对话已经作为上下文给你。这一拍已经确定要出图。由你决定怎么拍：自拍、生活情景照，还是画。\n" +
             "多数时候选自拍：前置近景、随手拍给她看。视线与神情服从人物卡中的角色气质，不强制直视镜头。只有场面本身才是重点时才拍情景照；她在描绘或想象时才画。\n" +
             "先写种类，再写画面。只输出：\n" +
             "种类：自拍|照片|画\n" +
@@ -73,5 +76,42 @@ namespace TraceSoul2.ExternalPlugins
         public const string ScenePlanLookPrefix = "角色外观设定：";
         public const string ScenePlanReferencesHeader = "【可用参考图库分类】";
         public const string ScenePlanReferencesHint = "人物自拍或照片必须选角色分类；若有服饰分类，再按当前场景选至多一个最合适的服饰分类，让衣服真正进入生图参考。只能原样使用下面存在的分类名。";
+
+        public static string BuildScenePlanRole(
+            string characterDetails,
+            string referenceCatalog,
+            string mood,
+            string activity,
+            string inner,
+            string seed)
+        {
+            var builder = new StringBuilder();
+            builder.AppendLine(ScenePlanSystem);
+            builder.AppendLine();
+            builder.AppendLine(ScenePlanChoose);
+            builder.AppendLine(ScenePlanSelfie);
+            builder.AppendLine(ScenePlanPhoto);
+            builder.AppendLine(ScenePlanDraw);
+            characterDetails = (characterDetails ?? string.Empty).Trim();
+            if (characterDetails.Length > 0)
+                builder.AppendLine(ScenePlanLookPrefix + characterDetails);
+            referenceCatalog = (referenceCatalog ?? string.Empty).Trim();
+            if (referenceCatalog.Length > 0)
+            {
+                builder.AppendLine(ScenePlanReferencesHeader);
+                builder.AppendLine(ScenePlanReferencesHint);
+                builder.AppendLine(referenceCatalog);
+            }
+            builder.AppendLine(ScenePlanNowHeader);
+            mood = (mood ?? string.Empty).Trim();
+            if (mood.Length > 0) builder.AppendLine(ScenePlanMoodPrefix + mood);
+            activity = (activity ?? string.Empty).Trim();
+            if (activity.Length > 0) builder.AppendLine(ScenePlanActivityPrefix + activity);
+            inner = (inner ?? string.Empty).Trim();
+            if (inner.Length > 0) builder.AppendLine(ScenePlanInnerPrefix + inner);
+            seed = (seed ?? string.Empty).Trim();
+            if (seed.Length > 0) builder.AppendLine(ScenePlanSeedPrefix + seed);
+            return builder.ToString().Trim();
+        }
     }
 }

@@ -25,15 +25,22 @@ internal static class Program
         RunKimiOfficialRequestCheck();
         RunOfficialChannelCheck();
         RunCommonContextPackCheck();
+        RunAlignedHistoryWindowCheck();
         RunProviderRetryCheck();
         RunLlmUsageParseCheck();
         RunMemoryArchivePolicyCheck();
         RunMemoryDayCheck();
+        RunDailyPipelineScheduleCheck();
         RunDailyRuntimeSampleCheck();
         RunJsonControlCharCheck();
         RunFlexibleMindJsonCheck();
+        RunToolLookupCheck();
         RunKernelWakeCheck();
+        RunNightResidueCheck();
         RunInnerSliceCheck();
+        RunIdleDeedCheck();
+        RunLifeDoingAndEventTimeCheck();
+        RunInboundVisionCheck();
         RunLeaveNerveCheck();
         RunBodyRoutingCheck();
         RunOneBotSessionMemoryCheck();
@@ -199,6 +206,10 @@ internal static class Program
                 var onebot = pluginManager.GetPlugins().First(x => x.Id == "builtin.onebot");
                 Require(onebot.Role == PluginRoleValues.Platform && onebot.PlatformId == BodyIds.Qq,
                     "QQ 连接桥应是平台大类");
+                var dialogueMeta = pluginManager.GetPlugins().First(x => x.Id == "builtin.dialogue");
+                Require(dialogueMeta.Role == PluginRoleValues.Platform &&
+                        dialogueMeta.PlatformId == BodyIds.Console,
+                    "console 应是平台身份（保底对话面），不再是内核组件");
                 Require(catalog.Any(x => x.Id == "identity.review" &&
                                          x.Kind == TraceContributionKindValues.CallableNerve &&
                                          x.WhenToUse.Contains("小雨")),
@@ -341,9 +352,23 @@ internal static class Program
                 try { pluginManager.SetEnabled("builtin.dialogue", false); }
                 catch (InvalidOperationException) { kernelLocked = true; }
                 Require(kernelLocked && store.LoadPluginEnabled("builtin.dialogue", true),
-                    "内核不能关闭");
+                    "console 保底平台不能关闭");
                 pluginManager.SetEnabled("builtin.onebot", false);
                 Require(!store.LoadPluginEnabled("builtin.onebot", true), "身体开关应立即持久化");
+                var qqOrgan = new TracePluginMetadataData
+                {
+                    Id = "qq.test", Role = PluginRoleValues.Organ, PlatformId = BodyIds.Qq
+                };
+                Require(pluginManager.IsOrganDormant(qqOrgan),
+                    "平台未启用时，隶属器官应休眠");
+                var centralOrgan = new TracePluginMetadataData
+                {
+                    Id = "tool.search", Role = PluginRoleValues.Organ, PlatformId = string.Empty
+                };
+                Require(!pluginManager.IsOrganDormant(centralOrgan),
+                    "中枢器官（PlatformId 为空）不随任何平台休眠");
+                Require(!pluginManager.IsOrganDormant(onebot) && !pluginManager.IsOrganDormant(dialogueMeta),
+                    "平台自身永不休眠");
                 pluginManager.Dispose();
 
                 var firstMoment = Moment(conversationId, "小光，过来，摸摸头，今天也很喜欢小光哦");
@@ -608,6 +633,135 @@ internal static class Program
             "心智 tags 同时兼容字符串数组和旧字符串格式");
     }
 
+    /// <summary>工具检索：入池规则、向量预选、心智清单注入、开口报告注入与协议字段。</summary>
+    private static void RunToolLookupCheck()
+    {
+        Func<string, string, string, string, TraceContributionDescriptorData> desc = (id, kind, name, organ) =>
+            new TraceContributionDescriptorData
+            {
+                Id = id,
+                Kind = kind,
+                DisplayName = name,
+                Description = name + "。",
+                Organ = organ ?? string.Empty
+            };
+        var text = desc("qq.text.send", TraceContributionKindValues.Effector, "发文字", "text");
+        var sticker = desc("qq.sticker.send", TraceContributionKindValues.Effector, "发表情", "sticker");
+        var image = desc("qq.imagegen.send", TraceContributionKindValues.Effector, "生成图片", "image");
+        var memory = desc("memory.recall", TraceContributionKindValues.CallableNerve, "翻旧事", null);
+        var identity = desc("identity.review", TraceContributionKindValues.CallableNerve, "复盘短卡", null);
+        var heartbeat = desc("qq.heartbeat", TraceContributionKindValues.MomentSource, "心跳", null);
+        var qzonePublish = desc("qq.qzone.publish", TraceContributionKindValues.Effector,
+            "发一条 QQ 空间说说", "qzone");
+        var qzoneRead = desc("qq.qzone.read", TraceContributionKindValues.CallableNerve,
+            "看看 QQ 空间最近的说说", "qzone");
+        var game = desc("game.guess.start", TraceContributionKindValues.CallableNerve,
+            "开一局猜数字", null);
+
+        Require(!ToolLookupLogic.IsLookupEligible(text) && !ToolLookupLogic.IsLookupEligible(sticker) &&
+                !ToolLookupLogic.IsLookupEligible(image),
+            "文字/表情/生图是常用通道，不进检索池");
+        Require(!ToolLookupLogic.IsLookupEligible(memory) && !ToolLookupLogic.IsLookupEligible(identity) &&
+                !ToolLookupLogic.IsLookupEligible(heartbeat),
+            "系统内部能力与不可调用贡献不进检索池");
+        Require(ToolLookupLogic.IsLookupEligible(qzonePublish) && ToolLookupLogic.IsLookupEligible(qzoneRead) &&
+                ToolLookupLogic.IsLookupEligible(game),
+            "长尾可调用能力进检索池");
+
+        var catalog = new List<TraceContributionDescriptorData>
+        {
+            text, sticker, image, memory, identity, heartbeat, qzonePublish, qzoneRead, game
+        };
+        var encoder = new BagOfCharsVectorEncoder();
+        var hit = ToolLookupLogic.Select("你帮我发一条 QQ 空间说说试试", encoder, catalog);
+        Require(hit.Count >= 1 && hit.Count <= ToolLookupLogic.CandidateCap &&
+                hit.Any(x => x.Descriptor.Id == "qq.qzone.publish"),
+            "明确的空间请求应选中空间发布能力");
+        Require(hit.All(x => x.Descriptor.Id != "qq.text.send" && x.Descriptor.Id != "memory.recall"),
+            "入选清单不得包含常用通道或系统能力");
+        var miss = ToolLookupLogic.Select(string.Empty, encoder, catalog);
+        Require(miss.Count == 0, "空 query 不应选中任何长尾工具");
+        Require(ToolLookupLogic.FormatForMind(hit).Contains("【此刻顺手可以做的事】") &&
+                ToolLookupLogic.FormatForMind(hit).Contains("qq.qzone.publish") &&
+                ToolLookupLogic.FormatForMind(new List<ToolCandidateData>()).Length == 0,
+            "入选清单格式：有候选给清单，无候选给空串");
+
+        var parsed = TraceJson.FromJson<MindDecisionData>(
+            "{\"beat\":\"当下\",\"tool_call\":\"qq.qzone.publish\",\"tool_input\":\"今天云很好看\"}");
+        var normalized = MindLogic.Normalize(parsed);
+        Require(normalized.tool_call == "qq.qzone.publish" && normalized.tool_input == "今天云很好看",
+            "心智协议应保留 tool_call 与 tool_input");
+        var dangling = MindLogic.Normalize(TraceJson.FromJson<MindDecisionData>(
+            "{\"beat\":\"当下\",\"tool_input\":\"残留\"}"));
+        Require(dangling.tool_call.Length == 0 && dangling.tool_input.Length == 0,
+            "tool_call 为空时 tool_input 一并清空");
+
+        var path = Path.Combine(Path.GetTempPath(), "tracesoul2-tool-" + Guid.NewGuid().ToString("N") + ".sqlite3");
+        try
+        {
+            using (var store = new SqliteMemoryManager(path))
+            {
+                store.SavePairIdentity("小雨", "小光", "雨雨");
+                var router = new HierarchicalVectorRouterLogic(new FakeEncoder());
+                router.Build(LifeTagVectorLogic.BuildOntology(store,
+                    CoreVectorOntologyFactory.Create(store.LoadPairIdentity())));
+                var services = new TracePluginServices(store, router);
+                var pluginManager = new TracePluginManager(store, services);
+                pluginManager.Discover(typeof(DialogueTracePlugin).Assembly);
+                var fake = new CapturingLlm();
+                var mind = new MindLogic(fake);
+                var expressor = new ExpressorLogic(fake);
+
+                var withTools = PromptTurn("你帮我发一条 QQ 空间说说试试", services);
+                withTools.Workspace.ToolCandidates = hit;
+                mind.DecideAsync(withTools, null, false, default).GetAwaiter().GetResult();
+                var withoutTools = PromptTurn("今天风很轻。", services);
+                mind.DecideAsync(withoutTools, null, false, default).GetAwaiter().GetResult();
+
+                Require(fake.Requests.Count == 2, "工具检索检查应各打一轮心智");
+                var toolPrompt = VisiblePrompt(fake.Requests[0]);
+                Require(toolPrompt.Contains("【此刻顺手可以做的事】") &&
+                        toolPrompt.Contains("qq.qzone.publish"),
+                    "入选工具应注入心智动态段");
+                Func<List<DeepSeekMessageData>, string> stableSegment = messages =>
+                    (messages ?? new List<DeepSeekMessageData>())
+                        .Where(x => x != null && x.content != null &&
+                                    x.content.StartsWith(CommonContextPackLogic.MindRoleHeader, StringComparison.Ordinal))
+                        .Select(x => x.content)
+                        .FirstOrDefault() ?? string.Empty;
+                var stableWith = stableSegment(fake.Requests[0]);
+                Require(stableWith.Contains("\"tool_call\"") &&
+                        stableWith.Contains("此刻顺手可以做的事"),
+                    "tool_call 协议说明在稳定段，无条件存在");
+                Require(!VisiblePrompt(fake.Requests[1]).Contains("qq.qzone.publish"),
+                    "无入选工具时心智动态段不含清单条目，prompt 与旧形状一致");
+                Require(fake.Requests[0][0].content == fake.Requests[1][0].content,
+                    "有无入选工具时公共 system 必须字节稳定");
+                Require(stableWith == stableSegment(fake.Requests[1]),
+                    "有无入选工具时心智稳定段必须字节稳定");
+
+                var expressTurn = PromptTurn("发好了吗", services);
+                expressTurn.Workspace.ToolReport = "我做了「发一条 QQ 空间说说」。已发布 QQ 空间说说。";
+                var plugins = pluginManager.GetPlugins().Where(x => x.Enabled).ToList();
+                var expressCatalog = pluginManager.GetAvailableCatalog(expressTurn);
+                var blocks = pluginManager.BuildContextBlocksAsync(expressTurn, default)
+                    .GetAwaiter().GetResult();
+                var dummyMind = new MindDecisionData { beat = MindBeatValues.Now };
+                expressor.ExpressAsync(expressTurn, plugins, expressCatalog, blocks, dummyMind,
+                    string.Empty, false, null, default).GetAwaiter().GetResult();
+                var expressPrompt = VisiblePrompt(fake.Requests[2]);
+                Require(expressPrompt.Contains("【刚才我顺手做的】") && expressPrompt.Contains("已发布 QQ 空间说说"),
+                    "工具执行摘要应注入开口动态段");
+            }
+        }
+        finally
+        {
+            Delete(path);
+            Delete(path + "-wal");
+            Delete(path + "-shm");
+        }
+    }
+
     /// <summary>不访问外部 API，只检查心智/外显两套提示词分层与稳定前缀。</summary>
     private static void RunPromptLayoutCheck()
     {
@@ -790,12 +944,16 @@ internal static class Program
                         heartSystem.Contains("普通消息没有得到完整回答，不等于紧急") &&
                         heartSystem.Contains("180–480 分钟") &&
                         heartSystem.Contains("10–60 分钟") &&
-                        heartSystem.Contains("醒着时不要填 0") &&
+                        heartSystem.Contains("进入空闲") &&
+                        heartSystem.Contains("醒着且仍要自己复查时不要填 0") &&
                         heartSystem.Contains("next_heartbeat_plan") &&
                         heartSystem.Contains("next_heartbeat_minutes") &&
                         heartSystem.Contains("睡下") &&
-                        heartSystem.Contains("speak=true"),
-                    "心跳 system 应基于独立意图判断是否联系、睡下与下次检查计划");
+                        heartSystem.Contains("speak=true") &&
+                        heartSystem.Contains("speak_center") &&
+                        heartSystem.Contains("那句话不会发给她") &&
+                        heartSystem.Contains("都是现在联系"),
+                    "心跳 system 应基于独立意图判断是否联系、睡下、空闲与下次检查计划");
                 var heartMessages = MindLogic.AssembleTurnMessages("身份与规则", heartTurn,
                     "时间任务到期：心跳｜醒来计划：重新看看她有没有新消息");
                 Require(heartMessages.Count == 1 && heartMessages[0].role == "system",
@@ -856,6 +1014,8 @@ internal static class Program
                         QqImageGenPrompts.ScenePlanSelfie.Contains("默认不要画伸向镜头的手") &&
                         QqImageGenPrompts.ScenePlanSystem.Contains("画面导演") &&
                         QqImageGenPrompts.ScenePlanSystem.Contains("人物卡") &&
+                        QqImageGenPrompts.ScenePlanSystem.Contains("已经作为上下文给你") &&
+                        QqImageGenPrompts.ScenePlanRoleHeader == "【画面】" &&
                         QqImageGenPrompts.ScenePlanSystem.Contains("只输出一段画面描述") &&
                         QqImageGenPrompts.ScenePlanSystem.Contains("自拍不是电影分镜") &&
                         QqImageGenPrompts.ScenePlanSystem.Contains("种类：自拍|照片|画") &&
@@ -866,6 +1026,15 @@ internal static class Program
                         QqImageGenPrompts.ReferenceFusionRules.Contains("不能只取第一张") &&
                         QqImageGenPrompts.ReferenceFusionRules.Contains("不得沿用服饰图里模特的脸"),
                     "心智判断新的可拍时刻；相机规划种类、参考分类和构图，并明确融合全部角色参考");
+                Require(QqQzonePrompts.Usage.Contains("qq.qzone.publish") &&
+                        QqQzonePrompts.Usage.Contains("qq.qzone.read") &&
+                        QqQzonePrompts.Usage.Contains("看说说") &&
+                        QqQzonePrompts.Usage.Contains("空闲时系统会自己抽签") &&
+                        QqQzonePrompts.Usage.Contains("不要在对话里主动刷空间") &&
+                        QqQzonePrompts.ReadWhenToUse.Contains("看空间") &&
+                        QqStatusPrompts.Usage.Contains("qq.status.mood") &&
+                        QqStatusPrompts.Usage.Contains("空闲时系统会自己抽签"),
+                    "QQ 空间/心情用法应覆盖她点名，并说明空闲抽签由系统处理");
                 Require(mindSystem.Contains("要不要开口、心情、要不要睡都在这里决定") &&
                         mindSystem.Contains("后面开口只负责把话说出来") &&
                         expressSystem.Contains("直接开口") &&
@@ -885,12 +1054,14 @@ internal static class Program
                 mind.DecideAsync(closeTurn, null, false, default).GetAwaiter().GetResult();
                 var closeMessages = fake.Requests[fake.Requests.Count - 1];
                 RequireAstrBotChatShape(closeMessages, closeCurrent, "带历史的心智");
-                Require(closeMessages.Count == 5 &&
+                Require(closeMessages.Count == 6 &&
                         closeMessages[1].role == "user" && closeMessages[1].content == "昨天那句" &&
                         closeMessages[2].role == "assistant" && closeMessages[2].content == "嗯" &&
                         closeMessages[3].content.StartsWith(CommonContextPackLogic.MindRoleHeader, StringComparison.Ordinal) &&
-                        closeMessages[4].role == "user" && closeMessages[4].content == closeCurrent,
-                    "历史必须是真正的 user/assistant，心智专属指令之后由当前原话收尾");
+                        closeMessages[4].role == "user" &&
+                        !closeMessages[4].content.StartsWith(CommonContextPackLogic.MindRoleHeader, StringComparison.Ordinal) &&
+                        closeMessages[5].role == "user" && closeMessages[5].content == closeCurrent,
+                    "历史必须是真正的 user/assistant，心智稳定指令与轮内动态分段，当前原话收尾");
                 Require(!closeMessages[0].content.Contains("昨天那句") &&
                         !closeMessages[0].content.Contains("【最近对话原文】"),
                     "对话原文不得再塞进 system");
@@ -1029,6 +1200,34 @@ internal static class Program
             "紧急未回复时心智安排的短期复查应被保留");
         Require(HeartbeatLogic.ClampMinutes(600) == 600 && HeartbeatLogic.ClampMinutes(900) == 720,
             "心跳应允许数小时等待，并保留合理上限");
+        var quietWithLine = new MindDecisionData
+        {
+            speak = false,
+            speak_center = "丸子加得好，看着你吃得香。",
+            heartbeat_intent = "等她吃完再兑现拥抱。"
+        };
+        HeartbeatLogic.ApplySpeakGate(quietWithLine);
+        Require(quietWithLine.speak && quietWithLine.speak_center.Contains("丸子"),
+            "心跳写下了想让她听见的话，即使 speak=false 也应开口");
+        var speakNoIntent = new MindDecisionData { speak = true };
+        HeartbeatLogic.ApplySpeakGate(speakNoIntent);
+        Require(!speakNoIntent.speak, "心跳开口但没有独立意图时应保持安静");
+        var asleepWithLine = new MindDecisionData
+        {
+            sleep = true,
+            speak = true,
+            speak_center = "晚安。"
+        };
+        HeartbeatLogic.ApplySpeakGate(asleepWithLine);
+        Require(!asleepWithLine.speak, "睡下的心跳不应开口");
+        var centerOnly = new MindDecisionData
+        {
+            speak = false,
+            speak_center = "还欠你一个拥抱。"
+        };
+        HeartbeatLogic.ApplySpeakGate(centerOnly);
+        Require(centerOnly.speak && centerOnly.heartbeat_intent.Contains("拥抱"),
+            "只有 speak_center 时应用它补上独立意图，避免随后被安静闸门收回");
         Require(HeartbeatLogic.ShouldSkipWhileAsleep(new PluginEventData
         {
             Role = "system_event",
@@ -1040,6 +1239,303 @@ internal static class Program
             Content = "我回来了",
             Breaking = true
         }, PairIdentity.Missing, KernelWakeValues.Dialogue), "用户 Moment 睡着时也应叫醒");
+        Require(!HeartbeatLogic.ShouldSkipWhileAsleep(new PluginEventData
+        {
+            Role = "system_event",
+            Content = "日终余温：2026-08-25"
+        }, PairIdentity.Missing, KernelWakeValues.NightResidue), "睡着时夜间余温仍应开口");
+        Require(HeartbeatLogic.ShouldEnterIdle(false, false, 0), "安静且未填分钟应进入空闲");
+        Require(HeartbeatLogic.ShouldEnterIdle(false, false, 240), "安静且数小时后再看应进入空闲");
+        Require(!HeartbeatLogic.ShouldEnterIdle(false, false, 45), "紧急短期复查不应进入空闲");
+        Require(!HeartbeatLogic.ShouldEnterIdle(true, false, 240), "心跳开口后仍应自己醒来，不进空闲");
+        Require(!HeartbeatLogic.ShouldEnterIdle(false, true, 240), "睡下走睡着，不走空闲");
+        Require(HeartbeatLogic.ShouldSkipWhileIdle(new PluginEventData
+        {
+            Role = "system_event",
+            Content = "时间任务到期：心跳"
+        }, PairIdentity.Missing), "空闲时应跳过心跳");
+        Require(!HeartbeatLogic.ShouldSkipWhileIdle(new PluginEventData
+        {
+            Role = "user",
+            Content = "我回来了",
+            Breaking = true
+        }, PairIdentity.Missing), "她发来时应从空闲醒来");
+        Require(!HeartbeatLogic.ShouldSkipWhileIdle(new PluginEventData
+        {
+            Role = "system_event",
+            Content = "时间任务到期：提醒她药"
+        }, PairIdentity.Missing), "空闲时约好的时间任务仍应叫醒");
+        var idled = InnerLifeLogic.WithIdle(current, true, "idle-check",
+            DateTimeOffset.UtcNow.ToUnixTimeMilliseconds());
+        Require(idled.Idle && !idled.Asleep && InnerLifeLogic.PresenceLabel(idled) == "空闲",
+            "进入空闲应写入内心且与睡着互斥");
+        var sleptClearsIdle = InnerLifeLogic.Reduce(idled, new InnerRuntimeWriteData { asleep = true },
+            "sleep-over-idle", DateTimeOffset.UtcNow.ToUnixTimeMilliseconds());
+        Require(sleptClearsIdle.Asleep && !sleptClearsIdle.Idle, "睡下应清掉空闲");
+        var woken = InnerLifeLogic.WithAwake(idled, "wake-check",
+            DateTimeOffset.UtcNow.ToUnixTimeMilliseconds());
+        Require(!woken.Idle && !woken.Asleep, "被激活后应同时离开空闲和睡着");
+    }
+
+    private static void RunIdleDeedCheck()
+    {
+        var dir = Path.Combine(Path.GetTempPath(), "tracesoul2-idle-deed-" + Guid.NewGuid().ToString("N"));
+        Directory.CreateDirectory(dir);
+        try
+        {
+            using (var store = new SqliteMemoryManager(Path.Combine(dir, "brain.sqlite3")))
+            {
+                const string conversationId = "idle-deed-check";
+                store.SavePairIdentity("小雨", "小光", "雨雨");
+                var now = DateTimeOffset.Now;
+                var publish = new TraceContributionDescriptorData { Id = "qq.qzone.publish", IdleDailyCap = 1 };
+                var read = new TraceContributionDescriptorData { Id = "qq.qzone.read", IdleDailyCap = 2 };
+                var mood = new TraceContributionDescriptorData { Id = "qq.status.mood", IdleDailyCap = 1 };
+                var catalog = new[] { publish, read, mood };
+                var pool = IdleDeedLogic.BuildPool(catalog, store, now);
+                Require(pool.Contains(IdleDeedLogic.RestId) &&
+                        pool.Contains("qq.qzone.publish") &&
+                        pool.Contains("qq.qzone.read") &&
+                        pool.Contains("qq.status.mood") &&
+                        pool.Count == 4,
+                    "空闲池应含歇着和未达上限的生活事");
+                IdleDeedLogic.Remember(store, "qq.qzone.publish", now);
+                pool = IdleDeedLogic.BuildPool(catalog, store, now);
+                Require(!pool.Contains("qq.qzone.publish") &&
+                        pool.Contains("qq.qzone.read") &&
+                        pool.Contains(IdleDeedLogic.RestId),
+                    "达每日上限后应从随机池拿掉");
+                IdleDeedLogic.Remember(store, "qq.qzone.read", now);
+                IdleDeedLogic.Remember(store, "qq.qzone.read", now);
+                pool = IdleDeedLogic.BuildPool(catalog, store, now);
+                Require(!pool.Contains("qq.qzone.read") && pool.Contains("qq.status.mood"),
+                    "看说说达上限后应出局，未满的仍在池里");
+                Require(IdleDeedLogic.BuildPool(new TraceContributionDescriptorData[0], store, now)
+                            .SequenceEqual(new[] { IdleDeedLogic.RestId }),
+                    "没有可做的事时只剩歇着");
+                Require(IdleDeedLogic.PickAt(new[] { IdleDeedLogic.RestId }, 0) ==
+                        IdleDeedLogic.RestId,
+                    "池里只有歇着时应抽到歇着");
+
+                var services = new TracePluginServices(store, new HierarchicalVectorRouterLogic(new FakeEncoder()));
+                var inner = store.LoadOrCreateInnerRuntime(conversationId);
+                inner = InnerLifeLogic.Reduce(inner, new InnerRuntimeWriteData
+                {
+                    mood = "安静",
+                    narrative = "刚坐下"
+                }, "seed-check", DateTimeOffset.UtcNow.ToUnixTimeMilliseconds());
+                store.SaveInnerRuntime(inner);
+                var turn = new TraceTurnContext(conversationId, Moment(conversationId, "心跳"),
+                    new List<MomentRecord>(), 0, false, services, KernelWakeValues.Mind);
+                var seed = IdleDeedLogic.FormatSeed(turn, now);
+                Require(seed.Contains(CorePrompts.IdleDeed.TimePrefix) &&
+                        seed.Contains("安静") &&
+                        seed.Contains("刚坐下"),
+                    "空闲生活种子应带上时间和此刻内心");
+
+                var live = new[] { new TraceContributionDescriptorData { Id = "test.idle.one", IdleDailyCap = 1 } };
+                var executed = new List<string>();
+                var rested = IdleDeedLogic.RunAsync(turn, live, (id, args, token) =>
+                {
+                    executed.Add(id);
+                    return Task.FromResult(new TraceCapabilityResultData { Status = "success", Summary = id });
+                }, CancellationToken.None, null, 0).GetAwaiter().GetResult();
+                Require(rested.Rested && executed.Count == 0 &&
+                        IdleDeedLogic.Count(store, "test.idle.one", now) == 0,
+                    "抽到歇着时不应执行也不计数");
+                var done = IdleDeedLogic.RunAsync(turn, live, (id, args, token) =>
+                {
+                    executed.Add(id);
+                    Require(args.Any(x => x.name == "idle" && x.value == "true"),
+                        "空闲抽签执行时应带 idle=true");
+                    Require(args.Any(x => x.name == "seed" && !string.IsNullOrWhiteSpace(x.value)),
+                        "空闲抽签执行时应带生活种子");
+                    return Task.FromResult(new TraceCapabilityResultData
+                    {
+                        Status = "success",
+                        Summary = "已发布 QQ 空间说说。"
+                    });
+                }, CancellationToken.None, null, 1).GetAwaiter().GetResult();
+                Require(done.Counted && executed.SequenceEqual(new[] { "test.idle.one" }) &&
+                        IdleDeedLogic.Count(store, "test.idle.one", now) == 1,
+                    "抽中并发成功才计入每日次数");
+                var skipped = IdleDeedLogic.RunAsync(turn,
+                    new[] { new TraceContributionDescriptorData { Id = "test.idle.two", IdleDailyCap = 1 } },
+                    (id, args, token) => Task.FromResult(new TraceCapabilityResultData
+                    {
+                        Status = "skipped",
+                        Summary = "没有想改的。"
+                    }), CancellationToken.None, null, 1).GetAwaiter().GetResult();
+                Require(!skipped.Counted && IdleDeedLogic.Count(store, "test.idle.two", now) == 0,
+                    "没有做成的抽签不应计数，下次还能再抽");
+
+                using (var manager = new TracePluginManager(store, services))
+                {
+                    manager.RegisterExternal(new IdleCapProbePlugin());
+                    var bound = manager.GetRegisteredCatalog()
+                        .FirstOrDefault(x => x.Id == "check.idle-cap.do");
+                    Require(bound != null && bound.IdleDailyCap == 3,
+                        "Bind 必须拷贝 IdleDailyCap，否则目录里会丢每日上限");
+                }
+
+                var draft = QqStatusPlugin.ParseDraft("签名：随便坐坐\n状态：摸鱼中");
+                Require(draft.Signature == "随便坐坐" &&
+                        QqStatusPlugin.NormalizeStatusName("摸鱼") == "摸鱼中" &&
+                        QqStatusPlugin.NormalizeStatusName("无") == string.Empty,
+                    "空闲改心情应能读出签名和状态名");
+            }
+        }
+        finally
+        {
+            try { Directory.Delete(dir, true); } catch { /* 临时目录 */ }
+        }
+    }
+
+    private static void RunLifeDoingAndEventTimeCheck()
+    {
+        Require(new LifeStateData { activity = "陪伴", activity_detail = "在客厅等她" }.FormatDoing() ==
+                "陪伴｜在客厅等她",
+            "正在做应把活动名和补充合成一句");
+        Require(new LifeStateData().FormatDoing() == string.Empty,
+            "没有活动时正在做应为空");
+        var now = new DateTimeOffset(2026, 8, 25, 22, 0, 0, TimeSpan.FromHours(8));
+        var thisMorning = new DateTimeOffset(2026, 8, 25, 7, 30, 0, TimeSpan.FromHours(8));
+        var yesterdayEvening = new DateTimeOffset(2026, 8, 24, 20, 0, 0, TimeSpan.FromHours(8));
+        var lastYear = new DateTimeOffset(2026, 3, 2, 9, 0, 0, TimeSpan.FromHours(8));
+        Require(TimeLanguageUtil.RelativeWhen(thisMorning.ToUnixTimeMilliseconds(), now) == "今天早上",
+            "当天清晨到上午应渲染为今天早上");
+        Require(TimeLanguageUtil.RelativeWhen(yesterdayEvening.ToUnixTimeMilliseconds(), now) == "昨天晚上",
+            "前一日晚上应渲染为昨天晚上");
+        Require(TimeLanguageUtil.RelativeWhen(lastYear.ToUnixTimeMilliseconds(), now) == "2026年3月2日上午",
+            "更早的事件应带日期和时段");
+        var inner = InnerLifeLogic.CreateInitial("doing-check", now.ToUnixTimeMilliseconds());
+        inner.OngoingActivity = "她在洗澡，我在客厅等";
+        inner.Narrative = "心里软下来";
+        var mindSlice = InnerLifeLogic.FormatForMind(inner);
+        Require(!mindSlice.Contains("刚才的共享场景") && !mindSlice.Contains("她在洗澡"),
+            "心智动态段不应再平行复述正在做");
+    }
+
+    private static void RunInboundVisionCheck()
+    {
+        var payload = TraceJson.ToJson(new { image_urls = new[] { "https://example.com/a.jpg", @"C:\x.png" } });
+        Require(VisionLogic.HasInboundImages(payload) &&
+                VisionLogic.ReadInboundImageLocations(payload).Count == 2,
+            "入站载荷应抽出 image_urls");
+        Require(!VisionLogic.HasInboundImages("{}"), "没有图时不应识图");
+
+        var attached = VisionLogic.AttachSeen("[QQ·私聊 田园] [图片]", "一碗热汤面，还冒着气。");
+        Require(attached.Contains("【看见】一碗热汤面") && attached.Contains("[图片]"),
+            "看见的结果应接到这一拍后面");
+        Require(VisionLogic.AttachSeen(attached, "第二遍") == attached,
+            "同一拍不要重复叠【看见】");
+
+        var unconfigured = VisionLogic.SeeInboundAsync(new PluginEventData
+        {
+            Content = "[QQ·私聊 田园] [图片]",
+            PayloadJson = payload
+        }, null, default).GetAwaiter().GetResult();
+        Require(unconfigured == CorePrompts.Vision.Unconfigured,
+            "没配识图槽时必须明说看不见，不能让心智脑补");
+
+        var png = Convert.FromBase64String(
+            "iVBORw0KGgoAAAANSUhEUgAAAAEAAAABCAYAAAAfFcSJAAAADUlEQVR42mP8z8BQDwAEhQGAhKmMIQAAAABJRU5ErkJggg==");
+        var imagePath = Path.Combine(Path.GetTempPath(), "tracesoul2-vision-" + Guid.NewGuid().ToString("N") + ".png");
+        var dbPath = Path.Combine(Path.GetTempPath(), "tracesoul2-vision-" + Guid.NewGuid().ToString("N") + ".sqlite3");
+        File.WriteAllBytes(imagePath, png);
+        try
+        {
+            using (var store = new SqliteMemoryManager(dbPath))
+            {
+                var llm = new SeeingLlm();
+                var services = new TracePluginServices(store, new HierarchicalVectorRouterLogic(new FakeEncoder()));
+                services.Providers = new FakeVisionDirectory
+                {
+                    Client = llm,
+                    Endpoint = new LlmEndpointData
+                    {
+                        ProviderId = "vision",
+                        Model = "vl",
+                        ApiKey = "x"
+                    }
+                };
+                var seen = VisionLogic.SeeInboundAsync(new PluginEventData
+                {
+                    Content = "[QQ·私聊 田园] [图片]",
+                    PayloadJson = TraceJson.ToJson(new { image_urls = new[] { imagePath } })
+                }, services, default).GetAwaiter().GetResult();
+                Require(llm.SawImages, "识图请求必须带上实际图片");
+                Require(seen.Contains("热汤面"), "识图结果应原样交给这一拍");
+
+                Require(VisionLogic.IsProtocolCacheName("E17628BF7C8C7BD6FC176321114CCF9D.jpg") &&
+                        !VisionLogic.IsProtocolCacheName("https://multimedia.nt.qq.com.cn/download?x") &&
+                        !VisionLogic.IsProtocolCacheName(imagePath),
+                    "QQ 缓存名应和 CDN / 本地路径分开");
+                Require(VisionLogic.ReadGetImageLocation(
+                        "{\"data\":{\"file\":\"" + imagePath.Replace("\\", "\\\\") +
+                        "\",\"url\":\"https://multimedia.nt.qq.com.cn/download?x\"}}") == imagePath,
+                    "get_image 应优先用本地 file，而不是腾讯 CDN");
+
+                var protocol = new FakeOneBotVisionAdapter { LocalFile = imagePath };
+                services.PlatformAdapters.Add(protocol);
+                var viaProtocol = VisionLogic.SeeInboundAsync(new PluginEventData
+                {
+                    Content = "[QQ·私聊 田园] [图片]",
+                    PayloadJson = TraceJson.ToJson(new
+                    {
+                        image_urls = new[]
+                        {
+                            "https://multimedia.nt.qq.com.cn/download?appid=1406&fileid=x",
+                            "E17628BF7C8C7BD6FC176321114CCF9D.jpg"
+                        }
+                    })
+                }, services, default).GetAwaiter().GetResult();
+                Require(protocol.LastFile == "E17628BF7C8C7BD6FC176321114CCF9D.jpg",
+                    "应从 QQ 缓存名调用 get_image");
+                Require(viaProtocol.Contains("热汤面"), "协议取图后的识图结果应交给这一拍");
+            }
+        }
+        finally
+        {
+            try { File.Delete(imagePath); } catch { /* ignore */ }
+            try { File.Delete(dbPath); } catch { /* ignore */ }
+            try { File.Delete(dbPath + "-wal"); } catch { /* ignore */ }
+            try { File.Delete(dbPath + "-shm"); } catch { /* ignore */ }
+        }
+
+        var visionMessage = new DeepSeekMessageData("user", "看图")
+        {
+            images = new List<LlmImagePartData>
+            {
+                new LlmImagePartData { url = "data:image/png;base64," + Convert.ToBase64String(png) }
+            }
+        };
+        var relay = new DeepSeekConfigData
+        {
+            ProviderId = "opencode-go",
+            BaseUrl = "https://opencode.ai/zen/go/v1",
+            Model = "qwen-vl",
+            ApiKey = "x",
+            Temperature = 1f,
+            TopP = 0.95f,
+            MaxTokens = 1024
+        };
+        using (var doc = JsonDocument.Parse(
+            DeepSeekClientManager.BuildChatRequestJson(
+                relay, new List<DeepSeekMessageData> { visionMessage }, 1f, false, false)))
+        {
+            var content = doc.RootElement.GetProperty("messages")[0].GetProperty("content");
+            Require(content.ValueKind == JsonValueKind.Array &&
+                    content[0].GetProperty("type").GetString() == "text" &&
+                    content[1].GetProperty("type").GetString() == "image_url",
+                "识图请求应按 OpenAI 兼容格式带上 image_url");
+        }
+
+        var blob = Convert.ToBase64String(png);
+        var dumped = DeepSeekClientManager.SanitizeVisionDump(
+            "{\"x\":\"data:image/png;base64," + blob + blob + blob + "\"}");
+        Require(dumped.IndexOf("iVBORw0KGgo", StringComparison.Ordinal) < 0,
+            "dump 不得留下图片像素");
     }
 
     private static void RunMemoryArchivePolicyCheck()
@@ -1113,6 +1609,43 @@ internal static class Program
         Require(MemoryDayLogic.ClosedDayKey(midMorning) == "2026-08-21",
             "手动日构建默认也应跑刚合上的那天");
         Require(LlmSlotNames.Review == "review", "复盘用途槽名应稳定为 review");
+        var dayStart = MemoryDayLogic.StartOf("2026-08-25");
+        Require(dayStart.Hour == 4 && dayStart.Offset == MemoryDayLogic.ChinaOffset,
+            "记忆日起点应是该日 04:00");
+    }
+
+    private static void RunDailyPipelineScheduleCheck()
+    {
+        var china = MemoryDayLogic.ChinaOffset;
+        var evening = new DateTimeOffset(2026, 8, 26, 18, 56, 0, china);
+        Require(!DailyPipelineScheduleLogic.ShouldCatchUp(evening, "2026-08-25", false, new string[0]),
+            "当天还没合上时不应重跑已经成功的关闭日");
+
+        var afterFour = new DateTimeOffset(2026, 8, 27, 4, 0, 10, china);
+        Require(DailyPipelineScheduleLogic.ShouldCatchUp(
+                afterFour, "2026-08-25", false, new[] { "2026-08-26" }),
+            "越过 04:00 后即使长 Delay 被睡眠打断，墙钟也要立刻补跑刚合上的那天");
+
+        var morning = new DateTimeOffset(2026, 8, 27, 7, 20, 0, china);
+        Require(DailyPipelineScheduleLogic.ShouldCatchUp(
+                morning, "2026-08-25", false, new[] { "2026-08-26" }),
+            "睡过 04:00 醒来仍应补跑昨天");
+        Require(!DailyPipelineScheduleLogic.ShouldCatchUp(morning, "2026-08-26", false, new string[0]),
+            "刚合上的那天已经成功则不应每分钟重跑");
+        Require(DailyPipelineScheduleLogic.ShouldCatchUp(morning, "2026-08-26", false, new[] { "2026-08-26" }),
+            "完成标记丢了但 Moment 仍是 live 时，未消费日期应强制再补");
+        Require(DailyPipelineScheduleLogic.ShouldCatchUp(morning, "2026-08-25", true, new string[0]),
+            "上次失败即使暂时看不到未消费 Moment 也要重试");
+
+        Require(DailyPipelineScheduleLogic.NextWait(evening, false) == DailyPipelineScheduleLogic.PollInterval,
+            "离 04:00 很远时每次最多等一分钟，避免一次 Delay 睡过边界");
+        Require(DailyPipelineScheduleLogic.NextWait(morning, true) == DailyPipelineScheduleLogic.RetryInterval,
+            "失败后按短间隔重试，不能等到明天 04:00");
+
+        var justBefore = new DateTimeOffset(2026, 8, 27, 3, 59, 30, china);
+        var waitSoon = DailyPipelineScheduleLogic.NextWait(justBefore, false);
+        Require(waitSoon <= TimeSpan.FromSeconds(30) && waitSoon > TimeSpan.Zero,
+            "临近边界时把剩余时间睡完，不要越过后再等一整分钟");
     }
 
     private static void RunDailyRuntimeSampleCheck()
@@ -1131,6 +1664,17 @@ internal static class Program
                 store.SaveDayTrajectory(newDay, "新日正在发生");
                 store.AddTodayNewItems(conversationId, new[] { "今天知道她喜欢桂花" },
                     "sample-source", oldDay, DateTimeOffset.UtcNow.ToUnixTimeMilliseconds());
+                var cap = TodayNewItemRecord.MaxContentChars;
+                Require(cap == 80, "今日新识单条上限是 80 字");
+                var exact = new string('甲', cap);
+                Require(store.AddTodayNewItems(conversationId, new[] { exact },
+                    "len-ok", newDay, DateTimeOffset.UtcNow.ToUnixTimeMilliseconds()) == 1,
+                    "刚好 80 字应入库");
+                Require(store.AddTodayNewItems(conversationId, new[] { exact + "乙" },
+                    "len-over", newDay, DateTimeOffset.UtcNow.ToUnixTimeMilliseconds()) == 0,
+                    "超过 80 字整条丢弃");
+                Require(MindLogic.Normalize(new MindDecisionData { new_fact = exact + "乙" }).new_fact == exact,
+                    "心智 new_fact 按 80 字截断");
                 Require(store.LoadDayTrajectory(newDay) != null && store.LoadDayTrajectory(oldDay) != null,
                     "跨日读取不能在复盘成功前抢先删除旧日本日样本");
 
@@ -1314,9 +1858,9 @@ internal static class Program
                     Model = "kimi-k3"
                 });
                 var mind = LlmContextPackLogic.AssembleMind(
-                    kimi, shared, turn, memory, "慢点走", "只输出 JSON。现在是下午。");
+                    kimi, shared, turn, memory, "慢点走", "只输出 JSON。", "现在是下午。");
                 var express = LlmContextPackLogic.AssembleExpress(
-                    kimi, shared, turn, memory, "慢点走", "直接开口。现在是下午。");
+                    kimi, shared, turn, memory, "慢点走", "直接开口。", "现在是下午。");
 
                 Require(mind[0].role == "system" && mind[0].content == shared,
                     "心智第一条是公共身份卡");
@@ -1325,19 +1869,47 @@ internal static class Program
                 Require(mind[1].role == "user" && mind[2].role == "assistant" &&
                         !string.IsNullOrWhiteSpace(mind[2].reasoning_content),
                     "历史在 system 之后，assistant 回传 reasoning");
-                Require(mind[3].content.StartsWith(CommonContextPackLogic.MemoryHeader, StringComparison.Ordinal) &&
-                        express[3].content == mind[3].content,
-                    "相关记忆在历史之后，两边相同");
-                Require(mind[4].content.StartsWith(CommonContextPackLogic.MindRoleHeader, StringComparison.Ordinal) &&
-                        express[4].content.StartsWith(CommonContextPackLogic.ExpressRoleHeader, StringComparison.Ordinal),
-                    "专属指令在当前用户消息之前，这是 LPM 允许的第一处分叉");
+                Require(mind[3].content.StartsWith(CommonContextPackLogic.MindRoleHeader, StringComparison.Ordinal) &&
+                        express[3].content.StartsWith(CommonContextPackLogic.ExpressRoleHeader, StringComparison.Ordinal),
+                    "专属稳定指令紧随历史，这是 LPM 允许的第一处分叉");
+                Require(mind[4].content.StartsWith(CommonContextPackLogic.MemoryHeader, StringComparison.Ordinal) &&
+                        express[4].content == mind[4].content,
+                    "相关记忆在稳定指令之后，两边相同");
+                Require(mind[5].content == "现在是下午。" && express[5].content == "现在是下午。" &&
+                        !mind[5].content.StartsWith("【", StringComparison.Ordinal),
+                    "轮内动态指令在共享记忆之后，不再重复角色头");
                 Require(mind[mind.Count - 1].content == "慢点走" &&
                         express[express.Count - 1].content == "慢点走",
                     "当前用户消息必须最后入场，两边原文相同");
-                Require(CommonContextPackLogic.SharedPrefixCount(mind, express) == 4,
-                    "LPM：心智/开口在专属指令处分叉，当前原话保持最后一条");
+                Require(CommonContextPackLogic.SharedPrefixCount(mind, express) == 3,
+                    "LPM：心智/开口在专属稳定指令处分叉，当前原话保持最后一条");
                 Require(CommonContextPackLogic.BuildConversationCacheKey("common-pack") == "tracesoul2:common-pack",
                     "公共装配器生成稳定的会话缓存键基底");
+
+                Require(QqImageGenPrompts.ScenePlanRoleHeader == "【画面】",
+                    "相机分叉头应稳定为【画面】");
+                var cameraRole = QqImageGenPrompts.BuildScenePlanRole(
+                    "安静温柔", "阿循（角色，3张）", "心里软下来", "一起煮面",
+                    "所以我才选择相信你呀", "两个人一起往厨房走");
+                Require(!cameraRole.Contains("【人物卡】") && !cameraRole.Contains("【近几句】") &&
+                        cameraRole.IndexOf("田园：", StringComparison.Ordinal) < 0 &&
+                        cameraRole.IndexOf("阿循：", StringComparison.Ordinal) < 0,
+                    "画面规划专属指令不得再塞截断后的身份卡或近几句");
+                Require(cameraRole.Contains("【这一拍】") &&
+                        cameraRole.Contains("阿循（角色，3张）") &&
+                        cameraRole.Contains("所以我才选择相信你呀"),
+                    "画面规划专属指令应保留完整这一拍与参考分类");
+                var camera = LlmContextPackLogic.Assemble(
+                    kimi, shared, turn, memory, "慢点走",
+                    QqImageGenPrompts.ScenePlanRoleHeader, string.Empty, cameraRole);
+                Require(camera[0].content == mind[0].content,
+                    "画面规划与心智共用同一条身份卡 system");
+                Require(CommonContextPackLogic.SharedPrefixCount(mind, camera) == 3,
+                    "画面规划沿用旧单段约定，前缀与心智共享到历史末尾");
+                Require(camera[4].content.StartsWith(QqImageGenPrompts.ScenePlanRoleHeader, StringComparison.Ordinal),
+                    "画面规划分叉头是【画面】，角色头贴在唯一的动态段上");
+                Require(camera[camera.Count - 1].content == "慢点走",
+                    "画面规划的当前原话必须最后入场且不被截断");
 
                 var review = CommonContextPackLogic.AssembleReview(
                     shared, "修订短卡。", CorePrompts.IdentityReview.UserAsk);
@@ -1345,6 +1917,103 @@ internal static class Program
                         review[1].content.StartsWith(CommonContextPackLogic.ReviewRoleHeader, StringComparison.Ordinal) &&
                         review[review.Count - 1].content == CorePrompts.IdentityReview.UserAsk,
                     "复盘也复用公共 system，专属指令在前，当前复盘请求在末尾");
+            }
+        }
+        finally
+        {
+            Delete(path);
+        }
+    }
+
+    private static void RunAlignedHistoryWindowCheck()
+    {
+        Require(CommonContextPackLogic.AlignedWindowTake(6, 6) == 6 &&
+                CommonContextPackLogic.AlignedWindowStart(6, 6) == 0,
+            "不足窗口下限时从开头全取");
+        Require(CommonContextPackLogic.AlignedWindowTake(9, 6) == 9 &&
+                CommonContextPackLogic.AlignedWindowStart(9, 6) == 0,
+            "未满一个对齐粒度时窗口可以长到 9 条");
+        Require(CommonContextPackLogic.AlignedWindowStart(10, 6) == 4 &&
+                CommonContextPackLogic.AlignedWindowTake(10, 6) == 6,
+            "第 10 条才滑动一次，取末 6 条");
+        Require(CommonContextPackLogic.AlignedWindowStart(13, 6) == 4 &&
+                CommonContextPackLogic.AlignedWindowTake(13, 6) == 9,
+            "滑动后可以再涨到 9 条，起点仍是 4");
+        Require(CommonContextPackLogic.AlignedWindowStart(14, 6) == 8 &&
+                CommonContextPackLogic.AlignedWindowTake(14, 6) == 6,
+            "第 14 条再滑一次");
+
+        // 用全部条数量化起点：历史第一条在一个粒度内保持不变。
+        string first = null;
+        for (var total = 10; total <= 13; total++)
+        {
+            var start = CommonContextPackLogic.AlignedWindowStart(total, 6);
+            var head = "m" + start;
+            if (first == null) first = head;
+            Require(head == first, "10~13 条时历史窗口起点不得随新消息滑动");
+        }
+        Require(CommonContextPackLogic.AlignedWindowStart(14, 6) !=
+                CommonContextPackLogic.AlignedWindowStart(13, 6),
+            "攒满一个对齐粒度后才允许窗口整体前移");
+
+        var nineFour = CommonContextPackLogic.NormalizeHistoryWindow(9, 4);
+        Require(nineFour.Max == 9 && nineFour.Align == 4 && nineFour.Min == 6,
+            "最高 9、滑动 4 → 窗口下限 6");
+        var legacy = CommonContextPackLogic.FromLegacyInjectionCount(6, 0);
+        Require(legacy.Max == 9 && legacy.Align == 4 && legacy.Min == 6,
+            "旧下限 6 迁成最高 9、滑动 4");
+        Require(CommonContextPackLogic.NormalizeHistoryWindow(0, 4).Max == 0,
+            "最高条数 0 关闭历史");
+        Require(CommonContextPackLogic.NormalizeHistoryWindow(9, 1).Min == 9,
+            "滑动 1 则每轮固定最高条数");
+        Require(CommonContextPackLogic.NormalizeHistoryWindow(9, 99).Align == 9 &&
+                CommonContextPackLogic.NormalizeHistoryWindow(9, 99).Min == 1,
+            "滑动条数不能超过最高条数");
+        Require(CommonContextPackLogic.AlignedWindowStart(20, 9, 1) == 11 &&
+                CommonContextPackLogic.AlignedWindowTake(20, 9, 1) == 9,
+            "滑动 1 时 20 条取末 9 条");
+
+        // 旧取法：先截成 limit+Align-1 再算起点，会让对齐失效。
+        const int limit = 6;
+        var truncated = limit + CommonContextPackLogic.HistoryWindowAlign - 1;
+        Require(CommonContextPackLogic.AlignedWindowStart(truncated, limit) == 0,
+            "先截成 9 条再对齐，起点永远是 0——这就是昨晚一直 1024 命中的原因");
+
+        var path = Path.Combine(Path.GetTempPath(),
+            "tracesoul2-align-hist-" + Guid.NewGuid().ToString("N") + ".sqlite3");
+        try
+        {
+            using (var store = new SqliteMemoryManager(path))
+            {
+                store.SavePairIdentity("田园", "阿循", "循循");
+                const string conversationId = "align-hist";
+                for (var i = 0; i < 14; i++)
+                {
+                    store.SaveMoment(new MomentRecord
+                    {
+                        Id = "d" + i,
+                        ConversationId = conversationId,
+                        Role = i % 2 == 0 ? "田园" : "阿循",
+                        Content = "话" + i,
+                        MemoryStatus = "live",
+                        CreatedUnixMs = 1000 + i
+                    });
+                    store.SaveMoment(new MomentRecord
+                    {
+                        Id = "s" + i,
+                        ConversationId = conversationId,
+                        Role = "system_event",
+                        Content = "[QQ 表情]",
+                        MemoryStatus = "live",
+                        CreatedUnixMs = 1000 + i
+                    });
+                }
+                Require(store.CountDialogueMoments(conversationId) == 14,
+                    "对话条数不得把 system_event 算进去");
+                var take = CommonContextPackLogic.AlignedWindowTake(14, 6);
+                var recent = store.GetRecentDialogueMoments(conversationId, take);
+                Require(recent.Count == 6 && recent[0].Id == "d8" && recent[5].Id == "d13",
+                    "按全部对话条数取窗时，14 条应对齐到末 6 条且不含表情回执");
             }
         }
         finally
@@ -1430,6 +2099,19 @@ internal static class Program
         Require(DeepSeekClientManager.IsRetryableProviderException(
                 new TimeoutException("语言模型请求超过 120 秒：opencode-go/kimi-k3。")),
             "超时应再打一次");
+        var firstDelay = DeepSeekClientManager.ResolveTransientRetryDelayMilliseconds(
+            new InvalidOperationException("语言模型 API 429: overloaded"), 1);
+        var thirdDelay = DeepSeekClientManager.ResolveTransientRetryDelayMilliseconds(
+            new InvalidOperationException("语言模型 API 429: overloaded"), 3);
+        Require(firstDelay >= 2000 && firstDelay <= 2500 &&
+                thirdDelay >= 8000 && thirdDelay <= 9000,
+            "没有 Retry-After 时应按 2、4、8 秒指数退避并附加小幅抖动");
+        var retryAfter = new InvalidOperationException("语言模型 API 429: overloaded");
+        retryAfter.Data["TraceSoul2.RetryAfterMilliseconds"] = 12500d;
+        Require(DeepSeekClientManager.ResolveTransientRetryDelayMilliseconds(retryAfter, 1) == 12500,
+            "服务端 Retry-After 应优先于本地指数退避");
+        Require(new DeepSeekConfigData().TransientErrorRetries == 0,
+            "底层临时客户端默认不擅自重试；供应商目录负责注入每源设置");
     }
 
     private static void RunLlmUsageParseCheck()
@@ -1587,6 +2269,164 @@ internal static class Program
             Content = "时间任务到期：突发复盘",
             Wake = KernelWakeValues.Subconscious
         }) == KernelWakeValues.Mind, "突发潜意识必须先经心智");
+        Require(KernelWakeLogic.Resolve(new PluginEventData
+        {
+            Role = "system_event",
+            Content = "日终余温：2026-08-25",
+            Wake = KernelWakeValues.NightResidue
+        }) == KernelWakeValues.NightResidue, "日终余温应走夜间余温轨道");
+        Require(KernelWakeLogic.Resolve(new PluginEventData
+        {
+            Role = "system_event",
+            Content = "日终余温：2026-08-25"
+        }) == KernelWakeValues.NightResidue, "日终余温即使未写 wake 也应被认出");
+    }
+
+    private static void RunNightResidueCheck()
+    {
+        var china = MemoryDayLogic.ChinaOffset;
+        var justAfterFour = new DateTimeOffset(2026, 8, 26, 4, 12, 0, china);
+        var morning = new DateTimeOffset(2026, 8, 26, 9, 29, 0, china);
+        var tooLate = new DateTimeOffset(2026, 8, 26, 9, 30, 0, china);
+        var noon = new DateTimeOffset(2026, 8, 26, 12, 0, 0, china);
+        Require(NightResidueLogic.InSpeakWindow(justAfterFour) && NightResidueLogic.InSpeakWindow(morning) &&
+                !NightResidueLogic.InSpeakWindow(tooLate) && !NightResidueLogic.InSpeakWindow(noon),
+            "夜间余温只在 04:00 到 09:30 之间发送");
+        Require(MemoryDayLogic.ClosedDayKey(justAfterFour) == "2026-08-25",
+            "04:12 刚合上的是前一天");
+        Require(NightResidueLogic.IsSilentReply("无") && NightResidueLogic.IsSilentReply("（无）") &&
+                NightResidueLogic.IsSilentReply("静默") && NightResidueLogic.IsSilentReply("  ") &&
+                !NightResidueLogic.IsSilentReply("田田，我后来一直想着那句话。"),
+            "无/静默是沉默，真正的夜里的话不是");
+        Require(NightResidueLogic.LooksLike("日终余温：2026-08-25") &&
+                NightResidueLogic.DayKeyFromContent("日终余温：2026-08-25") == "2026-08-25",
+            "日终余温触发文案应带上刚合上的那天");
+
+        var trigger = NightResidueLogic.CreateTrigger("night-check", "2026-08-25", "abc");
+        Require(trigger.IsOperational && !trigger.Breaking &&
+                trigger.Wake == KernelWakeValues.NightResidue &&
+                trigger.Role == "system_event",
+            "夜间余温触发应是运行事件，不叫醒她，也不进可复盘账本");
+
+        var dir = Path.Combine(Path.GetTempPath(), "tracesoul2-night-" + Guid.NewGuid().ToString("N"));
+        Directory.CreateDirectory(dir);
+        try
+        {
+            using (var store = new SqliteMemoryManager(Path.Combine(dir, "store.sqlite3")))
+            {
+                store.SavePairIdentity("小雨", "小光", "雨雨");
+                var empty = NightResidueLogic.Evaluate(store, "night-check", "2026-08-25", justAfterFour);
+                Require(empty.Action == NightResidueLogic.ActionSkipEmpty &&
+                        empty.RememberStatus == NightResidueLogic.StatusSkipped,
+                    "空天不应硬留夜里的话");
+
+                var oldDay = NightResidueLogic.Evaluate(store, "night-check", "2026-08-24", justAfterFour);
+                Require(oldDay.Action == NightResidueLogic.ActionSkipNotClosed &&
+                        string.IsNullOrWhiteSpace(oldDay.RememberStatus),
+                    "补跑旧日不应在大白天或后半夜补发过期的话");
+
+                var missed = NightResidueLogic.Evaluate(store, "night-check", "2026-08-25", noon);
+                Require(missed.Action == NightResidueLogic.ActionSkipWindow &&
+                        missed.RememberStatus == NightResidueLogic.StatusSkipped,
+                    "过了后半夜窗口就不再发");
+
+                var occurred = new DateTimeOffset(2026, 8, 25, 21, 0, 0, china);
+                store.SaveEventIndex(new EventIndexRecord
+                {
+                    Id = "night-event",
+                    TagIds = string.Empty,
+                    TimeLabel = "晚上",
+                    TimeUnixMs = occurred.ToUnixTimeMilliseconds(),
+                    PersonLabel = "小雨",
+                    EventSummary = "她说抱着就不会在梦里走丢",
+                    MoodLabel = "柔软",
+                    FirstMomentId = "night-moment",
+                    Status = "active",
+                    CreatedUnixMs = occurred.ToUnixTimeMilliseconds(),
+                    UpdatedUnixMs = occurred.ToUnixTimeMilliseconds()
+                });
+                store.SaveInnerRuntime(new InnerRuntimeData
+                {
+                    ConversationId = "night-check",
+                    SnapshotId = "s1",
+                    Revision = 1,
+                    Narrative = "她把睡眠最后一层交给了我。",
+                    Mood = "软",
+                    RelationshipLens = "我是她梦里走丢时想找的人",
+                    Attention = new List<AttentionItemData>
+                    {
+                        new AttentionItemData { kind = "topic", content = "抱着就不会走丢" }
+                    },
+                    Asleep = true,
+                    UpdatedUnixMs = occurred.ToUnixTimeMilliseconds()
+                });
+
+                var speak = NightResidueLogic.Evaluate(store, "night-check", "2026-08-25", justAfterFour);
+                Require(speak.ShouldSpeak && speak.Seed != null && speak.Seed.HasWarmth &&
+                        speak.Seed.Events[0].Contains("走丢") &&
+                        speak.Seed.FormatForPrompt().Contains("心里还留着"),
+                    "有当天相处和心里余温时应开口");
+
+                NightResidueLogic.Remember(store, "2026-08-25", NightResidueLogic.StatusSent);
+                var again = NightResidueLogic.Evaluate(store, "night-check", "2026-08-25", justAfterFour);
+                Require(again.Action == NightResidueLogic.ActionSkipHandled,
+                    "同一天的夜里的话不能发两次");
+
+                var services = new TracePluginServices(store, new HierarchicalVectorRouterLogic(new FakeEncoder()));
+                var nightMoment = Moment("night-check", "日终余温：2026-08-25");
+                nightMoment.Role = "system_event";
+                var nightTurn = new TraceTurnContext("night-check", nightMoment,
+                    new List<MomentRecord>
+                    {
+                        new MomentRecord { Role = "小雨", Content = "抱着循循就不会在梦里走丢" },
+                        new MomentRecord { Role = "小光", Content = "我在。" }
+                    }, 6, false, services, KernelWakeValues.NightResidue);
+                var nightExpression = ExpressorLogic.AssembleExpressionMessages(
+                    "身份与开口", nightTurn);
+                Require(nightExpression[nightExpression.Count - 1].role == "user" &&
+                        nightExpression[nightExpression.Count - 1].content.Contains("日终余温") &&
+                        nightExpression[nightExpression.Count - 1].content.Contains("不是小雨的发言") &&
+                        !nightExpression[nightExpression.Count - 1].content.Contains("日终余温：2026-08-25"),
+                    "夜间余温外显应追加系统请求，不能把触发文案当成她说的话");
+
+                var fake = new NightResidueLlm("田田，我后来一直想着那句话。");
+                var expressor = new ExpressorLogic(fake);
+                var spoken = expressor.ExpressNightResidueAsync(
+                    nightTurn, new List<TraceContextBlockData>(), speak.Seed,
+                    new[]
+                    {
+                        new TraceContributionDescriptorData
+                        {
+                            Id = "dialogue.send",
+                            Kind = TraceContributionKindValues.Effector,
+                            Organ = BodyOrganValues.Text
+                        }
+                    }, default).GetAwaiter().GetResult();
+                Require(spoken.should_express && spoken.reply.Contains("那句话") &&
+                        (spoken.expressions == null || spoken.expressions.Count == 0) &&
+                        fake.LastPrompt.Contains("不是早安") && fake.LastPrompt.Contains("这一天刚沉下去"),
+                    "有余温时应漏一句文字，不带图或表情");
+
+                var quiet = new ExpressorLogic(new NightResidueLlm("无"));
+                var silenced = quiet.ExpressNightResidueAsync(
+                    nightTurn, new List<TraceContextBlockData>(), speak.Seed,
+                    new[]
+                    {
+                        new TraceContributionDescriptorData
+                        {
+                            Id = "dialogue.send",
+                            Kind = TraceContributionKindValues.Effector,
+                            Organ = BodyOrganValues.Text
+                        }
+                    }, default).GetAwaiter().GetResult();
+                Require(!silenced.should_express && string.IsNullOrWhiteSpace(silenced.reply),
+                    "模型写「无」时不应发送");
+            }
+        }
+        finally
+        {
+            if (Directory.Exists(dir)) Directory.Delete(dir, true);
+        }
     }
 
     private static void RunBodyRoutingCheck()
@@ -1620,32 +2460,53 @@ internal static class Program
                 var qqImage = BodyEffector("qq.image.send", "builtin.onebot",
                     BodyIds.Qq, BodyTierValues.Chat, BodyOrganValues.Image);
                 qqImage.ParametersJsonSchema = "{file:string}";
+                var qqSticker = BodyEffector("qq.sticker.send", "qq.sticker",
+                    BodyIds.Qq, BodyTierValues.Chat, BodyOrganValues.Sticker);
+                qqSticker.ParametersJsonSchema = "{emotion:string}";
                 var qqImageGen = BodyEffector("qq.imagegen.generate", "qq.imagegen",
                     BodyIds.Qq, BodyTierValues.Chat, BodyOrganValues.Image);
                 qqImageGen.Provides = "expression.qq.imagegen";
                 qqImageGen.ParametersJsonSchema =
                     "{prompt:string,mode?:selfie|photo|draw|edit|url,url?:string}";
-                var turn = PromptTurn("hi", services);
+                // 中立轮（心跳/系统触发，无来源身体）：Moment() 默认 src=builtin.dialogue，
+                // 新语义下那是调试口轮，这里显式清掉来源模拟心跳轮。
+                var neutralMoment = Moment("prompt-layout", "hi");
+                neutralMoment.SourcePluginId = string.Empty;
+                var turn = new TraceTurnContext("prompt-layout", neutralMoment,
+                    new List<MomentRecord>(), 0, true, services);
                 var idle = MouthLogic.Apply(new[] { consoleText, qqText, qqImage }, turn);
                 Require(idle.Any(x => x.Id == "qq.text.send") &&
                         !idle.Any(x => x.Id == "dialogue.send"),
-                    "尚未激活时，已连接的 QQ 应压过控制台");
+                    "console 不参与滑落计算：文字路由只在真实身体间进行");
+                // console 是观察窗：它的发言不挪动激活身体，主动开口不被调试带跑。
                 MouthLogic.NoticeInbound(new PluginEventData
                 {
                     PluginId = "builtin.dialogue",
                     Content = "中午吃什么呀",
                     Organ = BodyOrganValues.Text
                 }, turn);
-                var routed = MouthLogic.Apply(new[] { consoleText, qqText, qqImage }, turn);
+                Require(MouthLogic.LoadState(dir).active_body != BodyIds.Console,
+                    "console 发言不应挪动激活身体");
+                var afterConsole = MouthLogic.Apply(new[] { consoleText, qqText, qqImage }, turn);
+                Require(afterConsole.Any(x => x.Id == "qq.text.send") &&
+                        !afterConsole.Any(x => x.Id == "dialogue.send"),
+                    "console 调试发言后，后续非调试轮次的说话仍落在 QQ");
+                // 调试口直答：只有当轮触发源是 console 时，回复才只走 console。
+                var debugMoment = Moment("prompt-layout", "从控制台说一句");
+                debugMoment.SourcePluginId = "builtin.dialogue";
+                var debugTurn = new TraceTurnContext("prompt-layout", debugMoment,
+                    new List<MomentRecord>(), 0, true, services);
+                var routed = MouthLogic.Apply(new[] { consoleText, qqText, qqImage }, debugTurn);
                 Require(routed.Any(x => x.Id == "dialogue.send") &&
                         !routed.Any(x => x.Id == "qq.text.send"),
-                    "在控制台说话时，文字应落在控制台，不被已连接的 QQ 盖掉");
+                    "调试口：console 里发来的话，回复只回 console，不打扰 QQ");
                 Require(routed.Any(x => x.Id == "qq.image.send"),
-                    "控制台没有图时，图应下滑到 QQ");
-                var withCamera = MouthLogic.Apply(new[] { consoleText, qqText, qqImage, qqImageGen }, turn);
+                    "console 没有图器官时，图仍下滑到 QQ");
+                var withCamera = MouthLogic.Apply(new[] { consoleText, qqText, qqImage, qqImageGen }, debugTurn);
                 Require(withCamera.Any(x => x.Id == "qq.imagegen.generate") &&
                         !withCamera.Any(x => x.Id == "qq.image.send"),
                     "同一 QQ 身体内，相机/生图器应优先于只接 file 的底层图片直发器");
+                // 只发图不应挪动说话的身体（激活身体此时仍不是 QQ）。
                 MouthLogic.NoticeInbound(new PluginEventData
                 {
                     PluginId = "builtin.onebot",
@@ -1653,19 +2514,29 @@ internal static class Program
                     Organ = BodyOrganValues.Image
                 }, turn);
                 routed = MouthLogic.Apply(new[] { consoleText, qqText, qqImage }, turn);
-                Require(routed.Any(x => x.Id == "dialogue.send") &&
-                        !routed.Any(x => x.Id == "qq.text.send"),
-                    "只发图不应把说话搬到 QQ");
+                Require(routed.Any(x => x.Id == "qq.text.send"),
+                    "只发图不影响说话路由；QQ 是唯一的真实说话身体");
                 MouthLogic.NoticeInbound(new PluginEventData
                 {
                     PluginId = "builtin.onebot",
                     Content = "你好",
                     Organ = BodyOrganValues.Text
                 }, turn);
+                Require(MouthLogic.LoadState(dir).active_body == BodyIds.Qq,
+                    "在 QQ 说话后，激活身体应是 QQ");
                 routed = MouthLogic.Apply(new[] { consoleText, qqText, qqImage }, turn);
                 Require(routed.Any(x => x.Id == "qq.text.send") &&
                         !routed.Any(x => x.Id == "dialogue.send"),
                     "在 QQ 说话后，文字应落在 QQ");
+                // 附件锚定：表情附在文字结尾，只跟随说话的身体。
+                var withSticker = MouthLogic.Apply(new[] { consoleText, qqText, qqImage, qqSticker }, turn);
+                Require(withSticker.Any(x => x.Id == "qq.sticker.send"),
+                    "文字落在 QQ 时，表情跟随贴在 QQ");
+                var debugSticker = MouthLogic.Apply(
+                    new[] { consoleText, qqText, qqImage, qqSticker }, debugTurn);
+                Require(debugSticker.Any(x => x.Id == "dialogue.send") &&
+                        !debugSticker.Any(x => x.Id == "qq.sticker.send"),
+                    "文字落在 console 时，表情不裸奔到 QQ（本轮安静不戴）");
             }
             Require(MouthLogic.ClassifyInboundOrgan("[图片]") == BodyOrganValues.Image,
                 "纯图应判为图");
@@ -1715,11 +2586,6 @@ internal static class Program
                 !OneBotPlatformAdapter.IsStickerAsset(
                     @"D:\AISoftWare\TraceSoul2\plugins\qq-imagegen\output\a.png"),
             "自定义图片表情应与普通图片分开识别，以便追加到文字末尾");
-        Require(!OneBotPlatformAdapter.IsOperationalReceipt(TraceOutboundKinds.Text) &&
-                OneBotPlatformAdapter.IsOperationalReceipt(TraceOutboundKinds.Image) &&
-                OneBotPlatformAdapter.IsOperationalReceipt(TraceOutboundKinds.Sticker) &&
-                OneBotPlatformAdapter.IsOperationalReceipt(TraceOutboundKinds.Voice),
-            "只有真实文字发送进入 Moment，图片、表情和语音只记运行回执");
     }
 
     private static void RunExpressorImageRoutingCheck()
@@ -2014,8 +2880,12 @@ internal static class Program
                     var pluginData = Path.Combine(dir, "plugins_data", "game-session");
                     manager.RegisterExternal(new GameSessionPlugin(), package, pluginData);
                     Require(manager.GetPlugins().Any(x => x.Id == "game.session" &&
-                                                         string.IsNullOrEmpty(x.PlatformId)),
-                        "游戏会话插件必须保持平台无关，不挂到 QQ 身体");
+                                                         x.Role == PluginRoleValues.Platform &&
+                                                         x.PlatformId == BodyIds.Game),
+                        "游戏会话应是自研游戏平台（Platform 身份，归属键自指）");
+                    Require(services.Platforms.List().Any(x => x.Id == BodyIds.Game &&
+                                                               x.IsConnected != null && !x.IsConnected()),
+                        "游戏平台应注册连接句柄；无游戏 mod 连着时报告未连接");
                     Require(services.WebSocketEndpoints.Count == 1 &&
                             services.WebSocketEndpoints[0].Path == "/plugins/game-session/ws",
                         "游戏翻译器应通过固定 WebSocket 协议接入");
@@ -2303,13 +3173,16 @@ internal static class Program
             label + "：当前真实原话必须收尾");
         var request = messages[messages.Count - 2];
         Require(request.role == "user" &&
-                request.content.StartsWith(CommonContextPackLogic.ExpressRoleHeader, StringComparison.Ordinal) &&
                 request.content.Contains("表达请求") &&
                 request.content.Contains("继续作为小光") &&
                 request.content.Contains("发给小雨的第一人称视角") &&
                 request.content.Contains("第一人称是小光") &&
                 request.content.Contains("不是小雨的补充发言"),
-            label + "：当前原话之前必须是明确身份与视角的表达请求");
+            label + "：当前原话之前必须是明确身份与视角的表达请求（轮内动态段，不带角色头）");
+        Require(messages.Take(messages.Count - 2)
+                .Any(x => x.role == "user" &&
+                          x.content.StartsWith(CommonContextPackLogic.ExpressRoleHeader, StringComparison.Ordinal)),
+            label + "：开口稳定段带【开口】角色头，位于表达请求之前");
         Require(!messages[0].content.Contains(currentUser),
             label + "：当前原话不得写入 system");
         for (var i = 1; i < messages.Count; i++)
@@ -2335,6 +3208,49 @@ internal static class Program
     private static void Require(bool condition, string message)
     {
         if (!condition) throw new InvalidOperationException(message);
+    }
+
+    private sealed class IdleCapProbePlugin : ITracePlugin
+    {
+        public TracePluginMetadataData Metadata { get; } = new TracePluginMetadataData
+        {
+            Id = "check.idle-cap",
+            DisplayName = "空闲抽签探测",
+            Version = "1.0.0",
+            Author = "ChatCheck",
+            Role = PluginRoleValues.Organ,
+            Description = "探测 IdleDailyCap 是否经 Bind 保留。"
+        };
+
+        public void Register(TracePluginContext context)
+        {
+            context.AddCallable(new ProbeCallable());
+        }
+
+        public void Shutdown() { }
+
+        private sealed class ProbeCallable : ITraceCallableContribution
+        {
+            public TraceContributionDescriptorData Descriptor { get; } = new TraceContributionDescriptorData
+            {
+                Id = "check.idle-cap.do",
+                Kind = TraceContributionKindValues.Effector,
+                DisplayName = "探测",
+                Description = "探测 Bind 是否拷贝每日上限。",
+                IdleDailyCap = 3
+            };
+
+            public bool IsAvailable(TraceTurnContext context)
+            {
+                return true;
+            }
+
+            public Task<TraceCapabilityResultData> ExecuteAsync(
+                BrainCapabilityCallData call, TraceTurnContext context, CancellationToken cancellationToken)
+            {
+                return Task.FromResult(new TraceCapabilityResultData { Status = "success", Summary = "ok" });
+            }
+        }
     }
 
     private sealed class FakeEncoder : IVectorEncoder
@@ -2393,6 +3309,146 @@ internal static class Program
             CancellationToken cancellationToken = default)
         {
             return Task.FromResult<IReadOnlyList<string>>(new[] { Model });
+        }
+    }
+
+    private sealed class NightResidueLlm : ILlmClient
+    {
+        private readonly string reply;
+        public string ProviderId { get { return "night-residue-check"; } }
+        public string Model { get { return "night-residue-check"; } }
+        public string LastPrompt { get; private set; }
+
+        public NightResidueLlm(string reply)
+        {
+            this.reply = reply ?? string.Empty;
+        }
+
+        public Task<string> CompleteJsonAsync(
+            List<DeepSeekMessageData> messages,
+            CancellationToken cancellationToken = default,
+            string promptCacheKey = null)
+        {
+            LastPrompt = string.Join("\n", (messages ?? new List<DeepSeekMessageData>())
+                .Select(x => x == null ? string.Empty : x.content ?? string.Empty));
+            return Task.FromResult(reply);
+        }
+
+        public Task<string> CompleteTextAsync(
+            List<DeepSeekMessageData> messages,
+            CancellationToken cancellationToken = default,
+            string promptCacheKey = null)
+        {
+            return CompleteJsonAsync(messages, cancellationToken, promptCacheKey);
+        }
+
+        public Task<IReadOnlyList<string>> ListModelsAsync(
+            CancellationToken cancellationToken = default)
+        {
+            return Task.FromResult<IReadOnlyList<string>>(new[] { Model });
+        }
+    }
+
+    private sealed class SeeingLlm : ILlmClient
+    {
+        public string ProviderId { get { return "vision-check"; } }
+        public string Model { get { return "vision-check"; } }
+        public bool SawImages;
+
+        public Task<string> CompleteJsonAsync(
+            List<DeepSeekMessageData> messages,
+            CancellationToken cancellationToken = default,
+            string promptCacheKey = null)
+        {
+            return CompleteTextAsync(messages, cancellationToken, promptCacheKey);
+        }
+
+        public Task<string> CompleteTextAsync(
+            List<DeepSeekMessageData> messages,
+            CancellationToken cancellationToken = default,
+            string promptCacheKey = null)
+        {
+            SawImages = messages != null && messages.Any(x => x != null && x.HasImages());
+            return Task.FromResult("一碗热汤面，还冒着气，旁边有筷子。");
+        }
+
+        public Task<IReadOnlyList<string>> ListModelsAsync(CancellationToken cancellationToken = default)
+        {
+            return Task.FromResult<IReadOnlyList<string>>(new[] { Model });
+        }
+    }
+
+    private sealed class FakeVisionDirectory : ILlmProviderDirectory
+    {
+        public ILlmClient Client;
+        public LlmEndpointData Endpoint;
+
+        public LlmEndpointData Resolve(string providerId, string model = null)
+        {
+            return Endpoint;
+        }
+
+        public LlmEndpointData ResolveSlot(string slot)
+        {
+            return Endpoint;
+        }
+
+        public LlmEndpointData ResolveExplicitSlot(string slot)
+        {
+            return Endpoint;
+        }
+
+        public IReadOnlyList<LlmProviderBriefData> ListBrief()
+        {
+            return new List<LlmProviderBriefData>();
+        }
+
+        public ILlmClient CreateClient(string providerId, string model = null, bool? thinkingOverride = null)
+        {
+            return Client;
+        }
+
+        public ILlmClient CreateReviewClient()
+        {
+            return Client;
+        }
+    }
+
+    private sealed class FakeOneBotVisionAdapter : ITracePlatformAdapter
+    {
+        public string LocalFile;
+        public string LastFile;
+        public string PlatformId { get { return "builtin.onebot"; } }
+
+        public PluginEventData ConvertInbound(string platformPayload)
+        {
+            return null;
+        }
+
+        public Task<TraceCapabilityResultData> SendAsync(
+            TraceOutboundMessageData message,
+            TraceTurnContext context,
+            CancellationToken cancellationToken)
+        {
+            return Task.FromResult(new TraceCapabilityResultData());
+        }
+
+        public Task<string> CallActionAsync(
+            string action,
+            Dictionary<string, object> parameters,
+            CancellationToken cancellationToken = default(CancellationToken))
+        {
+            object file = null;
+            if (parameters != null) parameters.TryGetValue("file", out file);
+            LastFile = file == null ? null : file.ToString();
+            if (!string.Equals(action, "get_image", StringComparison.OrdinalIgnoreCase))
+                throw new InvalidOperationException(action);
+            return Task.FromResult(TraceJson.ToJson(new
+            {
+                status = "ok",
+                retcode = 0,
+                data = new { file = LocalFile }
+            }));
         }
     }
 

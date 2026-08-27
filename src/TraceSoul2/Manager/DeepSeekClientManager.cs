@@ -6,6 +6,7 @@ using System.Text;
 using System.Text.Encodings.Web;
 using System.Text.Json;
 using System.Text.Json.Serialization;
+using System.Text.RegularExpressions;
 using System.Threading;
 using System.Threading.Tasks;
 using TraceSoul2.Data;
@@ -33,6 +34,7 @@ namespace TraceSoul2.Manager
         private static readonly string LlmDumpDir =
             Environment.GetEnvironmentVariable("TRACESOUL2_LLM_DUMP_DIR");
         private static int llmDumpCounter;
+        private const string RetryAfterMillisecondsKey = "TraceSoul2.RetryAfterMilliseconds";
         private static readonly JsonSerializerOptions OmitNullJson = new JsonSerializerOptions
         {
             IncludeFields = true,
@@ -266,22 +268,36 @@ namespace TraceSoul2.Manager
             for (var attempt = 0; attempt < attempts; attempt++)
             {
                 CompletionAttempt result;
-                try
+                var transientRetry = 0;
+                while (true)
                 {
-                    result = await SendOnceAsync(current, json, useJsonResponseFormat, cancellationToken, promptCacheKey);
-                }
-                catch (OperationCanceledException) when (cancellationToken.IsCancellationRequested)
-                {
-                    throw;
-                }
-                catch (Exception exception) when (
-                    attempt < attempts - 1 && IsRetryableProviderException(exception))
-                {
-                    diagnostics.Add("第" + (attempt + 1) + "次上游失败：" + exception.Message);
-                    if (json && useJsonResponseFormat)
-                        useJsonResponseFormat = false;
-                    current = messages;
-                    continue;
+                    try
+                    {
+                        result = await SendOnceAsync(
+                            current, json, useJsonResponseFormat, cancellationToken, promptCacheKey);
+                        break;
+                    }
+                    catch (OperationCanceledException) when (cancellationToken.IsCancellationRequested)
+                    {
+                        throw;
+                    }
+                    catch (Exception exception) when (
+                        transientRetry < config.TransientErrorRetries &&
+                        IsRetryableProviderException(exception))
+                    {
+                        transientRetry++;
+                        // 部分 OpenAI 兼容中转会在 response_format=json_object 上返回瞬时 500；
+                        // 这种协议兼容错误退避后摘掉 response_format，纯 429/超时则保持请求不变。
+                        if (json && useJsonResponseFormat && ShouldRetryWithoutResponseFormat(exception))
+                            useJsonResponseFormat = false;
+                        var delayMs = ResolveTransientRetryDelayMilliseconds(exception, transientRetry);
+                        await Task.Delay(delayMs, cancellationToken);
+                    }
+                    catch (Exception exception) when (
+                        transientRetry > 0 && IsRetryableProviderException(exception))
+                    {
+                        throw RetryExhausted(exception, transientRetry);
+                    }
                 }
                 var incomplete = json && DeepSeekStructuredOutputLogic.LooksIncompleteJson(result.Content);
                 if (!incomplete && !string.IsNullOrWhiteSpace(result.Content)) return result.Content;
@@ -360,18 +376,26 @@ namespace TraceSoul2.Manager
                     }
                     catch (Exception exception)
                     {
-                        throw new InvalidOperationException(
-                            "语言模型返回了无法解析的响应，HTTP " +
-                            httpStatus + "，body长度=" + body.Length + "。",
-                            exception);
+                        // 失败响应不保证仍是 JSON；应先按 HTTP 状态进入 429/5xx 退避，
+                        // 只有成功响应无法解析时才把它视作协议结构错误。
+                        if (!response.IsSuccessStatusCode)
+                            parsed = null;
+                        else
+                            throw new InvalidOperationException(
+                                "语言模型返回了无法解析的响应，HTTP " +
+                                httpStatus + "，body长度=" + body.Length + "。",
+                                exception);
                     }
                     if (!response.IsSuccessStatusCode)
                     {
                         var detail = parsed != null && parsed.error != null
                             ? parsed.error.message
                             : ExtractErrorMessage(body);
-                        throw new InvalidOperationException(
+                        var failure = new InvalidOperationException(
                             "语言模型 API " + httpStatus + ": " + detail);
+                        if (IsRetryableProviderFailure(httpStatus, body))
+                            AttachRetryAfter(failure, response);
+                        throw failure;
                     }
 
                     if (IsErrorOnlyChatResponse(parsed, body))
@@ -380,8 +404,10 @@ namespace TraceSoul2.Manager
                                      !string.IsNullOrWhiteSpace(parsed.error.message)
                             ? parsed.error.message
                             : ExtractErrorMessage(body);
-                        throw new InvalidOperationException(
+                        var failure = new InvalidOperationException(
                             "语言模型上游失败 HTTP " + httpStatus + ": " + detail);
+                        AttachRetryAfter(failure, response);
+                        throw failure;
                     }
 
                     if (parsed == null || parsed.choices == null || parsed.choices.Count == 0 ||
@@ -413,7 +439,11 @@ namespace TraceSoul2.Manager
                 var enc = new UTF8Encoding(true); // 带 BOM，记事本可直接打开
                 System.IO.File.WriteAllText(
                     System.IO.Path.Combine(dir, name + "-prompt.txt"),
-                    ParseRequestText(requestJson), enc);
+                    ParseRequestText(SanitizeVisionDump(requestJson)), enc);
+                // 原始请求体另存一份：转义/字段顺序等 dump 重排版看不见的差异，靠它定位。
+                System.IO.File.WriteAllText(
+                    System.IO.Path.Combine(dir, name + "-request.json"),
+                    SanitizeVisionDump(requestJson), new UTF8Encoding(false));
                 System.IO.File.WriteAllText(
                     System.IO.Path.Combine(dir, name + "-response.txt"),
                     "http=" + httpStatus + Environment.NewLine + ParseResponseText(responseBody), enc);
@@ -426,6 +456,42 @@ namespace TraceSoul2.Manager
             {
                 /* 导出失败不影响主流程 */
             }
+        }
+
+        /// <summary>dump 里去掉 data URI / Gemini inline_data 的原始像素，避免把整张图写进日志。</summary>
+        public static string SanitizeVisionDump(string json)
+        {
+            if (string.IsNullOrEmpty(json)) return json;
+            json = Regex.Replace(json,
+                @"data:image\/[A-Za-z0-9.+-]+;base64,[A-Za-z0-9+/=\s]+",
+                "data:image;base64,[omitted]",
+                RegexOptions.CultureInvariant);
+            if (json.IndexOf("inline_data", StringComparison.Ordinal) < 0) return json;
+            const string marker = "\"data\":\"";
+            var builder = new StringBuilder(json.Length);
+            var cursor = 0;
+            while (cursor < json.Length)
+            {
+                var at = json.IndexOf(marker, cursor, StringComparison.Ordinal);
+                if (at < 0)
+                {
+                    builder.Append(json, cursor, json.Length - cursor);
+                    break;
+                }
+                var start = at + marker.Length;
+                var end = json.IndexOf('"', start);
+                builder.Append(json, cursor, start - cursor);
+                if (end < 0)
+                {
+                    builder.Append(json, start, json.Length - start);
+                    break;
+                }
+                if (end - start >= 120) builder.Append("[omitted]");
+                else builder.Append(json, start, end - start);
+                builder.Append('"');
+                cursor = end + 1;
+            }
+            return builder.ToString();
         }
 
         private static string ParseRequestText(string requestJson)
@@ -478,6 +544,8 @@ namespace TraceSoul2.Manager
                     builder.AppendLine(m.reasoning_content);
                 }
                 builder.AppendLine(m.content ?? string.Empty);
+                if (m != null && m.HasImages())
+                    builder.AppendLine("[图 " + m.images.Count + " 张]");
                 builder.AppendLine();
             }
         }
@@ -642,7 +710,56 @@ namespace TraceSoul2.Manager
                    message.IndexOf("API 429", StringComparison.Ordinal) >= 0 ||
                    message.IndexOf("API 5", StringComparison.Ordinal) >= 0 ||
                    (message.IndexOf("超过", StringComparison.Ordinal) >= 0 &&
-                    message.IndexOf("秒", StringComparison.Ordinal) >= 0);
+                     message.IndexOf("秒", StringComparison.Ordinal) >= 0);
+        }
+
+        /// <summary>第几次瞬时故障重试对应的等待时间；优先采用服务端 Retry-After。</summary>
+        public static int ResolveTransientRetryDelayMilliseconds(Exception exception, int retryNumber)
+        {
+            if (exception != null && exception.Data.Contains(RetryAfterMillisecondsKey))
+            {
+                try
+                {
+                    var requested = Convert.ToDouble(exception.Data[RetryAfterMillisecondsKey]);
+                    if (requested >= 0)
+                        return (int)Math.Min(60000d, requested);
+                }
+                catch
+                {
+                    /* 非法 Retry-After 回落到本地指数退避。 */
+                }
+            }
+            retryNumber = Math.Max(1, Math.Min(6, retryNumber));
+            var baseMs = 2000 * (1 << (retryNumber - 1));
+            var jitter = Random.Shared.Next(0, Math.Min(1000, baseMs / 4) + 1);
+            return Math.Min(60000, baseMs + jitter);
+        }
+
+        private static bool ShouldRetryWithoutResponseFormat(Exception exception)
+        {
+            var message = exception == null ? string.Empty : exception.Message ?? string.Empty;
+            return message.IndexOf("Internal server error", StringComparison.OrdinalIgnoreCase) >= 0 ||
+                   message.IndexOf("Upstream request failed", StringComparison.OrdinalIgnoreCase) >= 0 ||
+                   message.IndexOf("Floating point NaN", StringComparison.OrdinalIgnoreCase) >= 0 ||
+                   message.IndexOf("上游失败 HTTP 200", StringComparison.Ordinal) >= 0;
+        }
+
+        private static InvalidOperationException RetryExhausted(Exception exception, int retryCount)
+        {
+            return new InvalidOperationException(
+                (exception == null ? "语言模型瞬时故障。" : exception.Message) +
+                "（已按退避策略重试 " + retryCount + " 次）", exception);
+        }
+
+        internal static void AttachRetryAfter(Exception exception, HttpResponseMessage response)
+        {
+            if (exception == null || response == null || response.Headers.RetryAfter == null) return;
+            var retryAfter = response.Headers.RetryAfter;
+            TimeSpan? delay = retryAfter.Delta;
+            if (!delay.HasValue && retryAfter.Date.HasValue)
+                delay = retryAfter.Date.Value - DateTimeOffset.UtcNow;
+            if (!delay.HasValue) return;
+            exception.Data[RetryAfterMillisecondsKey] = Math.Max(0d, delay.Value.TotalMilliseconds);
         }
 
         private static bool LooksLikeErrorOnlyBody(string body)
@@ -725,6 +842,7 @@ namespace TraceSoul2.Manager
             value.MaxTokens = Math.Max(128, Math.Min(384000, value.MaxTokens));
             value.TimeoutSeconds = Math.Max(5, Math.Min(600, value.TimeoutSeconds));
             value.EmptyContentRetries = Math.Max(0, Math.Min(3, value.EmptyContentRetries));
+            value.TransientErrorRetries = Math.Max(0, Math.Min(6, value.TransientErrorRetries));
             value.ReasoningEffort = NormalizeReasoningEffort(value.ReasoningEffort);
         }
 
