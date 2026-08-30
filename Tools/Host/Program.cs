@@ -146,6 +146,13 @@ var app = builder.Build();
 app.Use(async (context, next) =>
 {
     var remote = context.Connection.RemoteIpAddress;
+    var isWebSocketUpgrade = context.Request.Headers.Upgrade.ToString()
+        .Split(',')
+        .Any(part => string.Equals(part.Trim(), "websocket", StringComparison.OrdinalIgnoreCase));
+    // NapCat 等协议容器通过 Docker DNS 使用 Host: tracesoul2:端口。
+    // 仅对来自私有容器网络的 WebSocket 握手放行内部 Host；具体端点仍在后面执行 Token 鉴权。
+    var trustedContainerWebSocket = trustContainerProxy && isWebSocketUpgrade &&
+                                    remote != null && IsPrivateNetwork(remote);
     if (remote != null && !IPAddress.IsLoopback(remote) &&
         !(trustContainerProxy && IsPrivateNetwork(remote)))
     {
@@ -156,7 +163,7 @@ app.Use(async (context, next) =>
 
     var requestHost = NormalizeHost(context.Request.Host.Host);
     var publicRequest = publicHosts.Contains(requestHost);
-    if (!IsLoopbackHost(requestHost) && !publicRequest)
+    if (!IsLoopbackHost(requestHost) && !publicRequest && !trustedContainerWebSocket)
     {
         context.Response.StatusCode = StatusCodes.Status403Forbidden;
         await context.Response.WriteAsJsonAsync(new { error = "无效的控制台 Host。" });
@@ -181,9 +188,6 @@ app.Use(async (context, next) =>
         return;
     }
 
-    var isWebSocketUpgrade = context.Request.Headers.Upgrade.ToString()
-        .Split(',')
-        .Any(part => string.Equals(part.Trim(), "websocket", StringComparison.OrdinalIgnoreCase));
     var origin = context.Request.Headers.Origin.ToString();
     // NapCat 反向 WS 的 Origin 常是 ws://127.0.0.1:9021，和 HTTP 控制台 scheme/port 对不上。
     if (!isWebSocketUpgrade && !string.IsNullOrWhiteSpace(origin))
