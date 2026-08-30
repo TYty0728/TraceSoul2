@@ -48,11 +48,13 @@ namespace TraceSoul2.ExternalPlugins.GameSession
             {
                 Id = BodyIds.Game,
                 DisplayName = "游戏会话（自研 WS 桥）",
-                IsConnected = () => endpoint != null && endpoint.ActiveConnections > 0,
+                IsConnected = () => (endpoint != null && endpoint.ActiveConnections > 0) ||
+                                    (stardewAdapter != null && stardewAdapter.ConnectedRuntimeCount > 0),
                 Details = () => new
                 {
                     connections = endpoint == null ? 0 : endpoint.ActiveConnections,
-                    activeSessions = store == null ? 0 : store.GetActiveSessions().Count
+                    activeSessions = store == null ? 0 : store.GetActiveSessions().Count,
+                    connectedGameRuntimes = stardewAdapter == null ? 0 : stardewAdapter.ConnectedRuntimeCount
                 }
             });
             context.AddMountedFacet(new CurrentGameFacet(controller, config.facet_max_chars));

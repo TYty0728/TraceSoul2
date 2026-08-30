@@ -59,6 +59,19 @@ namespace TraceSoul2.ExternalPlugins.GameSession
                    string.Equals(session.ProfileId, "stardew-valley", StringComparison.OrdinalIgnoreCase);
         }
 
+        /// <summary>
+        /// Number of live Stardew stdio clients whose SMAPI bridge is still refreshing.
+        /// This is the actual game-body connection, unlike the short-lived WebUI WebSocket.
+        /// </summary>
+        public int ConnectedRuntimeCount
+        {
+            get
+            {
+                return runtimes.Values.Count(runtime => runtime != null &&
+                    runtime.Client.IsRunning && runtime.BridgeOnline);
+            }
+        }
+
         public async Task<StardewStartupResult> StartSessionAsync(
             GameSessionRecord session, CancellationToken token)
         {

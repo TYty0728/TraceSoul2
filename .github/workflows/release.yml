@@ -14,7 +14,7 @@ permissions:
   contents: write
 
 jobs:
-  windows-x64:
+  release:
     runs-on: windows-latest
     steps:
       - name: Resolve tag
@@ -47,7 +47,10 @@ jobs:
 
       - name: Build signed-by-hash release payload
         shell: pwsh
-        run: pwsh scripts/Publish-Release.ps1 -ExpectedVersion '${{ steps.version.outputs.version }}'
+        run: |
+          pwsh scripts/Publish-Release.ps1 -ExpectedVersion '${{ steps.version.outputs.version }}' -Runtime win-x64
+          pwsh scripts/Publish-Release.ps1 -ExpectedVersion '${{ steps.version.outputs.version }}' -Runtime linux-x64
+          pwsh scripts/Publish-Release.ps1 -ExpectedVersion '${{ steps.version.outputs.version }}' -Runtime linux-arm64
 
       - name: Create GitHub Release
         shell: pwsh

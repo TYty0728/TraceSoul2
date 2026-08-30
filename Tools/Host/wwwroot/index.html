@@ -2982,7 +2982,8 @@
   function renderUpdateStatus(data) {
     updateData = data || {};
     const latest = updateData.latest;
-    let text = "当前 v" + (updateData.currentVersion || "—");
+    let text = "当前 v" + (updateData.currentVersion || "—") +
+      (updateData.runtime ? (" · " + updateData.runtime) : "");
     if (!updateData.configured) text += "；请先填写 GitHub 仓库";
     else if (!latest) text += "；尚未检查正式版本";
     else if (latest.updateAvailable) text += "；发现 v" + latest.version;

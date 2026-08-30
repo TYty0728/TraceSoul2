@@ -6,6 +6,7 @@ using System.IO.Compression;
 using System.Linq;
 using System.Net.Http;
 using System.Security.Cryptography;
+using System.Runtime.InteropServices;
 using System.Text.Json;
 using System.Text.RegularExpressions;
 using System.Threading;
@@ -172,6 +173,7 @@ namespace TraceSoul2.Host
             return new
             {
                 currentVersion = current,
+                runtime = CurrentRuntimeIdentifier(),
                 repository = home.UpdateRepository ?? string.Empty,
                 configured = !string.IsNullOrWhiteSpace(home.UpdateRepository),
                 installable = File.Exists(Path.Combine(AppContext.BaseDirectory, "tracesoul2.install.json")),
@@ -210,14 +212,16 @@ namespace TraceSoul2.Host
                                  assetArray.ValueKind == JsonValueKind.Array
                         ? assetArray.EnumerateArray().ToList()
                         : new List<JsonElement>();
+                    var runtime = CurrentRuntimeIdentifier();
                     var zip = assets.FirstOrDefault(x =>
                     {
                         var name = StringOf(x, "name");
                         return name.EndsWith(".zip", StringComparison.OrdinalIgnoreCase) &&
-                               name.IndexOf("win-x64", StringComparison.OrdinalIgnoreCase) >= 0;
+                               name.IndexOf(runtime, StringComparison.OrdinalIgnoreCase) >= 0;
                     });
                     if (zip.ValueKind == JsonValueKind.Undefined)
-                        throw new InvalidOperationException("最新 Release 没有 Windows x64 更新 ZIP。");
+                        throw new InvalidOperationException(
+                            "最新 Release 没有 " + runtime + " 更新 ZIP。");
                     var zipName = StringOf(zip, "name");
                     var sha = assets.FirstOrDefault(x =>
                         string.Equals(StringOf(x, "name"), zipName + ".sha256",
@@ -328,9 +332,25 @@ namespace TraceSoul2.Host
                 if (!string.Equals(StringOf(document.RootElement, "product"), "TraceSoul2",
                         StringComparison.Ordinal) ||
                     !string.Equals(NormalizeVersion(StringOf(document.RootElement, "version")), expectedVersion,
-                        StringComparison.Ordinal))
+                        StringComparison.Ordinal) ||
+                    !string.Equals(StringOf(document.RootElement, "runtime"), CurrentRuntimeIdentifier(),
+                        StringComparison.OrdinalIgnoreCase))
                     throw new InvalidOperationException("更新包产品或版本与 GitHub Release 不一致。");
             }
+        }
+
+        private static string CurrentRuntimeIdentifier()
+        {
+            var architecture = RuntimeInformation.ProcessArchitecture switch
+            {
+                Architecture.X64 => "x64",
+                Architecture.Arm64 => "arm64",
+                _ => throw new PlatformNotSupportedException(
+                    "更新器暂不支持 " + RuntimeInformation.ProcessArchitecture + " 架构。")
+            };
+            if (RuntimeInformation.IsOSPlatform(OSPlatform.Windows)) return "win-" + architecture;
+            if (RuntimeInformation.IsOSPlatform(OSPlatform.Linux)) return "linux-" + architecture;
+            throw new PlatformNotSupportedException("更新器目前只支持 Windows 和 Linux。");
         }
 
         private static void CopyDirectory(string source, string destination)

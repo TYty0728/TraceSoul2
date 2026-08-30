@@ -31,6 +31,9 @@ if (int.TryParse(restartDelay, out var delayMs) && delayMs > 0)
 
 var home = TraceHome.Resolve();
 var dataDir = home.SoulDirectory;
+var trustContainerProxy = string.Equals(
+    Environment.GetEnvironmentVariable("TRACESOUL2_TRUST_CONTAINER_PROXY"),
+    "1", StringComparison.Ordinal);
 
 // OneBot 反向 WS（AstrBot aiocqhttp 同款）：NapCat 主动连 ws://127.0.0.1:{listen_port}/ws，
 // 宿主额外监听这个端口。改端口在控制台保存后宿主会自动重启。
@@ -65,7 +68,10 @@ builder.WebHost.ConfigureKestrel(options =>
     options.Limits.MinResponseDataRate = null;
     ConfigureListenUrls(options, urls);
     if (onebotListenPort > 0 && PortFree(onebotListenPort))
-        options.ListenLocalhost(onebotListenPort);
+    {
+        if (trustContainerProxy) options.ListenAnyIP(onebotListenPort);
+        else options.ListenLocalhost(onebotListenPort);
+    }
     else if (onebotListenPort > 0)
         Console.WriteLine("OneBot 反向监听端口 " + onebotListenPort + " 被占用，已跳过（可在控制台改端口后保存重启）。");
 });
@@ -81,7 +87,8 @@ var app = builder.Build();
 app.Use(async (context, next) =>
 {
     var remote = context.Connection.RemoteIpAddress;
-    if (remote != null && !IPAddress.IsLoopback(remote))
+    if (remote != null && !IPAddress.IsLoopback(remote) &&
+        !(trustContainerProxy && IsPrivateNetwork(remote)))
     {
         context.Response.StatusCode = StatusCodes.Status403Forbidden;
         await context.Response.WriteAsJsonAsync(new { error = "TraceSoul2 控制台只接受本机连接。" });
@@ -703,6 +710,16 @@ app.Run();
 static void RestartHost(string targetDataDir)
 {
     TraceHome.RememberActiveSoul(targetDataDir);
+    if (string.Equals(Environment.GetEnvironmentVariable("TRACESOUL2_RESTART_MODE"),
+            "supervisor", StringComparison.OrdinalIgnoreCase))
+    {
+        _ = Task.Run(async () =>
+        {
+            await Task.Delay(500);
+            Environment.Exit(0);
+        });
+        return;
+    }
     var urls = Environment.GetEnvironmentVariable("TRACESOUL2_URLS")
                ?? TraceHome.Current?.Urls
                ?? TraceHome.DefaultUrls;
@@ -784,6 +801,20 @@ static bool IsLoopbackHost(string host)
     if (string.Equals(host, "localhost", StringComparison.OrdinalIgnoreCase)) return true;
     IPAddress address;
     return IPAddress.TryParse(host, out address) && IPAddress.IsLoopback(address);
+}
+
+static bool IsPrivateNetwork(IPAddress address)
+{
+    if (address == null) return false;
+    if (address.IsIPv4MappedToIPv6) address = address.MapToIPv4();
+    if (address.AddressFamily == AddressFamily.InterNetwork)
+    {
+        var bytes = address.GetAddressBytes();
+        return bytes[0] == 10 ||
+               (bytes[0] == 172 && bytes[1] >= 16 && bytes[1] <= 31) ||
+               (bytes[0] == 192 && bytes[1] == 168);
+    }
+    return address.AddressFamily == AddressFamily.InterNetworkV6 && address.IsIPv6LinkLocal;
 }
 
 internal sealed class BackgroundMomentWorker : BackgroundService
