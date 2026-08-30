@@ -5,10 +5,15 @@ using System.IO;
 using System.Linq;
 using System.Net;
 using System.Net.Sockets;
+using System.Security.Claims;
 using System.Text.Json;
 using System.Threading;
 using System.Threading.Tasks;
 using Microsoft.AspNetCore.Builder;
+using Microsoft.AspNetCore.Authentication;
+using Microsoft.AspNetCore.Authentication.Cookies;
+using Microsoft.AspNetCore.Authorization;
+using Microsoft.AspNetCore.DataProtection;
 using Microsoft.AspNetCore.Hosting;
 using Microsoft.AspNetCore.Http;
 using Microsoft.AspNetCore.Mvc;
@@ -34,6 +39,8 @@ var dataDir = home.SoulDirectory;
 var trustContainerProxy = string.Equals(
     Environment.GetEnvironmentVariable("TRACESOUL2_TRUST_CONTAINER_PROXY"),
     "1", StringComparison.Ordinal);
+var publicHosts = ParsePublicHosts(
+    Environment.GetEnvironmentVariable("TRACESOUL2_PUBLIC_HOSTS"));
 
 // OneBot 反向 WS（AstrBot aiocqhttp 同款）：NapCat 主动连 ws://127.0.0.1:{listen_port}/ws，
 // 宿主额外监听这个端口。改端口在控制台保存后宿主会自动重启。
@@ -79,6 +86,58 @@ builder.Services.AddSingleton(new SoulRuntime(
     dataDir, home.PluginsDirectory, home.PluginsDataDirectory));
 builder.Services.AddSingleton(new UpdateService(home));
 builder.Services.AddSingleton(new DebugBranchService(dataDir));
+builder.Services.AddSingleton(new DashboardAuthService(home.Root));
+builder.Services.AddSingleton<DashboardLoginLimiter>();
+var authKeyDirectory = Path.Combine(home.Root, "auth-keys");
+Directory.CreateDirectory(authKeyDirectory);
+RestrictDirectoryPermissions(authKeyDirectory);
+builder.Services.AddDataProtection()
+    .PersistKeysToFileSystem(new DirectoryInfo(authKeyDirectory))
+    .SetApplicationName("TraceSoul2.Control");
+builder.Services.AddAuthentication(CookieAuthenticationDefaults.AuthenticationScheme)
+    .AddCookie(options =>
+    {
+        options.Cookie.Name = "tracesoul2_control";
+        options.Cookie.HttpOnly = true;
+        options.Cookie.IsEssential = true;
+        options.Cookie.SameSite = SameSiteMode.Strict;
+        options.Cookie.SecurePolicy = publicHosts.Count > 0
+            ? CookieSecurePolicy.Always
+            : CookieSecurePolicy.SameAsRequest;
+        options.ExpireTimeSpan = TimeSpan.FromDays(7);
+        options.SlidingExpiration = true;
+        options.Events.OnRedirectToLogin = context =>
+        {
+            context.Response.Headers.CacheControl = "no-store";
+            context.Response.StatusCode = StatusCodes.Status401Unauthorized;
+            return context.Response.WriteAsJsonAsync(new { error = "请先登录 TraceSoul2 控制台。" });
+        };
+        options.Events.OnRedirectToAccessDenied = context =>
+        {
+            context.Response.Headers.CacheControl = "no-store";
+            context.Response.StatusCode = StatusCodes.Status403Forbidden;
+            return context.Response.WriteAsJsonAsync(new { error = "当前账号无权执行此操作。" });
+        };
+        options.Events.OnValidatePrincipal = async context =>
+        {
+            var auth = context.HttpContext.RequestServices
+                .GetRequiredService<DashboardAuthService>();
+            var snapshot = auth.Snapshot();
+            var stamp = context.Principal?.FindFirst("session_stamp")?.Value;
+            if (!string.Equals(stamp, snapshot.SessionStamp, StringComparison.Ordinal))
+            {
+                context.RejectPrincipal();
+                await context.HttpContext.SignOutAsync(
+                    CookieAuthenticationDefaults.AuthenticationScheme);
+            }
+        };
+    });
+builder.Services.AddAuthorization(options =>
+{
+    options.FallbackPolicy = new AuthorizationPolicyBuilder()
+        .RequireAuthenticatedUser()
+        .Build();
+});
 builder.Services.AddHostedService<BackgroundMomentWorker>();
 builder.Services.AddSingleton<DailyPipelineWorker>();
 builder.Services.AddHostedService(sp => sp.GetRequiredService<DailyPipelineWorker>());
@@ -95,10 +154,30 @@ app.Use(async (context, next) =>
         return;
     }
 
-    if (!IsLoopbackHost(context.Request.Host.Host))
+    var requestHost = NormalizeHost(context.Request.Host.Host);
+    var publicRequest = publicHosts.Contains(requestHost);
+    if (!IsLoopbackHost(requestHost) && !publicRequest)
     {
         context.Response.StatusCode = StatusCodes.Status403Forbidden;
         await context.Response.WriteAsJsonAsync(new { error = "无效的控制台 Host。" });
+        return;
+    }
+
+    var trustedProxy = trustContainerProxy &&
+                       (remote == null || IPAddress.IsLoopback(remote) || IsPrivateNetwork(remote));
+    var effectiveScheme = context.Request.Scheme;
+    if (trustedProxy)
+    {
+        var forwardedProto = context.Request.Headers["X-Forwarded-Proto"].ToString()
+            .Split(',')[0].Trim();
+        if (string.Equals(forwardedProto, "http", StringComparison.OrdinalIgnoreCase) ||
+            string.Equals(forwardedProto, "https", StringComparison.OrdinalIgnoreCase))
+            effectiveScheme = forwardedProto;
+    }
+    if (publicRequest && !string.Equals(effectiveScheme, "https", StringComparison.OrdinalIgnoreCase))
+    {
+        context.Response.StatusCode = StatusCodes.Status403Forbidden;
+        await context.Response.WriteAsJsonAsync(new { error = "公网控制台必须通过 HTTPS 反向代理访问。" });
         return;
     }
 
@@ -111,10 +190,10 @@ app.Use(async (context, next) =>
     {
         Uri originUri;
         var requestPort = context.Request.Host.Port ??
-                          (context.Request.IsHttps ? 443 : 80);
+                          (string.Equals(effectiveScheme, "https", StringComparison.OrdinalIgnoreCase) ? 443 : 80);
         if (!Uri.TryCreate(origin, UriKind.Absolute, out originUri) ||
-            !string.Equals(originUri.Scheme, context.Request.Scheme, StringComparison.OrdinalIgnoreCase) ||
-            !string.Equals(originUri.Host, context.Request.Host.Host, StringComparison.OrdinalIgnoreCase) ||
+            !string.Equals(originUri.Scheme, effectiveScheme, StringComparison.OrdinalIgnoreCase) ||
+            !string.Equals(NormalizeHost(originUri.Host), requestHost, StringComparison.OrdinalIgnoreCase) ||
             originUri.Port != requestPort)
         {
             context.Response.StatusCode = StatusCodes.Status403Forbidden;
@@ -585,6 +664,114 @@ app.Use(async (HttpContext context, RequestDelegate next) =>
         await endpoint.OnConnectedAsync(socket, context.RequestAborted);
 });
 
+app.UseAuthentication();
+app.UseAuthorization();
+app.Use(async (context, next) =>
+{
+    if (context.User.Identity?.IsAuthenticated == true)
+    {
+        context.Response.Headers.CacheControl = "no-store";
+        var snapshot = context.RequestServices.GetRequiredService<DashboardAuthService>().Snapshot();
+        var path = context.Request.Path.Value ?? string.Empty;
+        var accountRoute = string.Equals(path, "/auth/account", StringComparison.OrdinalIgnoreCase) ||
+                           string.Equals(path, "/auth/logout", StringComparison.OrdinalIgnoreCase) ||
+                           string.Equals(path, "/auth/status", StringComparison.OrdinalIgnoreCase);
+        if (snapshot.MustChangePassword && !accountRoute)
+        {
+            context.Response.StatusCode = StatusCodes.Status428PreconditionRequired;
+            await context.Response.WriteAsJsonAsync(new { error = "首次登录必须先修改管理员账号和密码。" });
+            return;
+        }
+    }
+    await next();
+});
+
+app.MapGet("/auth/status", (HttpContext context, DashboardAuthService auth) =>
+{
+    context.Response.Headers.CacheControl = "no-store";
+    var snapshot = auth.Snapshot();
+    var authenticated = context.User.Identity?.IsAuthenticated == true;
+    return Results.Json(new
+    {
+        authenticated,
+        username = authenticated ? snapshot.Username : string.Empty,
+        mustChangePassword = authenticated && snapshot.MustChangePassword
+    });
+}).AllowAnonymous();
+
+app.MapPost("/auth/login", async (
+    HttpContext context,
+    DashboardAuthService auth,
+    DashboardLoginLimiter limiter,
+    DashboardLoginWrite body) =>
+{
+    context.Response.Headers.CacheControl = "no-store";
+    var clientKey = DashboardClientKey(context, trustContainerProxy);
+    var blockedFor = limiter.BlockedFor(clientKey);
+    if (blockedFor > TimeSpan.Zero)
+    {
+        context.Response.Headers.RetryAfter = Math.Max(1, (int)Math.Ceiling(blockedFor.TotalSeconds)).ToString();
+        return Results.Json(
+            new { error = "登录失败次数过多，请稍后再试。" },
+            statusCode: StatusCodes.Status429TooManyRequests);
+    }
+
+    if (body == null || !auth.Verify(body.username, body.password))
+    {
+        limiter.RegisterFailure(clientKey);
+        await Task.Delay(1500, context.RequestAborted);
+        return Results.Json(
+            new { error = "用户名或密码不正确。" },
+            statusCode: StatusCodes.Status401Unauthorized);
+    }
+
+    limiter.RegisterSuccess(clientKey);
+    var snapshot = auth.Snapshot();
+    await SignInDashboardAsync(context, snapshot);
+    return Results.Json(new
+    {
+        authenticated = true,
+        username = snapshot.Username,
+        mustChangePassword = snapshot.MustChangePassword
+    });
+}).AllowAnonymous();
+
+app.MapPost("/auth/logout", async (HttpContext context) =>
+{
+    await context.SignOutAsync(CookieAuthenticationDefaults.AuthenticationScheme);
+    return Results.Json(new { signedOut = true });
+});
+
+app.MapPut("/auth/account", async (
+    HttpContext context,
+    DashboardAuthService auth,
+    DashboardAccountWrite body) =>
+{
+    if (body == null) return Results.BadRequest(new { error = "账号信息不能为空。" });
+    if (!string.Equals(body.newPassword, body.confirmPassword, StringComparison.Ordinal))
+        return Results.BadRequest(new { error = "两次输入的新密码不一致。" });
+
+    try
+    {
+        var snapshot = auth.ChangeAccount(body.currentPassword, body.username, body.newPassword);
+        await SignInDashboardAsync(context, snapshot);
+        return Results.Json(new
+        {
+            saved = true,
+            username = snapshot.Username,
+            mustChangePassword = snapshot.MustChangePassword
+        });
+    }
+    catch (ArgumentException exception)
+    {
+        return Results.BadRequest(new { error = exception.Message });
+    }
+    catch (InvalidOperationException exception)
+    {
+        return Results.BadRequest(new { error = exception.Message });
+    }
+});
+
 app.MapPut("/memory/nerve", (SoulRuntime runtime, NerveWrite body) =>
     Results.Json(runtime.UpdateNerve(body.top_k, body.provider_id)));
 
@@ -603,9 +790,14 @@ app.MapPost("/memory/daily-run", (DailyRunWrite body, [FromServices] DailyPipeli
     });
 });
 
-app.MapGet("/events", async (HttpContext context, SoulRuntime runtime) =>
+app.MapGet("/events", async (
+    HttpContext context,
+    SoulRuntime runtime,
+    DashboardAuthService auth) =>
 {
     context.Response.Headers.ContentType = "text/event-stream";
+    context.Response.Headers.CacheControl = "no-store";
+    var sessionStamp = context.User.FindFirst("session_stamp")?.Value;
     using var subscription = runtime.SubscribeEvents();
     try
     {
@@ -614,7 +806,27 @@ app.MapGet("/events", async (HttpContext context, SoulRuntime runtime) =>
         var reader = subscription.Reader;
         while (!context.RequestAborted.IsCancellationRequested)
         {
-            var line = await reader.ReadAsync(context.RequestAborted);
+            if (!string.Equals(
+                    sessionStamp,
+                    auth.Snapshot().SessionStamp,
+                    StringComparison.Ordinal))
+                return;
+
+            string line;
+            using (var interval = CancellationTokenSource.CreateLinkedTokenSource(context.RequestAborted))
+            {
+                interval.CancelAfter(TimeSpan.FromSeconds(15));
+                try
+                {
+                    line = await reader.ReadAsync(interval.Token);
+                }
+                catch (OperationCanceledException) when (!context.RequestAborted.IsCancellationRequested)
+                {
+                    await context.Response.WriteAsync(": keepalive\n\n", context.RequestAborted);
+                    await context.Response.Body.FlushAsync(context.RequestAborted);
+                    continue;
+                }
+            }
             await context.Response.WriteAsync("data: " + JsonSerializer.Serialize(new { message = line }) + "\n\n");
             await context.Response.Body.FlushAsync();
         }
@@ -803,6 +1015,62 @@ static bool IsLoopbackHost(string host)
     return IPAddress.TryParse(host, out address) && IPAddress.IsLoopback(address);
 }
 
+static HashSet<string> ParsePublicHosts(string value)
+{
+    return new HashSet<string>(
+        (value ?? string.Empty)
+            .Split(',', StringSplitOptions.RemoveEmptyEntries)
+            .Select(NormalizeHost)
+            .Where(host => !string.IsNullOrWhiteSpace(host) && !host.Contains('/') && !host.Contains('\\')),
+        StringComparer.OrdinalIgnoreCase);
+}
+
+static string NormalizeHost(string host)
+{
+    return (host ?? string.Empty).Trim().TrimEnd('.').ToLowerInvariant();
+}
+
+static string DashboardClientKey(HttpContext context, bool trustContainerProxy)
+{
+    var remote = context.Connection.RemoteIpAddress;
+    if (trustContainerProxy && remote != null &&
+        (IPAddress.IsLoopback(remote) || IsPrivateNetwork(remote)))
+    {
+        var forwarded = context.Request.Headers["X-Forwarded-For"].ToString()
+            .Split(',')[0].Trim();
+        if (IPAddress.TryParse(forwarded, out var client)) return client.ToString();
+    }
+    return remote?.ToString() ?? "unknown";
+}
+
+static Task SignInDashboardAsync(HttpContext context, DashboardAuthSnapshot snapshot)
+{
+    var identity = new ClaimsIdentity(
+        new[]
+        {
+            new Claim(ClaimTypes.Name, snapshot.Username),
+            new Claim("session_stamp", snapshot.SessionStamp)
+        },
+        CookieAuthenticationDefaults.AuthenticationScheme);
+    return context.SignInAsync(
+        CookieAuthenticationDefaults.AuthenticationScheme,
+        new ClaimsPrincipal(identity),
+        new AuthenticationProperties
+        {
+            IsPersistent = true,
+            AllowRefresh = true,
+            ExpiresUtc = DateTimeOffset.UtcNow.AddDays(7)
+        });
+}
+
+static void RestrictDirectoryPermissions(string directory)
+{
+    if (OperatingSystem.IsWindows()) return;
+    File.SetUnixFileMode(
+        directory,
+        UnixFileMode.UserRead | UnixFileMode.UserWrite | UnixFileMode.UserExecute);
+}
+
 static bool IsPrivateNetwork(IPAddress address)
 {
     if (address == null) return false;
@@ -861,6 +1129,18 @@ internal sealed class SelectWrite { public string id { get; set; } public string
 internal sealed class ForkWrite { public string fromDay { get; set; } public string note { get; set; } public bool freshMemory { get; set; } }
 internal sealed class DatabaseSwitchRequest { public string nameOrPath { get; set; } }
 internal sealed class DatabaseCreateRequest { public string name { get; set; } }
+internal sealed class DashboardLoginWrite
+{
+    public string username { get; set; }
+    public string password { get; set; }
+}
+internal sealed class DashboardAccountWrite
+{
+    public string currentPassword { get; set; }
+    public string username { get; set; }
+    public string newPassword { get; set; }
+    public string confirmPassword { get; set; }
+}
 
 internal sealed class MouthsWrite
 {

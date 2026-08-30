@@ -65,13 +65,59 @@ Compose 默认使用当前 Linux 用户的 UID/GID 写入 `runtime/`，避免数
 
 ## 4. 打开 WebUI
 
-5080 和 9021 都只绑定服务器回环地址。在本地电脑建立隧道：
+WebUI 使用独立的单管理员认证。首次启动生成 24 位随机密码，只在日志显示一次：
+
+```bash
+docker compose logs tracesoul2 | grep -A 4 '控制台已创建管理员账号'
+```
+
+用 `admin` 和该密码首次登录后，必须立即修改用户名和密码。服务器只保存 PBKDF2-SHA256 密码摘要；登录会话保存在 HttpOnly、SameSite=Strict 的加密 Cookie 中。
+
+5080 和 9021 默认都只绑定服务器回环地址。在本地电脑建立隧道：
 
 ```bash
 ssh -L 5080:127.0.0.1:5080 user@server
 ```
 
-打开 `http://127.0.0.1:5080`。不要公开映射 5080，也不要给它配置公网反向代理。
+打开 `http://127.0.0.1:5080`。仅在配置了下述域名白名单和 HTTPS 后，才可通过公网反向代理访问。
+
+### 公网域名访问
+
+如需公网使用，必须准备一个解析到服务器的域名，并由 Caddy 等反向代理自动申请 HTTPS 证书。不要把 Compose 的 `127.0.0.1:5080` 改成 `0.0.0.0`。
+
+先在仓库根目录创建不会被 Git 提交的 `.env`：
+
+```dotenv
+TRACESOUL2_PUBLIC_HOSTS=soul.example.com
+```
+
+多个域名用英文逗号分隔。然后重新创建容器：
+
+```bash
+docker compose up -d --build
+```
+
+Caddy 最小配置如下，域名替换成自己的：
+
+```caddyfile
+soul.example.com {
+    reverse_proxy 127.0.0.1:5080
+}
+```
+
+公网域名不在 `TRACESOUL2_PUBLIC_HOSTS` 白名单、请求不是 HTTPS，或者浏览器 Origin 与访问域名不一致时，Host 都会拒绝访问。OneBot 和游戏桥 WebSocket 不使用管理员 Cookie，仍分别校验自己的 `access_token`。
+
+如果忘记初始密码且还没有重要登录会话，先停止容器，仅删除认证文件与加密会话密钥，再启动生成新密码：
+
+```bash
+docker compose down
+rm -- runtime/Data/control-auth.json
+rm -r -- runtime/Data/auth-keys
+docker compose up -d
+docker compose logs tracesoul2 | grep -A 4 '控制台已创建管理员账号'
+```
+
+这会使所有旧登录会话失效，但不会删除角色、聊天记录、模型设置或插件数据。
 
 ## 5. WebUI 一键更新
 

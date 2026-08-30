@@ -19,4 +19,5 @@ export TRACESOUL2_UID=${TRACESOUL2_UID:-$(id -u)}
 export TRACESOUL2_GID=${TRACESOUL2_GID:-$(id -g)}
 docker compose up -d --build
 echo "TraceSoul2 已启动：http://127.0.0.1:${TRACESOUL2_PORT:-5080}"
-echo "远程电脑请使用 SSH 隧道，不要把控制台端口暴露到公网。"
+echo "首次启动请运行 docker compose logs tracesoul2 查看一次性管理员密码。"
+echo "远程访问请使用 SSH 隧道，或按 docs/DOCKER.md 配置 HTTPS 反向代理。"

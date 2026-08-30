@@ -28,6 +28,24 @@
       margin: 0; background: var(--bg); color: var(--text); font-size: 13px;
     }
     .app { display: flex; flex-direction: column; height: 100vh; }
+    .app[hidden] { display: none; }
+    .auth-gate {
+      position: fixed; inset: 0; z-index: 100; display: grid; place-items: center;
+      padding: 20px; background:
+        radial-gradient(circle at 18% 18%, rgba(91,103,241,.2), transparent 35%),
+        linear-gradient(145deg, #171c2d, #252d46);
+    }
+    .auth-gate[hidden] { display: none; }
+    .auth-card {
+      width: min(390px, 100%); padding: 28px; border-radius: 16px; background: #fff;
+      box-shadow: 0 24px 80px rgba(5,9,22,.38);
+    }
+    .auth-card .auth-brand { font-size: 22px; font-weight: 800; margin-bottom: 6px; }
+    .auth-card .auth-brand span { color: var(--accent); margin-right: 7px; }
+    .auth-card p { line-height: 1.65; }
+    .auth-card button { width: 100%; margin: 16px 0 0; padding: 9px 12px; }
+    .auth-error { min-height: 20px; color: var(--danger); margin-top: 10px; font-size: 12px; }
+    .account-note { padding: 9px 11px; border-radius: 7px; background: #fff8e8; color: #795b12; }
 
     /* ---------- 顶部快捷操作栏 ---------- */
     .topbar {
@@ -553,7 +571,20 @@
   </style>
 </head>
 <body>
-<div class="app">
+<div id="authGate" class="auth-gate">
+  <form class="auth-card" onsubmit="loginDashboard(event)">
+    <div class="auth-brand"><span>∞</span>TraceSoul2</div>
+    <p class="muted">登录后才能访问角色数据、模型设置和实时日志。</p>
+    <label for="authUsername">管理员账号</label>
+    <input id="authUsername" type="text" autocomplete="username" value="admin" required />
+    <label for="authPassword">密码</label>
+    <input id="authPassword" type="password" autocomplete="current-password" required />
+    <button id="authLoginButton" class="primary" type="submit">登录控制台</button>
+    <div id="authError" class="auth-error" role="alert"></div>
+  </form>
+</div>
+
+<div id="appRoot" class="app" hidden>
   <!-- ================= 顶部快捷操作栏 ================= -->
   <header class="topbar">
     <div class="brand">
@@ -576,6 +607,8 @@
       <button class="qbtn" onclick="enterDebug()" title="进入调试分支">🔧 调试</button>
       <button class="qbtn" onclick="exitDebug()" title="切回正式主线">🌿 主线</button>
       <button class="qbtn" onclick="reloadPanels()" title="刷新当前页面数据">↻ 刷新</button>
+      <button id="accountButton" class="qbtn" onclick="openAccountModal(false)" title="修改管理员账号和密码">👤 管理员</button>
+      <button class="qbtn" onclick="logoutDashboard()" title="退出控制台">退出</button>
     </div>
   </header>
 
@@ -1085,6 +1118,27 @@
   </div>
 </div>
 
+<div id="accountModal" class="modal">
+  <form class="modal-card" style="width:min(480px,100%)" onsubmit="saveAccount(event)">
+    <h2>管理员账号</h2>
+    <p id="accountRequiredNote" class="account-note" hidden>这是首次登录。保存新的管理员账号和密码后，才会开放控制台。</p>
+    <label for="accountUsername">新用户名</label>
+    <input id="accountUsername" type="text" autocomplete="username" minlength="3" maxlength="32" required />
+    <label for="accountCurrentPassword">当前密码</label>
+    <input id="accountCurrentPassword" type="password" autocomplete="current-password" required />
+    <label for="accountNewPassword">新密码</label>
+    <input id="accountNewPassword" type="password" autocomplete="new-password" minlength="12" required />
+    <p class="muted">至少 12 个字符，并同时包含大写字母、小写字母和数字。</p>
+    <label for="accountConfirmPassword">确认新密码</label>
+    <input id="accountConfirmPassword" type="password" autocomplete="new-password" minlength="12" required />
+    <div id="accountError" class="auth-error" role="alert"></div>
+    <div class="modal-foot">
+      <button id="accountSaveButton" class="primary" type="submit">保存</button>
+      <button id="accountCancelButton" type="button" onclick="closeAccountModal()">取消</button>
+    </div>
+  </form>
+</div>
+
 <div id="pluginModal" class="modal" onclick="if(event.target===this)closePluginModal()">
   <div class="modal-card">
     <h2>插件配置</h2>
@@ -1106,6 +1160,10 @@
   let currentUsername = "";
   let liveTimer = null;
   let liveBusy = false;
+  let dashboardStarted = false;
+  let dashboardUsername = "";
+  let accountChangeRequired = false;
+  let eventStream = null;
 
   function classify(text) {
     if (text.indexOf("记忆神经") >= 0) return "memory";
@@ -1140,9 +1198,96 @@
       headers: body ? { "Content-Type": "application/json" } : {},
       body: body ? JSON.stringify(body) : undefined
     });
-    const data = await res.json();
+    const data = await res.json().catch(() => ({}));
+    if (res.status === 401) lockDashboard();
+    if (res.status === 428) openAccountModal(true);
     if (!res.ok) throw new Error(data.error || res.statusText);
     return data;
+  }
+
+  function lockDashboard() {
+    $("appRoot").hidden = true;
+    $("authGate").hidden = false;
+    if (eventStream) { eventStream.close(); eventStream = null; }
+    $("authPassword").value = "";
+    setTimeout(() => $("authUsername").focus(), 0);
+  }
+
+  function unlockDashboard(username) {
+    dashboardUsername = username || "admin";
+    $("accountButton").textContent = "👤 " + dashboardUsername;
+    $("authGate").hidden = true;
+    $("appRoot").hidden = false;
+  }
+
+  async function loginDashboard(event) {
+    event.preventDefault();
+    const button = $("authLoginButton");
+    button.disabled = true;
+    $("authError").textContent = "";
+    try {
+      const result = await api("/auth/login", "POST", {
+        username: $("authUsername").value,
+        password: $("authPassword").value
+      });
+      dashboardUsername = result.username;
+      accountChangeRequired = !!result.mustChangePassword;
+      $("authGate").hidden = true;
+      if (accountChangeRequired) openAccountModal(true);
+      else await beginDashboard();
+    } catch (error) {
+      $("authError").textContent = error.message;
+      $("authPassword").select();
+    } finally {
+      button.disabled = false;
+    }
+  }
+
+  function openAccountModal(required) {
+    accountChangeRequired = !!required;
+    $("accountUsername").value = dashboardUsername || "admin";
+    $("accountCurrentPassword").value = "";
+    $("accountNewPassword").value = "";
+    $("accountConfirmPassword").value = "";
+    $("accountError").textContent = "";
+    $("accountRequiredNote").hidden = !accountChangeRequired;
+    $("accountCancelButton").hidden = accountChangeRequired;
+    $("accountModal").classList.add("show");
+    setTimeout(() => $("accountCurrentPassword").focus(), 0);
+  }
+
+  function closeAccountModal() {
+    if (accountChangeRequired) return;
+    $("accountModal").classList.remove("show");
+  }
+
+  async function saveAccount(event) {
+    event.preventDefault();
+    const button = $("accountSaveButton");
+    button.disabled = true;
+    $("accountError").textContent = "";
+    try {
+      const result = await api("/auth/account", "PUT", {
+        username: $("accountUsername").value,
+        currentPassword: $("accountCurrentPassword").value,
+        newPassword: $("accountNewPassword").value,
+        confirmPassword: $("accountConfirmPassword").value
+      });
+      dashboardUsername = result.username;
+      accountChangeRequired = false;
+      $("accountModal").classList.remove("show");
+      if (!dashboardStarted) await beginDashboard();
+      else unlockDashboard(dashboardUsername);
+    } catch (error) {
+      $("accountError").textContent = error.message;
+    } finally {
+      button.disabled = false;
+    }
+  }
+
+  async function logoutDashboard() {
+    try { await api("/auth/logout", "POST"); }
+    finally { location.reload(); }
   }
 
   /* ================= 左侧导航切换（懒加载） ================= */
@@ -3059,8 +3204,10 @@
   }
 
   /* ================= 实时日志流 ================= */
-  const es = new EventSource("/events");
-  es.onmessage = e => {
+  function startEventStream() {
+    if (eventStream) eventStream.close();
+    eventStream = new EventSource("/events");
+    eventStream.onmessage = e => {
     try {
       const obj = JSON.parse(e.data);
       if (!obj) return;
@@ -3069,12 +3216,41 @@
     } catch (err) {
       addLog(e.data);
     }
-  };
+    };
+    eventStream.onerror = () => {
+      if (eventStream && eventStream.readyState === EventSource.CLOSED) {
+        eventStream = null;
+        lockDashboard();
+      }
+    };
+  }
 
   /* ================= 启动 ================= */
-  (async () => {
+  async function beginDashboard() {
+    unlockDashboard(dashboardUsername);
+    if (dashboardStarted) return;
+    dashboardStarted = true;
     await loadTopBar();
     await showSection("chat");
+    startEventStream();
+  }
+
+  (async () => {
+    try {
+      const status = await api("/auth/status");
+      if (!status.authenticated) { lockDashboard(); return; }
+      dashboardUsername = status.username;
+      accountChangeRequired = !!status.mustChangePassword;
+      if (accountChangeRequired) {
+        $("authGate").hidden = true;
+        openAccountModal(true);
+        return;
+      }
+      await beginDashboard();
+    } catch (error) {
+      lockDashboard();
+      $("authError").textContent = error.message;
+    }
   })();
 </script>
 </body>
