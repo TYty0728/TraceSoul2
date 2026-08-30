@@ -107,6 +107,35 @@ dotnet run --project Tools\ChatCheck\ChatCheck.csproj
 
 控制台只接受本机回环连接和同源浏览器请求；不要把它反向代理到公网。Windows 系统代理指向本机 Clash 但 Clash 没开时，LLM 请求会打到空端口被拒绝——那是系统代理残留，不是模型或 Key 的问题。
 
+### Ubuntu / Docker 一键运行
+
+Docker 只提供 .NET 运行环境；程序、角色和插件仍集中在宿主机 `runtime/`，所以整目录可搬迁，WebUI 更新也只替换 `runtime/App`：
+
+```bash
+chmod +x scripts/docker-up.sh
+./scripts/docker-up.sh
+```
+
+目录布局：
+
+```text
+runtime/
+  App/              # 首次启动由镜像初始化；WebUI 更新只替换这里
+  Data/             # home.json、souls、updates
+  Plugins/          # 插件代码包
+  plugins_data/     # 插件配置与持久数据
+```
+
+端口只发布到服务器 `127.0.0.1`。在自己的电脑上访问服务器 WebUI：
+
+```bash
+ssh -L 5080:127.0.0.1:5080 user@server
+```
+
+然后打开 `http://127.0.0.1:5080`。不要把 5080 反向代理或直接暴露到公网。Windows 旧目录可先用 `scripts/Export-DockerRuntime.ps1` 导出；复制时必须先停止 Host。
+
+容器访问宿主机上的 Ollama 等服务时，地址使用 `host.docker.internal`，不能使用容器自己的 `127.0.0.1`。
+
 生产运行时让启动脚本或服务设置 `TRACESOUL2_HOME`；不要把机器绝对路径写进仓库。密钥、Cookie、数据库只进家目录，提交前可跑 `pwsh scripts/Test-PublishSafety.ps1`。
 
 每个角色目录内：`tracesoul2-brainframe.sqlite3`、`tracesoul2-vectors.sqlite3`、`llm-providers.json`、`onebot.json`、`bodies.json`、`memory-nerve.json`、`identity_cards.json`（种子）。插件数据不再混入角色目录，统一位于 `plugins_data/<包名>/`。
@@ -143,4 +172,4 @@ dotnet run --project Tools\ChatCheck\ChatCheck.csproj
 | `qq-status` | QQ 器官 | 改签名/在线状态；空闲抽签 |
 | `game-session` | 游戏平台 | 一起玩的临时工作台；原始事件不进主记忆 |
 
-详见 [docs/PLUGINS.md](docs/PLUGINS.md)、[docs/PLUGIN_LAYERS.md](docs/PLUGIN_LAYERS.md)、[docs/GAME_SESSION_PLUGIN.md](docs/GAME_SESSION_PLUGIN.md)、[docs/PLATFORM_SENSORY_POSITIONING.md](docs/PLATFORM_SENSORY_POSITIONING.md) 与 [docs/ROADMAP.md](docs/ROADMAP.md)。
+详见 [docs/DOCKER.md](docs/DOCKER.md)、[docs/PLUGINS.md](docs/PLUGINS.md)、[docs/PLUGIN_LAYERS.md](docs/PLUGIN_LAYERS.md)、[docs/GAME_SESSION_PLUGIN.md](docs/GAME_SESSION_PLUGIN.md)、[docs/PLATFORM_SENSORY_POSITIONING.md](docs/PLATFORM_SENSORY_POSITIONING.md) 与 [docs/ROADMAP.md](docs/ROADMAP.md)。

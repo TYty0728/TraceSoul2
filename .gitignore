@@ -5,6 +5,7 @@
 .vscode/
 .idea/
 artifacts/
+runtime/
 publish/
 TestResults/
 *.user

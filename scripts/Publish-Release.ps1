@@ -44,7 +44,14 @@ if ($LASTEXITCODE -ne 0) { throw 'Updater 发布失败。' }
 Get-ChildItem -LiteralPath $updaterRoot -File | Where-Object {
     $_.Name -like 'TraceSoul2.Updater*'
 } | Copy-Item -Destination $packageRoot -Force
-Copy-Item -LiteralPath (Join-Path $PSScriptRoot 'Start-TraceSoul2.cmd') -Destination $packageRoot -Force
+$launcher = if ($Runtime.StartsWith('win-', [StringComparison]::OrdinalIgnoreCase)) {
+    'Start-TraceSoul2.cmd'
+} elseif ($Runtime.StartsWith('linux-', [StringComparison]::OrdinalIgnoreCase)) {
+    'Start-TraceSoul2.sh'
+} else {
+    throw "没有为 $Runtime 配置启动脚本。"
+}
+Copy-Item -LiteralPath (Join-Path $PSScriptRoot $launcher) -Destination $packageRoot -Force
 
 $installManifest = [ordered]@{
     product = 'TraceSoul2'

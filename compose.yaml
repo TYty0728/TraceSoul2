@@ -1,0 +1,23 @@
+services:
+  tracesoul2:
+    build:
+      context: .
+    image: tracesoul2:local
+    container_name: tracesoul2
+    restart: unless-stopped
+    user: "${TRACESOUL2_UID:-1000}:${TRACESOUL2_GID:-1000}"
+    environment:
+      TZ: ${TZ:-Asia/Shanghai}
+      TRACESOUL2_HOME: /opt/tracesoul2/Data
+      TRACESOUL2_PLUGINS: /opt/tracesoul2/Plugins
+      TRACESOUL2_PLUGINS_DATA: /opt/tracesoul2/plugins_data
+      TRACESOUL2_URLS: http://0.0.0.0:5080
+      TRACESOUL2_RESTART_MODE: supervisor
+      TRACESOUL2_TRUST_CONTAINER_PROXY: "1"
+    volumes:
+      - ./runtime:/opt/tracesoul2
+    ports:
+      - "127.0.0.1:${TRACESOUL2_PORT:-5080}:5080"
+      - "127.0.0.1:${TRACESOUL2_ONEBOT_PORT:-9021}:9021"
+    extra_hosts:
+      - "host.docker.internal:host-gateway"
