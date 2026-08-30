@@ -14,6 +14,7 @@ services:
       TRACESOUL2_URLS: http://0.0.0.0:5080
       TRACESOUL2_RESTART_MODE: supervisor
       TRACESOUL2_TRUST_CONTAINER_PROXY: "1"
+      TRACESOUL2_PUBLIC_HOSTS: ${TRACESOUL2_PUBLIC_HOSTS:-}
     volumes:
       - ./runtime:/opt/tracesoul2
     ports:
