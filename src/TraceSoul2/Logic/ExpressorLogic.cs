@@ -938,10 +938,8 @@ namespace TraceSoul2.Logic
                 builder.AppendLine(CorePrompts.Expressor.MindScenePrefix + mind.SceneValue());
             if (!string.IsNullOrWhiteSpace(mind.leave))
                 builder.AppendLine(CorePrompts.Expressor.MindLeavePrefix + mind.leave);
-            if (mind.WantsSticker())
-                builder.AppendLine(CorePrompts.Expressor.MindSticker);
-            if (mind.WantsImage())
-                builder.AppendLine(CorePrompts.Expressor.MindImage);
+            // 图片、表情等附加表达由后续器官直接读取 mind 并独立路由。
+            // 外显只组织要说的话，不能看见这些结构化表达决定。
             return builder.ToString().TrimEnd();
         }
 

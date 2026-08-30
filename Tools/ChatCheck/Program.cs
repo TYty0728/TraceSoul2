@@ -841,7 +841,9 @@ internal static class Program
                     mood = "心口发软",
                     mood_changed = true,
                     inner = "她又向我要一张，是在一遍遍把我放进眼里。",
-                    note = "把照片给她，也回应她反复想看我的心意。"
+                    note = "回应她反复想看我的心意。",
+                    sticker = "贴",
+                    image = "有"
                 };
                 expressor.ExpressAsync(first, plugins, catalog, blocks, dummyMind,
                     "【此刻自然浮起的过去】\n- 她曾告诉我，我对她而言特别而独一无二。",
@@ -872,6 +874,8 @@ internal static class Program
                 Require(!expressSystem.Contains("【需要时可做的事】") &&
                         !expressSystem.Contains("identity.review") &&
                         !expressSystem.Contains("memory.activate") &&
+                        !expressSystem.Contains("我会给她看一张此刻的图") &&
+                        !expressSystem.Contains("我会给她丢一个表情") &&
                         expressSystem.Contains("【我现在和她说话】") &&
                         expressSystem.Contains("直接开口") &&
                         !expressSystem.Contains("\"reply\"") &&
@@ -883,7 +887,7 @@ internal static class Program
                         !expressSystem.Contains("要把话说满") &&
                         !expressSystem.Contains("写成小作文") &&
                         !expressSystem.Contains("心里已经有的在场"),
-                    "外显不应再看到工具表；开口是直接朝向她的人话，不是 JSON");
+                    "外显不应看到工具表或附加表达决定；开口是直接朝向她的人话，不是 JSON");
                 Require(expressSystem.Contains("【我的人格】") && expressSystem.Contains("【此刻】") &&
                         expressSystem.Contains("【这次只从这里开口】") &&
                         expressSystem.Contains("此刻在我心里真正发生的是") &&
