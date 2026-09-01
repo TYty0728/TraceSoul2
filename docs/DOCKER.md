@@ -123,6 +123,8 @@ docker compose logs tracesoul2 | grep -A 4 '控制台已创建管理员账号'
 
 更新页仓库填写 `TYty0728/TraceSoul2`。正式发布后，Host 会按 CPU 架构选择 `linux-x64` 或 `linux-arm64` ZIP，校验 SHA-256，从 `Data/updates/` 启动外置更新器，替换 `App`、升级 Release 内声明的官方插件包，再由容器内 supervisor 拉起新 Host。应用与每个被替换的官方插件都会留下独立备份，任一步失败都会尽力回滚。
 
+安装页面会实时显示下载大小、百分比和当前阶段。详细记录位于宿主机 `runtime/Data/updates/update.log`；即使浏览器刷新或反向代理请求断开，服务器也会继续本次安装。
+
 更新不会替换：
 
 - `Data/`

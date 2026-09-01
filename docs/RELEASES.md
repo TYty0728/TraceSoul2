@@ -22,6 +22,8 @@ WebUI「系统更新」填写一次 `owner/repository`。检查更新只读取�
 4. 整体替换应用目录并重启；
 5. 保留旧应用目录作为可回滚备份。
 
+安装期间 WebUI 每秒读取进度，显示下载字节、百分比以及校验、解压、准备替换和重启等阶段。浏览器刷新或反向代理断开不会取消服务器上的下载；相同进度会按阶段和约每 10% 记录到 `Data/updates/update.log`。
+
 `souls/`、`plugins_data/` 和 `home.json` 都在应用目录外，不会被更新包覆盖。仓库内维护的官方插件代码包会随 Release 一起升级：更新器先备份旧插件包，再替换 DLL、清单和默认资源；失败时与 App 一起回滚。独立安装的第三方插件不受影响。
 
 Docker 部署使用宿主机 `runtime/App`、`runtime/Plugins` 和 `runtime/plugins_data`，因此也是同一套更新流程：容器内的外置更新器替换 `App`、升级 Release 声明的官方插件包，入口 supervisor 随后启动新版本，不需要挂载 Docker Socket。`runtime/plugins_data` 始终保留。

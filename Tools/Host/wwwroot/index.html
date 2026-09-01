@@ -403,6 +403,14 @@
     .game-install-path button { margin-bottom: 1px; white-space: nowrap; }
     .game-install-progress { height: 7px; margin: 11px 0 7px; overflow: hidden; border-radius: 99px; background: #e5ebe7; }
     .game-install-progress > span { display: block; height: 100%; width: 0; border-radius: inherit; background: linear-gradient(90deg,#4c9766,#79bd8f); transition: width .35s ease; }
+    .update-progress-panel { margin: 14px 0 10px; padding: 13px 14px; border: 1px solid #dce1f4; border-radius: 11px; background: #f8f9ff; }
+    .update-progress-panel.failed { border-color: #efcccc; background: #fff7f7; }
+    .update-progress-head { display: flex; align-items: center; justify-content: space-between; gap: 12px; color: #47516d; font-size: 11px; }
+    .update-progress-head b { color: #313a55; }
+    .update-progress-track { height: 9px; margin: 9px 0 7px; overflow: hidden; border-radius: 99px; background: #e3e6f1; }
+    .update-progress-track > span { display: block; height: 100%; width: 0; border-radius: inherit; background: linear-gradient(90deg,#6673f5,#7b9af7); transition: width .3s ease; }
+    .update-progress-panel.failed .update-progress-track > span { background: #d65b5b; }
+    .update-progress-detail { color: var(--muted); font-size: 10px; line-height: 1.5; }
     .game-install-log { max-height: 130px; margin: 10px 0 0; padding: 9px 10px; overflow: auto; border: 1px solid #e2e7e3; border-radius: 8px; background: #27322b; color: #c6d9ca; font: 9px/1.55 Consolas,monospace; white-space: pre-wrap; word-break: break-all; }
     .game-launch-option { margin-top: 9px; padding: 9px 10px; border: 1px dashed #bed5c5; border-radius: 8px; background: #fff; color: #506359; font: 9px/1.5 Consolas,monospace; word-break: break-all; }
     @media (max-width: 1120px) { .game-hero { grid-template-columns: 1fr; } .game-grid { grid-template-columns: 1fr; } }
@@ -1093,6 +1101,11 @@
             <div class="nogrow"><label>&nbsp;</label><button onclick="saveUpdateRepository()">保存仓库</button></div>
             <div class="nogrow"><label>&nbsp;</label><button class="primary" onclick="checkUpdate()">检查更新</button></div>
             <div class="nogrow"><label>&nbsp;</label><button id="installUpdateBtn" class="primary" onclick="installUpdate()" disabled>下载并安装</button></div>
+          </div>
+          <div id="updateProgressPanel" class="update-progress-panel" hidden>
+            <div class="update-progress-head"><b id="updateProgressMessage">准备安装…</b><span id="updateProgressPercent">0%</span></div>
+            <div class="update-progress-track"><span id="updateProgressBar"></span></div>
+            <div id="updateProgressDetail" class="update-progress-detail">等待服务器返回进度</div>
           </div>
           <p class="muted">更新包必须同时带有 SHA-256 文件。安装时旧应用和被升级的官方插件都会保留可回滚备份；角色数据、插件配置与生成文件不动。日常 Git 提交不会出现在这里，只有创建正式 Release 才会提示更新。</p>
         </div>
@@ -3113,6 +3126,8 @@
 
   /* ================= 系统更新 ================= */
   let updateData = null;
+  let updateInstallTimer = null;
+  let updateExpectedVersion = "";
   async function loadUpdate() {
     const pair = await Promise.all([api("/updates"), api("/status")]);
     updateData = pair[0];
@@ -3124,9 +3139,59 @@
     $("updatePluginDataDir").textContent = st.pluginsDataDirectory || "—";
     renderUpdateStatus(updateData);
   }
+  function formatUpdateBytes(value) {
+    const bytes = Number(value || 0);
+    if (bytes < 1024) return bytes + " B";
+    if (bytes < 1024 * 1024) return (bytes / 1024).toFixed(1) + " KB";
+    if (bytes < 1024 * 1024 * 1024) return (bytes / 1024 / 1024).toFixed(1) + " MB";
+    return (bytes / 1024 / 1024 / 1024).toFixed(2) + " GB";
+  }
+  function renderUpdateProgress(progress) {
+    const panel = $("updateProgressPanel");
+    progress = progress || {};
+    const visible = !!progress.inProgress || progress.phase === "failed";
+    panel.hidden = !visible;
+    panel.classList.toggle("failed", progress.phase === "failed");
+    if (!visible) return;
+    const percent = Math.max(0, Math.min(100, Number(progress.percent || 0)));
+    $("updateProgressBar").style.width = percent + "%";
+    $("updateProgressPercent").textContent = percent + "%";
+    $("updateProgressMessage").textContent = progress.message || "正在准备更新…";
+    const size = progress.downloadedBytes
+      ? (formatUpdateBytes(progress.downloadedBytes) +
+        (progress.totalBytes ? (" / " + formatUpdateBytes(progress.totalBytes)) : ""))
+      : "";
+    const detail = [];
+    if (progress.version) detail.push("目标 v" + progress.version);
+    if (progress.phase) detail.push("阶段：" + progress.phase);
+    if (size) detail.push(size);
+    $("updateProgressDetail").textContent = detail.join(" · ") || "等待服务器返回进度";
+  }
+  function startUpdateInstallPolling() {
+    if (updateInstallTimer) return;
+    updateInstallTimer = setInterval(pollUpdateInstall, 1000);
+  }
+  function stopUpdateInstallPolling() {
+    if (!updateInstallTimer) return;
+    clearInterval(updateInstallTimer);
+    updateInstallTimer = null;
+  }
+  async function pollUpdateInstall() {
+    try {
+      const data = await api("/updates");
+      renderUpdateStatus(data);
+      if (updateExpectedVersion && data.currentVersion === updateExpectedVersion) {
+        stopUpdateInstallPolling();
+        location.reload();
+      }
+    } catch (e) {
+      // 宿主替换期间短暂断开是正常现象，保持轮询等待新版本上线。
+    }
+  }
   function renderUpdateStatus(data) {
     updateData = data || {};
     const latest = updateData.latest;
+    const progress = updateData.install || {};
     let text = "当前 v" + (updateData.currentVersion || "—") +
       (updateData.runtime ? (" · " + updateData.runtime) : "");
     if (!updateData.configured) text += "；请先填写 GitHub 仓库";
@@ -3135,12 +3200,19 @@
     else text += "；已是最新正式版";
     if (!updateData.installable) text += "；当前是开发目录，只能检查，不能原地安装";
     if (updateData.error) text += "；" + updateData.error;
+    if (progress.inProgress) text += "；" + (progress.message || "正在安装更新");
+    if (progress.phase === "failed" && progress.error) text += "；安装失败：" + progress.error;
     $("updateStatus").textContent = text;
     const install = $("installUpdateBtn");
-    install.disabled = !(latest && latest.updateAvailable && updateData.installable);
-    install.textContent = latest && latest.updateAvailable
+    install.disabled = !!progress.inProgress || !(latest && latest.updateAvailable && updateData.installable);
+    install.textContent = progress.inProgress
+      ? ("正在安装 " + (progress.percent || 0) + "%")
+      : latest && latest.updateAvailable
       ? ("安装 v" + latest.version)
       : "下载并安装";
+    renderUpdateProgress(progress);
+    if (progress.inProgress) startUpdateInstallPolling();
+    else if (!updateExpectedVersion) stopUpdateInstallPolling();
   }
   async function saveUpdateRepository() {
     try {
@@ -3164,16 +3236,47 @@
     if (!latest || !latest.updateAvailable) return;
     if (!confirm("安装 TraceSoul2 v" + latest.version + "？\n应用会自动退出、整体替换并重启；角色数据和插件不会被覆盖。")) return;
     const button = $("installUpdateBtn");
+    updateExpectedVersion = latest.version;
     button.disabled = true;
+    renderUpdateProgress({ inProgress: true, phase: "checking", version: latest.version, percent: 1, message: "正在启动更新检查…" });
+    startUpdateInstallPolling();
     try {
       const result = await api("/updates/install", "POST");
       $("updateStatus").textContent = result.message || "更新器已启动，等待宿主重启…";
-      await waitHostBack();
+      await waitForUpdatedHost(latest.version);
       location.reload();
     } catch (e) {
+      try {
+        const state = await api("/updates");
+        renderUpdateStatus(state);
+        if (state.install && state.install.inProgress) {
+          $("updateStatus").textContent = "浏览器请求已断开，但服务器仍在安装；正在继续读取进度…";
+          return;
+        }
+      } catch (ignored) {
+        try {
+          await waitForUpdatedHost(latest.version);
+          location.reload();
+          return;
+        } catch (restartError) { /* 使用原始安装错误 */ }
+      }
+      updateExpectedVersion = "";
+      stopUpdateInstallPolling();
       button.disabled = false;
       $("updateStatus").textContent = "安装失败：" + e.message;
     }
+  }
+  async function waitForUpdatedHost(expectedVersion) {
+    for (let i = 0; i < 180; i++) {
+      await new Promise(r => setTimeout(r, 1000));
+      try {
+        const res = await fetch("/status", { cache: "no-store" });
+        if (!res.ok) continue;
+        const status = await res.json();
+        if (status.version === expectedVersion) return;
+      } catch (e) { /* 外置更新器正在替换或重启 */ }
+    }
+    throw new Error("等待新版宿主启动超时");
   }
 
   /* ================= 顶栏与整体刷新 ================= */
