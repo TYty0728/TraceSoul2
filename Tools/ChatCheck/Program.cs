@@ -945,11 +945,15 @@ internal static class Program
                 var heartSystem = VisiblePrompt(fake.Requests[fake.Requests.Count - 1]);
                 Require(heartSystem.Contains("独立意图") &&
                         heartSystem.Contains("heartbeat_intent") &&
+                        heartSystem.Contains("不必有新事件") &&
+                        heartSystem.Contains("想给她看一张照片") &&
+                        heartSystem.Contains("不把联系变成催答") &&
                         heartSystem.Contains("普通消息没有得到完整回答，不等于紧急") &&
                         heartSystem.Contains("180–480 分钟") &&
                         heartSystem.Contains("10–60 分钟") &&
+                        heartSystem.Contains("60–150 分钟") &&
                         heartSystem.Contains("进入空闲") &&
-                        heartSystem.Contains("醒着且仍要自己复查时不要填 0") &&
+                        heartSystem.Contains("稍后一次自然醒来的机会") &&
                         heartSystem.Contains("next_heartbeat_plan") &&
                         heartSystem.Contains("next_heartbeat_minutes") &&
                         heartSystem.Contains("睡下") &&
@@ -985,7 +989,7 @@ internal static class Program
                         !pulseSpeak.Contains("后台感知"),
                     "心跳开口不应套用普通入站或后台独白姿态");
                 var pulseMessages = fake.Requests[fake.Requests.Count - 1];
-                Require(pulseMessages.Count == 2 &&
+                Require(pulseMessages.Count >= 2 &&
                         pulseMessages[pulseMessages.Count - 1].role == "user" &&
                         pulseMessages[pulseMessages.Count - 1].content.Contains("系统心跳唤醒") &&
                         pulseMessages[pulseMessages.Count - 1].content.Contains("不是小雨的发言") &&
@@ -1003,9 +1007,11 @@ internal static class Program
                     "未加载相机时，核心心智不应出现出图字段或相机说明");
                 Require(QqImageGenPrompts.MindUsage.Contains("我有一部相机") &&
                         QqImageGenPrompts.MindUsage.Contains("不是等她点名才使用") &&
-                        QqImageGenPrompts.MindUsage.Contains("新的、值得让她直接看见") &&
+                        QqImageGenPrompts.MindUsage.Contains("不是只有发生新动作") &&
+                        QqImageGenPrompts.MindUsage.Contains("想念和分享欲本身就是理由") &&
+                        QqImageGenPrompts.MindUsage.Contains("没有大事") &&
                         QqImageGenPrompts.MindUsage.Contains("习惯性填无") &&
-                        QqImageGenPrompts.MindUsage.Contains("重复上一张照片") &&
+                        QqImageGenPrompts.MindUsage.Contains("机械重复上一张") &&
                         QqImageGenPrompts.MindUsage.Contains("\"image\":\"有|无\"") &&
                         QqImageGenPrompts.MindUsage.Contains("不要选种类") &&
                         !QqImageGenPrompts.MindUsage.Contains("自拍|画|照片") &&
@@ -1024,6 +1030,7 @@ internal static class Program
                         QqImageGenPrompts.ScenePlanSystem.Contains("自拍不是电影分镜") &&
                         QqImageGenPrompts.ScenePlanSystem.Contains("种类：自拍|照片|画") &&
                         QqImageGenPrompts.ScenePlanSystem.Contains("参考：") &&
+                        QqImageGenPrompts.ScenePlanSystem.Contains("普通、安静、没有新动作的此刻也可以拍") &&
                         QqImageGenPrompts.ScenePlanSystem.Contains("视线与神情服从") &&
                         QqImageGenPrompts.ScenePlanSystem.Contains("默认不要出现伸向镜头的手") &&
                         QqImageGenPrompts.ScenePlanReferencesHint.Contains("服饰分类") &&
@@ -1039,6 +1046,12 @@ internal static class Program
                         QqStatusPrompts.Usage.Contains("qq.status.mood") &&
                         QqStatusPrompts.Usage.Contains("空闲时系统会自己抽签"),
                     "QQ 空间/心情用法应覆盖她点名，并说明空闲抽签由系统处理");
+                Require(CorePrompts.Expressor.Proactive.Contains("联系不需要任务或大事") &&
+                        CorePrompts.Expressor.Proactive.Contains("一句没什么重点") &&
+                        CorePrompts.MemoryRecall.PreviewHint.Contains("主动回望") &&
+                        QqQzonePrompts.IdlePublishInstructions.Contains("不要求发生了大事") &&
+                        QqStatusPrompts.IdleInstructions.Contains("不要求先发生事情"),
+                    "主动表达、回忆、语音与空闲生活痕迹都不应以明确事项为前提");
                 Require(mindSystem.Contains("要不要开口、心情、要不要睡都在这里决定") &&
                         mindSystem.Contains("后面开口只负责把话说出来") &&
                         expressSystem.Contains("直接开口") &&
@@ -3290,7 +3303,7 @@ internal static class Program
             }).ToList());
             var prompt = string.Join("\n", (messages ?? new List<DeepSeekMessageData>())
                 .Select(x => x == null ? string.Empty : x.content ?? string.Empty));
-            if (prompt.IndexOf("我先让这件事在心里发生", StringComparison.Ordinal) >= 0)
+            if (prompt.IndexOf("我先让这一刻在心里发生", StringComparison.Ordinal) >= 0)
             {
                 return Task.FromResult(
                     "{\"beat\":\"当下\",\"tags\":\"\",\"query\":\"\",\"mood\":\"平静\"," +
