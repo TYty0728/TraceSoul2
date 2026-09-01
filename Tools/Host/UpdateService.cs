@@ -33,6 +33,9 @@ namespace TraceSoul2.Host
         private ReleaseInfo lastRelease;
         private string lastError = string.Empty;
         private DateTimeOffset? lastCheckedUtc;
+        private InstallProgress installProgress = InstallProgress.Idle();
+        private string lastLoggedInstallPhase = string.Empty;
+        private int lastLoggedInstallPercent = -10;
 
         public UpdateService(TraceHomeLayout home)
         {
@@ -47,13 +50,15 @@ namespace TraceSoul2.Host
             ReleaseInfo release;
             string error;
             DateTimeOffset? checkedAt;
+            InstallProgress install;
             lock (stateGate)
             {
                 release = lastRelease;
                 error = lastError;
                 checkedAt = lastCheckedUtc;
+                install = installProgress.Copy();
             }
-            return PublicStatus(release, error, checkedAt);
+            return PublicStatus(release, error, checkedAt, install);
         }
 
         public object ConfigureRepository(string repository)
@@ -96,81 +101,103 @@ namespace TraceSoul2.Host
 
         public async Task<object> BeginInstallAsync(CancellationToken cancellationToken)
         {
-            var repository = NormalizeRepository(home.UpdateRepository, allowEmpty: false);
-            var release = await ReadLatestReleaseAsync(repository, cancellationToken);
-            if (!IsNewer(release.Version, TraceHome.HostVersion()))
-                throw new InvalidOperationException("当前已经是最新正式版 v" + TraceHome.HostVersion() + "。");
-
-            var installRoot = Path.GetFullPath(AppContext.BaseDirectory)
-                .TrimEnd(Path.DirectorySeparatorChar, Path.AltDirectorySeparatorChar);
-            ValidateInstalledApplication(installRoot);
-
-            var runId = Guid.NewGuid().ToString("N");
-            var downloadRoot = Path.Combine(home.UpdatesDirectory, "downloads", release.Version, runId);
-            var extractedRoot = Path.Combine(downloadRoot, "package");
-            Directory.CreateDirectory(downloadRoot);
-            Directory.CreateDirectory(extractedRoot);
-            var zipPath = Path.Combine(downloadRoot, release.ZipName);
-
-            await DownloadFileAsync(release.ZipUrl, zipPath, cancellationToken);
-            var shaText = await http.GetStringAsync(release.Sha256Url, cancellationToken);
-            var expectedHashMatch = Sha256Pattern.Match(shaText ?? string.Empty);
-            if (!expectedHashMatch.Success)
-                throw new InvalidOperationException("Release 的 SHA-256 文件格式无效。");
-            var actualHash = await ComputeSha256Async(zipPath, cancellationToken);
-            if (!string.Equals(actualHash, expectedHashMatch.Value, StringComparison.OrdinalIgnoreCase))
-                throw new InvalidOperationException("更新包 SHA-256 校验失败，已拒绝安装。");
-
-            ExtractZipSafely(zipPath, extractedRoot);
-            ValidateReleasePackage(extractedRoot, release.Version);
-
-            var installParent = Directory.GetParent(installRoot)?.FullName;
-            if (string.IsNullOrWhiteSpace(installParent))
-                throw new InvalidOperationException("应用目录没有可用的父目录，拒绝热更新。");
-            var installName = Path.GetFileName(installRoot);
-            var preparedRoot = Path.Combine(
-                installParent, "." + installName + ".tracesoul2-update-" + release.Version + "-" + runId);
-            Directory.CreateDirectory(preparedRoot);
-            CopyDirectory(extractedRoot, preparedRoot);
-
-            var runnerRoot = Path.Combine(home.UpdatesDirectory, "runner", runId);
-            Directory.CreateDirectory(runnerRoot);
-            foreach (var file in Directory.GetFiles(extractedRoot, "TraceSoul2.Updater*"))
-                File.Copy(file, Path.Combine(runnerRoot, Path.GetFileName(file)), overwrite: true);
-            var runnerExe = Path.Combine(runnerRoot, "TraceSoul2.Updater.exe");
-            var runnerDll = Path.Combine(runnerRoot, "TraceSoul2.Updater.dll");
-            if (!File.Exists(runnerExe) && !File.Exists(runnerDll))
-                throw new InvalidOperationException("更新包缺少外置更新器。");
-
-            var startInfo = new ProcessStartInfo
+            BeginInstallProgress();
+            try
             {
-                FileName = File.Exists(runnerExe) ? runnerExe : "dotnet",
-                UseShellExecute = false,
-                CreateNoWindow = true,
-                WorkingDirectory = runnerRoot
-            };
-            if (!File.Exists(runnerExe)) startInfo.ArgumentList.Add(runnerDll);
-            AddArgument(startInfo, "--pid", Environment.ProcessId.ToString());
-            AddArgument(startInfo, "--source", preparedRoot);
-            AddArgument(startInfo, "--target", installRoot);
-            AddArgument(startInfo, "--home", home.Root);
-            AddArgument(startInfo, "--plugins", home.PluginsDirectory);
-            AddArgument(startInfo, "--version", release.Version);
-            startInfo.Environment[TraceHome.EnvHome] = home.Root;
-            startInfo.Environment[TraceHome.EnvPlugins] = home.PluginsDirectory;
-            startInfo.Environment[TraceHome.EnvUrls] = home.Urls;
-            if (Process.Start(startInfo) == null)
-                throw new InvalidOperationException("无法启动外置更新器。");
+                var repository = NormalizeRepository(home.UpdateRepository, allowEmpty: false);
+                SetInstallProgress("checking", 2, "正在读取最新正式 Release…");
+                var release = await ReadLatestReleaseAsync(repository, cancellationToken);
+                if (!IsNewer(release.Version, TraceHome.HostVersion()))
+                    throw new InvalidOperationException("当前已经是最新正式版 v" + TraceHome.HostVersion() + "。");
+                SetInstallProgress("preparing", 4, "正在检查本机安装目录…", version: release.Version);
 
-            return new
+                var installRoot = Path.GetFullPath(AppContext.BaseDirectory)
+                    .TrimEnd(Path.DirectorySeparatorChar, Path.AltDirectorySeparatorChar);
+                ValidateInstalledApplication(installRoot);
+
+                var runId = Guid.NewGuid().ToString("N");
+                var downloadRoot = Path.Combine(home.UpdatesDirectory, "downloads", release.Version, runId);
+                var extractedRoot = Path.Combine(downloadRoot, "package");
+                Directory.CreateDirectory(downloadRoot);
+                Directory.CreateDirectory(extractedRoot);
+                var zipPath = Path.Combine(downloadRoot, release.ZipName);
+
+                await DownloadFileAsync(release.ZipUrl, zipPath, cancellationToken);
+                SetInstallProgress("verifying", 78, "正在下载并核对 SHA-256 文件…");
+                var shaText = await http.GetStringAsync(release.Sha256Url, cancellationToken);
+                var expectedHashMatch = Sha256Pattern.Match(shaText ?? string.Empty);
+                if (!expectedHashMatch.Success)
+                    throw new InvalidOperationException("Release 的 SHA-256 文件格式无效。");
+                SetInstallProgress("verifying", 80, "正在计算更新包 SHA-256…");
+                var actualHash = await ComputeSha256Async(zipPath, cancellationToken);
+                if (!string.Equals(actualHash, expectedHashMatch.Value, StringComparison.OrdinalIgnoreCase))
+                    throw new InvalidOperationException("更新包 SHA-256 校验失败，已拒绝安装。");
+
+                SetInstallProgress("extracting", 84, "校验通过，正在安全解压更新包…");
+                ExtractZipSafely(zipPath, extractedRoot);
+                SetInstallProgress("validating", 90, "正在验证程序与官方插件清单…");
+                ValidateReleasePackage(extractedRoot, release.Version);
+
+                var installParent = Directory.GetParent(installRoot)?.FullName;
+                if (string.IsNullOrWhiteSpace(installParent))
+                    throw new InvalidOperationException("应用目录没有可用的父目录，拒绝热更新。");
+                var installName = Path.GetFileName(installRoot);
+                var preparedRoot = Path.Combine(
+                    installParent, "." + installName + ".tracesoul2-update-" + release.Version + "-" + runId);
+                Directory.CreateDirectory(preparedRoot);
+                SetInstallProgress("staging", 93, "正在准备可原子替换的新版本目录…");
+                CopyDirectory(extractedRoot, preparedRoot);
+
+                var runnerRoot = Path.Combine(home.UpdatesDirectory, "runner", runId);
+                Directory.CreateDirectory(runnerRoot);
+                foreach (var file in Directory.GetFiles(extractedRoot, "TraceSoul2.Updater*"))
+                    File.Copy(file, Path.Combine(runnerRoot, Path.GetFileName(file)), overwrite: true);
+                var runnerExe = Path.Combine(runnerRoot, "TraceSoul2.Updater.exe");
+                var runnerDll = Path.Combine(runnerRoot, "TraceSoul2.Updater.dll");
+                if (!File.Exists(runnerExe) && !File.Exists(runnerDll))
+                    throw new InvalidOperationException("更新包缺少外置更新器。");
+
+                var startInfo = new ProcessStartInfo
+                {
+                    FileName = File.Exists(runnerExe) ? runnerExe : "dotnet",
+                    UseShellExecute = false,
+                    CreateNoWindow = true,
+                    WorkingDirectory = runnerRoot
+                };
+                if (!File.Exists(runnerExe)) startInfo.ArgumentList.Add(runnerDll);
+                AddArgument(startInfo, "--pid", Environment.ProcessId.ToString());
+                AddArgument(startInfo, "--source", preparedRoot);
+                AddArgument(startInfo, "--target", installRoot);
+                AddArgument(startInfo, "--home", home.Root);
+                AddArgument(startInfo, "--plugins", home.PluginsDirectory);
+                AddArgument(startInfo, "--version", release.Version);
+                startInfo.Environment[TraceHome.EnvHome] = home.Root;
+                startInfo.Environment[TraceHome.EnvPlugins] = home.PluginsDirectory;
+                startInfo.Environment[TraceHome.EnvUrls] = home.Urls;
+                SetInstallProgress("handoff", 98, "正在启动外置更新器…");
+                if (Process.Start(startInfo) == null)
+                    throw new InvalidOperationException("无法启动外置更新器。");
+                SetInstallProgress("restarting", 100, "更新包准备完成，宿主正在重启…");
+
+                return new
+                {
+                    started = true,
+                    version = release.Version,
+                    message = "更新包校验完成，宿主即将退出并由外置更新器替换后重启。角色数据和插件配置不会被覆盖；Release 内置插件会保留备份后同步升级。"
+                };
+            }
+            catch (Exception exception)
             {
-                started = true,
-                version = release.Version,
-                message = "更新包校验完成，宿主即将退出并由外置更新器替换后重启。角色数据和插件配置不会被覆盖；Release 内置插件会保留备份后同步升级。"
-            };
+                FailInstallProgress(exception.Message);
+                throw;
+            }
         }
 
-        private object PublicStatus(ReleaseInfo release, string error, DateTimeOffset? checkedAt)
+        private object PublicStatus(
+            ReleaseInfo release,
+            string error,
+            DateTimeOffset? checkedAt,
+            InstallProgress install)
         {
             var current = TraceHome.HostVersion();
             return new
@@ -182,6 +209,18 @@ namespace TraceSoul2.Host
                 installable = File.Exists(Path.Combine(AppContext.BaseDirectory, "tracesoul2.install.json")),
                 checkedAtUtc = checkedAt?.ToString("O") ?? string.Empty,
                 error = error ?? string.Empty,
+                install = new
+                {
+                    inProgress = install.InProgress,
+                    phase = install.Phase,
+                    version = install.Version,
+                    percent = install.Percent,
+                    message = install.Message,
+                    downloadedBytes = install.DownloadedBytes,
+                    totalBytes = install.TotalBytes,
+                    error = install.Error,
+                    updatedAtUtc = install.UpdatedAtUtc
+                },
                 latest = release == null ? null : new
                 {
                     version = release.Version,
@@ -291,12 +330,120 @@ namespace TraceSoul2.Host
             using (var response = await http.GetAsync(url, HttpCompletionOption.ResponseHeadersRead, cancellationToken))
             {
                 response.EnsureSuccessStatusCode();
-                if (response.Content.Headers.ContentLength > 2L * 1024 * 1024 * 1024)
+                var totalBytes = response.Content.Headers.ContentLength ?? 0;
+                if (totalBytes > 2L * 1024 * 1024 * 1024)
                     throw new InvalidOperationException("更新包超过 2 GiB，拒绝下载。");
                 using (var source = await response.Content.ReadAsStreamAsync(cancellationToken))
                 using (var target = new FileStream(destination, FileMode.CreateNew, FileAccess.Write, FileShare.None))
-                    await source.CopyToAsync(target, cancellationToken);
+                {
+                    var buffer = new byte[128 * 1024];
+                    long downloadedBytes = 0;
+                    SetInstallProgress("downloading", 5, "正在下载更新包…",
+                        downloadedBytes: 0, totalBytes: totalBytes);
+                    while (true)
+                    {
+                        var read = await source.ReadAsync(buffer, 0, buffer.Length, cancellationToken);
+                        if (read <= 0) break;
+                        await target.WriteAsync(buffer, 0, read, cancellationToken);
+                        downloadedBytes += read;
+                        var percent = totalBytes > 0
+                            ? 5 + (int)Math.Min(70, downloadedBytes * 70 / totalBytes)
+                            : 5;
+                        var sizeText = FormatBytes(downloadedBytes) +
+                                       (totalBytes > 0 ? " / " + FormatBytes(totalBytes) : string.Empty);
+                        SetInstallProgress("downloading", percent, "正在下载更新包：" + sizeText,
+                            downloadedBytes: downloadedBytes, totalBytes: totalBytes);
+                    }
+                    SetInstallProgress("downloading", 75,
+                        "更新包下载完成：" + FormatBytes(downloadedBytes),
+                        downloadedBytes: downloadedBytes, totalBytes: totalBytes);
+                }
             }
+        }
+
+        private void BeginInstallProgress()
+        {
+            lock (stateGate)
+            {
+                if (installProgress.InProgress)
+                    throw new InvalidOperationException("已有更新正在安装，请不要重复提交。");
+                installProgress = new InstallProgress
+                {
+                    InProgress = true,
+                    Phase = "checking",
+                    Percent = 1,
+                    Message = "正在启动更新检查…",
+                    UpdatedAtUtc = DateTimeOffset.UtcNow.ToString("O")
+                };
+                lastLoggedInstallPhase = string.Empty;
+                lastLoggedInstallPercent = -10;
+            }
+            AppendInstallLog("[1%] 正在启动更新检查…");
+        }
+
+        private void SetInstallProgress(
+            string phase,
+            int percent,
+            string message,
+            string version = null,
+            bool inProgress = true,
+            long downloadedBytes = -1,
+            long totalBytes = -1,
+            string error = "")
+        {
+            var shouldLog = false;
+            lock (stateGate)
+            {
+                installProgress.InProgress = inProgress;
+                installProgress.Phase = phase ?? string.Empty;
+                installProgress.Percent = Math.Max(0, Math.Min(100, percent));
+                installProgress.Message = message ?? string.Empty;
+                installProgress.Error = error ?? string.Empty;
+                installProgress.UpdatedAtUtc = DateTimeOffset.UtcNow.ToString("O");
+                if (version != null) installProgress.Version = version;
+                if (downloadedBytes >= 0) installProgress.DownloadedBytes = downloadedBytes;
+                if (totalBytes >= 0) installProgress.TotalBytes = totalBytes;
+                shouldLog = !string.Equals(lastLoggedInstallPhase, installProgress.Phase,
+                                StringComparison.Ordinal) ||
+                            installProgress.Percent >= lastLoggedInstallPercent + 10 ||
+                            installProgress.Percent == 100 || installProgress.Phase == "failed";
+                if (shouldLog)
+                {
+                    lastLoggedInstallPhase = installProgress.Phase;
+                    lastLoggedInstallPercent = installProgress.Percent;
+                }
+            }
+            if (shouldLog) AppendInstallLog("[" + Math.Max(0, Math.Min(100, percent)) + "%] " + message);
+        }
+
+        private void FailInstallProgress(string error)
+        {
+            int percent;
+            lock (stateGate) percent = installProgress.Percent;
+            SetInstallProgress("failed", percent, "安装失败：" + error,
+                inProgress: false, error: error);
+        }
+
+        private void AppendInstallLog(string message)
+        {
+            try
+            {
+                Directory.CreateDirectory(home.UpdatesDirectory);
+                File.AppendAllText(Path.Combine(home.UpdatesDirectory, "update.log"),
+                    DateTimeOffset.Now.ToString("yyyy-MM-dd HH:mm:ss zzz") + " " + message + Environment.NewLine);
+            }
+            catch
+            {
+                // 日志不可写不能阻断更新；进度仍可通过状态接口读取。
+            }
+        }
+
+        private static string FormatBytes(long bytes)
+        {
+            if (bytes < 1024) return bytes + " B";
+            if (bytes < 1024L * 1024) return (bytes / 1024d).ToString("0.0") + " KB";
+            if (bytes < 1024L * 1024 * 1024) return (bytes / 1024d / 1024d).ToString("0.0") + " MB";
+            return (bytes / 1024d / 1024d / 1024d).ToString("0.00") + " GB";
         }
 
         private static async Task<string> ComputeSha256Async(string path, CancellationToken cancellationToken)
@@ -455,6 +602,34 @@ namespace TraceSoul2.Host
             public string ZipName;
             public string ZipUrl;
             public string Sha256Url;
+        }
+
+        private sealed class InstallProgress
+        {
+            public bool InProgress;
+            public string Phase = "idle";
+            public string Version = string.Empty;
+            public int Percent;
+            public string Message = string.Empty;
+            public long DownloadedBytes;
+            public long TotalBytes;
+            public string Error = string.Empty;
+            public string UpdatedAtUtc = string.Empty;
+
+            public static InstallProgress Idle() => new InstallProgress();
+
+            public InstallProgress Copy() => new InstallProgress
+            {
+                InProgress = InProgress,
+                Phase = Phase,
+                Version = Version,
+                Percent = Percent,
+                Message = Message,
+                DownloadedBytes = DownloadedBytes,
+                TotalBytes = TotalBytes,
+                Error = Error,
+                UpdatedAtUtc = UpdatedAtUtc
+            };
         }
     }
 }

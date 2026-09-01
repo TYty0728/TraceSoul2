@@ -245,9 +245,10 @@ app.MapPut("/updates/config", (UpdateService updates, UpdateConfigWrite body) =>
 app.MapPost("/updates/check", async (UpdateService updates, CancellationToken token) =>
     Results.Json(await updates.CheckAsync(token)));
 
-app.MapPost("/updates/install", async (UpdateService updates, CancellationToken token) =>
+app.MapPost("/updates/install", async (UpdateService updates) =>
 {
-    var result = await updates.BeginInstallAsync(token);
+    // 安装不绑定浏览器连接：反向代理超时或用户刷新页面时，后台下载仍应继续。
+    var result = await updates.BeginInstallAsync(CancellationToken.None);
     _ = Task.Run(async () =>
     {
         await Task.Delay(800);
