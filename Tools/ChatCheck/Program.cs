@@ -807,14 +807,16 @@ internal static class Program
                         !mindSystem.Contains("【需要时可做的事】") &&
                         !mindSystem.Contains("我现在可以使用的表达通道"),
                     "公共 system 使用同一套身份卡；心智尾部不含通道清单和工具表");
-                Require(mindSystem.Contains("我先让这件事在心里发生") && mindSystem.Contains("\"beat\"") &&
+                Require(mindSystem.Contains("我先让这一刻在心里发生") &&
+                        mindSystem.Contains("不必等一件明确的事发生") && mindSystem.Contains("\"beat\"") &&
                         mindSystem.Contains("\"inner\"") && mindSystem.Contains("\"attention\"") &&
                         mindSystem.Contains("\"review\"") && mindSystem.Contains("\"cognition\""),
                     "心智应输出决策卡、当前时、在场注意、看法和是否派出复盘");
                 Require(!mindSystem.Contains("外显") && !mindSystem.Contains("一句比较理性的") &&
                         mindSystem.Contains("像写给自己看") &&
                         mindSystem.Contains("开口前对自己说的半句") &&
-                        mindSystem.Contains("让它在心里过一下就好"),
+                        mindSystem.Contains("先让它在心里过一下") &&
+                        mindSystem.Contains("回忆不是资料任务"),
                     "心智应从自身经验出发，不知道框架分层，也不把触动压成理性执行摘要");
                 Require(!mindSystem.Contains("【这一拍的组织】") &&
                         !mindSystem.Contains("讲故事") &&
@@ -947,7 +949,7 @@ internal static class Program
                         heartSystem.Contains("heartbeat_intent") &&
                         heartSystem.Contains("不必有新事件") &&
                         heartSystem.Contains("想给她看一张照片") &&
-                        heartSystem.Contains("不把联系变成催答") &&
+                        heartSystem.Contains("不要把联系变成催答") &&
                         heartSystem.Contains("普通消息没有得到完整回答，不等于紧急") &&
                         heartSystem.Contains("180–480 分钟") &&
                         heartSystem.Contains("10–60 分钟") &&
@@ -959,7 +961,7 @@ internal static class Program
                         heartSystem.Contains("睡下") &&
                         heartSystem.Contains("speak=true") &&
                         heartSystem.Contains("speak_center") &&
-                        heartSystem.Contains("那句话不会发给她") &&
+                        heartSystem.Contains("speak=false 时 speak_center 必须留空") &&
                         heartSystem.Contains("都是现在联系"),
                     "心跳 system 应基于独立意图判断是否联系、睡下、空闲与下次检查计划");
                 var heartMessages = MindLogic.AssembleTurnMessages("身份与规则", heartTurn,

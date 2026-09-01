@@ -1083,7 +1083,7 @@
 
       <!-- 系统更新 -->
       <section id="sec-update" class="panel-section">
-        <div class="section-head"><h1>系统更新</h1><span class="muted">只安装正式 GitHub Release；角色与插件不参与替换</span></div>
+        <div class="section-head"><h1>系统更新</h1><span class="muted">只安装正式 GitHub Release；角色与插件配置不参与替换，官方内置插件随版本升级</span></div>
         <div class="box">
           <h2>版本</h2>
           <p id="updateStatus" class="muted">加载中…</p>
@@ -1094,7 +1094,7 @@
             <div class="nogrow"><label>&nbsp;</label><button class="primary" onclick="checkUpdate()">检查更新</button></div>
             <div class="nogrow"><label>&nbsp;</label><button id="installUpdateBtn" class="primary" onclick="installUpdate()" disabled>下载并安装</button></div>
           </div>
-          <p class="muted">更新包必须同时带有 SHA-256 文件。安装时旧应用会保留为可回滚目录；日常 Git 提交不会出现在这里，只有创建正式 Release 才会提示更新。</p>
+          <p class="muted">更新包必须同时带有 SHA-256 文件。安装时旧应用和被升级的官方插件都会保留可回滚备份；角色数据、插件配置与生成文件不动。日常 Git 提交不会出现在这里，只有创建正式 Release 才会提示更新。</p>
         </div>
         <div class="box">
           <h2>可迁移目录</h2>

@@ -42,6 +42,7 @@ jobs:
           dotnet restore TraceSoul2.sln
           dotnet build TraceSoul2.sln -c Release --no-restore
           dotnet Tools/CoreCheck/bin/Release/net8.0/CoreCheck.dll
+          dotnet Tools/Updater/bin/Release/net8.0/TraceSoul2.Updater.dll --self-test
           dotnet Tools/ChatCheck/bin/Release/net8.0/ChatCheck.dll
           dotnet Tools/ChatCheck/bin/Release/net8.0/ChatCheck.dll --prompt-layout
 

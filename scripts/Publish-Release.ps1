@@ -26,7 +26,8 @@ $releaseRoot = Join-Path $repoRoot ('.release\' + $runId)
 $packageRoot = Join-Path $releaseRoot 'package'
 $updaterRoot = Join-Path $releaseRoot 'updater'
 $artifactRoot = Join-Path $repoRoot ('artifacts\' + $version)
-New-Item -ItemType Directory -Path $packageRoot,$updaterRoot,$artifactRoot -Force | Out-Null
+$bundledPluginsRoot = Join-Path $packageRoot 'BundledPlugins'
+New-Item -ItemType Directory -Path $packageRoot,$updaterRoot,$artifactRoot,$bundledPluginsRoot -Force | Out-Null
 
 $selfContainedValue = if ($SelfContained) { 'true' } else { 'false' }
 dotnet publish (Join-Path $repoRoot 'Tools\Host\TraceSoul2.Host.csproj') `
@@ -53,11 +54,48 @@ $launcher = if ($Runtime.StartsWith('win-', [StringComparison]::OrdinalIgnoreCas
 }
 Copy-Item -LiteralPath (Join-Path $PSScriptRoot $launcher) -Destination $packageRoot -Force
 
+# 仓库内随产品维护的官方插件与 Host 一起发布。插件代码包可以替换，用户配置与生成文件
+# 始终位于外部 plugins_data/，更新器不会触碰。
+$bundledPlugins = @(
+    @{ Name = 'qq-tts'; Project = 'ExternalPlugins\QqTts\TraceSoul2.Plugin.QqTts.csproj' },
+    @{ Name = 'qq-imagegen'; Project = 'ExternalPlugins\QqImageGen\TraceSoul2.Plugin.QqImageGen.csproj' },
+    @{ Name = 'qq-qzone'; Project = 'ExternalPlugins\QqQzone\TraceSoul2.Plugin.QqQzone.csproj' },
+    @{ Name = 'qq-status'; Project = 'ExternalPlugins\QqStatus\TraceSoul2.Plugin.QqStatus.csproj' },
+    @{ Name = 'game-session'; Project = 'ExternalPlugins\GameSession\TraceSoul2.Plugin.GameSession.csproj' }
+)
+foreach ($plugin in $bundledPlugins) {
+    $projectPath = Join-Path $repoRoot $plugin.Project
+    $projectDirectory = Split-Path -Parent $projectPath
+    $pluginTarget = Join-Path $bundledPluginsRoot $plugin.Name
+    New-Item -ItemType Directory -Path $pluginTarget -Force | Out-Null
+    dotnet publish $projectPath -c Release -r $Runtime --self-contained $selfContainedValue -o $pluginTarget
+    if ($LASTEXITCODE -ne 0) { throw "官方插件发布失败：$($plugin.Name)" }
+    foreach ($requiredFile in @('plugin.json', 'config_schema.json')) {
+        $sourceFile = Join-Path $projectDirectory $requiredFile
+        if (Test-Path -LiteralPath $sourceFile) {
+            Copy-Item -LiteralPath $sourceFile -Destination $pluginTarget -Force
+        }
+    }
+    $protocol = Join-Path $projectDirectory 'protocol'
+    if (Test-Path -LiteralPath $protocol) {
+        Copy-Item -LiteralPath $protocol -Destination $pluginTarget -Recurse -Force
+    }
+    $manifest = Join-Path $pluginTarget 'plugin.json'
+    if (-not (Test-Path -LiteralPath $manifest)) {
+        throw "官方插件包缺少 plugin.json：$($plugin.Name)"
+    }
+    $dllName = (Get-Content -LiteralPath $manifest -Raw | ConvertFrom-Json).dll
+    if (-not $dllName -or -not (Test-Path -LiteralPath (Join-Path $pluginTarget $dllName))) {
+        throw "官方插件包缺少清单指定的 DLL：$($plugin.Name)"
+    }
+}
+
 $installManifest = [ordered]@{
     product = 'TraceSoul2'
     version = $version
     runtime = $Runtime
     createdUtc = [DateTimeOffset]::UtcNow.ToString('O')
+    bundledPlugins = @($bundledPlugins | ForEach-Object { $_.Name })
 }
 $installManifest | ConvertTo-Json | Set-Content -LiteralPath (Join-Path $packageRoot 'tracesoul2.install.json') -Encoding utf8NoBOM
 
