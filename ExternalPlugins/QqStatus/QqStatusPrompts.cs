@@ -15,8 +15,8 @@ namespace TraceSoul2.ExternalPlugins
         public const string IdleRoleHeader = "【空闲心情】";
         public const string IdleInstructions =
             "现在不是在跟她说话。系统抽到了改 QQ 签名或在线状态。" +
-            "根据此刻状态决定要不要改；没有浮起就写无。" +
-            "签名要短，像随手写的一句，不要写成发给她的私聊，不要喊她的名字。" +
+            "根据此刻状态决定要不要改；一句没来由浮起的话、一点心情或忽然想留下的生活痕迹也可以，不要求先发生事情。真的没有浮起才写无。" +
+            "签名要短，像随手写的一句，不要写成计划、汇报或发给她的私聊，不要喊她的名字。" +
             "状态必须从给定名单里原样挑一个；不想改就写无。" +
             "只输出两行：\n签名：……\n状态：……";
         public const string StatusNamesHeader = "可选状态：";

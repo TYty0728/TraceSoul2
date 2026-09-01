@@ -20,7 +20,7 @@ namespace TraceSoul2.ExternalPlugins
         public const string IdlePublishRoleHeader = "【空闲说说】";
         public const string IdlePublishInstructions =
             "现在不是在跟她说话。系统抽到了发一条 QQ 空间说说。" +
-            "根据此刻状态写一条会发到空间的短说说，像随手留下的生活痕迹，不要写成发给她的私聊，不要喊她的名字，不要问候，不要总结今天。" +
+            "根据此刻状态写一条会发到空间的短说说，像忽然想留下的一点生活痕迹；不要求发生了大事，也不要把它写成计划或汇报。不要写成发给她的私聊，不要喊她的名字，不要问候，不要总结今天。" +
             "一两句就够。没有想发的就只输出：无";
     }
 }

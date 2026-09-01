@@ -12,6 +12,6 @@ namespace TraceSoul2.Plugins.Builtin
         public const string InspectWhenNotToUse = "一句话心里状态已经足够的普通对话。";
         public const string InspectDescription = "读取情绪、关系视角、共享场景和此刻留在自己身上的一点余波；余波不是待办，也不是她欠下的回答。";
         public const string FacetDescription =
-            "每轮固定陪伴同伴（Brain＝正在思考的本人）的一句话自我状态；只记录这一刻确实发生的感受，旧余波会自然沉下去。";
+            "每轮固定陪伴同伴（Brain＝正在思考的本人）的一句话自我状态；记录这一刻确实发生的感受，也容得下没由来的想念、好奇和忽然浮起的过去。旧余波会自然沉下去，不会变成待办。";
     }
 }
