@@ -121,15 +121,15 @@ docker compose logs tracesoul2 | grep -A 4 '控制台已创建管理员账号'
 
 ## 5. WebUI 一键更新
 
-更新页仓库填写 `TYty0728/TraceSoul2`。正式发布后，Host 会按 CPU 架构选择 `linux-x64` 或 `linux-arm64` ZIP，校验 SHA-256，从 `Data/updates/` 启动外置更新器，替换 `App` 后由容器内 supervisor 拉起新 Host。
+更新页仓库填写 `TYty0728/TraceSoul2`。正式发布后，Host 会按 CPU 架构选择 `linux-x64` 或 `linux-arm64` ZIP，校验 SHA-256，从 `Data/updates/` 启动外置更新器，替换 `App`、升级 Release 内声明的官方插件包，再由容器内 supervisor 拉起新 Host。应用与每个被替换的官方插件都会留下独立备份，任一步失败都会尽力回滚。
 
 更新不会替换：
 
 - `Data/`
-- `Plugins/`
 - `plugins_data/`
+- `Plugins/` 中不属于该 Release 的第三方插件
 
-旧 `App` 会作为隐藏备份目录保留在 `runtime/`，确认新版稳定后再人工清理。
+`Plugins/` 中的 `qq-tts`、`qq-imagegen`、`qq-qzone`、`qq-status`、`game-session` 等官方包会随正式版本升级，但对应 `plugins_data/<包名>/` 配置和生成文件保持原样。旧 `App` 与旧官方插件包会作为隐藏备份目录保留在 `runtime/`，确认新版稳定后再人工清理。
 
 ## 6. 整目录带回本地
 

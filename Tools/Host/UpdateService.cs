@@ -4,6 +4,7 @@ using System.Diagnostics;
 using System.IO;
 using System.IO.Compression;
 using System.Linq;
+using System.Net;
 using System.Net.Http;
 using System.Security.Cryptography;
 using System.Runtime.InteropServices;
@@ -16,7 +17,8 @@ namespace TraceSoul2.Host
 {
     /// <summary>
     /// 正式版更新：只读取配置仓库的 GitHub Release，校验 zip.sha256 后，
-    /// 从家目录外置 runner 启动更新器。角色数据与插件从不进入替换目录。
+    /// 从家目录外置 runner 启动更新器。角色数据与插件数据不进入替换目录；
+    /// Release 内声明的官方插件代码包随应用一起事务式升级。
     /// </summary>
     public sealed class UpdateService : IDisposable
     {
@@ -152,6 +154,7 @@ namespace TraceSoul2.Host
             AddArgument(startInfo, "--source", preparedRoot);
             AddArgument(startInfo, "--target", installRoot);
             AddArgument(startInfo, "--home", home.Root);
+            AddArgument(startInfo, "--plugins", home.PluginsDirectory);
             AddArgument(startInfo, "--version", release.Version);
             startInfo.Environment[TraceHome.EnvHome] = home.Root;
             startInfo.Environment[TraceHome.EnvPlugins] = home.PluginsDirectory;
@@ -163,7 +166,7 @@ namespace TraceSoul2.Host
             {
                 started = true,
                 version = release.Version,
-                message = "更新包校验完成，宿主即将退出并由外置更新器替换后重启。角色数据和插件不会被覆盖。"
+                message = "更新包校验完成，宿主即将退出并由外置更新器替换后重启。角色数据和插件配置不会被覆盖；Release 内置插件会保留备份后同步升级。"
             };
         }
 
@@ -199,9 +202,16 @@ namespace TraceSoul2.Host
             using (var response = await http.GetAsync(url, cancellationToken))
             {
                 if (!response.IsSuccessStatusCode)
+                {
+                    if (response.StatusCode == HttpStatusCode.NotFound &&
+                        await RepositoryIsPubliclyReadableAsync(repository, cancellationToken))
+                        throw new InvalidOperationException(
+                            "仓库 " + repository + " 可以公开读取，但还没有正式 GitHub Release。" +
+                            "普通 main 提交不会成为更新；请先创建与产品版本一致的 v* 标签并等待 Release 构建完成。");
                     throw new InvalidOperationException(
                         "GitHub Release 查询失败（HTTP " + (int)response.StatusCode +
-                        "）。请确认仓库名称正确、仓库可公开读取且已经发布正式 Release。");
+                        "）。请确认仓库名称正确且仓库可公开读取；HTTP 404 也可能表示仓库还没有正式 Release。");
+                }
                 using (var stream = await response.Content.ReadAsStreamAsync(cancellationToken))
                 using (var document = await JsonDocument.ParseAsync(stream, cancellationToken: cancellationToken))
                 {
@@ -240,6 +250,15 @@ namespace TraceSoul2.Host
                     };
                 }
             }
+        }
+
+        private async Task<bool> RepositoryIsPubliclyReadableAsync(
+            string repository,
+            CancellationToken cancellationToken)
+        {
+            var url = "https://api.github.com/repos/" + repository;
+            using (var response = await http.GetAsync(url, cancellationToken))
+                return response.IsSuccessStatusCode;
         }
 
         private static string NormalizeRepository(string repository, bool allowEmpty)
@@ -329,14 +348,52 @@ namespace TraceSoul2.Host
                 throw new InvalidOperationException("更新包缺少 Host 或安装标记。");
             using (var document = JsonDocument.Parse(File.ReadAllText(marker)))
             {
-                if (!string.Equals(StringOf(document.RootElement, "product"), "TraceSoul2",
+                var manifest = document.RootElement;
+                if (!string.Equals(StringOf(manifest, "product"), "TraceSoul2",
                         StringComparison.Ordinal) ||
-                    !string.Equals(NormalizeVersion(StringOf(document.RootElement, "version")), expectedVersion,
+                    !string.Equals(NormalizeVersion(StringOf(manifest, "version")), expectedVersion,
                         StringComparison.Ordinal) ||
-                    !string.Equals(StringOf(document.RootElement, "runtime"), CurrentRuntimeIdentifier(),
+                    !string.Equals(StringOf(manifest, "runtime"), CurrentRuntimeIdentifier(),
                         StringComparison.OrdinalIgnoreCase))
                     throw new InvalidOperationException("更新包产品或版本与 GitHub Release 不一致。");
+                ValidateBundledPlugins(packageRoot, manifest);
             }
+        }
+
+        private static void ValidateBundledPlugins(string packageRoot, JsonElement manifest)
+        {
+            if (!manifest.TryGetProperty("bundledPlugins", out var names) ||
+                names.ValueKind == JsonValueKind.Null) return;
+            if (names.ValueKind != JsonValueKind.Array)
+                throw new InvalidOperationException("更新包 bundledPlugins 清单格式无效。");
+            var root = Path.Combine(packageRoot, "BundledPlugins");
+            var seen = new HashSet<string>(StringComparer.OrdinalIgnoreCase);
+            foreach (var item in names.EnumerateArray())
+            {
+                var name = item.ValueKind == JsonValueKind.String ? item.GetString() ?? string.Empty : string.Empty;
+                if (!IsSafePackageName(name) || !seen.Add(name))
+                    throw new InvalidOperationException("更新包包含无效或重复的官方插件名：" + name);
+                var folder = Path.Combine(root, name);
+                var pluginManifest = Path.Combine(folder, "plugin.json");
+                if (!Directory.Exists(folder) || !File.Exists(pluginManifest))
+                    throw new InvalidOperationException("更新包缺少官方插件目录或清单：" + name);
+                using (var pluginDocument = JsonDocument.Parse(File.ReadAllText(pluginManifest)))
+                {
+                    var dll = StringOf(pluginDocument.RootElement, "dll");
+                    if (string.IsNullOrWhiteSpace(dll) ||
+                        !string.Equals(Path.GetFileName(dll), dll, StringComparison.Ordinal) ||
+                        !File.Exists(Path.Combine(folder, dll)))
+                        throw new InvalidOperationException("官方插件包缺少清单指定的 DLL：" + name);
+                }
+            }
+        }
+
+        private static bool IsSafePackageName(string value)
+        {
+            if (string.IsNullOrWhiteSpace(value) || value.Length > 80 || value.StartsWith(".", StringComparison.Ordinal))
+                return false;
+            return string.Equals(Path.GetFileName(value), value, StringComparison.Ordinal) &&
+                   value.All(ch => char.IsLetterOrDigit(ch) || ch == '-' || ch == '_' || ch == '.');
         }
 
         private static string CurrentRuntimeIdentifier()
