@@ -20,6 +20,12 @@ internal static class Program
     private static void Main(string[] args)
     {
         SQLitePCL.Batteries_V2.Init();
+        if ((args ?? Array.Empty<string>()).Contains("--vision"))
+        {
+            RunInboundVisionCheck();
+            Console.WriteLine("Inbound vision checks passed.");
+            return;
+        }
         RunTagRankCheck();
         RunMindTemplateCheck();
         RunKimiOfficialRequestCheck();
@@ -1504,7 +1510,6 @@ internal static class Program
                     {
                         image_urls = new[]
                         {
-                            "https://multimedia.nt.qq.com.cn/download?appid=1406&fileid=x",
                             "E17628BF7C8C7BD6FC176321114CCF9D.jpg"
                         }
                     })
@@ -1512,6 +1517,38 @@ internal static class Program
                 Require(protocol.LastFile == "E17628BF7C8C7BD6FC176321114CCF9D.jpg",
                     "应从 QQ 缓存名调用 get_image");
                 Require(viaProtocol.Contains("热汤面"), "协议取图后的识图结果应交给这一拍");
+
+                var remoteFile = Path.Combine(Path.GetTempPath(), Guid.NewGuid().ToString("N"), "napcat.png");
+                protocol.Response = TraceJson.ToJson(new
+                {
+                    status = "ok", retcode = 0,
+                    data = new { file = remoteFile, base64 = Convert.ToBase64String(png) }
+                });
+                protocol.Actions.Clear();
+                var remoteImages = VisionLogic.LoadImagesAsync(new[] { "remote-image.jpg" }, services, default)
+                    .GetAwaiter().GetResult();
+                Require(remoteImages.Count == 1 && remoteImages[0].bytes.SequenceEqual(png),
+                    "NapCat 与宿主不同机器时，应读取 get_image 回包的 Base64");
+                Require(protocol.Actions.SequenceEqual(new[] { "get_image" }),
+                    "get_image 回包已有图片时，不应重复调用 get_file");
+
+                protocol.Response = TraceJson.ToJson(new
+                {
+                    data = new { file = remoteFile, base64 = "invalid-base64", url = new Uri(imagePath).AbsoluteUri }
+                });
+                remoteImages = VisionLogic.LoadImagesAsync(new[] { "remote-image.jpg" }, services, default)
+                    .GetAwaiter().GetResult();
+                Require(remoteImages.Count == 1 && remoteImages[0].bytes.SequenceEqual(png),
+                    "本地路径不可读、Base64 损坏时，应继续尝试同一回包的 URL");
+
+                protocol.Response = "{\"data\":{\"file\":\"unavailable.jpg\"}}";
+                protocol.FileResponse = TraceJson.ToJson(new { data = new { base64 = Convert.ToBase64String(png) } });
+                protocol.Actions.Clear();
+                remoteImages = VisionLogic.LoadImagesAsync(new[] { "remote-image.jpg" }, services, default)
+                    .GetAwaiter().GetResult();
+                Require(remoteImages.Count == 1 && remoteImages[0].bytes.SequenceEqual(png) &&
+                        protocol.Actions.SequenceEqual(new[] { "get_image", "get_file" }),
+                    "get_image 无可用来源时，应继续读取 get_file 的 Base64");
             }
         }
         finally
@@ -3437,6 +3474,9 @@ internal static class Program
     {
         public string LocalFile;
         public string LastFile;
+        public string Response;
+        public string FileResponse;
+        public readonly List<string> Actions = new List<string>();
         public string PlatformId { get { return "builtin.onebot"; } }
 
         public PluginEventData ConvertInbound(string platformPayload)
@@ -3460,8 +3500,11 @@ internal static class Program
             object file = null;
             if (parameters != null) parameters.TryGetValue("file", out file);
             LastFile = file == null ? null : file.ToString();
+            Actions.Add(action);
+            if (action == "get_file" && FileResponse != null) return Task.FromResult(FileResponse);
             if (!string.Equals(action, "get_image", StringComparison.OrdinalIgnoreCase))
                 throw new InvalidOperationException(action);
+            if (Response != null) return Task.FromResult(Response);
             return Task.FromResult(TraceJson.ToJson(new
             {
                 status = "ok",

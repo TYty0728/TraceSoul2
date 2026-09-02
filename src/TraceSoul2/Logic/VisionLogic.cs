@@ -16,7 +16,7 @@ namespace TraceSoul2.Logic
     /// <summary>
     /// 入站识图：用控制台「识图多模态」槽看她发来的图，把看见的结果写进这一拍，
     /// 心智和开口只吃这段，不再对着 [图片] 四个字脑补。
-    /// QQ 入站常见是腾讯 CDN 链 + NapCat 缓存名；CDN 这边往往 403，要先问协议端 get_image 拿本地原图。
+    /// QQ 入站常见是腾讯 CDN 链 + NapCat 缓存名；先问 get_image，兼容共享文件、Base64 与刷新后的 URL。
     /// </summary>
     public static class VisionLogic
     {
@@ -96,7 +96,7 @@ namespace TraceSoul2.Logic
             if (images.Count == 0)
             {
                 services?.LogTiming(source == null ? null : source.TraceId, "识图取图失败",
-                    detail: "locations=" + locations.Count + "｜QQ 图要先问协议端拿本地文件，不能只下 CDN");
+                    detail: "locations=" + locations.Count + "｜未取得图片；跨机器部署需可访问的 URL、Base64 或共享文件");
                 return CorePrompts.Vision.LoadFailed;
             }
 
@@ -162,6 +162,7 @@ namespace TraceSoul2.Logic
                         image = await LoadViaProtocolAsync(services, location, cancellationToken);
                     if (image != null) result.Add(image);
                 }
+                catch (OperationCanceledException) when (cancellationToken.IsCancellationRequested) { throw; }
                 catch { /* 单张失败不影响其余。 */ }
             }
             return result;
@@ -257,13 +258,23 @@ namespace TraceSoul2.Logic
                         action,
                         new Dictionary<string, object> { { "file", file } },
                         cancellationToken);
-                    var resolved = ReadGetImageLocation(raw);
+                    var resolved = ReadGetImageLocations(raw);
                     services.LogTiming(null, "识图 " + action,
-                        detail: string.IsNullOrWhiteSpace(resolved) ? "回包没有本地路径" : DescribeLocation(resolved));
-                    if (string.IsNullOrWhiteSpace(resolved)) continue;
-                    var image = await LoadOneAsync(resolved, cancellationToken);
-                    if (image != null) return image;
+                        detail: resolved.Count == 0 ? "回包没有可用图片来源" :
+                            string.Join(",", resolved.Select(DescribeLocation)));
+                    foreach (var location in resolved)
+                    {
+                        cancellationToken.ThrowIfCancellationRequested();
+                        try
+                        {
+                            var image = await LoadOneAsync(location, cancellationToken);
+                            if (image != null) return image;
+                        }
+                        catch (OperationCanceledException) when (cancellationToken.IsCancellationRequested) { throw; }
+                        catch { /* 单个来源无效时，继续试同一回包里的其他来源。 */ }
+                    }
                 }
+                catch (OperationCanceledException) when (cancellationToken.IsCancellationRequested) { throw; }
                 catch (Exception exception)
                 {
                     services.LogTiming(null, "识图 " + action + " 失败",
@@ -276,6 +287,8 @@ namespace TraceSoul2.Logic
         private static string DescribeLocation(string location)
         {
             if (string.IsNullOrWhiteSpace(location)) return "empty";
+            if (location.StartsWith("base64://", StringComparison.OrdinalIgnoreCase) ||
+                location.StartsWith("data:", StringComparison.OrdinalIgnoreCase)) return "inline-image";
             if (location.StartsWith("http://127.0.0.1", StringComparison.OrdinalIgnoreCase) ||
                 location.StartsWith("http://localhost", StringComparison.OrdinalIgnoreCase))
                 return "local-http";
@@ -283,6 +296,8 @@ namespace TraceSoul2.Logic
                 location.IndexOf("qpic.cn", StringComparison.OrdinalIgnoreCase) >= 0)
                 return "qq-cdn";
             if (ExistingFilePath(location) != null) return "local-file";
+            if (Path.IsPathRooted(location) || location.StartsWith("file:", StringComparison.OrdinalIgnoreCase))
+                return "unreadable-file";
             return "other";
         }
 
@@ -294,7 +309,15 @@ namespace TraceSoul2.Logic
 
         public static string ReadGetImageLocation(string json)
         {
-            if (string.IsNullOrWhiteSpace(json)) return null;
+            return ReadGetImageLocations(json).FirstOrDefault();
+        }
+
+        // 一个回包可同时含 NapCat 所在机器的路径、内联原图和 CDN URL。
+        // 路径在跨容器部署时可能不存在，不能因拿到了 file 就丢弃其余来源。
+        public static List<string> ReadGetImageLocations(string json)
+        {
+            var result = new List<string>();
+            if (string.IsNullOrWhiteSpace(json)) return result;
             try
             {
                 using (var document = JsonDocument.Parse(json))
@@ -303,19 +326,25 @@ namespace TraceSoul2.Logic
                     JsonElement data;
                     if (!root.TryGetProperty("data", out data) || data.ValueKind != JsonValueKind.Object)
                         data = root;
-                    foreach (var key in new[] { "file", "path", "file_path", "url" })
+                    foreach (var key in new[] { "file", "path", "file_path", "base64", "url" })
                     {
                         if (!data.TryGetProperty(key, out var value) || value.ValueKind != JsonValueKind.String)
                             continue;
                         var location = (value.GetString() ?? string.Empty).Trim();
                         if (location.Length == 0) continue;
-                        if (IsProtocolCacheName(location)) continue;
-                        return location;
+                        if (key == "base64")
+                        {
+                            if (!location.StartsWith("data:", StringComparison.OrdinalIgnoreCase) &&
+                                !location.StartsWith("base64://", StringComparison.OrdinalIgnoreCase))
+                                location = "base64://" + location;
+                        }
+                        else if (IsProtocolCacheName(location)) continue;
+                        if (!result.Contains(location, StringComparer.Ordinal)) result.Add(location);
                     }
                 }
             }
             catch { /* 回包异常时按取图失败。 */ }
-            return null;
+            return result.OrderBy(LoadPriority).ToList();
         }
 
         private static LlmImagePartData WrapBytes(byte[] bytes, string mime = null)
