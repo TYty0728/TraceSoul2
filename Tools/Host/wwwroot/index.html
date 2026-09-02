@@ -3128,6 +3128,18 @@
   let updateData = null;
   let updateInstallTimer = null;
   let updateExpectedVersion = "";
+  let updatePollBusy = false;
+  let updateSubmitting = false;
+  let updateDisconnectedAt = 0;
+  let updateRestartDeadline = 0;
+  try { updateExpectedVersion = sessionStorage.getItem("updateExpectedVersion") || ""; } catch (e) {}
+  function rememberUpdateTarget(version) {
+    updateExpectedVersion = version || "";
+    try {
+      if (updateExpectedVersion) sessionStorage.setItem("updateExpectedVersion", updateExpectedVersion);
+      else sessionStorage.removeItem("updateExpectedVersion");
+    } catch (e) {}
+  }
   async function loadUpdate() {
     const pair = await Promise.all([api("/updates"), api("/status")]);
     updateData = pair[0];
@@ -3138,6 +3150,7 @@
     $("updatePluginDir").textContent = st.pluginsDirectory || "—";
     $("updatePluginDataDir").textContent = st.pluginsDataDirectory || "—";
     renderUpdateStatus(updateData);
+    if (updateExpectedVersion) startUpdateInstallPolling();
   }
   function formatUpdateBytes(value) {
     const bytes = Number(value || 0);
@@ -3163,7 +3176,10 @@
       : "";
     const detail = [];
     if (progress.version) detail.push("目标 v" + progress.version);
-    if (progress.phase) detail.push("阶段：" + progress.phase);
+    const phases = { checking: "检查版本", preparing: "检查目录", connecting: "连接下载源", downloading: "下载",
+      retrying: "自动重试", downloaded: "下载完成", verifying: "校验", extracting: "解压",
+      validating: "验证安装包", staging: "准备替换", handoff: "启动更新器", restarting: "等待新版上线", failed: "失败" };
+    if (progress.phase) detail.push("阶段：" + (phases[progress.phase] || progress.phase));
     if (size) detail.push(size);
     $("updateProgressDetail").textContent = detail.join(" · ") || "等待服务器返回进度";
   }
@@ -3177,15 +3193,44 @@
     updateInstallTimer = null;
   }
   async function pollUpdateInstall() {
+    if (updatePollBusy) return;
+    updatePollBusy = true;
+    const controller = new AbortController();
+    const timeout = setTimeout(() => controller.abort(), 8000);
     try {
-      const data = await api("/updates");
-      renderUpdateStatus(data);
-      if (updateExpectedVersion && data.currentVersion === updateExpectedVersion) {
+      const response = await fetch("/updates", { cache: "no-store", signal: controller.signal });
+      if (response.status === 401) { stopUpdateInstallPolling(); lockDashboard(); return; }
+      if (!response.ok) throw new Error(response.statusText);
+      const data = await response.json();
+      updateDisconnectedAt = 0;
+      if (updateExpectedVersion && data.currentVersion === updateExpectedVersion && !data.install?.inProgress) {
+        rememberUpdateTarget("");
         stopUpdateInstallPolling();
         location.reload();
+        return;
+      }
+      if (!updateSubmitting && updateExpectedVersion && data.install?.phase === "idle") {
+        rememberUpdateTarget("");
+        stopUpdateInstallPolling();
+        renderUpdateStatus(data);
+        $("updateStatus").textContent += "；宿主已上线，但未确认目标版本，可能已回滚。请查看 Data/updates/update.log。";
+        return;
+      }
+      renderUpdateStatus(data);
+      if (updateRestartDeadline && Date.now() > updateRestartDeadline) {
+        stopUpdateInstallPolling();
+        $("updateStatus").textContent = "等待新版上线超过三分钟，请查看 Data/updates/update.log；不要重复提交安装。";
       }
     } catch (e) {
-      // 宿主替换期间短暂断开是正常现象，保持轮询等待新版本上线。
+      if (!updateDisconnectedAt) updateDisconnectedAt = Date.now();
+      $("updateProgressMessage").textContent = "暂时无法连接宿主，正在等待恢复；服务器可能仍在安装…";
+      if (Date.now() - updateDisconnectedAt > 180000) {
+        stopUpdateInstallPolling();
+        $("updateStatus").textContent = "连续三分钟无法读取状态，请检查服务器更新日志；这不代表安装一定失败。";
+      }
+    } finally {
+      clearTimeout(timeout);
+      updatePollBusy = false;
     }
   }
   function renderUpdateStatus(data) {
@@ -3204,15 +3249,22 @@
     if (progress.phase === "failed" && progress.error) text += "；安装失败：" + progress.error;
     $("updateStatus").textContent = text;
     const install = $("installUpdateBtn");
-    install.disabled = !!progress.inProgress || !(latest && latest.updateAvailable && updateData.installable);
+    install.disabled = updateSubmitting || !!progress.inProgress || !(latest && latest.updateAvailable && updateData.installable);
     install.textContent = progress.inProgress
       ? ("正在安装 " + (progress.percent || 0) + "%")
       : latest && latest.updateAvailable
       ? ("安装 v" + latest.version)
       : "下载并安装";
-    renderUpdateProgress(progress);
-    if (progress.inProgress) startUpdateInstallPolling();
-    else if (!updateExpectedVersion) stopUpdateInstallPolling();
+    if (!updateSubmitting || progress.inProgress || progress.phase === "failed") renderUpdateProgress(progress);
+    if (progress.inProgress) {
+      if (progress.version) rememberUpdateTarget(progress.version);
+      if (progress.phase === "restarting" && !updateRestartDeadline) updateRestartDeadline = Date.now() + 180000;
+      startUpdateInstallPolling();
+    } else if (progress.phase === "failed") {
+      rememberUpdateTarget("");
+      updateRestartDeadline = 0;
+      stopUpdateInstallPolling();
+    } else if (!updateExpectedVersion) stopUpdateInstallPolling();
   }
   async function saveUpdateRepository() {
     try {
@@ -3233,50 +3285,25 @@
   }
   async function installUpdate() {
     const latest = updateData && updateData.latest;
-    if (!latest || !latest.updateAvailable) return;
-    if (!confirm("安装 TraceSoul2 v" + latest.version + "？\n应用会自动退出、整体替换并重启；角色数据和插件不会被覆盖。")) return;
+    if (updateSubmitting || updateData?.install?.inProgress || !latest || !latest.updateAvailable) return;
+    if (!confirm("安装 TraceSoul2 v" + latest.version + "？\n应用和官方插件代码会备份后升级；角色数据、插件配置与第三方插件保持不变。")) return;
     const button = $("installUpdateBtn");
-    updateExpectedVersion = latest.version;
+    rememberUpdateTarget(latest.version);
+    updateRestartDeadline = 0;
+    updateDisconnectedAt = 0;
+    updateSubmitting = true;
     button.disabled = true;
     renderUpdateProgress({ inProgress: true, phase: "checking", version: latest.version, percent: 1, message: "正在启动更新检查…" });
     startUpdateInstallPolling();
     try {
       const result = await api("/updates/install", "POST");
-      $("updateStatus").textContent = result.message || "更新器已启动，等待宿主重启…";
-      await waitForUpdatedHost(latest.version);
-      location.reload();
+      $("updateStatus").textContent = result.message || "已提交后台安装，正在读取进度…";
     } catch (e) {
-      try {
-        const state = await api("/updates");
-        renderUpdateStatus(state);
-        if (state.install && state.install.inProgress) {
-          $("updateStatus").textContent = "浏览器请求已断开，但服务器仍在安装；正在继续读取进度…";
-          return;
-        }
-      } catch (ignored) {
-        try {
-          await waitForUpdatedHost(latest.version);
-          location.reload();
-          return;
-        } catch (restartError) { /* 使用原始安装错误 */ }
-      }
-      updateExpectedVersion = "";
-      stopUpdateInstallPolling();
-      button.disabled = false;
-      $("updateStatus").textContent = "安装失败：" + e.message;
+      $("updateStatus").textContent = "安装请求未确认：" + e.message + "；正在查询服务器状态，请不要重复点击。";
+    } finally {
+      updateSubmitting = false;
+      await pollUpdateInstall();
     }
-  }
-  async function waitForUpdatedHost(expectedVersion) {
-    for (let i = 0; i < 180; i++) {
-      await new Promise(r => setTimeout(r, 1000));
-      try {
-        const res = await fetch("/status", { cache: "no-store" });
-        if (!res.ok) continue;
-        const status = await res.json();
-        if (status.version === expectedVersion) return;
-      } catch (e) { /* 外置更新器正在替换或重启 */ }
-    }
-    throw new Error("等待新版宿主启动超时");
   }
 
   /* ================= 顶栏与整体刷新 ================= */

@@ -1,0 +1,12 @@
+<Project Sdk="Microsoft.NET.Sdk">
+  <PropertyGroup>
+    <OutputType>Exe</OutputType>
+    <TargetFramework>net8.0</TargetFramework>
+    <ImplicitUsings>enable</ImplicitUsings>
+    <Nullable>disable</Nullable>
+  </PropertyGroup>
+  <ItemGroup>
+    <Compile Include="../Host/ReleaseDownloader.cs" Link="ReleaseDownloader.cs" />
+    <Compile Include="../Host/UpdateService.cs" Link="UpdateService.cs" />
+  </ItemGroup>
+</Project>

@@ -14,7 +14,10 @@ permissions:
   contents: write
 
 jobs:
+  update-integration:
+    uses: ./.github/workflows/update-check.yml
   release:
+    needs: update-integration
     runs-on: windows-latest
     steps:
       - name: Resolve tag
@@ -36,19 +39,34 @@ jobs:
         with:
           dotnet-version: "8.0.x"
 
+      - uses: actions/setup-python@v5
+        with:
+          python-version: "3.10"
+
+      - uses: actions/setup-node@v4
+        with:
+          node-version: "22"
+
       - name: Restore and test
         shell: pwsh
         run: |
+          $ErrorActionPreference = 'Stop'
+          $PSNativeCommandUseErrorActionPreference = $true
           dotnet restore TraceSoul2.sln
           dotnet build TraceSoul2.sln -c Release --no-restore
           dotnet Tools/CoreCheck/bin/Release/net8.0/CoreCheck.dll
           dotnet Tools/Updater/bin/Release/net8.0/TraceSoul2.Updater.dll --self-test
+          dotnet Tools/UpdateCheck/bin/Release/net8.0/UpdateCheck.dll
+          python -m unittest discover -s scripts/tests -p test_update_server.py
+          node scripts/tests/test-update-ui.cjs
           dotnet Tools/ChatCheck/bin/Release/net8.0/ChatCheck.dll
           dotnet Tools/ChatCheck/bin/Release/net8.0/ChatCheck.dll --prompt-layout
 
       - name: Build signed-by-hash release payload
         shell: pwsh
         run: |
+          $ErrorActionPreference = 'Stop'
+          $PSNativeCommandUseErrorActionPreference = $true
           pwsh scripts/Publish-Release.ps1 -ExpectedVersion '${{ steps.version.outputs.version }}' -Runtime win-x64
           pwsh scripts/Publish-Release.ps1 -ExpectedVersion '${{ steps.version.outputs.version }}' -Runtime linux-x64
           pwsh scripts/Publish-Release.ps1 -ExpectedVersion '${{ steps.version.outputs.version }}' -Runtime linux-arm64

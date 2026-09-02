@@ -24,6 +24,12 @@ WebUI「系统更新」填写一次 `owner/repository`。检查更新只读取�
 
 安装期间 WebUI 每秒读取进度，显示下载字节、百分比以及校验、解压、准备替换和重启等阶段。浏览器刷新或反向代理断开不会取消服务器上的下载；相同进度会按阶段和约每 10% 记录到 `Data/updates/update.log`。
 
+从 v0.1.7 起，安装接口立即返回、由后台任务下载；安装包与 SHA-256 文件都优先使用 GitHub API 资产接口（`Accept: application/octet-stream`），由 GitHub 重定向到官方资产域名，失败时尝试官方 Release 地址。使用 HTTP/1.1、20 秒连接超时、45 秒无数据超时和最多 6 次重试，不因总下载耗时长而中止。部分文件按仓库、资产 ID、大小与更新时间隔离保存在 `updates/downloads/`，再次安装可断点续传。服务器不支持 Range 时重新下载，不会把完整响应拼接到旧文件后；所有缓存仍必须通过 SHA-256 校验才能安装。
+
+网络至少需要能访问 `api.github.com` 和 `release-assets.githubusercontent.com`。若这些官方域名也不可达，仍需修复服务器网络；更新器不会使用第三方镜像或关闭 TLS 校验。99% 表示等待更新器与重启，只有新版宿主上线才确认成功。
+
+旧版下载通道无法联网时，先用仓库内 `scripts/update-server.py` 引导升级一次。它仅用于默认 Docker 目录布局，验证挂载路径、自动识别 CPU、续传并校验官方包，然后启动真正的事务式更新器。确认更新器通过准备检查后才让旧宿主退出；保留旧程序、官方插件备份和全部持久化数据。
+
 `souls/`、`plugins_data/` 和 `home.json` 都在应用目录外，不会被更新包覆盖。仓库内维护的官方插件代码包会随 Release 一起升级：更新器先备份旧插件包，再替换 DLL、清单和默认资源；失败时与 App 一起回滚。独立安装的第三方插件不受影响。
 
 Docker 部署使用宿主机 `runtime/App`、`runtime/Plugins` 和 `runtime/plugins_data`，因此也是同一套更新流程：容器内的外置更新器替换 `App`、升级 Release 声明的官方插件包，入口 supervisor 随后启动新版本，不需要挂载 Docker Socket。`runtime/plugins_data` 始终保留。
