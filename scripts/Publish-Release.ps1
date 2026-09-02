@@ -104,7 +104,7 @@ $zipPath = Join-Path $artifactRoot $zipName
 if (Test-Path -LiteralPath $zipPath) { Remove-Item -LiteralPath $zipPath -Force }
 Compress-Archive -Path (Join-Path $packageRoot '*') -DestinationPath $zipPath -CompressionLevel Optimal
 $hash = (Get-FileHash -LiteralPath $zipPath -Algorithm SHA256).Hash.ToLowerInvariant()
-($hash + '  ' + $zipName) | Set-Content -LiteralPath ($zipPath + '.sha256') -Encoding ascii
+[IO.File]::WriteAllText($zipPath + '.sha256', $hash + '  ' + $zipName + "`n", [Text.Encoding]::ASCII)
 
 dotnet pack (Join-Path $repoRoot 'Tools\PluginApi\TraceSoul2.PluginApi.csproj') `
     -c Release -o $artifactRoot --no-build

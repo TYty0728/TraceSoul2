@@ -40,7 +40,7 @@ foreach ($filePath in $files) {
     if ($forbiddenExtensions -contains $item.Extension.ToLowerInvariant()) {
         $findings.Add([pscustomobject]@{ File=$filePath; Line=0; Kind='database or private key file' })
     }
-    if ($item.Length -gt 5MB -or $item.Extension -notmatch '^\.(cs|csproj|props|targets|json|md|txt|html|js|css|ps1|bat|yml|yaml|xml|config|toml)$') {
+    if ($item.Length -gt 5MB -or $item.Extension -notmatch '^\.(cs|csproj|props|targets|json|md|txt|html|js|cjs|py|sh|css|ps1|bat|yml|yaml|xml|config|toml)$') {
         continue
     }
     $lineNumber = 0

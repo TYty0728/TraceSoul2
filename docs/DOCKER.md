@@ -125,6 +125,14 @@ docker compose logs tracesoul2 | grep -A 4 '控制台已创建管理员账号'
 
 安装页面会实时显示下载大小、百分比和当前阶段。详细记录位于宿主机 `runtime/Data/updates/update.log`；即使浏览器刷新或反向代理请求断开，服务器也会继续本次安装。
 
+v0.1.7 起优先走 GitHub API 资产下载、HTTP/1.1、自动重试与断点续传。如果旧版因为 `github.com:443` 超时而无法升级，下载仓库内 `scripts/update-server.py` 后，在宿主机执行一次：
+
+```bash
+python3 scripts/update-server.py --root /home/ubuntu/TraceSoul2 --version 0.1.7
+```
+
+`--root` 换成实际项目路径。脚本使用 Python 3 标准库，无需 pip 或宿主机 dotnet；需要宿主机 Docker 权限和正在运行的默认 `tracesoul2` 容器。只要安装成功，后续正式 Release 可直接从 WebUI 更新，无需每次执行 SSH 脚本。若下载中断，重跑同一脚本可利用保留的部分文件。执行期间不要同时点击 WebUI 安装。
+
 更新不会替换：
 
 - `Data/`

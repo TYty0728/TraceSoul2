@@ -1,0 +1,38 @@
+name: Update integration
+on:
+  push:
+    branches: [main]
+    paths:
+      - 'Tools/Host/**'
+      - 'Tools/Updater/**'
+      - 'Tools/UpdateCheck/**'
+      - 'scripts/**'
+      - '.github/workflows/**'
+  workflow_call:
+
+permissions:
+  contents: read
+
+jobs:
+  docker-update-check:
+    runs-on: ubuntu-latest
+    timeout-minutes: 20
+    steps:
+      - uses: actions/checkout@v4
+        with:
+          lfs: true
+      - uses: actions/setup-dotnet@v4
+        with:
+          dotnet-version: '8.0.x'
+      - name: Test updater and download logic
+        run: |
+          dotnet build TraceSoul2.sln -c Release
+          dotnet Tools/Updater/bin/Release/net8.0/TraceSoul2.Updater.dll --self-test
+          dotnet Tools/UpdateCheck/bin/Release/net8.0/UpdateCheck.dll
+          python3 -m unittest discover -s scripts/tests -p test_update_server.py
+          node scripts/tests/test-update-ui.cjs
+      - name: Build real Linux package
+        shell: pwsh
+        run: ./scripts/Publish-Release.ps1 -Runtime linux-x64
+      - name: Upgrade a live Docker Host and verify data preservation
+        run: python3 scripts/tests/test-docker-bootstrap.py

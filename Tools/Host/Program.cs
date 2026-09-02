@@ -245,14 +245,16 @@ app.MapPut("/updates/config", (UpdateService updates, UpdateConfigWrite body) =>
 app.MapPost("/updates/check", async (UpdateService updates, CancellationToken token) =>
     Results.Json(await updates.CheckAsync(token)));
 
-app.MapPost("/updates/install", async (UpdateService updates) =>
+app.MapPost("/updates/install", (UpdateService updates) =>
 {
-    // 安装不绑定浏览器连接：反向代理超时或用户刷新页面时，后台下载仍应继续。
-    var result = await updates.BeginInstallAsync(CancellationToken.None);
-    _ = Task.Run(async () =>
+    // Return immediately. Slow downloads live in the service, not an HTTP request.
+    var result = updates.StartInstall(() =>
     {
-        await Task.Delay(800);
-        app.Lifetime.StopApplication();
+        _ = Task.Run(async () =>
+        {
+            await Task.Delay(800);
+            app.Lifetime.StopApplication();
+        });
     });
     return Results.Json(result);
 });

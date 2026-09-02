@@ -1,6 +1,7 @@
 # Build and IDE output
 **/bin/
 **/obj/
+**/__pycache__/
 .vs/
 .vscode/
 .idea/
