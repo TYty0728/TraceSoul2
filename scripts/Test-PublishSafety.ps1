@@ -32,7 +32,7 @@ $credentialPatterns = [ordered]@{
 $findings = [Collections.Generic.List[object]]::new()
 foreach ($filePath in $files) {
     if (-not (Test-Path -LiteralPath $filePath) -or [IO.Path]::GetFullPath($filePath) -eq $selfPath) { continue }
-    $item = Get-Item -LiteralPath $filePath
+    $item = Get-Item -LiteralPath $filePath -Force
     if ($forbiddenNames -contains $item.Name.ToLowerInvariant() -and
         $item.Name -ne 'llm-providers.example.json') {
         $findings.Add([pscustomobject]@{ File=$filePath; Line=0; Kind='runtime configuration' })
