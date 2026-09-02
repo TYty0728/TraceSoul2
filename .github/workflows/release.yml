@@ -19,6 +19,8 @@ jobs:
   release:
     needs: update-integration
     runs-on: windows-latest
+    env:
+      PYTHONUTF8: "1"
     steps:
       - name: Resolve tag
         id: version
