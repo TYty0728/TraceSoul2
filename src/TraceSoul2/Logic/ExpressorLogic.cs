@@ -56,7 +56,8 @@ namespace TraceSoul2.Logic
                 promptCacheKey);
             var expressed = ParseSpoken(raw);
             ApplyMindAtmosphere(expressed, mind, turn, waitOnly, catalog);
-            EnsureExplicitImageRequest(expressed, turn, catalog);
+            // 离场等待和归来使用同一个入站；只在最终回应补图，避免一次索图生成两次。
+            if (!waitOnly) EnsureExplicitImageRequest(expressed, turn, catalog);
             var mapped = MapExpressor(
                 expressed, catalog, needsReply, waitOnly ? new MindDecisionData() : mind,
                 includeAutoSticker: !waitOnly);
@@ -322,6 +323,8 @@ namespace TraceSoul2.Logic
             if (expressed == null || turn == null || turn.Moment == null) return;
             var text = (turn.Moment.Content ?? string.Empty).Trim();
             if (text.Length == 0) return;
+            if (Regex.IsMatch(text,
+                @"(?:不要|别|不用|不必|不想|停止|取消)[^，。！？\n]{0,12}(?:照片|自拍|图片|发图|拍照|生图)")) return;
             var asksForImage = Regex.IsMatch(text,
                     @"(?:发|给|来|拍|看看|想看|试试|画|生成|做).{0,12}(?:照片|自拍|图片|图)",
                     RegexOptions.IgnoreCase) ||

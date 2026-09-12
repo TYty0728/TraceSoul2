@@ -14,7 +14,9 @@
     <ProjectReference Include="../../ExternalPlugins/GameSession/TraceSoul2.Plugin.GameSession.csproj" />
     <ProjectReference Include="../../ExternalPlugins/QqStatus/TraceSoul2.Plugin.QqStatus.csproj" />
     <Compile Include="Program.cs" />
+    <Compile Include="QqDeliveryChecks.cs" />
     <Compile Include="../../ExternalPlugins/QqImageGen/QqImageGenPrompts.cs" />
+    <Compile Include="../../ExternalPlugins/QqImageGen/CameraSharingContext.cs" />
     <Compile Include="../../ExternalPlugins/QqQzone/QqQzonePrompts.cs" />
     <Content Include="../../resources/identity_cards.json" CopyToOutputDirectory="PreserveNewest" Link="identity_cards.json" />
   </ItemGroup>

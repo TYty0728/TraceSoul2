@@ -257,11 +257,11 @@ namespace TraceSoul2.Plugins.Builtin
                     payload = "[CQ:image,file=" + file.Replace(",", "%2C") + "]";
                     // 自定义表情库里的 PNG/GIF 通过平台协议仍是 image 段，语义上却是 sticker。
                     // 文字已经暂存时，把它接到同一条消息结尾；普通图片和生图仍单独发送。
-                    if (IsStickerAsset(file) && owner.TryAppendSegment(payload))
+                    if (IsStickerAsset(file))
                     {
                         canonicalContent = OneBotPlatformPrompts.SendStickerMoment;
-                        summary = "已把图片表情追加到 QQ 文字消息结尾。";
-                        deferred = true;
+                        deferred = owner.TryAppendSegment(payload);
+                        summary = deferred ? "已把图片表情追加到 QQ 文字消息结尾。" : "已通过 QQ 发送图片表情。";
                         break;
                     }
                     canonicalContent = OneBotPlatformPrompts.SendImageMoment;

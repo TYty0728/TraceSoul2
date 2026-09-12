@@ -15,7 +15,7 @@ using TraceSoul2.ExternalPlugins;
 using TraceSoul2.ExternalPlugins.GameSession;
 using TraceSoul2.Util;
 
-internal static class Program
+internal static partial class Program
 {
     private static void Main(string[] args)
     {
@@ -50,6 +50,7 @@ internal static class Program
         RunLeaveNerveCheck();
         RunBodyRoutingCheck();
         RunOneBotSessionMemoryCheck();
+        RunQqDeliveryAndCameraContextCheck();
         RunExpressorImageRoutingCheck();
         RunMindAtmosphereCheck();
         RunRecentDialogueContextCheck();

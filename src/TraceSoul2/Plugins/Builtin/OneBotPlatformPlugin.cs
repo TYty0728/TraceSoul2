@@ -34,6 +34,10 @@ namespace TraceSoul2.Plugins.Builtin
         private readonly object socketGate = new object();
         private readonly SemaphoreSlim sendLock = new SemaphoreSlim(1, 1);
         private readonly Queue<PluginEventData> inbound = new Queue<PluginEventData>();
+        private readonly Dictionary<string, long> recentInbound = new Dictionary<string, long>(StringComparer.Ordinal);
+        private readonly Queue<KeyValuePair<string, long>> recentInboundOrder = new Queue<KeyValuePair<string, long>>();
+        private const int RecentInboundLimit = 4096;
+        private const long RecentInboundLifetimeMs = 30 * 60 * 1000;
         private readonly List<WebSocket> reverseSockets = new List<WebSocket>();
         private readonly HashSet<string> learnedSelfIds = new HashSet<string>(StringComparer.Ordinal);
         private readonly Dictionary<string, TaskCompletionSource<string>> pendingActions =
@@ -75,6 +79,21 @@ namespace TraceSoul2.Plugins.Builtin
         internal OneBotConfig Config { get { return config; } }
         internal bool TryResolveSession(TraceTurnContext context, out string sessionType, out string sessionId)
         {
+            // 入站轮次及其延迟图片始终跟随原会话；新入站不能改写旧轮次的收件人。
+            if (context?.Moment?.SourcePluginId == PluginId)
+            {
+                try
+                {
+                    var source = TraceJson.FromJson<OneBotSessionPayload>(context.Moment.PayloadJson ?? string.Empty);
+                    if (source != null && !string.IsNullOrWhiteSpace(source.session_id))
+                    {
+                        sessionType = source.session_type;
+                        sessionId = source.session_id;
+                        return true;
+                    }
+                }
+                catch { /* 非会话载荷沿用最后会话兜底 */ }
+            }
             lock (gate)
             {
                 sessionType = lastSessionType;
@@ -604,7 +623,7 @@ namespace TraceSoul2.Plugins.Builtin
 
         // ---------- 入站收口：适配器翻译成规范 Moment 后进收件箱 ----------
 
-        private void HandleInbound(string json, WebSocket sourceSocket)
+        internal void HandleInbound(string json, WebSocket sourceSocket)
         {
             var timer = Stopwatch.StartNew();
             var moment = adapter.ConvertInbound(json);
@@ -620,6 +639,26 @@ namespace TraceSoul2.Plugins.Builtin
             var remembered = false;
             lock (gate)
             {
+                // 多条 WS 连接及重连重放都可能交付同一个 message_id。判重与入队必须原子执行。
+                var now = Environment.TickCount64;
+                while (recentInboundOrder.Count > 0 &&
+                       now - recentInboundOrder.Peek().Value >= RecentInboundLifetimeMs)
+                    recentInbound.Remove(recentInboundOrder.Dequeue().Key);
+                var eventId = moment.ExternalEventId;
+                if (!string.IsNullOrWhiteSpace(eventId) && eventId != "0")
+                {
+                    var key = JsonText.ExtractLong(json, "self_id") + ":" +
+                              session?.session_type + ":" + session?.session_id + ":" + eventId;
+                    if (recentInbound.ContainsKey(key))
+                    {
+                        services?.LogTiming(moment.TraceId, "QQ 重复消息已忽略", detail: "event=" + eventId);
+                        return;
+                    }
+                    if (recentInboundOrder.Count >= RecentInboundLimit)
+                        recentInbound.Remove(recentInboundOrder.Dequeue().Key);
+                    recentInbound.Add(key, now);
+                    recentInboundOrder.Enqueue(new KeyValuePair<string, long>(key, now));
+                }
                 if (session != null && !string.IsNullOrWhiteSpace(session.session_id))
                 {
                     lastSessionType = session.session_type ?? string.Empty;
@@ -634,6 +673,16 @@ namespace TraceSoul2.Plugins.Builtin
         }
 
         // ---------- 收件箱（后台服务 → Brain） ----------
+
+        internal List<PluginEventData> TakeInbound()
+        {
+            lock (gate)
+            {
+                var result = new List<PluginEventData>();
+                while (inbound.Count > 0 && result.Count < 5) result.Add(inbound.Dequeue());
+                return result;
+            }
+        }
 
         private sealed class OneBotInboxService : ITraceBackgroundService
         {
@@ -652,13 +701,7 @@ namespace TraceSoul2.Plugins.Builtin
 
             public IEnumerable<PluginEventData> Poll(long nowUnixMs)
             {
-                lock (owner.gate)
-                {
-                    var result = new List<PluginEventData>();
-                    while (owner.inbound.Count > 0 && result.Count < 5)
-                        result.Add(owner.inbound.Dequeue());
-                    return result;
-                }
+                return owner.TakeInbound();
             }
 
             public void Shutdown() { }

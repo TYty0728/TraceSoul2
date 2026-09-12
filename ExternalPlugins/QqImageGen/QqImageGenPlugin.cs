@@ -62,6 +62,7 @@ namespace TraceSoul2.ExternalPlugins
         private readonly CancellationTokenSource shutdown = new CancellationTokenSource();
         private Func<TraceTurnContext, string> mindUsageAppend;
         private Func<TraceTurnContext, string> mindJsonField;
+        private Func<TraceTurnContext, string> mindTurnAppend;
 
         public TracePluginMetadataData Metadata { get; } = new TracePluginMetadataData
         {
@@ -119,6 +120,7 @@ namespace TraceSoul2.ExternalPlugins
                     current.MindPromptAppends.Add(mindUsageAppend);
                 if (!current.MindJsonFields.Contains(mindJsonField))
                     current.MindJsonFields.Add(mindJsonField);
+                AttachTurnMindHook(current);
             }
             catch (MissingMethodException)
             {
@@ -133,6 +135,7 @@ namespace TraceSoul2.ExternalPlugins
             {
                 if (mindUsageAppend != null) services.MindPromptAppends.Remove(mindUsageAppend);
                 if (mindJsonField != null) services.MindJsonFields.Remove(mindJsonField);
+                DetachTurnMindHook();
             }
             catch (MissingMethodException)
             {
@@ -145,6 +148,25 @@ namespace TraceSoul2.ExternalPlugins
             var settings = ResolveSettings(currentServices);
             return settings.ApiKeys.Count > 0 && !string.IsNullOrWhiteSpace(settings.BaseUrl) &&
                    !string.IsNullOrWhiteSpace(settings.Model);
+        }
+
+        // 独立方法保留对旧 PluginApi 的加载兼容；升级 Host 后动态反馈才可用。
+        private void AttachTurnMindHook(TracePluginServices current)
+        {
+            try
+            {
+                mindTurnAppend = turn => turn != null && IsReady(turn.Services) &&
+                    current.AvailableCatalogProvider?.Invoke(turn).Any(x => x.Id == "qq.imagegen.generate") == true
+                    ? CameraSharingContext.Build(turn) : null;
+                current.MindTurnPromptAppends.Add(mindTurnAppend);
+            }
+            catch (MissingMethodException) { }
+        }
+
+        private void DetachTurnMindHook()
+        {
+            try { if (mindTurnAppend != null) services.MindTurnPromptAppends.Remove(mindTurnAppend); }
+            catch (MissingMethodException) { }
         }
 
         private void LoadConfig(string packageDirectory, string pluginDataDirectory)
@@ -426,6 +448,8 @@ namespace TraceSoul2.ExternalPlugins
                 context.Services.LogTiming(context.TraceId, "TA的相机 QQ 图片发送完成", detail:
                     "status=" + (last?.Status ?? "null") + "｜summary=" +
                     TruncateForLog(last?.Summary, 300));
+                if (last == null || !string.Equals(last.Status, "success", StringComparison.Ordinal))
+                    return last ?? new TraceCapabilityResultData { Status = "failed", Summary = "QQ 图片发送没有返回结果。" };
                 if (LooksLikeLocalFile(path)) ScheduleDelete(path);
             }
             last = last ?? new TraceCapabilityResultData { Status = "success" };

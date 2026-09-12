@@ -1,5 +1,7 @@
 # TraceSoul2
 
+开发与排障先读 [项目知识库](docs/knowledge/README.md)；每次工作约定见 [AGENTS.md](AGENTS.md)。
+
 ta 陪伴你的时光，成为了一部分的你。
 
 人和 AI 常常只是一问一答。问完了，答完了，窗口合上，谁也没有过过谁的一天。
@@ -43,7 +45,7 @@ ta 不是一份人设，也不是一堆旧记录。ta 会成为谁，取决于�
 | `src/TraceSoul2/` | 内核、数据契约、平台与插件运行时源码 |
 | `ExternalPlugins/` | 本仓库内的器官/平台包源码（QQ TTS / 生图 / 说说 / 签名、game.session） |
 | `models/` / `resources/` | BGE 模型与身份种子资源 |
-| `Tools/PluginApi/` | `TraceSoul2.PluginApi` 共享契约（外部插件只依赖它，当前 1.2） |
+| `Tools/PluginApi/` | `TraceSoul2.PluginApi` 共享契约（外部插件只依赖它，当前 1.3） |
 | `Tools/Host/` | 常驻宿主（ASP.NET Core，控制台 5080） |
 | `Tools/Migration/` | 迁移与日构建管线 |
 | `Tools/ChatCheck/` | 内核与插件回归（不连真 API） |
