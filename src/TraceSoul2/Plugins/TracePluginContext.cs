@@ -105,6 +105,10 @@ namespace TraceSoul2.Plugins
         public List<Func<TraceTurnContext, string>> MindPromptAppends { get; } =
             new List<Func<TraceTurnContext, string>>();
 
+        /// <summary>器官本轮状态；只拼入心智动态段，不污染身份与稳定提示前缀。</summary>
+        public List<Func<TraceTurnContext, string>> MindTurnPromptAppends { get; } =
+            new List<Func<TraceTurnContext, string>>();
+
         /// <summary>
         /// 器官插件可把心智 JSON 额外字段挂到这里，例如 "image":"有|无"。
         /// 未就绪时返回空；核心 JSON 样例本身不含出图字段。

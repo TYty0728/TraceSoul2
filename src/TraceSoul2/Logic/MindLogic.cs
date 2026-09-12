@@ -238,6 +238,18 @@ namespace TraceSoul2.Logic
             }
             if (alreadyLeft)
                 builder.AppendLine(CorePrompts.Mind.AlreadyLeft);
+            foreach (var append in turn.Services.MindTurnPromptAppends.ToArray())
+            {
+                try
+                {
+                    var text = append?.Invoke(turn);
+                    if (!string.IsNullOrWhiteSpace(text)) builder.AppendLine(text.Trim());
+                }
+                catch (Exception exception)
+                {
+                    turn.Services.LogTiming(turn.TraceId, "器官本轮提示失败", detail: exception.GetType().Name);
+                }
+            }
             var organized = MindTemplateLogic.Format(templates);
             if (!string.IsNullOrWhiteSpace(organized))
             {

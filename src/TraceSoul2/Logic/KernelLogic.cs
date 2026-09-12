@@ -840,9 +840,10 @@ namespace TraceSoul2.Logic
             try
             {
                 var extraResult = await plugins.ExecuteAsync(sendCall, turn, cancellationToken);
-                if (extraResult != null && extraResult.ProducedEvent != null)
+                var sent = extraResult != null && extraResult.Status == "success";
+                if (sent && extraResult.ProducedEvent != null)
                     PersistPluginEvent(conversationId, extraResult.ProducedEvent);
-                plugins.Services.LogTiming(turn.TraceId, "TA的相机 后台图已发出", 0,
+                plugins.Services.LogTiming(turn.TraceId, sent ? "TA的相机 后台图已发出" : "TA的相机 后台发图未成功", 0,
                     extraResult == null ? "null" : extraResult.Summary);
             }
             catch (Exception exception)
