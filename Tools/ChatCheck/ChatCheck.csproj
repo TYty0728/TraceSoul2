@@ -15,6 +15,8 @@
     <ProjectReference Include="../../ExternalPlugins/QqStatus/TraceSoul2.Plugin.QqStatus.csproj" />
     <Compile Include="Program.cs" />
     <Compile Include="QqDeliveryChecks.cs" />
+    <Compile Include="VisionTransportChecks.cs" />
+    <Compile Include="../Host/GeminiClientManager.cs" Link="GeminiClientManager.cs" />
     <Compile Include="../../ExternalPlugins/QqImageGen/QqImageGenPrompts.cs" />
     <Compile Include="../../ExternalPlugins/QqImageGen/CameraSharingContext.cs" />
     <Compile Include="../../ExternalPlugins/QqQzone/QqQzonePrompts.cs" />
