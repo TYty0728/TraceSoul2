@@ -8,6 +8,7 @@ using System.Threading;
 using System.Threading.Tasks;
 using TraceSoul2.Data;
 using TraceSoul2.Manager;
+using TraceSoul2.Prompts;
 using TraceSoul2.Plugins;
 using TraceSoul2.Util;
 
@@ -140,7 +141,9 @@ namespace TraceSoul2.Logic
                 var visionTimer = Stopwatch.StartNew();
                 var seen = await VisionLogic.SeeInboundAsync(source, plugins.Services, cancellationToken);
                 source.Content = VisionLogic.AttachSeen(source.Content, seen);
-                plugins.Services.LogTiming(source.TraceId, "识图完成", visionTimer.ElapsedMilliseconds,
+                var visionStage = seen == CorePrompts.Vision.LoadFailed ? "识图未成功" :
+                    seen == CorePrompts.Vision.Unconfigured ? "识图未配置" : "识图完成";
+                plugins.Services.LogTiming(source.TraceId, visionStage, visionTimer.ElapsedMilliseconds,
                     "chars=" + (seen ?? string.Empty).Length);
             }
 

@@ -4,6 +4,7 @@ using System.IO;
 using System.Linq;
 using System.Net.Http;
 using System.Text.Json;
+using System.Text.RegularExpressions;
 using System.Threading;
 using System.Threading.Tasks;
 using TraceSoul2.Data;
@@ -103,6 +104,11 @@ namespace TraceSoul2.Logic
             var client = directory.CreateClient(endpoint.ProviderId, endpoint.Model, false);
             if (client == null) return CorePrompts.Vision.Unconfigured;
 
+            services?.LogTiming(source.TraceId, "识图模型请求",
+                detail: "client=" + client.GetType().Name + "｜model=" + endpoint.Model +
+                    "｜images=" + images.Count + "｜types=" +
+                    string.Join(",", images.Select(x => x.ResolveMime())));
+
             var ask = CorePrompts.Vision.UserAsk(source.Content);
             var messages = new List<DeepSeekMessageData>
             {
@@ -124,12 +130,30 @@ namespace TraceSoul2.Logic
                     return Limit(raw, MaxSeenChars);
                 }
             }
+            catch (OperationCanceledException) when (cancellationToken.IsCancellationRequested) { throw; }
             catch (Exception exception)
             {
                 services?.LogTiming(source == null ? null : source.TraceId, "识图模型失败",
-                    detail: exception.GetType().Name);
+                    detail: DescribeModelFailure(exception, endpoint.ApiKey));
                 return CorePrompts.Vision.LoadFailed;
             }
+        }
+
+        private static string DescribeModelFailure(Exception exception, string apiKey)
+        {
+            // 供应商错误可能回显凭据、带签名 URL 或图片；先脱敏，再截断。
+            var message = exception.Message ?? string.Empty;
+            if (!string.IsNullOrEmpty(apiKey))
+            {
+                message = message.Replace(apiKey, "[redacted]");
+                message = message.Replace(Uri.EscapeDataString(apiKey), "[redacted]");
+            }
+            message = Regex.Replace(message, @"(?i)(?:data:[^,\s]+;base64,|base64://)[a-z0-9+/=\s]*", "[image omitted]");
+            message = Regex.Replace(message, @"(?i)https?://[^\s""<>]+", "[url omitted]");
+            message = Regex.Replace(message, @"(?i)bearer\s+[^\s"",;]+", "Bearer [redacted]");
+            message = Regex.Replace(message, @"(?i)(api[_-]?key|access[_-]?token|authorization)([""\s:=]+)[^\s"",;}]+", "$1$2[redacted]");
+            message = Regex.Replace(message, @"\s+", " ").Trim();
+            return exception.GetType().Name + ": " + Limit(message, 500);
         }
 
         public static Task<List<LlmImagePartData>> LoadImagesAsync(
@@ -198,7 +222,10 @@ namespace TraceSoul2.Logic
                 return WrapBytes(bytes);
             }
             if (location.StartsWith("data:", StringComparison.OrdinalIgnoreCase))
-                return new LlmImagePartData { url = location };
+            {
+                var inline = new LlmImagePartData { url = location };
+                return WrapBytes(inline.ResolveBytes(), inline.ResolveMime());
+            }
 
             if (Uri.TryCreate(location, UriKind.Absolute, out var uri) &&
                 (uri.Scheme == Uri.UriSchemeHttp || uri.Scheme == Uri.UriSchemeHttps))
@@ -352,10 +379,15 @@ namespace TraceSoul2.Logic
             if (bytes == null || bytes.Length < 32 || bytes.Length > MaxBytes) return null;
             if (bytes[0] == (byte)'<' || bytes[0] == (byte)'{' || bytes[0] == (byte)'[')
                 return null;
-            mime = string.IsNullOrWhiteSpace(mime) ? LlmImagePartData.GuessMime(bytes) : mime.Trim();
+            mime = (mime ?? string.Empty).Split(';')[0].Trim().ToLowerInvariant();
+            // CDN 常把图片返回为 application/octet-stream；本地与远端统一按文件签名识别。
+            var detected = LlmImagePartData.GuessMime(bytes);
+            var knownSignature = detected != "image/jpeg" ||
+                (bytes[0] == 0xff && bytes[1] == 0xd8 && bytes[2] == 0xff);
+            if (knownSignature) mime = detected;
             if (mime.IndexOf("html", StringComparison.OrdinalIgnoreCase) >= 0 ||
                 mime.IndexOf("json", StringComparison.OrdinalIgnoreCase) >= 0 ||
-                mime.IndexOf("text/", StringComparison.OrdinalIgnoreCase) >= 0)
+                !mime.StartsWith("image/", StringComparison.OrdinalIgnoreCase))
                 return null;
             return new LlmImagePartData { bytes = bytes, mime = mime };
         }

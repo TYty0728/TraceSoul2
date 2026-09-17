@@ -1444,6 +1444,7 @@ internal static partial class Program
 
     private static void RunInboundVisionCheck()
     {
+        RunVisionTransportChecksAsync().GetAwaiter().GetResult();
         var payload = TraceJson.ToJson(new { image_urls = new[] { "https://example.com/a.jpg", @"C:\x.png" } });
         Require(VisionLogic.HasInboundImages(payload) &&
                 VisionLogic.ReadInboundImageLocations(payload).Count == 2,
