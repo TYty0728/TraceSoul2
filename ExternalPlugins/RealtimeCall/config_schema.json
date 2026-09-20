@@ -1,0 +1,8 @@
+{
+  "hint": "转写/TTS 实时对话桥。客户端负责 ASR、TTS 和音频设备；必须设置至少 32 个字符的独立令牌，未配置时拒绝所有连接。",
+  "fields": [
+    { "key": "access_token", "label": "客户端连接令牌", "type": "password", "description": "Unity/QQ 音频网关通过 Authorization: Bearer 请求头连接；不把令牌放进链接。" },
+    { "key": "conversation_id", "label": "所属对话", "type": "string", "description": "由服务端绑定，客户端不能任意选择其他对话。" },
+    { "key": "idle_timeout_seconds", "label": "空闲断连秒数", "type": "number", "min": 15, "max": 3600, "default": 120, "description": "客户端应每 30 秒以内 ping。" }
+  ]
+}

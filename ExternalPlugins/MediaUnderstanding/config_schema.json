@@ -1,0 +1,14 @@
+{
+  "hint": "安装 yt-dlp、ffmpeg、ffprobe 并配置多模态模型槽后，可受限下载 B站/抖音视频并分析离散画面与平台可用字幕。当前不直接识别音轨。",
+  "fields": [
+    { "key": "enabled", "label": "启用视频分析", "type": "bool", "default": true },
+    { "key": "yt_dlp_path", "label": "yt-dlp 路径", "type": "string", "default": "yt-dlp" },
+    { "key": "ffmpeg_path", "label": "ffmpeg 路径", "type": "string", "default": "ffmpeg" },
+    { "key": "ffprobe_path", "label": "ffprobe 路径", "type": "string", "default": "ffprobe" },
+    { "key": "max_download_mb", "label": "最大下载 MB", "type": "number", "min": 10, "max": 1024, "default": 150 },
+    { "key": "max_duration_seconds", "label": "最大视频秒数", "type": "number", "min": 10, "max": 14400, "default": 1200 },
+    { "key": "max_frames", "label": "最多抽帧数", "type": "number", "min": 2, "max": 16, "default": 8 },
+    { "key": "process_timeout_seconds", "label": "处理超时秒数", "type": "number", "min": 30, "max": 1800, "default": 180 },
+    { "key": "max_concurrent_analyses", "label": "最大并发分析", "type": "number", "min": 1, "max": 4, "default": 1 }
+  ]
+}

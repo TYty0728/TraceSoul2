@@ -11,6 +11,7 @@
     <Compile Include="$(MSBuildThisFileDirectory)../../src/TraceSoul2/Data/InnerLifeData.cs" />
     <Compile Include="$(MSBuildThisFileDirectory)../../src/TraceSoul2/Data/PairIdentityData.cs" />
     <Compile Include="$(MSBuildThisFileDirectory)../../src/TraceSoul2/Data/PluginData.cs" />
+    <Compile Include="$(MSBuildThisFileDirectory)../../src/TraceSoul2/Data/MediaRealtimeData.cs" />
     <Compile Include="$(MSBuildThisFileDirectory)../../src/TraceSoul2/Data/VectorMemoryData.cs" />
     <Compile Include="$(MSBuildThisFileDirectory)../../src/TraceSoul2/Data/VectorStorageData.cs" />
     <Compile Include="$(MSBuildThisFileDirectory)../../src/TraceSoul2/Manager/ILlmClient.cs" />
