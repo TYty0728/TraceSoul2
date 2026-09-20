@@ -10,7 +10,7 @@ namespace TraceSoul2.Logic
 {
     /// <summary>
     /// 心跳：Moment 处理完后排一次；到期自己想要不要说、办事、睡下、多久后再跳。
-    /// 睡着或空闲后停跳。睡着要等她发来才醒；空闲还会被以前约好的时间任务叫醒。
+    /// 睡着后停跳；清醒的空闲仍保留下一次自然醒来的安排。
     /// </summary>
     public static class HeartbeatLogic
     {
@@ -18,8 +18,8 @@ namespace TraceSoul2.Logic
         public const string ScheduleDocumentKey = "schedules";
         public const string HeartbeatContent = "心跳";
         public const string PlanSeparator = "｜醒来计划：";
-        public const string DefaultNextPlan = "重新看看时间、她有没有新消息和近期计划，再决定是否联系";
-        public const string DefaultLongFollowUpPlan = "隔几个小时再看看时间、她有没有新消息和近期计划";
+        public const string DefaultNextPlan = "到时感受自己的心绪，看看有没有想和她分享的，再决定是否联系";
+        public const string DefaultLongFollowUpPlan = "隔几个小时带着新的心绪回来，想想有什么想告诉她";
         public const int DefaultMinMinutes = 10;
         public const int DefaultMaxMinutes = 20;
         public const int DefaultLongFollowUpMinutes = 240;
@@ -104,8 +104,7 @@ namespace TraceSoul2.Logic
         }
 
         /// <summary>
-        /// 心跳醒着时必须留下下一次检查；只有明确睡下或进入空闲才真正停跳。
-        /// 模型没有给出分钟数时拉长到数小时；若同时决定安静，后续会进入空闲。
+        /// 清醒时保留下一次自然醒来；没有填写分钟时兜底为数小时，安静不等于断联。
         /// </summary>
         public static int ResolveFollowUpMinutes(bool sleep, int requestedMinutes)
         {
@@ -115,7 +114,7 @@ namespace TraceSoul2.Logic
         }
 
         /// <summary>
-        /// 心跳决定不开口，且下次要等很久：不要空转心跳，进入空闲直到被激活。
+        /// 清醒且这次安静，可以进入空闲生活；空闲不会取消下一次心跳。
         /// </summary>
         public static bool ShouldEnterIdle(bool speak, bool sleep, int requestedMinutes)
         {
@@ -171,11 +170,12 @@ namespace TraceSoul2.Logic
             return !IsBreaking(source, pair);
         }
 
-        /// <summary>空闲只停心跳；她发来的话、约好的时间任务、夜间余温仍会进来。</summary>
+        /// <summary>空闲接受已安排的心跳；仅忽略旧版连续思考事件。</summary>
         public static bool ShouldSkipWhileIdle(PluginEventData source, PairIdentity pair)
         {
             if (IsBreaking(source, pair)) return false;
-            return IsHeartbeatOrLegacyContinue(source == null ? string.Empty : source.Content);
+            var content = source == null ? string.Empty : source.Content;
+            return !IsHeartbeatContent(content) && InnerLifeLogic.IsContinuationContent(content);
         }
 
         public static long? NextDueUnixMs(IMemoryStore storage, string conversationId)

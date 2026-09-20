@@ -853,7 +853,7 @@
                   <input id="hbMax" type="number" min="0" max="180" style="width:90px" /></div>
                 <div class="nogrow"><label>&nbsp;</label><button class="primary" onclick="saveHeartbeat()">保存心跳</button></div>
               </div>
-              <p class="muted" style="margin-top:4px">入站 Moment 处理完后，在此范围内随机排一次心跳。到期他自己想：要不要说、办事、睡下、多久后再跳。两端都填 0 则关闭。睡着或空闲后心跳停；睡着要等她发来才醒，空闲还会被以前约好的时间任务叫醒。</p>
+              <p class="muted" style="margin-top:4px">他会为清醒时的下一次联系安排时间；没有指定时间时，首次心跳在此范围内安排。到期再决定要不要开口，安静或进入空闲仍保留下次计划。睡下后心跳暂停，等她发来再醒。两端都填 0 则关闭心跳。</p>
               <h2>已配置的模型</h2>
               <div class="model-bar">
                 <input id="modelSearch" placeholder="搜索模型或 ID" oninput="renderModelList()" />
@@ -1925,7 +1925,7 @@
       `<div class="live-field"><div class="key">今日新识</div><div class="value">${c.todayNewItems && c.todayNewItems.length ? c.todayNewItems.map(x => esc(x.content)).join("；") : "—"}</div></div>` +
       `<div class="live-field"><div class="key">活跃事件</div><div class="value">${c.activeEvents && c.activeEvents.length ? c.activeEvents.map(x => esc((x.time ? x.time + " · " : "") + (x.eventSummary || x.id))).join("；") : "—"}</div></div>`;
     $("liveHeartbeatBox").innerHTML =
-      liveField("当前状态", asleep ? "睡着后停止自醒" : (idle ? "空闲，等她再来或约定时间到" : (h.enabled ? "等待下一次醒来" : "当前没有心跳任务"))) +
+      liveField("当前状态", asleep ? "睡着后停止自醒" : (idle ? (h.enabled ? "空闲生活中，保留下一次醒来" : "空闲，当前没有心跳任务") : (h.enabled ? "等待下一次醒来" : "当前没有心跳任务"))) +
       liveField("时间范围", (h.minMinutes || 0) + "–" + (h.maxMinutes || 0) + " 分钟") +
       liveField("下次时间", formatHeartbeatDue(h.dueUnixMs)) +
       liveField("醒来计划", h.nextPlan) +
@@ -3341,7 +3341,8 @@
     try {
       const obj = JSON.parse(e.data);
       if (!obj) return;
-      if (obj.hello) { addLog("已连接实时日志流", "sys"); return; }
+      // 每次连接都回放服务端最近 300 条，先替换旧视图，避免断线重连重复。
+      if (obj.hello) { logEl.replaceChildren(); return; }
       if (obj.message) addLog(obj.message);
     } catch (err) {
       addLog(e.data);

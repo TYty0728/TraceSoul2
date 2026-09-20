@@ -3,6 +3,7 @@ using System.Collections.Generic;
 using System.IO;
 using System.Linq;
 using System.Net.Http;
+using System.Security.Cryptography;
 using System.Text.Json;
 using System.Text.RegularExpressions;
 using System.Threading;
@@ -58,7 +59,7 @@ namespace TraceSoul2.Logic
                         if (item.ValueKind != JsonValueKind.String) continue;
                         var location = (item.GetString() ?? string.Empty).Trim();
                         if (location.Length == 0) continue;
-                        if (!result.Contains(location, StringComparer.OrdinalIgnoreCase))
+                        if (!result.Contains(location, StringComparer.Ordinal))
                             result.Add(location);
                     }
                 }
@@ -106,7 +107,7 @@ namespace TraceSoul2.Logic
 
             services?.LogTiming(source.TraceId, "识图模型请求",
                 detail: "client=" + client.GetType().Name + "｜model=" + endpoint.Model +
-                    "｜images=" + images.Count + "｜types=" +
+                    "｜images=" + images.Count + "｜bytes=" + images.Sum(x => (long)x.bytes.Length) + "｜types=" +
                     string.Join(",", images.Select(x => x.ResolveMime())));
 
             var ask = CorePrompts.Vision.UserAsk(source.Content);
@@ -171,10 +172,12 @@ namespace TraceSoul2.Logic
             var listed = (locations ?? Enumerable.Empty<string>())
                 .Where(x => !string.IsNullOrWhiteSpace(x))
                 .Select(x => x.Trim())
-                .Distinct(StringComparer.OrdinalIgnoreCase)
+                .Distinct(StringComparer.Ordinal)
                 .OrderBy(LoadPriority)
                 .ToList();
             var result = new List<LlmImagePartData>();
+            var fingerprints = new HashSet<string>(StringComparer.Ordinal);
+            var duplicates = 0;
             foreach (var location in listed)
             {
                 if (result.Count >= MaxImages) break;
@@ -184,11 +187,21 @@ namespace TraceSoul2.Logic
                     var image = await LoadOneAsync(location, cancellationToken);
                     if (image == null && IsProtocolCacheName(location))
                         image = await LoadViaProtocolAsync(services, location, cancellationToken);
-                    if (image != null) result.Add(image);
+                    if (image != null)
+                    {
+                        // QQ 同一消息段同时给 CDN URL 和缓存名，get_image 又解析回同一图片。
+                        // 按内容去重，不能把两个来源当成两张图，也不能挤掉真正的后续图片。
+                        var fingerprint = Convert.ToHexString(SHA256.HashData(image.bytes));
+                        if (fingerprints.Add(fingerprint)) result.Add(image);
+                        else duplicates++;
+                    }
                 }
                 catch (OperationCanceledException) when (cancellationToken.IsCancellationRequested) { throw; }
                 catch { /* 单张失败不影响其余。 */ }
             }
+            if (duplicates > 0)
+                services?.LogTiming(null, "识图图片去重", detail:
+                    "duplicate_sources=" + duplicates + "｜images=" + result.Count);
             return result;
         }
 

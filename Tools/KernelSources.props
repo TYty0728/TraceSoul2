@@ -31,6 +31,7 @@
     <Compile Include="$(MSBuildThisFileDirectory)../src/TraceSoul2/Logic/LifeStateLogic.cs" />
     <Compile Include="$(MSBuildThisFileDirectory)../src/TraceSoul2/Logic/HeartbeatLogic.cs" />
     <Compile Include="$(MSBuildThisFileDirectory)../src/TraceSoul2/Logic/IdleDeedLogic.cs" />
+    <Compile Include="$(MSBuildThisFileDirectory)../src/TraceSoul2/Logic/QzonePublishLogic.cs" />
     <Compile Include="$(MSBuildThisFileDirectory)../src/TraceSoul2/Logic/MemoryLiveWriteLogic.cs" />
     <Compile Include="$(MSBuildThisFileDirectory)../src/TraceSoul2/Logic/MemoryArchivePolicyLogic.cs" />
     <Compile Include="$(MSBuildThisFileDirectory)../src/TraceSoul2/Logic/CognitionLiveWriteLogic.cs" />

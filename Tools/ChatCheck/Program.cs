@@ -43,6 +43,9 @@ internal static partial class Program
         RunToolLookupCheck();
         RunKernelWakeCheck();
         RunNightResidueCheck();
+        RunRecentEventLogCheck();
+        RunQzoneMediaChecksAsync().GetAwaiter().GetResult();
+        RunHeartbeatContinuityChecksAsync().GetAwaiter().GetResult();
         RunInnerSliceCheck();
         RunIdleDeedCheck();
         RunLifeDoingAndEventTimeCheck();
@@ -1275,11 +1278,11 @@ internal static partial class Program
         Require(!HeartbeatLogic.ShouldEnterIdle(false, false, 45), "紧急短期复查不应进入空闲");
         Require(!HeartbeatLogic.ShouldEnterIdle(true, false, 240), "心跳开口后仍应自己醒来，不进空闲");
         Require(!HeartbeatLogic.ShouldEnterIdle(false, true, 240), "睡下走睡着，不走空闲");
-        Require(HeartbeatLogic.ShouldSkipWhileIdle(new PluginEventData
+        Require(!HeartbeatLogic.ShouldSkipWhileIdle(new PluginEventData
         {
             Role = "system_event",
             Content = "时间任务到期：心跳"
-        }, PairIdentity.Missing), "空闲时应跳过心跳");
+        }, PairIdentity.Missing), "清醒的空闲应接受已安排的心跳，不能永久断联");
         Require(!HeartbeatLogic.ShouldSkipWhileIdle(new PluginEventData
         {
             Role = "user",
@@ -2419,11 +2422,24 @@ internal static partial class Program
                     UpdatedUnixMs = occurred.ToUnixTimeMilliseconds()
                 });
 
+                store.SaveDayTrajectory("2026-08-25", "白天讨论了一次意见不同的事，后来才说开。" + new string('记', 450) + "仍然想弄明白分歧的缘由。");
+                for (var i = 1; i <= 12; i++)
+                    store.SaveEventIndex(new EventIndexRecord
+                    {
+                        Id = "night-event-" + i, Status = "active",
+                        TimeUnixMs = occurred.AddMinutes(i).ToUnixTimeMilliseconds(),
+                        EventSummary = "当天后续事件 " + i + new string('事', 90) + "完整的感想线索"
+                    });
                 var speak = NightResidueLogic.Evaluate(store, "night-check", "2026-08-25", justAfterFour);
                 Require(speak.ShouldSpeak && speak.Seed != null && speak.Seed.HasWarmth &&
                         speak.Seed.Events[0].Contains("走丢") &&
                         speak.Seed.FormatForPrompt().Contains("心里还留着"),
                     "有当天相处和心里余温时应开口");
+                Require(speak.Seed.Events.Count == NightResidueLogic.EventCap &&
+                        speak.Seed.Events.Last().Contains("后续事件 12") &&
+                        speak.Seed.Events.Last().Contains("完整的感想线索") &&
+                        speak.Seed.FormatForPrompt().Contains("仍然想弄明白分歧的缘由"),
+                    "夜间素材应保留当天脉络和跨全天事件，不只取最早八件或八十字片段");
 
                 NightResidueLogic.Remember(store, "2026-08-25", NightResidueLogic.StatusSent);
                 var again = NightResidueLogic.Evaluate(store, "night-check", "2026-08-25", justAfterFour);
@@ -2462,8 +2478,11 @@ internal static partial class Program
                     }, default).GetAwaiter().GetResult();
                 Require(spoken.should_express && spoken.reply.Contains("那句话") &&
                         (spoken.expressions == null || spoken.expressions.Count == 0) &&
-                        fake.LastPrompt.Contains("不是早安") && fake.LastPrompt.Contains("这一天刚沉下去"),
-                    "有余温时应漏一句文字，不带图或表情");
+                        fake.LastPrompt.Contains("不是早安") &&
+                        fake.LastPrompt.Contains("这一天刚沉下去") &&
+                        fake.LastPrompt.Contains("不要接着刚才的对话") &&
+                        fake.LastPrompt.Contains("从这一天浮起来"),
+                    "有余温时应开口，对着这一天而不是此刻对话");
 
                 var quiet = new ExpressorLogic(new NightResidueLlm("无"));
                 var silenced = quiet.ExpressNightResidueAsync(

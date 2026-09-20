@@ -68,7 +68,7 @@ namespace TraceSoul2.ExternalPlugins
         {
             Id = PluginId,
             DisplayName = "QQ 相机与生图",
-            Version = "2.2.0",
+            Version = "2.2.1",
             Author = "TraceSoul2",
             Role = PluginRoleValues.Organ,
             PlatformId = BodyIds.Qq,
@@ -261,6 +261,16 @@ namespace TraceSoul2.ExternalPlugins
             CancellationToken cancellationToken)
         {
             var dispatch = (call.GetArgument("dispatch") ?? "all").Trim().ToLowerInvariant();
+            if (dispatch == "release")
+            {
+                foreach (var path in SplitCategories(call.GetArgument("files")))
+                {
+                    bool owned;
+                    lock (filesGate) owned = pendingFiles.Contains(path);
+                    if (owned) TryDelete(path);
+                }
+                return new TraceCapabilityResultData { Status = "success", Summary = "已清理相机本次生成的临时图片。" };
+            }
             if (dispatch == "send")
                 return await SendPreparedFilesAsync(call, context, cancellationToken);
             return await GenerateThenMaybeSendAsync(call, context, cancellationToken, send: dispatch != "generate");
@@ -1046,7 +1056,7 @@ namespace TraceSoul2.ExternalPlugins
                 Provides = "expression.qq.imagegen",
                 Boundary = QqImageGenPrompts.EffectorBoundary,
                 BodyId = BodyIds.Qq, BodyTier = BodyTierValues.Chat, Organ = BodyOrganValues.Image,
-                ParametersJsonSchema = "{prompt:string,mode?:selfie|photo|draw|edit|url,refs?:string,aspect_ratio?:string,url?:string}",
+                ParametersJsonSchema = "{prompt:string,mode?:selfie|photo|draw|edit|url,refs?:string,aspect_ratio?:string,url?:string,dispatch?:all|generate|send|release,files?:string}",
                 HasExternalSideEffect = true
             };
             public bool IsAvailable(TraceTurnContext context) => context != null && owner.IsReady(context.Services);

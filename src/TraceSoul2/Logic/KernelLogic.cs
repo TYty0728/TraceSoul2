@@ -127,7 +127,7 @@ namespace TraceSoul2.Logic
                 !HeartbeatLogic.IsBreaking(source, pair))
             {
                 PersistPluginEvent(conversationId, source);
-                plugins.Services.LogTiming(source.TraceId, "空闲，跳过心跳",
+                plugins.Services.LogTiming(source.TraceId, "空闲，跳过旧版连续思考事件",
                     prepareTimer.ElapsedMilliseconds);
                 return new ChatTurnResultData(
                     string.Empty, "idle", "空闲", "空闲｜跳过",
@@ -743,7 +743,7 @@ namespace TraceSoul2.Logic
             var extraCall = CloneCall(extra, null, null);
             try
             {
-                var extraResult = await plugins.ExecuteAsync(extraCall, turn, cancellationToken);
+                var extraResult = await ExecuteWithQzoneMediaAsync(extraCall, turn, cancellationToken);
                 if (extraResult != null && extraResult.ProducedEvent != null)
                     PersistPluginEvent(conversationId, extraResult.ProducedEvent);
                 turn.Workspace.Results.Add(extraResult);
@@ -1246,7 +1246,7 @@ namespace TraceSoul2.Logic
             };
             try
             {
-                var result = await plugins.ExecuteAsync(call, turn, cancellationToken);
+                var result = await ExecuteWithQzoneMediaAsync(call, turn, cancellationToken);
                 turn.Workspace.Results.Add(result);
                 if (result != null && result.ProducedEvent != null)
                     PersistPluginEvent(turn.ConversationId, result.ProducedEvent);
@@ -1265,6 +1265,15 @@ namespace TraceSoul2.Logic
                 turn.Workspace.Results.Add(failed);
                 return failed;
             }
+        }
+
+        private Task<TraceCapabilityResultData> ExecuteWithQzoneMediaAsync(
+            BrainCapabilityCallData call, TraceTurnContext turn, CancellationToken cancellationToken)
+        {
+            if (call.capability_id != "qq.qzone.publish")
+                return plugins.ExecuteAsync(call, turn, cancellationToken);
+            return QzonePublishLogic.ExecuteAsync(call, turn, plugins.GetAvailableCatalog(turn),
+                (step, token) => plugins.ExecuteAsync(step, turn, token), cancellationToken);
         }
 
         private async Task RunTurnCompleteHooksAsync(TraceTurnContext turn)
@@ -1539,40 +1548,6 @@ namespace TraceSoul2.Logic
                     new List<BrainCallArgumentData>(), cancellationToken);
                 return;
             }
-            if (heartbeatTurn)
-            {
-                var requestedMinutes = decision == null ? 0 : decision.next_heartbeat_minutes;
-                var speak = decision != null && decision.speak;
-                if (HeartbeatLogic.ShouldEnterIdle(speak, false, requestedMinutes))
-                {
-                    var entering = !runtime.Idle;
-                    var idled = InnerLifeLogic.WithIdle(runtime, true, MomentId(turn),
-                        DateTimeOffset.UtcNow.ToUnixTimeMilliseconds());
-                    if (idled != runtime) turn.Services.Storage.SaveInnerRuntime(idled);
-                    await TryExecuteNerveAsync("time.continue.clear", "空闲后停止心跳", turn, catalog,
-                        new List<BrainCallArgumentData>(), cancellationToken);
-                    plugins.Services.LogTiming(turn.TraceId, "心跳安静且下次很久，进入空闲", 0);
-                    if (entering) await RunIdleDeedAsync(turn, catalog, cancellationToken);
-                    return;
-                }
-                var minutes = HeartbeatLogic.ResolveFollowUpMinutes(false, requestedMinutes);
-                var nextPlan = decision == null ? string.Empty : decision.next_heartbeat_plan;
-                if (requestedMinutes <= 0)
-                {
-                    if (string.IsNullOrWhiteSpace(nextPlan))
-                        nextPlan = HeartbeatLogic.DefaultLongFollowUpPlan;
-                    // 审查快照和控制台应显示实际排下的兜底值，而不是误导性的“0 / 不再自醒”。
-                    if (decision != null)
-                    {
-                        decision.next_heartbeat_minutes = minutes;
-                        decision.next_heartbeat_plan = nextPlan;
-                    }
-                }
-                var due = HeartbeatLogic.DueFromMinutes(minutes, DateTimeOffset.Now);
-                await TryExecuteNerveAsync("time.continue", "心跳后续跳", turn, catalog,
-                    HeartbeatDueArgs(due, nextPlan), cancellationToken);
-                return;
-            }
             var min = turn.Services.HeartbeatMinMinutes;
             var max = turn.Services.HeartbeatMaxMinutes;
             if (!HeartbeatLogic.IsEnabled(min, max))
@@ -1581,9 +1556,47 @@ namespace TraceSoul2.Logic
                     new List<BrainCallArgumentData>(), cancellationToken);
                 return;
             }
+            if (heartbeatTurn || (decision != null && decision.next_heartbeat_minutes > 0))
+            {
+                var requestedMinutes = decision == null ? 0 : decision.next_heartbeat_minutes;
+                var speak = decision != null && decision.speak;
+                var runIdleDeed = false;
+                if (heartbeatTurn && HeartbeatLogic.ShouldEnterIdle(speak, false, requestedMinutes))
+                {
+                    var entering = !runtime.Idle;
+                    var idled = InnerLifeLogic.WithIdle(runtime, true, MomentId(turn),
+                        DateTimeOffset.UtcNow.ToUnixTimeMilliseconds());
+                    if (idled != runtime) turn.Services.Storage.SaveInnerRuntime(idled);
+                    plugins.Services.LogTiming(turn.TraceId, "这次安静，进入空闲并保留下次联系计划", 0);
+                    runIdleDeed = entering;
+                }
+                var minutes = HeartbeatLogic.ResolveFollowUpMinutes(false, requestedMinutes);
+                var nextPlan = decision == null ? string.Empty : decision.next_heartbeat_plan;
+                if (string.IsNullOrWhiteSpace(nextPlan))
+                    nextPlan = HeartbeatLogic.DefaultLongFollowUpPlan;
+                if (decision != null)
+                {
+                    // 审查快照和控制台应显示实际排下的兜底值，而不是误导性的“0 / 不再自醒”。
+                    decision.next_heartbeat_minutes = minutes;
+                    decision.next_heartbeat_plan = nextPlan;
+                }
+                var due = HeartbeatLogic.DueFromMinutes(minutes, DateTimeOffset.Now);
+                await TryExecuteNerveAsync("time.continue", "心跳后续跳", turn, catalog,
+                    HeartbeatDueArgs(due, nextPlan), cancellationToken);
+                if (runIdleDeed) await RunIdleDeedAsync(turn, catalog, cancellationToken);
+                return;
+            }
             var firstDue = HeartbeatLogic.PickDueUnixMs(min, max, DateTimeOffset.Now);
+            var firstPlan = string.IsNullOrWhiteSpace(decision?.next_heartbeat_plan)
+                ? HeartbeatLogic.DefaultNextPlan : decision.next_heartbeat_plan;
+            if (decision != null)
+            {
+                decision.next_heartbeat_minutes = Math.Max(1, (int)Math.Round(
+                    (firstDue - DateTimeOffset.UtcNow.ToUnixTimeMilliseconds()) / 60000.0));
+                decision.next_heartbeat_plan = firstPlan;
+            }
             await TryExecuteNerveAsync("time.continue", "入站后排一次心跳", turn, catalog,
-                HeartbeatDueArgs(firstDue, HeartbeatLogic.DefaultNextPlan), cancellationToken);
+                HeartbeatDueArgs(firstDue, firstPlan), cancellationToken);
         }
 
         private static List<BrainCallArgumentData> HeartbeatDueArgs(long dueUnixMs, string nextPlan)

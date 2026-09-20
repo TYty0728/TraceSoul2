@@ -406,8 +406,8 @@ namespace TraceSoul2.ExternalPlugins
         {
             var json = payload == null ? null : JsonSerializer.Serialize(payload);
             if (settings.LogRequestBody && json != null)
-                services?.LogTiming(traceId, "TA的相机 本次请求体(base64已截断)", detail:
-                    SanitizeJsonForLog(json));
+                services?.LogTiming(traceId, "TA的相机 请求概况", detail:
+                    "model=" + settings.Model + "｜body_chars=" + json.Length + "｜图片及请求正文已省略");
             HttpContent content = json == null ? null : new StringContent(json, Encoding.UTF8, "application/json");
             return await SendContentAsync(method, url, apiKey, content, googleKey, cancellationToken);
         }
@@ -613,17 +613,6 @@ namespace TraceSoul2.ExternalPlugins
                 }
             }
             return null;
-        }
-
-        private static string SanitizeJsonForLog(string json)
-        {
-            json = json ?? string.Empty;
-            return Regex.Replace(json, "\"(?<value>[^\"\\\\]{200,})\"", match =>
-            {
-                var value = match.Groups["value"].Value;
-                return "\"" + value.Substring(0, 80) + "...<截断，总长度" + value.Length + ">..." +
-                       value.Substring(value.Length - 20) + "\"";
-            });
         }
 
         private static string SafeUrl(string value)
