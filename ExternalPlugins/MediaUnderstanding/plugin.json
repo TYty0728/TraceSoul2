@@ -1,0 +1,12 @@
+{
+  "dll": "TraceSoul2.Plugin.MediaUnderstanding.dll",
+  "enabled": true,
+  "yt_dlp_path": "yt-dlp",
+  "ffmpeg_path": "ffmpeg",
+  "ffprobe_path": "ffprobe",
+  "max_download_mb": 150,
+  "max_duration_seconds": 1200,
+  "max_frames": 8,
+  "process_timeout_seconds": 180,
+  "max_concurrent_analyses": 1
+}

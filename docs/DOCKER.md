@@ -139,7 +139,7 @@ python3 scripts/update-server.py --root /home/ubuntu/TraceSoul2 --version 0.1.7
 - `plugins_data/`
 - `Plugins/` 中不属于该 Release 的第三方插件
 
-`Plugins/` 中的 `qq-tts`、`qq-imagegen`、`qq-qzone`、`qq-status`、`game-session` 等官方包会随正式版本升级，但对应 `plugins_data/<包名>/` 配置和生成文件保持原样。旧 `App` 与旧官方插件包会作为隐藏备份目录保留在 `runtime/`，确认新版稳定后再人工清理。
+`Plugins/` 中的 `qq-tts`、`qq-imagegen`、`qq-qzone`、`qq-status`、`game-session`、`media-understanding`、`realtime-call` 等官方包会随正式版本升级，但对应 `plugins_data/<包名>/` 配置和生成文件保持原样。旧 `App` 与旧官方插件包会作为隐藏备份目录保留在 `runtime/`，确认新版稳定后再人工清理。
 
 ## 6. 整目录带回本地
 

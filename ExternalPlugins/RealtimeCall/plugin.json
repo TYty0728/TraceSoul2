@@ -1,0 +1,6 @@
+{
+  "dll": "TraceSoul2.Plugin.RealtimeCall.dll",
+  "access_token": "",
+  "conversation_id": "tracesoul2",
+  "idle_timeout_seconds": 120
+}

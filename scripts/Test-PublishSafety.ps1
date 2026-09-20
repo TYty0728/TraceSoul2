@@ -11,7 +11,7 @@ if ((Test-Path -LiteralPath (Join-Path $repoRoot '.git')) -and -not $IncludeUntr
     $files = @(git -C $repoRoot ls-files | ForEach-Object { Join-Path $repoRoot $_ })
 } else {
     $files = @(Get-ChildItem -LiteralPath $repoRoot -Recurse -Force -File |
-        Where-Object { $_.FullName -notmatch '\\(bin|obj|\.git|artifacts|\.release)\\' } |
+        Where-Object { $_.FullName -notmatch '\\(bin|obj|\.git|artifacts|\.release|runtime)\\' } |
         Select-Object -ExpandProperty FullName)
 }
 
