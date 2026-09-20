@@ -807,7 +807,7 @@ app.MapPost("/runtime/failures/resume", (SoulRuntime runtime, FailureResumeWrite
     if (fault != null && fault.NotificationState < 0)
         return Results.BadRequest(new { error = "任务仍在执行，不能重复恢复。" });
     runtime.Providers.Protection.Resume(body.key);
-    runtime.Emit("错误保护：用户已手动恢复任务。");
+    runtime.Emit(fault?.NonBlocking == true ? "错误报告：用户已清除报告。" : "错误保护：用户已手动恢复任务。");
     return Results.Ok(new { resumed = true });
 });
 

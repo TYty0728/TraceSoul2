@@ -21,24 +21,27 @@ internal static partial class Program
         try
         {
             var guard = new FailureProtection(directory);
+            await RunStickerFailureProtectionCheckAsync(guard, directory);
             var inner = new FailureTestClient();
             var client = new ProtectedLlmClient(inner, guard);
             await ExpectFailureAsync(() => client.CompleteTextAsync(new List<DeepSeekMessageData>()));
-            Require(inner.Calls == 1 && guard.List().Single().Reason.Contains("402"), "模型余额错误必须持久化暂停");
+            Require(inner.Calls == 1 && guard.List().Single().Reason.Contains("402") && !guard.IsPaused("provider:test"),
+                "模型余额错误必须持久化报告，但不得暂停聊天");
             for (var i = 0; i < 10; i++)
                 await ExpectFailureAsync(() => new ProtectedLlmClient(inner, new FailureProtection(directory))
                     .CompleteTextAsync(new List<DeepSeekMessageData>()));
-            Require(inner.Calls == 1, "新客户端/新保护实例不得绕过暂停继续请求");
+            Require(inner.Calls == 11 && guard.List().Count == 1, "后续调用不被锁住，同一未处理错误报告去重");
 
             var notifications = 0;
             var session = "{\"session_type\":\"private\",\"session_id\":\"12345\"}";
             Task<string> Send(string action, Dictionary<string, object> args, CancellationToken token)
             {
                 notifications++;
-                var payload = JsonSerializer.Serialize(args);
+                var payload = JsonSerializer.Serialize(args, new JsonSerializerOptions { Encoder = System.Text.Encodings.Web.JavaScriptEncoder.UnsafeRelaxedJsonEscaping });
                 Require(action == "send_private_msg" && Convert.ToInt64(args["user_id"]) == 12345,
                     "通知应直接送达 QQ 会话");
                 Require(!payload.Contains("secret-key") && !payload.Contains("private-chat"), "通知不得包含上游正文和密钥");
+                Require(payload.Contains("ERROR") && !payload.Contains("已暂停"), "模型错误通知不得声称对话暂停");
                 return Task.FromResult("{}");
             }
             await FailureNotifications.SendPendingAsync(guard, false, session, Send, _ => { }, default);
@@ -49,15 +52,15 @@ internal static partial class Program
             await FailureNotifications.SendPendingAsync(new FailureProtection(directory), true, session, Send, _ => { }, default);
             Require(notifications == 1, "重启后不得重复发送已尝试的通知");
 
-            guard.Resume("provider:test");
             inner.Fail = false;
-            Require(await client.CompleteTextAsync(new List<DeepSeekMessageData>()) == "ok" && inner.Calls == 2,
-                "必须显式恢复后才允许再次请求");
+            Require(await client.CompleteTextAsync(new List<DeepSeekMessageData>()) == "ok" && inner.Calls == 12,
+                "模型恢复后下一次调用直接成功，无需手动恢复");
+            guard.Resume("provider:test");
             using (var cancelled = new CancellationTokenSource())
             {
                 cancelled.Cancel();
                 await ExpectFailureAsync(() => client.CompleteTextAsync(new List<DeepSeekMessageData>(), cancelled.Token));
-                Require(guard.List().Count == 0 && inner.Calls == 2, "调用方取消不得被视为模型故障");
+                Require(guard.List().Count == 0 && inner.Calls == 12, "调用方取消不得被视为模型故障");
             }
 
             guard.BeginAttempt("daily", "日构建复盘");
@@ -131,9 +134,81 @@ internal static partial class Program
                     Require(server.Calls == 3, "HTTP 500 配置再大的重试数也最多请求 3 次");
                 }
             }
-            Console.WriteLine("Failure protection checks passed: persistence, resume, notification dedupe, cancellation and HTTP request bounds.");
+            Console.WriteLine("Failure protection checks passed: non-blocking errors/warnings, legacy upgrade, daily pause, notification dedupe, cancellation and HTTP request bounds.");
         }
         finally { Directory.Delete(directory, true); }
+    }
+
+    private static async Task RunStickerFailureProtectionCheckAsync(FailureProtection guard, string directory)
+    {
+        var results = new List<TraceCapabilityResultData>
+        {
+            new TraceCapabilityResultData { CapabilityId = "qq.text.send", Status = "success" },
+            new TraceCapabilityResultData
+            {
+                CapabilityId = "qq.sticker.send", Status = "failed",
+                Summary = "没有匹配上的情绪表情（最高相似度 0.45，阈值 0.45）。"
+            },
+            new TraceCapabilityResultData { CapabilityId = "time.continue", Status = "success" }
+        };
+        var turn = new ChatTurnResultData("已发送的文字", "reflex", "", "", null, null, results);
+        guard.ObserveTurnFailures(turn);
+        var restarted = new FailureProtection(directory);
+        restarted.ThrowIfPaused("dialogue");
+        var inner = new FailureTestClient { Fail = false };
+        var client = new ProtectedLlmClient(inner, restarted);
+        Require(await client.CompleteTextAsync(new List<DeepSeekMessageData>()) == "ok" && inner.Calls == 1,
+            "文字成功但表情失败后，下一轮必须仍能调用模型");
+        var notifications = 0;
+        await FailureNotifications.SendPendingAsync(restarted, true,
+            "{\"session_type\":\"private\",\"session_id\":\"12345\"}",
+            (_, args, _) =>
+            {
+                notifications++;
+                var payload = JsonSerializer.Serialize(args, new JsonSerializerOptions { Encoder = System.Text.Encodings.Web.JavaScriptEncoder.UnsafeRelaxedJsonEscaping });
+                Require(payload.Contains("WARNING") && !payload.Contains("ERROR") && !payload.Contains("已暂停"),
+                    "表情失败只能发送 WARNING，不能声称停聊");
+                return Task.FromResult("{}");
+            }, _ => { }, default);
+        Require(restarted.List().Single().Severity == "warning" && notifications == 1 && !restarted.IsPaused("warning:qq.sticker.send"),
+            "单次表情失败应报告 WARNING，不得暂停对话");
+        guard.Resume("warning:qq.sticker.send");
+
+        // 表情 WARNING 不能掩盖同轮其它 ERROR，但两者都不暂停对话。
+        foreach (var capability in new[] { "memory.archive", "identity.review", "turn.complete", "qq.text.send" })
+        {
+            results.Add(new TraceCapabilityResultData { CapabilityId = capability, Status = "failed" });
+            guard.ObserveTurnFailures(turn);
+            Require(!new FailureProtection(directory).IsPaused("dialogue") &&
+                    guard.List().Any(x => x.Key == "dialogue" && x.Severity == "error"),
+                "其它能力故障应记录 ERROR，不能停聊：" + capability);
+            guard.Resume("dialogue");
+            results.RemoveAt(results.Count - 1);
+        }
+
+        inner.Fail = true;
+        await ExpectFailureAsync(() => client.CompleteTextAsync(new List<DeepSeekMessageData>()));
+        guard.ObserveTurnFailures(turn);
+        await ExpectFailureAsync(() => client.CompleteTextAsync(new List<DeepSeekMessageData>()));
+        Require(inner.Calls == 3 && !guard.IsPaused("provider:test") &&
+                guard.List().Any(x => x.Key == "provider:test" && x.Severity == "error"),
+            "真实模型错误应记录 ERROR，但后续新调用不被锁住");
+        guard.Resume("provider:test");
+        guard.Resume("warning:qq.sticker.send");
+
+        // 用旧结构建库，验证真实升级会新增字段并解除旧版对话/供应商停聊。
+        var legacyDirectory = Path.Combine(directory, "legacy");
+        Directory.CreateDirectory(legacyDirectory);
+        using (var db = new SQLite.SQLiteConnection(Path.Combine(legacyDirectory, "failure-protection.sqlite3")))
+        {
+            db.Execute("CREATE TABLE failure_stops (Key TEXT PRIMARY KEY, Label TEXT, Reason TEXT, CreatedUnixMs BIGINT, NotificationState INTEGER)");
+            foreach (var key in new[] { "dialogue", "provider:test", "daily" })
+                db.Execute("INSERT INTO failure_stops VALUES (?,?,?,1,1)", key, "旧错误", "故障");
+        }
+        var upgraded = new FailureProtection(legacyDirectory);
+        Require(!upgraded.IsPaused("dialogue") && !upgraded.IsPaused("provider:test") && upgraded.IsPaused("daily") &&
+                upgraded.List().Count == 3 && upgraded.List().All(x => x.NotificationState == 1),
+            "升级必须自动解除旧停聊标记，保留报告、通知去重和日构建暂停");
     }
 
     private static ILlmClient FailureHttpClient(string url, bool native)

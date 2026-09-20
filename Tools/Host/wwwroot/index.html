@@ -744,7 +744,7 @@
           <button id="dailyStart" class="primary" onclick="startDailyPlan()" disabled>检查后执行</button>
           <p class="muted">检查不调用模型；开始后先补旧日，全部成功才继续目标日。任一天失败即停止。已有部分记忆不会被清空。</p>
           <h3>错误保护</h3>
-          <p class="muted">模型请求失败后暂停相关通道；日构建失败后停止自动补跑。重启不会解除。请先处理余额或配置，再逐项恢复；恢复暂停后，请重新检查历史，再点击开始构建。</p>
+          <p class="muted">对话和模型错误仅报告，不暂停后续聊天；表情包失败记为 WARNING。同一未处理报告只通知一次。日构建失败仍停止自动补跑，处理后恢复并重新检查历史，再点击开始构建。</p>
           <button onclick="loadFailures()">刷新保护状态</button>
           <div id="failureProtection" class="muted">加载中…</div>
           <p class="muted">召回流程：Brain 判定回忆类问题 → 子代理读各层关键词列表定位（域/维度/概念/时间/地点/人物/心情）→ ONNX bge-small-zh 语义向量在定位范围内拼装 top_k 条细节 → 找不到就如实告诉 Brain。</p>
@@ -1990,13 +1990,13 @@
     try {
       const stops = await api("/runtime/failures");
       box.replaceChildren();
-      if (!stops.length) { box.textContent = "没有暂停的任务。"; return; }
+      if (!stops.length) { box.textContent = "没有错误报告或暂停的任务。"; return; }
       for (const stop of stops) {
         const row = document.createElement("p");
-        row.textContent = `${stop.label} [${stop.key}]：${stop.reason} `;
+        row.textContent = `${stop.severity === "warning" ? "WARNING" : "ERROR"} · ${stop.label} [${stop.key}]：${stop.reason}（${stop.nonBlocking ? "仅报告，不暂停对话" : "任务已暂停"}） `;
         if (stop.notificationState >= 0) {
           const button = document.createElement("button");
-          button.textContent = "已处理，恢复";
+          button.textContent = stop.nonBlocking ? "已读，清除报告" : "已处理，恢复";
           button.onclick = async () => {
             try { await api("/runtime/failures/resume", "POST", { key: stop.key }); await loadFailures(); await inspectDaily(); }
             catch (e) { alert("恢复失败：" + e.message); }
