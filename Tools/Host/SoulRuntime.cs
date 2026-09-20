@@ -32,6 +32,7 @@ namespace TraceSoul2.Host
         private readonly CancellationTokenSource deferredCts = new CancellationTokenSource();
         private readonly Task deferredWorker;
         private readonly RecentEventLog eventLog = new RecentEventLog();
+        private readonly Queue<PluginEventData> pendingBackground = new Queue<PluginEventData>();
         private readonly SqliteVectorManager vectorStore;
         private readonly SoulRuntimeSettings runtimeSettings;
         private HierarchicalVectorRouterLogic router;
@@ -218,7 +219,7 @@ namespace TraceSoul2.Host
                 ReasoningEffort = string.Empty,
                 EmptyContentRetries = 1
             };
-            return new DeepSeekClientManager(config);
+            return new ProtectedLlmClient(new DeepSeekClientManager(config), Providers.Protection);
         }
 
         /// <summary>记忆神经状态（控制台设置区展示）。</summary>
@@ -578,6 +579,7 @@ namespace TraceSoul2.Host
 
         public async Task<ChatTurnResultData> PostMomentAsync(string text, CancellationToken cancellationToken)
         {
+            Providers.Protection.ThrowIfPaused("dialogue");
             if (string.IsNullOrWhiteSpace(text))
                 throw new InvalidOperationException("Moment 内容不能为空。");
             var rawClient = Providers.CreateCurrentClient();
@@ -593,12 +595,14 @@ namespace TraceSoul2.Host
             await gate.WaitAsync(cancellationToken);
             try
             {
+                Providers.Protection.ThrowIfPaused("dialogue");
                 EmitTiming(traceId, "本地对话取得运行锁", queueTimer.ElapsedMilliseconds);
                 var chat = new KernelLogic(Store, client, Plugins);
                 var result = await chat.ChatAsync(
                     ConversationId, text.Trim(), "dialogue.receive",
                     HistoryWindowMax, cancellationToken, traceId, HistoryWindowAlign);
                 deferred = chat.TakeDeferredWork();
+                ObserveTurnFailures(result);
                 LastTurn = result;
                 foreach (var memoryResult in result.ContributionResults
                              .Where(x => x != null && x.CapabilityId == "memory.activate"))
@@ -606,6 +610,13 @@ namespace TraceSoul2.Host
                 RebuildOntology();
                 Emit("moment：" + Truncate(text, 40));
                 completed = result;
+            }
+            catch (OperationCanceledException) when (cancellationToken.IsCancellationRequested) { throw; }
+            catch (Exception error)
+            {
+                if (!Providers.Protection.IsPaused("provider:" + rawClient.ProviderId))
+                    Providers.Protection.Pause("dialogue", "对话处理", error);
+                throw;
             }
             finally { gate.Release(); }
             QueueDeferredTurn(deferred);
@@ -616,15 +627,27 @@ namespace TraceSoul2.Host
         {
             if (!Store.LoadPairIdentity().IsComplete) return;
             var rawClient = Providers.CreateCurrentClient();
-            if (rawClient == null) return;
+            if (rawClient == null)
+            {
+                Providers.Protection.Pause("dialogue", "对话处理", new InvalidOperationException("模型 API Key 尚未填写"));
+                return;
+            }
+            if (Providers.Protection.IsPaused("dialogue") ||
+                Providers.Protection.IsPaused("provider:" + rawClient.ProviderId)) return;
             var lockTimer = Stopwatch.StartNew();
             await gate.WaitAsync(cancellationToken);
             try
             {
-                var due = Plugins.PollBackgroundServices(DateTimeOffset.UtcNow.ToUnixTimeMilliseconds());
-                if (due.Count == 0) return;
-                foreach (var source in due)
+                if (Providers.Protection.IsPaused("dialogue") ||
+                    Providers.Protection.IsPaused("provider:" + rawClient.ProviderId)) return;
+                if (pendingBackground.Count == 0)
+                    foreach (var item in Plugins.PollBackgroundServices(DateTimeOffset.UtcNow.ToUnixTimeMilliseconds()))
+                        pendingBackground.Enqueue(item);
+                while (pendingBackground.Count > 0)
                 {
+                    if (Providers.Protection.IsPaused("dialogue") ||
+                        Providers.Protection.IsPaused("provider:" + rawClient.ProviderId)) break;
+                    var source = pendingBackground.Dequeue();
                     if (string.IsNullOrWhiteSpace(source.TraceId)) source.TraceId = NewTraceId();
                     var queueMs = source.OccurredUnixMs <= 0
                         ? 0
@@ -638,12 +661,35 @@ namespace TraceSoul2.Host
                             ? ConversationId : source.ConversationId,
                         source, HistoryWindowMax, cancellationToken, HistoryWindowAlign);
                     QueueDeferredTurn(chat.TakeDeferredWork());
+                    ObserveTurnFailures(result);
                     LastTurn = result;
                     RebuildOntology();
                     Emit("后台 Moment：" + Truncate(source.Content, 40));
                 }
             }
+            catch (OperationCanceledException) when (cancellationToken.IsCancellationRequested) { throw; }
+            catch (Exception error)
+            {
+                if (!Providers.Protection.IsPaused("provider:" + rawClient.ProviderId))
+                    Providers.Protection.Pause("dialogue", "对话与主动联系", error);
+                throw;
+            }
             finally { gate.Release(); }
+        }
+
+        public Task NotifyFailuresAsync(CancellationToken token)
+        {
+            var adapter = liveServices.PlatformAdapters.FirstOrDefault(x => x.PlatformId == "builtin.onebot");
+            return FailureNotifications.SendPendingAsync(Providers.Protection,
+                adapter != null && liveServices.Platforms.List().Any(x => x.Id == "onebot" && SafeConnected(x)),
+                Store.LoadPluginDocument("builtin.onebot", "last_session"),
+                (action, args, ct) => adapter.CallActionAsync(action, args, ct), Emit, token);
+        }
+
+        private void ObserveTurnFailures(ChatTurnResultData result)
+        {
+            if (result?.ContributionResults?.Any(x => x != null && x.Status == "failed") == true)
+                Providers.Protection.Pause("dialogue", "对话或附加能力", new InvalidOperationException("能力执行失败"));
         }
 
         /// <summary>
@@ -678,6 +724,7 @@ namespace TraceSoul2.Host
                 var result = await chat.ProcessPluginEventAsync(
                     ConversationId, source, HistoryWindowMax, cancellationToken, HistoryWindowAlign);
                 QueueDeferredTurn(chat.TakeDeferredWork());
+                ObserveTurnFailures(result);
                 LastTurn = result;
                 RebuildOntology();
                 Emit("夜间余温已处理：" + (string.IsNullOrWhiteSpace(result.Reply)

@@ -61,6 +61,7 @@ jobs:
           dotnet Tools/UpdateCheck/bin/Release/net8.0/UpdateCheck.dll
           python -m unittest discover -s scripts/tests -p test_update_server.py
           node scripts/tests/test-update-ui.cjs
+          node scripts/tests/test-daily-build-ui.cjs
           dotnet Tools/ChatCheck/bin/Release/net8.0/ChatCheck.dll
           dotnet Tools/ChatCheck/bin/Release/net8.0/ChatCheck.dll --prompt-layout
 

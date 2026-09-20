@@ -3,6 +3,7 @@ using System.Collections.Generic;
 using System.IO;
 using System.Linq;
 using SQLite;
+using TraceSoul2.Host;
 using TraceSoul2.Data;
 
 namespace TraceSoul2.Migrate
@@ -13,6 +14,7 @@ namespace TraceSoul2.Migrate
         private readonly SQLiteConnection connection;
         private readonly SQLiteConnection brain;
         private readonly object brainWriteGate = new object();
+        private string activeReviewAttempt;
 
         public MigrationDb(string migrationDbPath, string brainframePath)
         {
@@ -49,8 +51,19 @@ namespace TraceSoul2.Migrate
         public void SaveReviewState(ReviewStateRecord state)
         {
             state.UpdatedUnixMs = DateTimeOffset.UtcNow.ToUnixTimeMilliseconds();
+            if (state.Status == "running")
+            {
+                var previous = GetReviewState(state.DayKey);
+                activeReviewAttempt = DailyBuildHistory.Start(connection, state.DayKey, previous == null ? null :
+                    new DailyReviewState { DayKey = previous.DayKey, Status = previous.Status,
+                        Error = previous.Error, UpdatedUnixMs = previous.UpdatedUnixMs });
+            }
+            else if (state.Status == "failed")
+                DailyBuildHistory.Finish(connection, activeReviewAttempt, "failed", state.Error);
             connection.InsertOrReplace(state);
         }
+
+        public void SetReviewStage(string stage) => DailyBuildHistory.Stage(connection, activeReviewAttempt, stage);
 
         /// <summary>某天是否已完整跑过当天循环（构筑+复盘+日榜），用独立的完成标记，不受榜单晋升移动影响。</summary>
         public bool IsDayCompleted(string dayKey)
@@ -67,6 +80,7 @@ namespace TraceSoul2.Migrate
                 Status = "done",
                 UpdatedUnixMs = DateTimeOffset.UtcNow.ToUnixTimeMilliseconds()
             });
+            DailyBuildHistory.Finish(connection, activeReviewAttempt, "done", null);
         }
 
         public List<string> GetDoneDayKeys()

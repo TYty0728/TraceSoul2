@@ -31,6 +31,7 @@ jobs:
           dotnet Tools/UpdateCheck/bin/Release/net8.0/UpdateCheck.dll
           python3 -m unittest discover -s scripts/tests -p test_update_server.py
           node scripts/tests/test-update-ui.cjs
+          node scripts/tests/test-daily-build-ui.cjs
       - name: Build real Linux package
         shell: pwsh
         run: ./scripts/Publish-Release.ps1 -Runtime linux-x64

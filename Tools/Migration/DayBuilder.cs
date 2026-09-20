@@ -12,6 +12,7 @@ using TraceSoul2.Manager;
 using TraceSoul2.Prompts;
 using TraceSoul2.Tools.Memory;
 using TraceSoul2.Util;
+using TraceSoul2.Host;
 
 namespace TraceSoul2.Migrate
 {
@@ -90,6 +91,7 @@ namespace TraceSoul2.Migrate
 
             foreach (var chunk in chunks)
             {
+                context.Migration.SetReviewStage("事件观察（第 " + (observationCalls + 1) + " 批）");
                 var chunkText = string.Join("\n", chunk.Select(x => FormatMoment(x, pair)));
                 var route = router.Route(chunkText);
                 var conceptIds = route.Concepts.Select(x => x.Node.Id).ToList();
@@ -217,41 +219,32 @@ namespace TraceSoul2.Migrate
                 IdentityCardSlotValues.UserProfile,
                 Card(cardsBefore, IdentityCardSlotValues.UserProfile).Body, pair);
             var detailCalls = 0;
-            var detailGate = new SemaphoreSlim(4);
-            var detailTasks = dayEntries.Select(async entry =>
+            context.Migration.SetReviewStage("细节生成");
+            await ProtectedParallelWork.RunAsync(dayEntries, 4, async (entry, detailToken) =>
             {
                 List<MomentRecord> evidence;
                 if (!evidenceByEntry.TryGetValue(entry.Id, out evidence)) return;
-                await detailGate.WaitAsync();
-                try
+                var index = dayIndexes.FirstOrDefault(x => x.Id == entry.IndexId);
+                var indexLine = index == null ? string.Empty
+                    : index.TimeLabel + "（" + index.DayKindLabel + "）·" + index.PlaceLabel + "·"
+                      + index.PersonLabel + "·" + index.EventSummary + "·" + index.MoodLabel;
+                var prompt = ReplayPrompts.BuildDetailPrompt(
+                    pair, personalityCard, userProfileCard, evidence, indexLine, entry.Summary, 0, 200);
+                var messages = new List<DeepSeekMessageData>
                 {
-                    var index = dayIndexes.FirstOrDefault(x => x.Id == entry.IndexId);
-                    var indexLine = index == null ? string.Empty
-                        : index.TimeLabel + "（" + index.DayKindLabel + "）·" + index.PlaceLabel + "·"
-                          + index.PersonLabel + "·" + index.EventSummary + "·" + index.MoodLabel;
-                    var prompt = ReplayPrompts.BuildDetailPrompt(
-                        pair, personalityCard, userProfileCard, evidence, indexLine, entry.Summary, 0, 200);
-                    var messages = new List<DeepSeekMessageData>
-                    {
-                        new DeepSeekMessageData("system", prompt),
-                        new DeepSeekMessageData("user", CorePrompts.Migration.DetailUser)
-                    };
-                    var detailOutput = await DeepSeekStructuredOutputLogic.CompleteAsync<ReplayPrompts.DetailOutputData>(
-                        llm, messages, x => x != null && !string.IsNullOrWhiteSpace(x.detail),
-                        "细节输出缺少 detail。", CancellationToken.None);
-                    entry.Detail = SmartTrim(detailOutput.detail ?? string.Empty, 200);
-                    context.Migration.UpdateEventEntryDetail(entry.Id, entry.Detail);
-                    var n = Interlocked.Increment(ref detailCalls);
-                    Console.WriteLine("  细节「" + Limit(entry.Summary, 20) + "」：" + Limit(entry.Detail, 60));
-                    LogCall(context, dayKey, "detail", n,
-                        "细节：" + Limit(entry.Summary, 40), TraceJson.ToJson(detailOutput));
-                }
-                finally
-                {
-                    detailGate.Release();
-                }
-            });
-            await Task.WhenAll(detailTasks);
+                    new DeepSeekMessageData("system", prompt),
+                    new DeepSeekMessageData("user", CorePrompts.Migration.DetailUser)
+                };
+                var detailOutput = await DeepSeekStructuredOutputLogic.CompleteAsync<ReplayPrompts.DetailOutputData>(
+                    llm, messages, x => x != null && !string.IsNullOrWhiteSpace(x.detail),
+                    "细节输出缺少 detail。", detailToken);
+                entry.Detail = SmartTrim(detailOutput.detail ?? string.Empty, 200);
+                context.Migration.UpdateEventEntryDetail(entry.Id, entry.Detail);
+                var n = Interlocked.Increment(ref detailCalls);
+                Console.WriteLine("  细节「" + Limit(entry.Summary, 20) + "」：" + Limit(entry.Detail, 60));
+                LogCall(context, dayKey, "detail", n,
+                    "细节：" + Limit(entry.Summary, 40), TraceJson.ToJson(detailOutput));
+            }, error => context.Providers.Protection.Pause("provider:" + llm.ProviderId, "复盘细节生成", error));
 
             // ---------- 条目语义向量：一句话总结编码（幂等，召回拼装用） ----------
             try
@@ -266,10 +259,12 @@ namespace TraceSoul2.Migrate
             }
 
             // ---------- 认知形成：跑完事件构筑后，直接用当天新增事件提炼第一人称理解 ----------
+            context.Migration.SetReviewStage("认知形成");
             await RunCognitionFormationAsync(
                 context, pair, llm, dayKey, dayIndexes, dayEntries, lastMomentId);
 
             // ---------- 日终三卡复盘 + 内心全字段同步 ----------
+            context.Migration.SetReviewStage("身份复盘与内心同步");
             var cardsNow = context.Store.LoadIdentityCards(MigrationContext.ConversationId);
             var reviewOutput = await RunDayReviewAsync(
                 context, pair, llm, dayKey, cardsNow, userProfileCard, dayIndexes, dayEntries);
@@ -278,12 +273,14 @@ namespace TraceSoul2.Migrate
             Console.WriteLine("三卡与内心变化：" + (changed.Count == 0 ? "（无变化）" : string.Join("；", changed)));
 
             // ---------- 当天排序：日榜（事件/认知各持榜单）+ 周/月/年/永久晋升 ----------
+            context.Migration.SetReviewStage("日榜排序与长期晋升");
             var dayCognitions = context.Migration.GetCognitionsCreatedInRange(
                 range.DayStartMs(day), range.DayEndMs(day));
             await RankDayLadderAsync(context, pair, llm, dayKey, dayIndexes, dayCognitions);
             await DayLadderLogic.PromoteAsync(context, pair, dayKey, llm);
 
             // ---------- 标记当天 Moment 已归档（实时归档已标记的不会重复） ----------
+            context.Migration.SetReviewStage("归档收尾");
             var markedBuilt = context.Migration.MarkMomentsBuiltByRange(
                 range.DayStartMs(day), range.DayEndMs(day));
             if (markedBuilt > 0) Console.WriteLine("  已标记 " + markedBuilt + " 条 Moment 为已归档（built）。");
@@ -301,6 +298,7 @@ namespace TraceSoul2.Migrate
             MigrationContext context, PairIdentity pair, ILlmClient llm, string dayKey)
         {
             Console.WriteLine("空天循环：" + dayKey + " 没有 Moment——仍复盘这一天的时间感。");
+            context.Migration.SetReviewStage("空天身份复盘");
             var cardsNow = context.Store.LoadIdentityCards(MigrationContext.ConversationId);
             var profile = Card(cardsNow, IdentityCardSlotValues.UserProfile);
             var userProfileCard = IdentityCardLogic.ResolveBody(
@@ -311,6 +309,7 @@ namespace TraceSoul2.Migrate
             var changed = ApplyReviewOutput(context, pair, reviewOutput, cardsNow, string.Empty, true);
             Console.WriteLine("三卡与内心变化：" + (changed.Count == 0 ? "（无变化）" : string.Join("；", changed)));
             var day = DateTime.ParseExact(dayKey, "yyyy-MM-dd", CultureInfo.InvariantCulture);
+            context.Migration.SetReviewStage("空天日榜排序与长期晋升");
             var range = DateRange.Parse(new[] { "--from", dayKey, "--to", dayKey });
             var dayCognitions = context.Migration.GetCognitionsCreatedInRange(
                 range.DayStartMs(day), range.DayEndMs(day));

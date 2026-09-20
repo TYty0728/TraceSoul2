@@ -13,6 +13,8 @@
     <PackageReference Include="sqlite-net-pcl" Version="1.9.172" />
     <PackageReference Include="Microsoft.ML.OnnxRuntime" Version="1.19.2" />
     <Compile Include="../Host/LlmProviderStore.cs" />
+    <Compile Include="../Host/FailureProtection.cs" />
+    <Compile Include="../Host/DailyBuildPreflight.cs" />
     <Compile Include="../Host/LlmProviderCatalog.cs" />
     <Compile Include="../Host/GeminiClientManager.cs" />
     <Compile Include="../Host/TraceHome.cs" />

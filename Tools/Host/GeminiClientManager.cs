@@ -101,6 +101,7 @@ namespace TraceSoul2.Host
             var temperature = config.Temperature;
             var recitationTries = 0;
             var current = messages;
+            var totalRequests = 0;
             for (var attempt = 0; attempt < attempts; )
             {
                 GeminiAttempt result;
@@ -109,6 +110,8 @@ namespace TraceSoul2.Host
                 {
                     try
                     {
+                        if (++totalRequests > 3)
+                            throw new InvalidOperationException("模型单次调用已达到 3 次请求上限。");
                         result = await SendOnceAsync(current, temperature, json, cancellationToken);
                         break;
                     }
@@ -117,7 +120,7 @@ namespace TraceSoul2.Host
                         throw;
                     }
                     catch (Exception exception) when (
-                        transientRetry < config.TransientErrorRetries &&
+                        totalRequests < 3 && transientRetry < Math.Min(2, config.TransientErrorRetries) &&
                         DeepSeekClientManager.IsRetryableProviderException(exception))
                     {
                         transientRetry++;
