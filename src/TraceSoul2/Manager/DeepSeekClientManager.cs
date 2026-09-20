@@ -265,6 +265,7 @@ namespace TraceSoul2.Manager
             var attempts = 1 + config.EmptyContentRetries;
             var current = messages;
             var useJsonResponseFormat = json;
+            var totalRequests = 0;
             for (var attempt = 0; attempt < attempts; attempt++)
             {
                 CompletionAttempt result;
@@ -274,7 +275,12 @@ namespace TraceSoul2.Manager
                     try
                     {
                         result = await SendOnceAsync(
-                            current, json, useJsonResponseFormat, cancellationToken, promptCacheKey);
+                            current, json, useJsonResponseFormat, cancellationToken, promptCacheKey,
+                            () =>
+                            {
+                                if (++totalRequests > 3)
+                                    throw new InvalidOperationException("模型单次调用已达到 3 次请求上限。");
+                            });
                         break;
                     }
                     catch (OperationCanceledException) when (cancellationToken.IsCancellationRequested)
@@ -282,7 +288,7 @@ namespace TraceSoul2.Manager
                         throw;
                     }
                     catch (Exception exception) when (
-                        transientRetry < config.TransientErrorRetries &&
+                        totalRequests < 3 && transientRetry < Math.Min(2, config.TransientErrorRetries) &&
                         IsRetryableProviderException(exception))
                     {
                         transientRetry++;
@@ -328,20 +334,23 @@ namespace TraceSoul2.Manager
             bool json,
             bool useJsonResponseFormat,
             CancellationToken cancellationToken,
-            string promptCacheKey)
+            string promptCacheKey,
+            Action consumeRequest)
         {
             var temperature = ResolveTemperature();
             try
             {
                 return await PostOnceAsync(
-                    messages, temperature, json, useJsonResponseFormat, cancellationToken, promptCacheKey);
+                    messages, temperature, json, useJsonResponseFormat, cancellationToken, promptCacheKey, consumeRequest);
             }
             catch (InvalidOperationException exception)
             {
                 if (Math.Abs(temperature - 1f) > 0.001f &&
+                    !System.Text.RegularExpressions.Regex.IsMatch(exception.Message ?? string.Empty,
+                        @"(?:API|HTTP)\s*(401|402|403|404)\b", System.Text.RegularExpressions.RegexOptions.IgnoreCase) &&
                     LooksLikeUnitTemperatureOnly(exception.Message))
                     return await PostOnceAsync(
-                        messages, 1f, json, useJsonResponseFormat, cancellationToken, promptCacheKey);
+                        messages, 1f, json, useJsonResponseFormat, cancellationToken, promptCacheKey, consumeRequest);
                 throw;
             }
         }
@@ -352,8 +361,10 @@ namespace TraceSoul2.Manager
             bool json,
             bool useJsonResponseFormat,
             CancellationToken cancellationToken,
-            string promptCacheKey)
+            string promptCacheKey,
+            Action consumeRequest)
         {
+            consumeRequest();
             var bodyJson = BuildChatRequestJson(
                 config, messages, temperature, json, useJsonResponseFormat, promptCacheKey);
             var endpoint = config.BaseUrl.TrimEnd('/') + "/chat/completions";
@@ -686,7 +697,7 @@ namespace TraceSoul2.Manager
 
         public static bool IsRetryableProviderFailure(int httpStatus, string body)
         {
-            if (httpStatus == 401 || httpStatus == 403 || httpStatus == 404)
+            if (httpStatus == 400 || httpStatus == 401 || httpStatus == 402 || httpStatus == 403 || httpStatus == 404)
                 return false;
             if (httpStatus == 429 || httpStatus >= 500)
                 return true;
@@ -699,6 +710,8 @@ namespace TraceSoul2.Manager
             if (exception is TimeoutException || exception is HttpRequestException)
                 return true;
             var message = exception.Message ?? string.Empty;
+            if (System.Text.RegularExpressions.Regex.IsMatch(message, @"(?:API|HTTP)\s*(400|401|402|403|404)\b",
+                    System.Text.RegularExpressions.RegexOptions.IgnoreCase)) return false;
             if (message.IndexOf("API Key", StringComparison.OrdinalIgnoreCase) >= 0 ||
                 message.IndexOf("尚未填写", StringComparison.Ordinal) >= 0)
                 return false;

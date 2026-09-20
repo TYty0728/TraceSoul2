@@ -21,11 +21,13 @@ namespace TraceSoul2.Host
         private readonly string path;
         private readonly object gate = new object();
         private FileData data;
+        public FailureProtection Protection { get; }
 
         public LlmProviderStore(string path)
         {
             this.path = path ?? throw new ArgumentNullException("path");
             Directory.CreateDirectory(Path.GetDirectoryName(path) ?? ".");
+            Protection = new FailureProtection(Path.GetDirectoryName(path) ?? ".");
             var created = !File.Exists(path);
             data = LoadUnsafe();
             if (created) SaveUnsafe();
@@ -102,7 +104,7 @@ namespace TraceSoul2.Host
                 if (incoming.maxTokens > 0) item.maxTokens = incoming.maxTokens;
                 if (incoming.timeout > 0) item.timeout = incoming.timeout;
                 if (incoming.transientRetries >= 0)
-                    item.transientRetries = Math.Max(0, Math.Min(6, incoming.transientRetries));
+                    item.transientRetries = Math.Max(0, Math.Min(2, incoming.transientRetries));
                 if (incoming.proxy != null) item.proxy = incoming.proxy.Trim();
                 item.thinkingEnabled = incoming.thinkingEnabled;
                 if (!string.IsNullOrWhiteSpace(incoming.reasoningEffort))
@@ -135,7 +137,7 @@ namespace TraceSoul2.Host
                     topP = template.topP,
                     maxTokens = template.maxTokens,
                     timeout = 120,
-                    transientRetries = 3
+                    transientRetries = 2
                 };
                 if (string.Equals(template.id, "moonshot", StringComparison.OrdinalIgnoreCase))
                 {
@@ -313,8 +315,8 @@ namespace TraceSoul2.Host
                 if (item == null || string.IsNullOrWhiteSpace(item.apiKey)) return null;
                 var config = ToConfig(item, model, thinkingOverride);
                 if (LlmProviderCatalog.IsGeminiNative(item.type))
-                    return new GeminiClientManager(config);
-                return new DeepSeekClientManager(config);
+                    return new ProtectedLlmClient(new GeminiClientManager(config), Protection);
+                return new ProtectedLlmClient(new DeepSeekClientManager(config), Protection);
             }
         }
 
@@ -522,7 +524,7 @@ namespace TraceSoul2.Host
             if (item.models.Count == 0 && !string.IsNullOrWhiteSpace(item.model))
                 EnsureModel(item, item.model, LlmSlotNames.Chat);
             if (item.timeout <= 0) item.timeout = 120;
-            item.transientRetries = Math.Max(0, Math.Min(6, item.transientRetries));
+            item.transientRetries = Math.Max(0, Math.Min(2, item.transientRetries));
             if (item.proxy == null) item.proxy = string.Empty;
         }
 
@@ -740,7 +742,7 @@ namespace TraceSoul2.Host
         public float topP { get; set; }
         public int maxTokens { get; set; }
         public int timeout { get; set; }
-        public int transientRetries { get; set; } = 3;
+        public int transientRetries { get; set; } = 2;
         public string proxy { get; set; }
         public bool thinkingEnabled { get; set; }
         public string reasoningEffort { get; set; }

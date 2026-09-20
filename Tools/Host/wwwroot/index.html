@@ -611,7 +611,7 @@
     <div class="spacer"></div>
     <div class="top-actions">
       <span id="dbInfo" class="db-info"></span>
-      <button class="qbtn primary" onclick="runDaily()" title="立即执行日构建">🌅 日构建</button>
+      <button class="qbtn primary" onclick="runDaily()" title="先检查历史错误，再构建">🌅 日构建</button>
       <button class="qbtn" onclick="enterDebug()" title="进入调试分支">🔧 调试</button>
       <button class="qbtn" onclick="exitDebug()" title="切回正式主线">🌿 主线</button>
       <button class="qbtn" onclick="reloadPanels()" title="刷新当前页面数据">↻ 刷新</button>
@@ -736,10 +736,17 @@
           </div>
           <div class="row">
             <div class="nogrow"><label>日构建（每天 04:00 自动跑；也可手动）</label>
-              <input id="dailyDay" type="text" placeholder="留空=刚结束的记忆日" style="width:170px" /></div>
-            <div class="nogrow"><label>&nbsp;</label><button onclick="runDaily()">立即跑日构建</button></div>
+              <input id="dailyDay" type="text" placeholder="留空=刚结束的记忆日" style="width:170px" oninput="invalidateDailyPlan()" /></div>
+            <div class="nogrow"><label>&nbsp;</label><button onclick="runDaily()">检查历史与日构建</button></div>
             <div class="muted" style="align-self:flex-end">把未归档的 Moment 构筑成事件并复盘；LLM 调用到 5090 监视台看。</div>
           </div>
+          <div id="dailyPreflight" class="muted">点击检查，先查看历史未完成日期和错误。</div>
+          <button id="dailyStart" class="primary" onclick="startDailyPlan()" disabled>检查后执行</button>
+          <p class="muted">检查不调用模型；开始后先补旧日，全部成功才继续目标日。任一天失败即停止。已有部分记忆不会被清空。</p>
+          <h3>错误保护</h3>
+          <p class="muted">模型请求失败后暂停相关通道；日构建失败后停止自动补跑。重启不会解除。请先处理余额或配置，再逐项恢复；恢复暂停后，请重新检查历史，再点击开始构建。</p>
+          <button onclick="loadFailures()">刷新保护状态</button>
+          <div id="failureProtection" class="muted">加载中…</div>
           <p class="muted">召回流程：Brain 判定回忆类问题 → 子代理读各层关键词列表定位（域/维度/概念/时间/地点/人物/心情）→ ONNX bge-small-zh 语义向量在定位范围内拼装 top_k 条细节 → 找不到就如实告诉 Brain。</p>
         </div>
         <div class="grid2">
@@ -807,11 +814,11 @@
                   <div class="nogrow"><label>超时（秒）</label>
                     <input id="timeout" type="number" min="10" max="600" style="width:90px" /></div>
                   <div class="nogrow"><label>过载退避重试（次）</label>
-                    <input id="transientRetries" type="number" min="0" max="6" style="width:90px" /></div>
+                    <input id="transientRetries" type="number" min="0" max="2" style="width:90px" /></div>
                   <div><label>代理地址（暂存，HTTP 客户端稍后接入）</label>
                     <input id="proxy" placeholder="http://127.0.0.1:7890" /></div>
                 </div>
-                <p class="muted" style="margin:4px 0 8px">仅用于 429、5xx、请求超时等瞬时故障；优先采用 Retry-After，否则按 2、4、8…秒指数退避，单次最多等待 60 秒。0 为关闭，最多 6 次。</p>
+                <p class="muted" style="margin:4px 0 8px">仅用于 429、5xx、请求超时等瞬时故障；优先采用 Retry-After，否则按 2、4 秒退避，单次最多等待 60 秒。0 为关闭，最多重试 2 次；含空响应与兼容重试在内，单次模型调用最多请求 3 次。耗尽后暂停通道，余额/鉴权错误直接暂停。</p>
                 <div class="row">
                   <div class="slider">
                     <label>冷暖（温度）<span id="tempVal" class="slider-val"></span></label>
@@ -1613,7 +1620,7 @@
     $("displayName").value = cur.displayName || "";
     $("baseUrl").value = cur.baseUrl || "";
     $("timeout").value = cur.timeout > 0 ? cur.timeout : 120;
-    $("transientRetries").value = cur.transientRetries == null ? 3 : cur.transientRetries;
+    $("transientRetries").value = cur.transientRetries == null ? 2 : Math.min(2, cur.transientRetries);
     $("proxy").value = cur.proxy || "";
     const t = cur.temperature > 0 ? cur.temperature : 0.3;
     $("tempSlider").value = t; $("tempVal").textContent = t;
@@ -1696,7 +1703,7 @@
       topP: parseFloat($("topPSlider").value),
       maxTokens: parseInt($("maxTokens").value) || 0,
       timeout: parseInt($("timeout").value) || 120,
-      transientRetries: Math.max(0, Math.min(6, parseInt($("transientRetries").value) || 0)),
+      transientRetries: Math.max(0, Math.min(2, parseInt($("transientRetries").value) || 0)),
       proxy: $("proxy").value,
       thinkingEnabled: $("thinking").checked,
       reasoningEffort: $("effort").value
@@ -1972,9 +1979,33 @@
 
   /* ================= 记忆 ================= */
   async function loadMemory() {
+    await loadFailures();
+    await inspectDaily();
     await loadNerve();
     await loadLadder();
     await loadTrajectory();
+  }
+  async function loadFailures() {
+    const box = $("failureProtection");
+    try {
+      const stops = await api("/runtime/failures");
+      box.replaceChildren();
+      if (!stops.length) { box.textContent = "没有暂停的任务。"; return; }
+      for (const stop of stops) {
+        const row = document.createElement("p");
+        row.textContent = `${stop.label} [${stop.key}]：${stop.reason} `;
+        if (stop.notificationState >= 0) {
+          const button = document.createElement("button");
+          button.textContent = "已处理，恢复";
+          button.onclick = async () => {
+            try { await api("/runtime/failures/resume", "POST", { key: stop.key }); await loadFailures(); await inspectDaily(); }
+            catch (e) { alert("恢复失败：" + e.message); }
+          };
+          row.appendChild(button);
+        }
+        box.appendChild(row);
+      }
+    } catch (e) { box.textContent = "读取错误保护失败：" + e.message; }
   }
   async function loadNerve() {
     try {
@@ -2001,11 +2032,54 @@
       await loadNerve();
     } catch (e) { alert("保存失败：" + e.message); }
   }
-  async function runDaily() {
+  let dailyPlan = null;
+  function invalidateDailyPlan() {
+    dailyPlan = null;
+    $("dailyStart").disabled = true;
+    $("dailyPreflight").textContent = "日期已改变，请重新检查历史。";
+  }
+  async function inspectDaily() {
+    const box = $("dailyPreflight"), button = $("dailyStart");
+    dailyPlan = null;
+    button.disabled = true;
     try {
-      const r = await api("/memory/daily-run", "POST", { day: ($("dailyDay") ? $("dailyDay").value.trim() : "") });
-      logLine("日构建已启动：" + r.day + "｜" + r.message);
-    } catch (e) { alert("启动失败：" + e.message); }
+      const day = $("dailyDay").value.trim();
+      const plan = await api("/memory/daily-status?day=" + encodeURIComponent(day));
+      dailyPlan = plan;
+      box.replaceChildren();
+      const line = text => { const p = document.createElement("p"); p.textContent = text; box.appendChild(p); };
+      line(`复盘模型：${plan.providerId || "未配置"} / ${plan.model || "未配置"}`);
+      if (plan.busy) line("日构建队列正在执行；可稍后重新检查进度。");
+      for (const item of plan.historicalFailures)
+        line(`待处理 ${item.day}｜${item.stage}｜${item.reason}`);
+      for (const reason of plan.blockers) line("暂不能执行：" + reason);
+      if (plan.days.length) line("执行顺序：" + plan.days.join(" → "));
+      else if (!plan.blockers.length) line("目标日期及之前的日构建均已完成，无需重复构建。");
+      if (plan.recentAttempts.length) {
+        line("最近构建记录（旧错误不会因再次尝试而清除）：");
+        for (const item of plan.recentAttempts.slice(0, 8))
+          line(`${item.day}｜${item.status}｜${item.stage}｜${item.reason}`);
+      }
+      button.textContent = plan.historicalFailures.length ? "处理历史未完成日期，再构建目标日" : "按以上顺序开始构建";
+      button.disabled = !plan.ready;
+    } catch (e) { box.textContent = "日构建检查失败：" + e.message; }
+  }
+  async function runDaily() {
+    await showSection("memory");
+    await inspectDaily();
+    await loadFailures();
+  }
+  async function startDailyPlan() {
+    if (!dailyPlan || !dailyPlan.ready) return;
+    const day = dailyPlan.day;
+    dailyPlan = null;
+    $("dailyStart").disabled = true;
+    try {
+      const r = await api("/memory/daily-run", "POST", { day });
+      logLine("日构建队列已启动：" + r.days.join(" → ") + "｜" + r.message);
+    } catch (e) { alert("启动被阻止：" + e.message); }
+    await inspectDaily();
+    await loadFailures();
   }
   async function loadLadder() {
     try {

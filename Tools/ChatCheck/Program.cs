@@ -20,6 +20,12 @@ internal static partial class Program
     private static void Main(string[] args)
     {
         SQLitePCL.Batteries_V2.Init();
+        if ((args ?? Array.Empty<string>()).Contains("--failure-protection"))
+        {
+            RunFailureProtectionChecksAsync().GetAwaiter().GetResult();
+            RunDailyBuildPreflightChecksAsync().GetAwaiter().GetResult();
+            return;
+        }
         if ((args ?? Array.Empty<string>()).Contains("--vision"))
         {
             RunInboundVisionCheck();
@@ -33,6 +39,8 @@ internal static partial class Program
         RunCommonContextPackCheck();
         RunAlignedHistoryWindowCheck();
         RunProviderRetryCheck();
+        RunFailureProtectionChecksAsync().GetAwaiter().GetResult();
+        RunDailyBuildPreflightChecksAsync().GetAwaiter().GetResult();
         RunLlmUsageParseCheck();
         RunMemoryArchivePolicyCheck();
         RunMemoryDayCheck();

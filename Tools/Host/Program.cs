@@ -139,6 +139,7 @@ builder.Services.AddAuthorization(options =>
         .Build();
 });
 builder.Services.AddHostedService<BackgroundMomentWorker>();
+builder.Services.AddHostedService<FailureNotificationWorker>();
 builder.Services.AddSingleton<DailyPipelineWorker>();
 builder.Services.AddHostedService(sp => sp.GetRequiredService<DailyPipelineWorker>());
 
@@ -782,19 +783,32 @@ app.MapPut("/auth/account", async (
 app.MapPut("/memory/nerve", (SoulRuntime runtime, NerveWrite body) =>
     Results.Json(runtime.UpdateNerve(body.top_k, body.provider_id)));
 
+app.MapGet("/memory/daily-status", (HttpRequest request, [FromServices] DailyPipelineWorker worker) =>
+    Results.Json(worker.Inspect(request.Query["day"].ToString())));
+
 app.MapPost("/memory/daily-run", (DailyRunWrite body, [FromServices] DailyPipelineWorker worker) =>
 {
-    var day = worker.Trigger(body == null ? null : body.day);
+    var plan = worker.Trigger(body == null ? null : body.day);
     return Results.Json(new
     {
-        started = worker.IsAvailable,
-        day,
+        started = true,
+        day = plan.Day,
+        days = plan.Days,
         available = worker.IsAvailable,
         migrateDll = worker.MigrateDll ?? string.Empty,
-        message = worker.IsAvailable
-            ? "日构建已启动，LLM 调用可到 5090 实时监视台观看。"
-            : "找不到 TraceSoul2.Migrate.dll，无法自动构建。"
+        message = "已检查历史，将按旧日到目标日依次构建，遇错停止。"
     });
+});
+
+app.MapGet("/runtime/failures", (SoulRuntime runtime) => Results.Json(runtime.Providers.Protection.List()));
+app.MapPost("/runtime/failures/resume", (SoulRuntime runtime, FailureResumeWrite body) =>
+{
+    var fault = runtime.Providers.Protection.List().FirstOrDefault(x => x.Key == body.key);
+    if (fault != null && fault.NotificationState < 0)
+        return Results.BadRequest(new { error = "任务仍在执行，不能重复恢复。" });
+    runtime.Providers.Protection.Resume(body.key);
+    runtime.Emit("错误保护：用户已手动恢复任务。");
+    return Results.Ok(new { resumed = true });
 });
 
 app.MapGet("/events", async (
@@ -1101,10 +1115,29 @@ internal sealed class BackgroundMomentWorker : BackgroundService
     {
         while (!stoppingToken.IsCancellationRequested)
         {
-            try { await runtime.PollBackgroundAsync(stoppingToken); }
+            try
+            {
+                await runtime.PollBackgroundAsync(stoppingToken);
+            }
             catch (OperationCanceledException) { return; }
             catch (Exception exception) { runtime.Emit("后台轮询失败：" + exception.Message); }
             await Task.Delay(2000, stoppingToken);
+        }
+    }
+}
+
+internal sealed class FailureNotificationWorker : BackgroundService
+{
+    private readonly SoulRuntime runtime;
+    public FailureNotificationWorker(SoulRuntime runtime) { this.runtime = runtime; }
+    protected override async Task ExecuteAsync(CancellationToken stoppingToken)
+    {
+        while (!stoppingToken.IsCancellationRequested)
+        {
+            try { await runtime.NotifyFailuresAsync(stoppingToken); }
+            catch (OperationCanceledException) when (stoppingToken.IsCancellationRequested) { return; }
+            catch (Exception) { runtime.Emit("错误保护通知检查失败，暂停状态仍保留。"); }
+            await Task.Delay(TimeSpan.FromSeconds(5), stoppingToken);
         }
     }
 }
@@ -1115,6 +1148,7 @@ internal sealed class PairWrite
     public string assname { get; set; }
 }
 
+internal sealed class FailureResumeWrite { public string key { get; set; } }
 internal sealed class CardWrite { public string body { get; set; } }
 internal sealed class EnabledWrite { public bool enabled { get; set; } }
 internal sealed class PluginConfigWrite
