@@ -24,6 +24,8 @@ namespace TraceSoul2.Host
             path = Path.Combine(directory, "failure-protection.sqlite3");
             using var db = Open();
             db.CreateTable<FailureStop>();
+            // 旧版把对话/供应商错误当作停聊开关；升级后保留报告，但不再阻塞聊天。
+            db.Execute("UPDATE failure_stops SET NonBlocking=1 WHERE Key='dialogue' OR Key LIKE 'provider:%'");
         }
 
         private SQLiteConnection Open()
@@ -42,12 +44,36 @@ namespace TraceSoul2.Host
         public bool IsPaused(string key)
         {
             using var db = Open();
-            return db.Find<FailureStop>(key) != null;
+            var fault = db.Find<FailureStop>(key);
+            return fault != null && !fault.NonBlocking;
         }
 
         public void ThrowIfPaused(string key)
         {
             if (IsPaused(key)) throw new FailurePausedException();
+        }
+
+        public void ObserveTurnFailures(ChatTurnResultData result)
+        {
+            foreach (var failure in result?.ContributionResults ?? Array.Empty<TraceCapabilityResultData>())
+            {
+                if (failure == null || failure.Status != "failed") continue;
+                if (failure.CapabilityId == "qq.sticker.send")
+                    Report("warning:qq.sticker.send", "表情包", "本次表情未发送成功，已跳过。", "warning");
+                else
+                    Report("dialogue", "对话或附加能力", new InvalidOperationException("能力执行失败"));
+            }
+        }
+
+        public void Report(string key, string label, Exception error)
+            => Report(key, label, SafeReason(error), "error");
+
+        private void Report(string key, string label, string reason, string severity)
+        {
+            using var db = Open();
+            // 同一未处理报告只通知一次；后续新消息照常处理，失败轮不自动重放。
+            db.Execute("INSERT OR IGNORE INTO failure_stops (Key,Label,Reason,CreatedUnixMs,NotificationState,NonBlocking,Severity) VALUES (?,?,?,?,0,1,?)",
+                key, label, reason, DateTimeOffset.UtcNow.ToUnixTimeMilliseconds(), severity);
         }
 
         public void Pause(string key, string label, Exception error)
@@ -132,6 +158,8 @@ namespace TraceSoul2.Host
         public string Reason { get; set; }
         public long CreatedUnixMs { get; set; }
         public int NotificationState { get; set; }
+        public bool NonBlocking { get; set; }
+        public string Severity { get; set; }
     }
 
     public sealed class FailurePausedException : InvalidOperationException
@@ -161,8 +189,14 @@ namespace TraceSoul2.Host
             token.ThrowIfCancellationRequested();
             var claimed = pending.Where(x => protection.ClaimNotification(x.Key, x.CreatedUnixMs)).ToList();
             if (claimed.Count == 0) return;
-            var text = "【系统 ERROR · 已暂停】\n" + string.Join("\n", claimed.Select(x => x.Label + "：" + x.Reason)) +
-                "\n相关任务已停止自动重试，重启也不会恢复。请检查余额/模型配置，再到 WebUI「记忆 → 错误保护」手动恢复。失败对话不会自动重发。";
+            var warningOnly = claimed.All(x => x.Severity == "warning");
+            var text = (warningOnly ? "【系统 WARNING】\n" : "【系统 ERROR】\n") +
+                string.Join("\n", claimed.Select(x =>
+                    (x.Severity == "warning" ? "WARNING" : "ERROR") + " · " + x.Label + "：" + x.Reason +
+                    (x.NonBlocking ? "" : "（此任务已暂停）"))) +
+                "\n对话不会因此暂停，失败对话不会自动重发。";
+            if (claimed.Any(x => !x.NonBlocking))
+                text += "\n已暂停的后台任务需处理后到 WebUI「记忆 → 错误保护」手动恢复。";
             try
             {
                 await send(type == "group" ? "send_group_msg" : "send_private_msg",
@@ -171,9 +205,9 @@ namespace TraceSoul2.Host
                         [type == "group" ? "group_id" : "user_id"] = id,
                         ["message"] = new[] { new { type = "text", data = new { text } } }
                     }, token).WaitAsync(TimeSpan.FromSeconds(15), token);
-                log("错误保护：已发送 QQ 系统通知。");
+                log("错误报告：已发送 QQ 系统通知。");
             }
-            catch (Exception) { log("错误保护：QQ 通知未确认送达，不自动重发；暂停状态可在 WebUI 查看。"); }
+            catch (Exception) { log("错误报告：QQ 通知未确认送达，不自动重发；报告可在 WebUI 查看。"); }
         }
     }
 
@@ -197,12 +231,11 @@ namespace TraceSoul2.Host
         private async Task<string> RunAsync(Func<Task<string>> call, CancellationToken token)
         {
             token.ThrowIfCancellationRequested();
-            protection.ThrowIfPaused(Key);
             try { return await call(); }
             catch (OperationCanceledException) when (token.IsCancellationRequested) { throw; }
             catch (Exception error)
             {
-                protection.Pause(Key, "语言模型通道", error);
+                protection.Report(Key, "语言模型通道", error);
                 throw;
             }
         }

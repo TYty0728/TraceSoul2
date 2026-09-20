@@ -61,7 +61,7 @@ namespace TraceSoul2.Host
             plan.Model = client?.Model ?? model ?? "";
             if (client == null) plan.Blockers.Add("复盘模型未配置或缺少 API Key。");
             foreach (var fault in runtime.Providers.Protection.List().Where(x =>
-                         x.Key == "daily" || x.Key == "provider:" + plan.ProviderId))
+                         !x.NonBlocking && (x.Key == "daily" || x.Key == "provider:" + plan.ProviderId)))
                 plan.Blockers.Add(fault.Label + "：" + fault.Reason + "；请先处理并在错误保护中恢复。");
             return plan;
         }
