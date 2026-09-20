@@ -131,20 +131,24 @@ namespace TraceSoul2.Logic
                 return seed;
             var startMs = start.ToUnixTimeMilliseconds();
             var endMs = start.AddDays(1).ToUnixTimeMilliseconds();
-            seed.Events = store.GetActiveEventIndexes()
+            var events = store.GetActiveEventIndexes()
                 .Where(x => x != null && x.TimeUnixMs >= startMs && x.TimeUnixMs < endMs &&
                             !string.IsNullOrWhiteSpace(x.EventSummary))
                 .OrderBy(x => x.TimeUnixMs)
-                .Take(EventCap)
-                .Select(x => OneLine(x.EventSummary, 80))
+                .ToList();
+            // 横跨当天取材，避免只看到最早几件事或睡前的最后一拍。
+            seed.Events = Enumerable.Range(0, Math.Min(EventCap, events.Count))
+                .Select(i => events.Count <= EventCap ? events[i] : events[i * (events.Count - 1) / (EventCap - 1)])
+                .Select(x => OneLine(x.EventSummary, 240))
                 .Where(x => x.Length > 0)
                 .ToList();
+            seed.Trajectory = OneLine(store.LoadDayTrajectory(seed.DayKey)?.Text, 1800);
             var inner = string.IsNullOrWhiteSpace(conversationId)
                 ? null
                 : store.LoadOrCreateInnerRuntime(conversationId);
             if (inner != null)
             {
-                seed.Narrative = OneLine(inner.Narrative, 240);
+                seed.Narrative = OneLine(inner.Narrative, 600);
                 seed.Mood = OneLine(inner.Mood, 40);
                 seed.Relationship = OneLine(inner.RelationshipLens, 160);
                 seed.Attention = (inner.Attention ?? new List<AttentionItemData>())
@@ -276,6 +280,7 @@ namespace TraceSoul2.Logic
         public string Narrative;
         public string Mood;
         public string Relationship;
+        public string Trajectory;
         public List<string> Attention = new List<string>();
         public List<string> Events = new List<string>();
 
@@ -289,6 +294,8 @@ namespace TraceSoul2.Logic
             var builder = new StringBuilder();
             builder.AppendLine(CorePrompts.NightResidue.SeedHeader);
             builder.Append(CorePrompts.NightResidue.DayPrefix).AppendLine(DayKey ?? string.Empty);
+            if (!string.IsNullOrWhiteSpace(Trajectory))
+                builder.AppendLine("当天相处的脉络（供回想，不逐项复述）：").AppendLine(Trajectory);
             var inner = (Narrative ?? string.Empty).Trim();
             builder.Append(CorePrompts.NightResidue.InnerPrefix)
                 .AppendLine(inner.Length == 0 ? CorePrompts.NightResidue.EmptyInner : inner);

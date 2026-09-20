@@ -112,7 +112,7 @@ namespace TraceSoul2.Logic
 
             var runtime = turn.Services.Storage.LoadOrCreateInnerRuntime(turn.ConversationId);
             var mood = runtime == null ? string.Empty : (runtime.Mood ?? string.Empty).Trim();
-            var inner = runtime == null ? string.Empty : OneLine(runtime.Narrative, 200);
+            var inner = runtime == null ? string.Empty : OneLine(runtime.Narrative, 500);
             builder.Append(CorePrompts.IdleDeed.MoodPrefix)
                 .AppendLine(mood.Length == 0 ? CorePrompts.IdleDeed.Empty : mood);
             builder.Append(CorePrompts.IdleDeed.InnerPrefix)
@@ -130,7 +130,7 @@ namespace TraceSoul2.Logic
                 .AppendLine(doing.Length == 0 ? CorePrompts.IdleDeed.Empty : doing);
 
             var trajectory = turn.Services.Storage.LoadDayTrajectory(MemoryDayLogic.CurrentDayKey(now));
-            var today = trajectory == null ? string.Empty : OneLine(trajectory.Text, 400);
+            var today = trajectory == null ? string.Empty : OneLine(trajectory.Text, 1200);
             if (today.Length > 0)
                 builder.Append(CorePrompts.IdleDeed.TodayPrefix).AppendLine(today);
             return builder.ToString().TrimEnd();

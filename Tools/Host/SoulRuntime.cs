@@ -31,8 +31,7 @@ namespace TraceSoul2.Host
             });
         private readonly CancellationTokenSource deferredCts = new CancellationTokenSource();
         private readonly Task deferredWorker;
-        private readonly object eventGate = new object();
-        private readonly List<Channel<string>> eventSubscribers = new List<Channel<string>>();
+        private readonly RecentEventLog eventLog = new RecentEventLog();
         private readonly SqliteVectorManager vectorStore;
         private readonly SoulRuntimeSettings runtimeSettings;
         private HierarchicalVectorRouterLogic router;
@@ -755,57 +754,11 @@ namespace TraceSoul2.Host
             }
         }
 
-        public sealed class EventSubscription : IDisposable
-        {
-            private readonly SoulRuntime owner;
-            private readonly Channel<string> channel;
-            private bool disposed;
-
-            internal EventSubscription(SoulRuntime owner, Channel<string> channel)
-            {
-                this.owner = owner;
-                this.channel = channel;
-            }
-
-            public ChannelReader<string> Reader { get { return channel.Reader; } }
-
-            public void Dispose()
-            {
-                if (disposed) return;
-                disposed = true;
-                owner.RemoveEventSubscriber(channel);
-            }
-        }
-
-        public EventSubscription SubscribeEvents()
-        {
-            var channel = Channel.CreateBounded<string>(new BoundedChannelOptions(500)
-            {
-                FullMode = BoundedChannelFullMode.DropOldest,
-                SingleReader = true,
-                SingleWriter = false
-            });
-            lock (eventGate) eventSubscribers.Add(channel);
-            return new EventSubscription(this, channel);
-        }
+        internal RecentEventLog.Subscription SubscribeEvents() => eventLog.Subscribe();
 
         public void Emit(string message)
         {
-            var line = DateTimeOffset.Now.ToString("HH:mm:ss.fff") + " " + (message ?? string.Empty);
-            lock (eventGate)
-            {
-                foreach (var subscriber in eventSubscribers.ToList())
-                    subscriber.Writer.TryWrite(line);
-            }
-        }
-
-        private void RemoveEventSubscriber(Channel<string> channel)
-        {
-            lock (eventGate)
-            {
-                eventSubscribers.Remove(channel);
-                channel.Writer.TryComplete();
-            }
+            eventLog.Emit(message);
         }
 
         private void EmitTiming(string traceId, string stage, long? elapsedMs = null, string detail = null)
@@ -1101,12 +1054,7 @@ namespace TraceSoul2.Host
             Store.Dispose();
             vectorStore.Dispose();
             if (encoder != null) encoder.Dispose();
-            lock (eventGate)
-            {
-                foreach (var subscriber in eventSubscribers.ToList())
-                    subscriber.Writer.TryComplete();
-                eventSubscribers.Clear();
-            }
+            eventLog.Dispose();
         }
 
         private static string Truncate(string value, int max)

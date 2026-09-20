@@ -19,7 +19,7 @@ namespace TraceSoul2.ExternalPlugins
     /// Cookie 不手动配置——向 NapCat 要 get_cookies（多域名，含 get_credentials），
     /// p_skey 计算 g_tk。发布接口常假失败，只发一次绝不重试。
     /// </summary>
-    public sealed class QqQzonePlugin : ITracePlugin
+    public sealed partial class QqQzonePlugin : ITracePlugin
     {
         private const string PluginId = "qq.qzone";
         private static readonly Regex JsonpPrefix = new Regex(
@@ -27,12 +27,16 @@ namespace TraceSoul2.ExternalPlugins
         private string herUin = string.Empty;
         private int publishDailyCap = 1;
         private int readDailyCap = 2;
+        private readonly Func<HttpClient> httpFactory;
+
+        public QqQzonePlugin() { }
+        internal QqQzonePlugin(Func<HttpClient> httpFactory) { this.httpFactory = httpFactory; }
 
         public TracePluginMetadataData Metadata { get; } = new TracePluginMetadataData
         {
             Id = PluginId,
             DisplayName = "QQ 空间说说",
-            Version = "1.3.0",
+            Version = "1.4.0",
             Author = "TraceSoul2",
             Role = PluginRoleValues.Organ,
             PlatformId = BodyIds.Qq,
@@ -70,12 +74,14 @@ namespace TraceSoul2.ExternalPlugins
         internal async Task<TraceCapabilityResultData> PublishFromCallAsync(
             BrainCapabilityCallData call, TraceTurnContext context, CancellationToken cancellationToken)
         {
+            if (call?.GetArgument("dispatch") == "prepare")
+                return await PrepareDraftAsync(call, context, cancellationToken);
             var idle = IsIdleCall(call);
             var content = call == null ? string.Empty : call.GetArgument("content");
             if (string.IsNullOrWhiteSpace(content) && call != null) content = call.GetArgument("text");
             if (string.IsNullOrWhiteSpace(content) && idle)
-                content = await ComposePublishAsync(call == null ? string.Empty : call.GetArgument("seed"),
-                    context, cancellationToken);
+                content = ParseDraft(await ComposePublishAsync(call == null ? string.Empty : call.GetArgument("seed"),
+                    context, cancellationToken)).Content;
             if (LooksLikeNone(content))
             {
                 return new TraceCapabilityResultData
@@ -86,15 +92,17 @@ namespace TraceSoul2.ExternalPlugins
                     EvidenceRefs = new List<string>()
                 };
             }
-            return await PublishAsync(content, context, cancellationToken);
+            var files = (call?.GetArgument("files") ?? "").Split(new[] { '\r', '\n' }, StringSplitOptions.RemoveEmptyEntries);
+            return await PublishAsync(content, context, cancellationToken, files);
         }
 
         internal async Task<TraceCapabilityResultData> PublishAsync(
-            string content, TraceTurnContext context, CancellationToken cancellationToken)
+            string content, TraceTurnContext context, CancellationToken cancellationToken, IReadOnlyList<string> files = null)
         {
             content = (content ?? string.Empty).Trim();
             if (content.Length == 0) throw new InvalidOperationException("QQ 说说需要 content（全文）。");
             var session = await LoginAsync(context, cancellationToken);
+            var photos = await UploadImagesAsync(files, session, cancellationToken);
 
             var form = new Dictionary<string, string>
             {
@@ -111,6 +119,7 @@ namespace TraceSoul2.ExternalPlugins
                 { "format", "json" },
                 { "qzreferrer", "https://user.qzone.qq.com/" + session.Uin }
             };
+            AddPhotoFields(form, photos);
             var url = "https://h5.qzone.qq.com/proxy/domain/taotao.qzone.qq.com/cgi-bin/emotion_cgi_publish_v6" +
                       "?g_tk=" + session.Gtk + "&uin=" + session.Uin;
 
@@ -126,7 +135,7 @@ namespace TraceSoul2.ExternalPlugins
                     string message = string.Empty;
                     TryReadCode(StripEnvelope(body), out code, out message);
                     // 老插件踩过：接口常返回非 0，但说说其实已经发出。只发一次，假失败也当已投递。
-                    return FinishPublish(content, context, code, message, (int)response.StatusCode);
+                    return FinishPublish(content, context, code, message, (int)response.StatusCode, photos.Count);
                 }
             }
         }
@@ -194,12 +203,12 @@ namespace TraceSoul2.ExternalPlugins
         }
 
         private static TraceCapabilityResultData FinishPublish(
-            string content, TraceTurnContext context, long code, string message, int httpStatus)
+            string content, TraceTurnContext context, long code, string message, int httpStatus, int imageCount = 0)
         {
             var pair = context.Services.Storage.LoadPairIdentity();
             var ok = code == 0;
             var summary = ok
-                ? "已发布 QQ 空间说说。"
+                ? (imageCount > 0 ? "已发布 QQ 空间图文说说（配图 " + imageCount + " 张）。" : "已发布 QQ 空间说说。")
                 : "说说已投递一次（接口 code=" + code +
                   (string.IsNullOrWhiteSpace(message) ? string.Empty : "，" + message) +
                   "，HTTP " + httpStatus + "）。空间接口常假失败，请到空间确认，不要再发。";
@@ -213,10 +222,10 @@ namespace TraceSoul2.ExternalPlugins
                     PluginId = PluginId,
                     ExternalEventId = Guid.NewGuid().ToString("N"),
                     Role = pair.IsComplete ? pair.Assname : "assistant",
-                    Content = "[QQ 空间说说] " + content,
+                    Content = "[QQ 空间说说] " + content + (imageCount > 0 ? " [配图 " + imageCount + " 张]" : ""),
                     Realm = TraceRealmValues.ExternalWorld,
                     EvidenceType = EvidenceTypeValues.AssPerformed,
-                    PayloadJson = string.Empty,
+                    PayloadJson = JsonSerializer.Serialize(new { images = imageCount }),
                     OccurredUnixMs = DateTimeOffset.UtcNow.ToUnixTimeMilliseconds()
                 },
                 EvidenceRefs = new List<string>()
@@ -384,9 +393,9 @@ namespace TraceSoul2.ExternalPlugins
             return h & 0x7FFFFFFF;
         }
 
-        private static HttpClient NewClient()
+        private HttpClient NewClient()
         {
-            return new HttpClient { Timeout = TimeSpan.FromSeconds(30) };
+            return httpFactory?.Invoke() ?? new HttpClient { Timeout = TimeSpan.FromSeconds(60) };
         }
 
         private static void ApplyBrowserHeaders(HttpRequestMessage request, QzoneSession session)
@@ -816,7 +825,7 @@ namespace TraceSoul2.ExternalPlugins
                     BodyId = BodyIds.Qq,
                     BodyTier = BodyTierValues.Chat,
                     Organ = BodyOrganValues.Qzone,
-                    ParametersJsonSchema = "{content:string}",
+                    ParametersJsonSchema = "{content:string,image_prompt?:string,dispatch?:prepare|publish}",
                     HasExternalSideEffect = true,
                     IdleDailyCap = owner.publishDailyCap
                 };

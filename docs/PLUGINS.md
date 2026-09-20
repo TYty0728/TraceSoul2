@@ -136,7 +136,7 @@ public sealed class XxxEffector : ITraceCallableContribution
 | `qq-sticker` | qq.sticker | QQ 器官 | 情绪词 → 语义/标签匹配 → 图片/GIF 发到 QQ | `threshold`、`personas`；图库在 `emojis/<人格>/`（兼容老 smartemoji） |
 | `qq-tts` | qq.tts | QQ 器官 | 要念的话 + 情绪词 → 情感语音 | `api_key`、`api_url`、`model`、`voice`；生成落 `plugins_data/qq-tts/generated/` |
 | `qq-imagegen` | qq.imagegen | QQ 器官 | 心智只决定发不发；画面规划在插件内，生图发 QQ | 供应商槽或包内 `api_key`/`base_url`/`model`；生成落 `generated/` |
-| `qq-qzone` | qq.qzone | QQ 器官 | 发/看说说；空闲按日限抽签 | Cookie 经 NapCat `get_cookies` 自动取；`her_uin`、`publish_daily_cap`、`read_daily_cap` |
+| `qq-qzone` | qq.qzone | QQ 器官 | 发/看说说，可选配图；空闲按日限抽签 | Cookie 经 NapCat `get_cookies` 自动取；`her_uin`、`publish_daily_cap`、`read_daily_cap`；配图由中枢协调相机生成后图文一次发布 |
 | `qq-status` | qq.status | QQ 器官 | 改签名 / 在线状态；空闲按日限抽签 | `mood_daily_cap` |
 | `game-session` | game.session | 游戏平台 | 一起玩的临时工作台；原始事件不进主记忆 | 见 [GAME_SESSION_PLUGIN.md](GAME_SESSION_PLUGIN.md) |
 

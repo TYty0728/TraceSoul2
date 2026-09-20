@@ -13,6 +13,7 @@ using TraceSoul2.Host;
 using TraceSoul2.Logic;
 using TraceSoul2.Manager;
 using TraceSoul2.Plugins;
+using TraceSoul2.Plugins.Builtin;
 using TraceSoul2.Prompts;
 using TraceSoul2.Util;
 
@@ -37,6 +38,16 @@ internal static partial class Program
         var normalized = await VisionLogic.LoadImagesAsync(new[] { inline }, deadline.Token);
         Require(normalized.Count == 1 && normalized[0].ToDataUri().StartsWith("data:image/png;base64,"),
             "内联图片也必须规范 MIME");
+        var otherPng = png.Concat(new byte[] { 0 }).ToArray();
+        var uniqueImages = await VisionLogic.LoadImagesAsync(new[]
+        {
+            inline, "base64://" + Convert.ToBase64String(png),
+            "data:image/png;base64," + Convert.ToBase64String(png),
+            "data:image/jpeg;base64," + Convert.ToBase64String(png),
+            "base64://" + Convert.ToBase64String(otherPng)
+        }, deadline.Token);
+        Require(uniqueImages.Count == 2 && uniqueImages[1].bytes.SequenceEqual(otherPng),
+            "相同图片的多个来源只占一个名额，不能挤掉后续不同图片");
         using (var errorPage = new VisionHttpFixture(Encoding.UTF8.GetBytes("  <html>" + new string('x', 100)), "application/octet-stream"))
         {
             Require((await VisionLogic.LoadImagesAsync(new[] { errorPage.Url }, deadline.Token)).Count == 0,
@@ -51,22 +62,31 @@ internal static partial class Program
                 : "{\"choices\":[{\"message\":{\"content\":\"测试画面\"},\"finish_reason\":\"stop\"}]}";
             using var api = new VisionHttpFixture(Encoding.UTF8.GetBytes(reply), "application/json");
             using var cdn = new VisionHttpFixture(png, "application/octet-stream");
+            using var originalCdn = new VisionHttpFixture(png, "image/jpeg");
             var services = VisionServices(store, api.Url, native);
             var protocol = new FakeOneBotVisionAdapter
             {
                 Response = TraceJson.ToJson(new { data = new { file = "/unavailable-napcat-cache/test.png", url = cdn.Url } })
             };
             services.PlatformAdapters.Add(protocol);
-            var seen = await VisionLogic.SeeInboundAsync(new PluginEventData
+            var qq = new OneBotPlatformPlugin();
+            var inbound = new OneBotPlatformAdapter(qq).ConvertInbound(TraceJson.ToJson(new
             {
-                Content = "看图", TraceId = "vision-check",
-                PayloadJson = TraceJson.ToJson(new { image_urls = new[] { "remote-image.png" } })
-            }, services, deadline.Token);
+                post_type = "message", self_id = 999, user_id = 123, message_type = "private", message_id = 42,
+                message = new[] { new { type = "image", data = new { file = "remote-image.png", url = originalCdn.Url } } }
+            }));
+            inbound.TraceId = "vision-check";
+            Require(VisionLogic.ReadInboundImageLocations(inbound.PayloadJson).Count == 2,
+                "复现 QQ 一张图片同时给缓存名和 URL 的双来源载荷");
+            var seen = await VisionLogic.SeeInboundAsync(inbound, services, deadline.Token);
             Require(seen == "测试画面", "跨容器文件不可读时，应通过 CDN 完成模型识图");
             using var request = JsonDocument.Parse(await api.Request);
             await cdn.Request;
+            await originalCdn.Request;
             if (native)
             {
+                Require(request.RootElement.GetProperty("contents")[0].GetProperty("parts").GetArrayLength() == 2,
+                    "同一 QQ 图片的缓存名和 CDN URL 不能重复发送给 Gemini 原生接口");
                 var part = request.RootElement.GetProperty("contents")[0].GetProperty("parts")[1].GetProperty("inline_data");
                 Require(part.GetProperty("mime_type").GetString() == "image/png" &&
                         part.GetProperty("data").GetString() == Convert.ToBase64String(png),
@@ -74,6 +94,8 @@ internal static partial class Program
             }
             else
             {
+                Require(request.RootElement.GetProperty("messages")[1].GetProperty("content").GetArrayLength() == 2,
+                    "同一 QQ 图片的缓存名和 CDN URL 不能重复发送给 OpenAI 兼容中转");
                 var image = request.RootElement.GetProperty("messages")[1].GetProperty("content")[1].GetProperty("image_url");
                 Require(image.GetProperty("url").GetString() == "data:image/png;base64," + Convert.ToBase64String(png),
                     "OpenAI 兼容请求应包含准确的图片 Data URI");

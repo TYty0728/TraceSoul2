@@ -28,7 +28,7 @@
     { "key": "safety_settings", "label": "Gemini 安全阈值", "type": "select", "options": ["BLOCK_NONE", "BLOCK_ONLY_HIGH", "BLOCK_MEDIUM_AND_ABOVE"] },
     { "key": "enable_thinking", "label": "Gemini 开启思考", "type": "bool", "default": false },
     { "key": "failure_fallback_text", "label": "失败时明确告知", "type": "bool", "default": true },
-    { "key": "log_request_body", "label": "打印生图请求体到日志", "type": "bool", "default": false, "description": "排查上游问题时开启；图片 base64 会自动截断。排查完建议关闭，避免日志过长。" },
+    { "key": "log_request_body", "label": "记录生图请求概况", "type": "bool", "default": false, "description": "记录模型和请求长度；不打印图片编码或完整请求正文。" },
     { "key": "debug", "label": "调试日志", "type": "bool", "default": false },
     { "key": "proxy", "label": "代理（可选）", "type": "string", "placeholder": "http://127.0.0.1:7890" }
   ]

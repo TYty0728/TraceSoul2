@@ -37,7 +37,7 @@ namespace TraceSoul2.Data
         public long UpdatedUnixMs { get; set; }
         /// <summary>睡着后心跳停，非打破性 Moment 不跑心智。</summary>
         public bool Asleep { get; set; }
-        /// <summary>空闲后心跳停，直到她发来或以前约好的时间任务到期才再醒。</summary>
+        /// <summary>清醒的空闲生活；保留下一次心跳，也会被她的消息或约定任务唤醒。</summary>
         public bool Idle { get; set; }
     }
 

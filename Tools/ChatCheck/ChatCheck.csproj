@@ -13,13 +13,17 @@
     <ProjectReference Include="../PluginApi/TraceSoul2.PluginApi.csproj" />
     <ProjectReference Include="../../ExternalPlugins/GameSession/TraceSoul2.Plugin.GameSession.csproj" />
     <ProjectReference Include="../../ExternalPlugins/QqStatus/TraceSoul2.Plugin.QqStatus.csproj" />
+    <ProjectReference Include="../../ExternalPlugins/QqQzone/TraceSoul2.Plugin.QqQzone.csproj" />
     <Compile Include="Program.cs" />
     <Compile Include="QqDeliveryChecks.cs" />
     <Compile Include="VisionTransportChecks.cs" />
+    <Compile Include="RecentEventLogChecks.cs" />
+    <Compile Include="QzoneMediaChecks.cs" />
+    <Compile Include="HeartbeatContinuityChecks.cs" />
+    <Compile Include="../Host/RecentEventLog.cs" Link="RecentEventLog.cs" />
     <Compile Include="../Host/GeminiClientManager.cs" Link="GeminiClientManager.cs" />
     <Compile Include="../../ExternalPlugins/QqImageGen/QqImageGenPrompts.cs" />
     <Compile Include="../../ExternalPlugins/QqImageGen/CameraSharingContext.cs" />
-    <Compile Include="../../ExternalPlugins/QqQzone/QqQzonePrompts.cs" />
     <Content Include="../../resources/identity_cards.json" CopyToOutputDirectory="PreserveNewest" Link="identity_cards.json" />
   </ItemGroup>
 </Project>
