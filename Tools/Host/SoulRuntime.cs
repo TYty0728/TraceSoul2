@@ -456,7 +456,11 @@ namespace TraceSoul2.Host
             var today = Store.GetTodayNewItems(ConversationId, dayBoundary.ToUnixTimeMilliseconds(), 12)
                 .Select(x => new { x.Content, x.SourceMomentId, x.CreatedUnixMs }).ToList();
             var latest = LastTurnPayload();
-            var activeEvents = Store.GetActiveEventIndexes().Take(8)
+            // 历史补构建会刷新写入时间；实时状态按事件发生时间展示最近的事件。
+            var activeEvents = Store.GetActiveEventIndexes()
+                .OrderByDescending(x => x.TimeUnixMs)
+                .ThenByDescending(x => x.UpdatedUnixMs)
+                .Take(8)
                 .Select(x => new
                 {
                     x.Id,

@@ -1,6 +1,7 @@
 using System;
 using System.Collections.Generic;
 using System.Text;
+using System.Text.Json;
 using System.Threading;
 using System.Threading.Tasks;
 using TraceSoul2.Data;
@@ -40,7 +41,8 @@ namespace TraceSoul2.Logic
                 new DeepSeekMessageData("assistant", Limit(raw, 16000)),
                 new DeepSeekMessageData(
                     "user",
-                    CorePrompts.Retry.JsonRepairUser(missingMessage))
+                    CorePrompts.Retry.JsonRepairUser(DescribeFailure(firstError)) +
+                    " 请重新输出完整 JSON，不要只输出修改片段；字符串中的双引号必须转义，属性和值之间用冒号，属性之间用逗号。")
             };
             var repairedRaw = await client.CompleteJsonAsync(repair, cancellationToken, promptCacheKey);
             try
@@ -52,9 +54,20 @@ namespace TraceSoul2.Logic
             catch (Exception secondError)
             {
                 throw new InvalidOperationException(
-                    "语言模型连续两次返回不可用的结构化输出。首次错误：" + firstError.Message,
+                    "语言模型连续两次返回不可用的结构化输出。首次错误：" + DescribeFailure(firstError) +
+                    "；纠正后错误：" + DescribeFailure(secondError),
                     secondError);
             }
+        }
+
+        // JSON 异常正文/Path 可能夹带模型生成的字段；持久化与纠正仅使用类别和位置。
+        private static string DescribeFailure(Exception error)
+        {
+            if (error is JsonException json)
+                return "JSON 语法或字段类型错误（行 " + ((json.LineNumber ?? 0) + 1) +
+                    "，字节位置 " + (json.BytePositionInLine ?? 0) + "）";
+            return error is InvalidOperationException
+                ? Limit(error.Message, 240) : "结构化输出解析失败";
         }
 
         /// <summary>开口：收自然语言。校验失败再请它重说一次，不要求 JSON。</summary>

@@ -10,6 +10,7 @@ internal static partial class Program
 {
     private static async Task RunDailyBuildPreflightChecksAsync()
     {
+        await RunReviewOutputChecksAsync();
         var states = new[]
         {
             new DailyReviewState { DayKey = "2026-09-17", Status = "done" },

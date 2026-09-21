@@ -52,8 +52,8 @@ namespace TraceSoul2.Migrate
             context.MigrationModel = Environment.GetEnvironmentVariable("TRACESOUL2_MIGRATION_MODEL");
             if (!string.IsNullOrWhiteSpace(context.MigrationProviderId))
             {
-                context.Llm = context.Providers.CreateClient(
-                    context.MigrationProviderId, context.MigrationModel, false);
+                context.Llm = context.Providers.CreateReviewClient(
+                    context.MigrationProviderId, context.MigrationModel);
             }
             else
             {
@@ -71,7 +71,7 @@ namespace TraceSoul2.Migrate
 
         public ILlmClient CreateLlmClient()
         {
-            return Providers.CreateClient(MigrationProviderId, MigrationModel, false);
+            return Providers.CreateReviewClient(MigrationProviderId, MigrationModel);
         }
 
         /// <summary>BGE 编码器按需加载（模型约 90MB，非向量命令不加载）。</summary>

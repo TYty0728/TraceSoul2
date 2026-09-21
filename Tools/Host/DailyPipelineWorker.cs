@@ -55,8 +55,9 @@ namespace TraceSoul2.Host
             if (!runtime.Store.LoadPairIdentity().IsComplete) plan.Blockers.Add("请先配置两人身份。");
             var provider = Environment.GetEnvironmentVariable("TRACESOUL2_MIGRATION_PROVIDER");
             var model = Environment.GetEnvironmentVariable("TRACESOUL2_MIGRATION_MODEL");
-            var client = string.IsNullOrWhiteSpace(provider)
-                ? runtime.Providers.CreateReviewClient() : runtime.Providers.CreateClient(provider, model, false);
+            var client = runtime.Providers.CreateReviewClient(provider, model);
+            plan.ReviewTemperature = runtime.Providers.ReviewTemperature;
+            plan.ProviderOverride = !string.IsNullOrWhiteSpace(provider);
             plan.ProviderId = client?.ProviderId ?? provider ?? "";
             plan.Model = client?.Model ?? model ?? "";
             if (client == null) plan.Blockers.Add("复盘模型未配置或缺少 API Key。");

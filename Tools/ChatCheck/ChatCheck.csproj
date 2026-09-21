@@ -17,6 +17,9 @@
     <Compile Include="Program.cs" />
     <Compile Include="FailureProtectionChecks.cs" />
     <Compile Include="DailyBuildPreflightChecks.cs" />
+    <Compile Include="ReviewOutputChecks.cs" />
+    <Compile Include="../Host/LlmProviderStore.cs" Link="LlmProviderStore.cs" />
+    <Compile Include="../Host/LlmProviderCatalog.cs" Link="LlmProviderCatalog.cs" />
     <Compile Include="../Host/DailyBuildPreflight.cs" Link="DailyBuildPreflight.cs" />
     <Compile Include="../Host/FailureProtection.cs" Link="FailureProtection.cs" />
     <Compile Include="QqDeliveryChecks.cs" />

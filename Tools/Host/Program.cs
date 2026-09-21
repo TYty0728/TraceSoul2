@@ -452,6 +452,19 @@ app.MapGet("/providers", (SoulRuntime runtime) =>
 
 app.MapGet("/providers/slots", (SoulRuntime runtime) => Results.Json(runtime.PublicSlots()));
 
+app.MapGet("/providers/review-settings", (SoulRuntime runtime) =>
+    Results.Json(new { temperature = runtime.Providers.ReviewTemperature }));
+
+app.MapPut("/providers/review-settings", (SoulRuntime runtime, ReviewSettingsWrite body) =>
+{
+    if (body?.temperature == null) return Results.BadRequest(new { error = "请填写复盘温度。" });
+    if (!float.IsFinite(body.temperature.Value) || body.temperature < 0 || body.temperature > 1)
+        return Results.BadRequest(new { error = "复盘温度必须在 0～1 之间。" });
+    runtime.Providers.SetReviewTemperature(body.temperature.Value);
+    runtime.RefreshReviewClient();
+    return Results.Json(new { temperature = runtime.Providers.ReviewTemperature });
+});
+
 app.MapGet("/providers/templates", () => Results.Json(LlmProviderCatalog.Templates()));
 
 app.MapPost("/providers", (SoulRuntime runtime, AddProviderWrite body) =>
@@ -1166,6 +1179,7 @@ internal sealed class LimitWrite
 internal sealed class HeartbeatWrite { public int minMinutes { get; set; } public int maxMinutes { get; set; } }
 internal sealed class NerveWrite { public int top_k { get; set; } public string provider_id { get; set; } }
 internal sealed class DailyRunWrite { public string day { get; set; } }
+internal sealed class ReviewSettingsWrite { public float? temperature { get; set; } }
 internal sealed class SelectWrite { public string id { get; set; } public string model { get; set; } }
 internal sealed class ForkWrite { public string fromDay { get; set; } public string note { get; set; } public bool freshMemory { get; set; } }
 internal sealed class DatabaseSwitchRequest { public string nameOrPath { get; set; } }

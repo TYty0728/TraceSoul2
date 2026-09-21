@@ -99,6 +99,8 @@ namespace TraceSoul2.Host
         public List<string> Blockers { get; set; } = new List<string>();
         public string ProviderId { get; set; }
         public string Model { get; set; }
+        public float ReviewTemperature { get; set; }
+        public bool ProviderOverride { get; set; }
         public bool Busy { get; set; }
         public bool Ready => !Busy && Blockers.Count == 0 && Days.Count > 0;
     }
