@@ -308,12 +308,16 @@ namespace TraceSoul2.Host
         }
 
         public ILlmClient CreateClient(string id, string model, bool? thinkingOverride)
+            => CreateConfiguredClient(id, model, thinkingOverride, false);
+
+        private ILlmClient CreateConfiguredClient(string id, string model, bool? thinkingOverride, bool review)
         {
             lock (gate)
             {
                 var item = Find(id);
                 if (item == null || string.IsNullOrWhiteSpace(item.apiKey)) return null;
                 var config = ToConfig(item, model, thinkingOverride);
+                if (review) config.Temperature = data.reviewTemperature ?? 0.2f;
                 if (LlmProviderCatalog.IsGeminiNative(item.type))
                     return new ProtectedLlmClient(new GeminiClientManager(config), Protection);
                 return new ProtectedLlmClient(new DeepSeekClientManager(config), Protection);
@@ -341,14 +345,30 @@ namespace TraceSoul2.Host
         }
 
         /// <summary>复盘：指定槽则用该模型并关思考；未指定则用对话开口关思考，避免推理模型把额度耗在 reasoning。</summary>
-        public ILlmClient CreateReviewClient()
+        public float ReviewTemperature { get { lock (gate) return data.reviewTemperature ?? 0.2f; } }
+
+        public void SetReviewTemperature(float temperature)
+        {
+            if (!float.IsFinite(temperature) || temperature < 0 || temperature > 1)
+                throw new ArgumentException("复盘温度必须在 0～1 之间。");
+            lock (gate) { data.reviewTemperature = temperature; SaveUnsafe(); }
+        }
+
+        public ILlmClient CreateReviewClient() => CreateReviewClient(null, null);
+
+        public ILlmClient CreateReviewClient(string providerOverride, string modelOverride)
         {
             string providerId;
             string model;
             lock (gate)
             {
                 var refer = data.review;
-                if (refer != null && !string.IsNullOrWhiteSpace(refer.providerId))
+                if (!string.IsNullOrWhiteSpace(providerOverride))
+                {
+                    providerId = providerOverride;
+                    model = modelOverride;
+                }
+                else if (refer != null && !string.IsNullOrWhiteSpace(refer.providerId))
                 {
                     providerId = refer.providerId;
                     model = string.IsNullOrWhiteSpace(refer.model) ? null : refer.model;
@@ -359,7 +379,7 @@ namespace TraceSoul2.Host
                     model = null;
                 }
             }
-            return CreateClient(providerId, model, false);
+            return CreateConfiguredClient(providerId, model, false, true);
         }
 
         public DeepSeekConfigData CurrentConfig()
@@ -471,6 +491,8 @@ namespace TraceSoul2.Host
             var loaded = JsonSerializer.Deserialize<FileData>(json, JsonOptions);
             if (loaded == null) loaded = new FileData();
             if (loaded.providers == null) loaded.providers = new List<LlmProviderRecord>();
+            if (loaded.reviewTemperature.HasValue && (!float.IsFinite(loaded.reviewTemperature.Value) ||
+                loaded.reviewTemperature < 0 || loaded.reviewTemperature > 1)) loaded.reviewTemperature = null;
             if (loaded.providers.Count == 0) loaded.providers.Add(DefaultProvider());
             foreach (var item in loaded.providers)
             {
@@ -710,6 +732,7 @@ namespace TraceSoul2.Host
             public string currentId { get; set; }
             public LlmSlotRef thinking { get; set; }
             public LlmSlotRef review { get; set; }
+            public float? reviewTemperature { get; set; }
             public LlmSlotRef multimodal { get; set; }
             public LlmSlotRef image { get; set; }
             public LlmSlotRef speech { get; set; }

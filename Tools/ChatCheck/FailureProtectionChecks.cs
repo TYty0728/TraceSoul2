@@ -244,6 +244,7 @@ internal static partial class Program
 
     private sealed class FailureHttpServer : IDisposable
     {
+        public readonly List<string> Requests = new List<string>();
         private readonly TcpListener listener = new TcpListener(IPAddress.Loopback, 0);
         private readonly CancellationTokenSource cts = new CancellationTokenSource(TimeSpan.FromSeconds(30));
         private readonly Task worker;
@@ -268,6 +269,7 @@ internal static partial class Program
                         var length = header.ToString().Split('\n').FirstOrDefault(x => x.StartsWith("Content-Length:", StringComparison.OrdinalIgnoreCase));
                         var request = new byte[length == null ? 0 : int.Parse(length.Split(':')[1])];
                         await stream.ReadExactlyAsync(request, cts.Token);
+                        Requests.Add(Encoding.UTF8.GetString(request));
                         var call = Interlocked.Increment(ref Calls);
                         var reply = respond == null ? (Status: status, Body: body) : respond(call);
                         var bytes = Encoding.UTF8.GetBytes(reply.Body);

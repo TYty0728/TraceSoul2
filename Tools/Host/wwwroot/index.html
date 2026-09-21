@@ -741,6 +741,7 @@
             <div class="muted" style="align-self:flex-end">把未归档的 Moment 构筑成事件并复盘；LLM 调用到 5090 监视台看。</div>
           </div>
           <div id="dailyPreflight" class="muted">点击检查，先查看历史未完成日期和错误。</div>
+          <button onclick="showSection('brain')">修改复盘模型与温度</button>
           <button id="dailyStart" class="primary" onclick="startDailyPlan()" disabled>检查后执行</button>
           <p class="muted">检查不调用模型；开始后先补旧日，全部成功才继续目标日。任一天失败即停止。已有部分记忆不会被清空。</p>
           <h3>错误保护</h3>
@@ -776,6 +777,12 @@
             <div><label>生图</label><select id="slotImage"></select></div>
             <div><label>&nbsp;</label><button class="primary" onclick="saveSlots()">保存槽位</button></div>
           </div>
+          <div class="row" style="margin-top:12px">
+            <div><label>复盘专用温度（默认 0.2）</label><input id="reviewTemperature" type="number" min="0" max="1" step="0.05" /></div>
+            <div class="nogrow"><label>&nbsp;</label><button onclick="saveReviewSettings()">保存复盘温度</button></div>
+          </div>
+          <p id="reviewSettingsStatus" class="muted">加载中…</p>
+          <p class="muted">只影响身份复盘和日构建，不改变聊天温度。低温度减少输出随机性；模型仍可能返回格式错误。模型有固定参数限制时遵循其协议。已在运行的构建下次启动才采用新设置。失败后请到「记忆 → 错误保护」恢复日构建，再检查并开始。</p>
         </div>
         <div class="box">
           <div class="prov-add">
@@ -1608,6 +1615,9 @@
     }).join("");
     fillProviderForm(providerCache.find(p => p.id === selectedProviderId) || cur);
     renderSlots();
+    const reviewSettings = await api("/providers/review-settings");
+    $("reviewTemperature").value = reviewSettings.temperature;
+    $("reviewSettingsStatus").textContent = "当前复盘温度：" + reviewSettings.temperature;
   }
   function selectProvider(id) {
     selectedProviderId = id;
@@ -1728,8 +1738,21 @@
         image: parseSlotValue($("slotImage").value)
       });
       logLine("用途槽已保存");
+      invalidateDailyPlan();
       await refreshProviders(selectedProviderId);
     } catch (e) { alert("保存槽位失败：" + e.message); }
+  }
+  async function saveReviewSettings() {
+    try {
+      const value = $("reviewTemperature").value.trim();
+      const temperature = Number(value);
+      if (!value || !Number.isFinite(temperature) || temperature < 0 || temperature > 1)
+        throw new Error("复盘温度必须在 0～1 之间。");
+      const saved = await api("/providers/review-settings", "PUT", { temperature });
+      $("reviewTemperature").value = saved.temperature;
+      $("reviewSettingsStatus").textContent = "已保存复盘温度：" + saved.temperature + "；下次构建生效。";
+      invalidateDailyPlan();
+    } catch (e) { alert("保存复盘温度失败：" + e.message); }
   }
   async function useModel(modelId) {
     try {
@@ -2036,7 +2059,7 @@
   function invalidateDailyPlan() {
     dailyPlan = null;
     $("dailyStart").disabled = true;
-    $("dailyPreflight").textContent = "日期已改变，请重新检查历史。";
+    $("dailyPreflight").textContent = "日期或配置已改变，请重新检查历史。";
   }
   async function inspectDaily() {
     const box = $("dailyPreflight"), button = $("dailyStart");
@@ -2049,6 +2072,8 @@
       box.replaceChildren();
       const line = text => { const p = document.createElement("p"); p.textContent = text; box.appendChild(p); };
       line(`复盘模型：${plan.providerId || "未配置"} / ${plan.model || "未配置"}`);
+      if (plan.reviewTemperature != null) line(`复盘温度：${plan.reviewTemperature}（模型固定参数限制除外）`);
+      if (plan.providerOverride) line("复盘模型由服务器环境变量覆盖；在用途槽修改模型不会替换此覆盖。温度仍使用复盘专用设置。");
       if (plan.busy) line("日构建队列正在执行；可稍后重新检查进度。");
       for (const item of plan.historicalFailures)
         line(`待处理 ${item.day}｜${item.stage}｜${item.reason}`);
