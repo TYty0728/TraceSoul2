@@ -36,6 +36,8 @@ namespace TraceSoul2.Plugins
     /// <summary>宿主提供的基础设施。它不提供“调用另一个插件”的入口。</summary>
     public sealed class TracePluginServices
     {
+        /// <summary>持续语音、动作等的运行账本与取消入口；回执不自动变成真实聊天。</summary>
+        public TraceExecutionRegistry Executions { get; } = new TraceExecutionRegistry();
         public IMemoryStore Storage { get; private set; }
         /// <summary>统一的当前生活状态读写面；插件更新时必须带 source/source_id。</summary>
         public ILifeStateStore LifeState { get; set; }
@@ -80,6 +82,8 @@ namespace TraceSoul2.Plugins
 
         /// <summary>按当前轮可用性过滤的贡献目录提供者（与 Brain 可调用的目录一致）。</summary>
         public Func<TraceTurnContext, List<TraceContributionDescriptorData>> AvailableCatalogProvider { get; set; }
+        /// <summary>显式行动目录；保留同一身体上多个同类动作，不经过默认回复器官择一。</summary>
+        public Func<TraceTurnContext, List<TraceContributionDescriptorData>> AvailableActionCatalogProvider { get; set; }
 
         /// <summary>整轮表达结束后的收尾钩子（平台插件用来把暂存文字与表情合并成一条消息发送等）。</summary>
         public List<Func<TraceTurnContext, Task>> TurnCompleteHooks { get; } =

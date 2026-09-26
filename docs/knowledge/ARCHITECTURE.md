@@ -8,8 +8,9 @@ QQ WebSocket → OneBotPlatformAdapter.ConvertInbound → OneBot 收件箱
 后台事件 → SoulRuntime.PollBackgroundAsync
                          ↓ 同一运行锁
 KernelLogic → 保存输入 / 判断唤醒类型 / 识图 / 记忆预激活
-            → MindLogic（组织当下、是否说话、是否出图）
-            → 可选外出或工具 → ExpressorLogic（开口与附加表达映射）
+            → AgentLoopLogic（直接回复 / 行动后继续 / 等待）
+            → 可选能力执行 → 结果返回同一 Agent 循环
+            → ExpressorLogic 公共表达映射（仅 refine 才再次调用模型）
             → MouthLogic 身体路由 → 平台适配器
             → 文字与表情合并发送 / 更新内心与轨迹 / 安排下一次心跳
                          ↓
@@ -17,7 +18,7 @@ KernelLogic → 保存输入 / 判断唤醒类型 / 识图 / 记忆预激活
                 → 取得运行锁提交发送与回执入库
 ```
 
-普通对话通常是 Mind + Expressor 两次 LLM；外出、识图、工具、画面规划、结构化响应重试会增加请求。**两次 LLM 请求并不等于发两条 QQ 回复**。
+普通对话一次 Agent 生成；工具/记忆续推、明确的表达加工、识图、画面规划与结构化纠正会增加请求。最多四轮行动后收口，模型调用次数不等于外发消息数。语音/动作可以独立执行，持续执行回执通过运行事件回流。见 [AGENT_HARNESS](../AGENT_HARNESS.md)。
 
 ## 主要文件
 
@@ -28,7 +29,9 @@ KernelLogic → 保存输入 / 判断唤醒类型 / 识图 / 记忆预激活
 | `Tools/Host/TraceHome.cs` | 软件与家目录分离，角色/插件路径解析 |
 | `Tools/Host/ExternalPluginLoader.cs` | 外部程序集加载与共享契约解析 |
 | `src/TraceSoul2/Logic/KernelLogic.cs` | 主编排、唤醒分流、发送、回执和轮后任务 |
-| `Logic/MindLogic.cs`、`Logic/ExpressorLogic.cs` | 心智决策与外显表达 |
+| `Logic/AgentLoopLogic.cs`、`Prompts/AgentLoopPrompts.cs` | 有界 Agent 循环、能力目录与同一主体续推 |
+| `Logic/MindLogic.cs`、`Logic/ExpressorLogic.cs` | 兼容状态/上下文、公共表达映射与可选加工 |
+| `Plugins/TraceExecutionRegistry.cs` | 持续执行、进度、取消请求与终态回执 |
 | `Logic/CommonContextPackLogic.cs`、`Logic/LlmContextPackLogic.cs` | 公共前缀、历史窗口和供应商策略路由 |
 | `Prompts/CorePrompts.cs`、插件的 `*Prompts.cs` | 核心与器官提示词；不要在路由层散落提示词 |
 | `Logic/MouthLogic.cs` | 身体/器官匹配与通道收口 |

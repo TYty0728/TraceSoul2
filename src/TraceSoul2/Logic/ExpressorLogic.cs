@@ -22,6 +22,18 @@ namespace TraceSoul2.Logic
             this.llm = llm ?? throw new ArgumentNullException("llm");
         }
 
+        /// <summary>直接生成与专门润色共用的器官映射；本方法不调用模型。</summary>
+        public static BrainStructuredOutputData PrepareDirectReply(string reply, TraceTurnContext turn,
+            IEnumerable<TraceContributionDescriptorData> catalog, MindDecisionData decision)
+        {
+            var expressed = new ExpressorOutputData { reply = reply ?? string.Empty };
+            ApplyMindAtmosphere(expressed, decision, turn, false, catalog);
+            EnsureExplicitImageRequest(expressed, turn, catalog);
+            var output = MapExpressor(expressed, catalog, true, decision);
+            EnsureMindImageExpression(output, decision, catalog);
+            return output;
+        }
+
         public async Task<BrainStructuredOutputData> ExpressAsync(
             TraceTurnContext turn,
             IEnumerable<TracePluginMetadataData> plugins,
@@ -829,6 +841,14 @@ namespace TraceSoul2.Logic
             }
             builder.AppendLine(CorePrompts.Expressor.ThoughtHeader);
             builder.AppendLine(FormatMind(mind));
+            if (mind is AgentStepData agentStep)
+            {
+                builder.AppendLine("【已完成判断的正文草稿，只做所需表达加工】");
+                builder.AppendLine(agentStep.reply ?? string.Empty);
+                builder.AppendLine("【本轮实际执行结果；未成功的行动不能写成已完成】");
+                foreach (var result in turn.Workspace.Results.Where(x => x != null))
+                    builder.AppendLine(result.CapabilityId + "｜" + result.Status + "｜" + result.Summary + "｜" + Limit(result.Payload, 4000));
+            }
             if (!string.IsNullOrWhiteSpace(leaveResult))
             {
                 builder.AppendLine();

@@ -1,6 +1,10 @@
 # TraceSoul2.PluginApi
 
-TraceSoul2 运行时插件的稳定契约（当前包版本 **1.4.0**）。
+TraceSoul2 运行时插件的稳定契约（版本 **1.5.0**，配套产品 **0.1.15**）。
+
+## 1.5 起
+
+新增 `AgentStepData`、`TraceExecutionRegistry` 与执行回执。能力调用增加 `body_id/group_id/execution_id`，结果增加 `ExecutionId`；既有调用签名保持兼容。持续语音、动作与取消的接入示例见 [Agent 运行框架](../../docs/AGENT_HARNESS.md)。
 
 ## 1.4 起
 

@@ -108,6 +108,12 @@ namespace TraceSoul2.Logic
             MindDecisionData mind,
             int topK)
         {
+            return Assemble(turn, mind, topK, out _);
+        }
+
+        public static string Assemble(TraceTurnContext turn, MindDecisionData mind, int topK, out bool hasEvidence)
+        {
+            hasEvidence = false;
             if (turn == null || turn.Services == null || turn.Services.Storage == null)
                 return string.Empty;
             var storage = turn.Services.Storage;
@@ -176,6 +182,7 @@ namespace TraceSoul2.Logic
 
             var indexById = filtered.ToDictionary(x => x.Id, StringComparer.Ordinal);
             var cognitions = RecallCognitions(turn.Services.Storage, conceptIds, query, topK);
+            hasEvidence = picked.Count > 0 || cognitions.Count > 0;
             return Format(picked, indexById, scores, cognitions);
         }
 

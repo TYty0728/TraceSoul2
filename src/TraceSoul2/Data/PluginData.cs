@@ -380,6 +380,12 @@ namespace TraceSoul2.Data
         public string call_id;
         public string capability_id;
         public string purpose;
+        /// <summary>可选目标身体，必须匹配能力目录；空时由能力自身绑定决定。</summary>
+        public string body_id;
+        /// <summary>关联同一身体的多模态动作；精确同步由组合能力负责。</summary>
+        public string group_id;
+        /// <summary>执行器生成；插件用此标识上报实际播放/动作回执，模型不能指定。</summary>
+        public string execution_id;
         public List<BrainCallArgumentData> arguments = new List<BrainCallArgumentData>();
 
         public string GetArgument(string name, string fallback = "")
@@ -393,6 +399,8 @@ namespace TraceSoul2.Data
 
     public sealed class TraceCapabilityResultData
     {
+        /// <summary>持续执行标识；running 只代表受理，完成由设备回执确认。</summary>
+        public string ExecutionId { get; set; }
         public string CallId { get; set; }
         public string CapabilityId { get; set; }
         public string Status { get; set; }
@@ -421,12 +429,8 @@ namespace TraceSoul2.Data
         public List<BrainFacetOutputData> facet_outputs = new List<BrainFacetOutputData>();
     }
 
-    /// <summary>
-    /// 心智决策卡：安静、理性、好读好填。
-    /// 心智只组织这一拍怎么想，不写对她说的台词。
-    /// </summary>
-    [Serializable]
     /// <summary>本轮向量检索入选的长尾工具：描述 + 相似度。</summary>
+    [Serializable]
     public sealed class ToolCandidateData
     {
         public TraceContributionDescriptorData Descriptor { get; private set; }
@@ -439,7 +443,8 @@ namespace TraceSoul2.Data
         }
     }
 
-    public sealed class MindDecisionData
+    /// <summary>可选的当下状态变化。沿用旧名称供插件 ABI 与存量快照兼容，不代表独立模型阶段。</summary>
+    public class MindDecisionData
     {
         /// <summary>当下 / 旧事 / 出门</summary>
         public string beat;

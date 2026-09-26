@@ -11,6 +11,7 @@ using System.Threading.Tasks;
 using TraceSoul2.Data;
 using TraceSoul2.Host;
 using TraceSoul2.Manager;
+using TraceSoul2.Plugins.Builtin;
 
 internal static partial class Program
 {
@@ -37,7 +38,7 @@ internal static partial class Program
             Task<string> Send(string action, Dictionary<string, object> args, CancellationToken token)
             {
                 notifications++;
-                var payload = JsonSerializer.Serialize(args, new JsonSerializerOptions { Encoder = System.Text.Encodings.Web.JavaScriptEncoder.UnsafeRelaxedJsonEscaping });
+                var payload = AssertNotificationWirePayload(action, args);
                 Require(action == "send_private_msg" && Convert.ToInt64(args["user_id"]) == 12345,
                     "通知应直接送达 QQ 会话");
                 Require(!payload.Contains("secret-key") && !payload.Contains("private-chat"), "通知不得包含上游正文和密钥");
@@ -139,6 +140,28 @@ internal static partial class Program
         finally { Directory.Delete(directory, true); }
     }
 
+    private static string AssertNotificationWirePayload(string action, Dictionary<string, object> args)
+    {
+        string text = null;
+        foreach (var echo in new[] { null, "echo-\"通知\"\t" })
+        {
+            var wire = OneBotPlatformPlugin.SerializeActionRequest(action, args, echo);
+            using var document = JsonDocument.Parse(wire);
+            var root = document.RootElement;
+            Require(root.GetProperty("action").GetString() == action &&
+                root.TryGetProperty("echo", out var actualEcho) == (echo != null) &&
+                (echo == null || actualEcho.GetString() == echo), "HTTP/WS 动作封装必须正确转义并保留 echo");
+            var message = root.GetProperty("params").GetProperty("message");
+            Require(message.ValueKind == JsonValueKind.Array && message.GetArrayLength() == 1 &&
+                message[0].GetProperty("type").GetString() == "text" && !wire.Contains("AnonymousType"),
+                "错误通知最终传输必须是消息段数组，不能发送匿名类型名或二次编码字符串");
+            text = message[0].GetProperty("data").GetProperty("text").GetString();
+            Require(text.Contains("\n") && root.GetProperty("params").GetProperty("user_id").GetInt64() == 12345,
+                "最终通知须保留完整正文和数值型会话 ID");
+        }
+        return text;
+    }
+
     private static async Task RunStickerFailureProtectionCheckAsync(FailureProtection guard, string directory)
     {
         var results = new List<TraceCapabilityResultData>
@@ -165,7 +188,7 @@ internal static partial class Program
             (_, args, _) =>
             {
                 notifications++;
-                var payload = JsonSerializer.Serialize(args, new JsonSerializerOptions { Encoder = System.Text.Encodings.Web.JavaScriptEncoder.UnsafeRelaxedJsonEscaping });
+                var payload = AssertNotificationWirePayload("send_private_msg", args);
                 Require(payload.Contains("WARNING") && !payload.Contains("ERROR") && !payload.Contains("已暂停"),
                     "表情失败只能发送 WARNING，不能声称停聊");
                 return Task.FromResult("{}");
