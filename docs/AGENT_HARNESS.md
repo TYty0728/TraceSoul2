@@ -76,6 +76,6 @@ context.Services.Executions.Report(new TraceExecutionReceiptData
 
 覆盖真实 Kernel 单次回复、状态与正文隔离、工具/记忆续推、空结果、执行失败、重复调用、未知能力、目标身体校验、可选润色、独立语音/动作、运行事件角色、回执顺序、跨会话取消限制和行动预算。使用模拟模型、模拟设备与内存 SQLite，不向真人发消息。
 
-2026-09-26 验证：完整 ChatCheck 与 `--prompt-layout` 通过；Host、PluginApi 和七个外部插件（GameSession、MediaUnderstanding、RealtimeCall、QqImageGen、QqTts、QqQzone、QqStatus）构建均为零警告、零错误；`git diff --check` 通过。另验证同类多动作、无文字通道的语音身体及插件禁用时的取消。0.1.15 发布前独立检出排除认知网改动，Release 全解决方案、完整 ChatCheck、Prompt 布局、86 项媒体/通话及更新流程检查通过，Windows 发布包与 SHA-256 校验通过。真实 Docker 升级由发布 CI 验证；尚未部署用户服务器。
+2026-09-26 验证：完整 ChatCheck 与 `--prompt-layout` 通过；Host、PluginApi 和七个外部插件（GameSession、MediaUnderstanding、RealtimeCall、QqImageGen、QqTts、QqQzone、QqStatus）构建均为零警告、零错误；`git diff --check` 通过。另验证同类多动作、无文字通道的语音身体及插件禁用时的取消。0.1.15 发布前独立检出排除认知网改动，Release 全解决方案、完整 ChatCheck、Prompt 布局、86 项媒体/通话及更新流程检查通过，Windows 发布包与 SHA-256 校验通过。正式 v0.1.15 已发布，发布 CI 和真实 Docker 升级/数据保留检查通过；尚未部署用户服务器。
 
 真实模型自然度、请求时延、设备打断延迟仍需实际环境验证。没有新增机器人驱动、Live2D 渲染器、原生流式音频模型或精确跨设备同步；提供它们可接入的运行契约与模拟执行闭环。
