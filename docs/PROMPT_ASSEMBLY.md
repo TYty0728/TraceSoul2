@@ -30,43 +30,38 @@
 
 Kimi 官网的心智、开口、复盘与同模型的插件调用共用 `prompt_cache_key = tracesoul2:{conversationId}`。其他渠道沿用隐式缓存。Host 的 TimedLlmClient 必须转发 BaseUrl，供应商兼容层才知道是否添加私有字段。
 
-一轮 Moment 会打两套请求，所有渠道都让它们共享同一段前缀：
+2026-09-26 起，普通 Moment 使用 `【Agent 当下】` 一次生成正文与可选状态；需要能力时执行并带结果继续，`refine=true` 才另行调用 `【开口】`。见 [AGENT_HARNESS](AGENT_HARNESS.md)。
 
-1. **心智**：安静组织这一拍。不写台词，不看通道清单。
-2. **外显**：带着心智的组织卡和共享预激活记忆开口。不看工具表，不重做决策。
-
-两套请求都是同一形状：一条稳定 system、量化对齐的 user / assistant 历史、角色稳定段、共享记忆、轮内动态段、当前原话。时间、内心、标签、此刻任务和输出协议等每轮动态内容不得再进入 system，也不得进入角色稳定段。
+各次请求共用一条稳定 system、量化对齐的真实历史和稳定指令。时间、当前状态、实际能力目录、行动结果与设备回执放动态段。结构化协议规则放稳定段；本轮数据不得进入身份 system 或稳定角色段。后台事件不以对方原话的形式追加到末尾，而是在动态段明确标识为运行事件。
 
 不要再把对话原文压成 `田园：… / 阿循：…` 塞进 system。不要把身份切成多条 system。
 
 镜头就是 `user` / `assistant` 本身。专属指令说明这一轮要干什么；当前原话放在最后，模型接住的是这一句。
 
-## 心智
+## Agent 与兼容心智上下文
 
 器官稳定说明使用 `MindPromptAppends`，本轮回执/计数等使用 `MindTurnPromptAppends`，后者只进入动态段。相机的最近发图反馈不可放进身份 system 或稳定角色段。
 
-公共 system 是同一套身份卡（含表达习惯）；思考规则、时钟、内心、标签、JSON 协议只出现在最后的【心智】。
+公共 system 保留同一套身份卡（含表达习惯）。Agent 协议与器官稳定说明在稳定段；当前状态、能力目录及执行记录在动态段。输出 `step/reply/actions/refine`，沿用 `MindDecisionData` 的可选状态字段供插件和存量快照兼容，不再强制先生成组织卡。
 
-输出是一张人能读完的组织卡：`beat`（当下 / 旧事 / 出门）、标签、心情、话题边界 `archive`、新识、出门事由、当前时 `inner`、在场注意 `attention`、给外显的 `note`（不是台词）。普通对话的 `review` 固定为 false；身份复盘由定点时间运行事件唤醒。
-
-中枢按入口换轨：她说话走心智；`leave` 走代码外出链。定点「每日复盘」直达潜意识（现有 `identity.review`）；普通对话不派身份复盘。`archive` 只提供话题边界信号，代码在累计 40 条双方 Moment 后才允许小复盘，60 条时兜底强制执行。
+旧 `MindLogic.DecideAsync` 保留兼容与专项检查，普通对话不再调用它。旧 `beat=出门` 不驱动固定外出链，查询/行动统一通过能力调用；长期归档与身份修订继续由完整日终管线触发。
 
 ## 外显
 
-公共前缀与心智相同；开口格式、心智组织卡、表达请求只出现在最后的【开口】。不含 `【需要时可做的事】`，不填能力 ID。
+公共前缀与 Agent 相同；显式加工时提供正文草稿和实际行动结果。普通直接回复只使用公共表达映射，不调用开口模型。夜间余温专项生成仍保留独立入口。
 
 主文字通道由宿主的 `ReplyChannelProvider` 确定；QQ 连着时感官目录不暴露控制台通道。附加表情、图片、语音由外显给内容，代码映射到 effector。
 
 ## 装配不变量
 
 - 恰好一条 `role=system`。
-- 不把 Moment 正文复制进 system。当前原话只出现一次，位于专属指令之前。
+- 不把 Moment 正文复制进 system。当前真实原话只出现一次，位于专属指令之后。
 - 历史只含两人真实 Moment：人 → `user`，同伴 → `assistant`；排除 `system_event` 和出站 `[QQ` / `[CQ:` 占位。连续同一角色合并成一条。
 - 插件专用对话模型（画面规划等）走同一装配器；分叉只允许出现在专属指令。
 - 不向模型展示 `callable_nerve`、`mounted_facet`、`unclassified`、`explicit_dialogue` 等实现枚举。
 - `senses.catalog`、`qq.reply.channel` 与 `*.usage` 不拼进 Prompt；表达通道由代码映射。
 - 第一段必须直接以第一人称身份开头，紧接人格卡；不得用“你是一个 Brain”之类框架角色抢占身份注意力。
-- 记忆定位由心智勾标签，代码做向量拼装；不要为「总结给外显看」另开一轮 LLM。
+- 记忆先由代码预激活，Agent 可按缺口调用 memory.recall；不要为「总结给外显看」另开一轮 LLM。
 
 ## 尚未决定的历史策略
 
@@ -94,4 +89,4 @@ dotnet build Tools\ChatCheck\ChatCheck.csproj
 dotnet Tools\ChatCheck\bin\Debug\net8.0\ChatCheck.dll --prompt-layout
 ```
 
-该检查不访问外部 API，会验证所有渠道默认解析为 `Common`、心智与外显共用稳定 system、当前 Moment 位于专属尾部之前、对话原文不进 system、内部枚举隐藏、外显无工具表，以及 Kimi 的缓存键和 assistant reasoning 兼容项仍然生效。
+该检查不访问外部 API，包含 Agent 专项回归，并保留旧心智/外显兼容布局检查；验证所有渠道默认解析为 `Common`、共用稳定 system、当前真实原话位于专属指令之后、对话原文不进 system，以及缓存键和 assistant reasoning 兼容项。`--agent-loop` 可单独运行新主链检查。

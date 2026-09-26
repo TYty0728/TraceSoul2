@@ -7,6 +7,7 @@ using System.Linq;
 using System.Net.Http;
 using System.Net.WebSockets;
 using System.Text;
+using System.Text.Json;
 using System.Threading;
 using System.Threading.Tasks;
 using TraceSoul2.Data;
@@ -67,7 +68,7 @@ namespace TraceSoul2.Plugins.Builtin
         {
             Id = PluginId,
             DisplayName = "QQ 平台（OneBot v11 / NapCat）",
-            Version = "1.4.1",
+            Version = "1.4.2",
             Author = "TraceSoul2",
             Role = PluginRoleValues.Platform,
             PlatformId = BodyIds.Qq,
@@ -815,8 +816,7 @@ namespace TraceSoul2.Plugins.Builtin
             var echo = Interlocked.Increment(ref nextEcho).ToString();
             var pending = new TaskCompletionSource<string>(TaskCreationOptions.RunContinuationsAsynchronously);
             lock (gate) pendingActions[echo] = pending;
-            var payload = "{\"action\":\"" + Escape(action) + "\",\"params\":{" +
-                          string.Join(",", BuildParams(parameters)) + "},\"echo\":\"" + echo + "\"}";
+            var payload = SerializeActionRequest(action, parameters, echo);
             await SendSocketAsync(socket, payload);
             var finished = await Task.WhenAny(pending.Task, Task.Delay(30000));
             if (finished != pending.Task)
@@ -852,8 +852,7 @@ namespace TraceSoul2.Plugins.Builtin
         /// <summary>正向模式：HTTP 动作（POST {http_url}/{action}），返回原始响应文本。</summary>
         private async Task<string> CallActionOverHttpAsync(string action, Dictionary<string, object> parameters)
         {
-            var body = "{\"action\":\"" + action + "\",\"params\":{" +
-                       string.Join(",", BuildParams(parameters)) + "}}";
+            var body = SerializeActionRequest(action, parameters);
             using (var request = new HttpRequestMessage(HttpMethod.Post, config.http_url.TrimEnd('/') + "/" + action))
             {
                 if (!string.IsNullOrWhiteSpace(config.access_token))
@@ -868,19 +867,16 @@ namespace TraceSoul2.Plugins.Builtin
             }
         }
 
-        private static IEnumerable<string> BuildParams(Dictionary<string, object> parameters)
+        /// <summary>动作参数可含消息段数组和嵌套对象，不能用 ToString 把它们变成 CLR 类型名。</summary>
+        internal static string SerializeActionRequest(string action, Dictionary<string, object> parameters, string echo = null)
         {
-            foreach (var pair in parameters ?? new Dictionary<string, object>())
-                yield return "\"" + pair.Key + "\":" + ParamValue(pair.Value);
-        }
-
-        private static string ParamValue(object value)
-        {
-            if (value == null) return "null";
-            if (value is bool flag) return flag ? "true" : "false";
-            if (value is long || value is int || value is short || value is byte) return value.ToString();
-            if (value is double || value is float) return Convert.ToDouble(value).ToString(CultureInfo.InvariantCulture);
-            return "\"" + Escape(value.ToString()) + "\"";
+            var request = new Dictionary<string, object>
+            {
+                ["action"] = action ?? string.Empty,
+                ["params"] = parameters ?? new Dictionary<string, object>()
+            };
+            if (echo != null) request["echo"] = echo;
+            return JsonSerializer.Serialize(request);
         }
 
         private static string Escape(string value)

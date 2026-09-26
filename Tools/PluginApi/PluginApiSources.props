@@ -5,6 +5,8 @@
     只放纯数据与接口（Data POCO、ILlmClient、IMemoryStore、插件契约、平台适配器契约）。
   -->
   <ItemGroup>
+    <Compile Include="$(MSBuildThisFileDirectory)../../src/TraceSoul2/Data/AgentLoopData.cs" />
+    <Compile Include="$(MSBuildThisFileDirectory)../../src/TraceSoul2/Plugins/TraceExecutionRegistry.cs" />
     <Compile Include="$(MSBuildThisFileDirectory)../../src/TraceSoul2/Data/AgentArchitectureData.cs" />
     <Compile Include="$(MSBuildThisFileDirectory)../../src/TraceSoul2/Data/ChatMemoryData.cs" />
     <Compile Include="$(MSBuildThisFileDirectory)../../src/TraceSoul2/Data/IdentityCardData.cs" />

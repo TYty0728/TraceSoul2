@@ -5,6 +5,8 @@
     已移入 TraceSoul2.PluginApi 项目（PluginApiSources.props），这里不再重复编译。
   -->
   <ItemGroup>
+    <Compile Include="$(MSBuildThisFileDirectory)../src/TraceSoul2/Logic/AgentLoopLogic.cs" />
+    <Compile Include="$(MSBuildThisFileDirectory)../src/TraceSoul2/Prompts/AgentLoopPrompts.cs" />
     <Compile Include="$(MSBuildThisFileDirectory)../src/TraceSoul2/Manager/SqliteMemoryManager.cs" />
     <Compile Include="$(MSBuildThisFileDirectory)../src/TraceSoul2/Manager/SqliteVectorManager.cs" />
     <Compile Include="$(MSBuildThisFileDirectory)../src/TraceSoul2/Manager/CoreVectorOntologyFactory.cs" />

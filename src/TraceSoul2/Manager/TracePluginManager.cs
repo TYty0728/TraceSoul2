@@ -45,6 +45,7 @@ namespace TraceSoul2.Manager
             this.services = services ?? throw new ArgumentNullException("services");
             services.EnabledCatalogProvider = () => GetEnabledCatalog();
             services.AvailableCatalogProvider = GetAvailableCatalog;
+            services.AvailableActionCatalogProvider = GetAvailableActionCatalog;
         }
 
         public void Discover(params Assembly[] assemblies)
@@ -147,6 +148,16 @@ namespace TraceSoul2.Manager
                 .Concat(momentSources.Values.Select(x => Bind(x.Descriptor)))
                 .Concat(backgroundServices.Values.Select(x => Bind(x.Descriptor)))
                 .OrderBy(x => x.Kind).ThenBy(x => x.Id).ToList();
+        }
+
+        /// <summary>显式行动保留同一身体的全部能力；默认文字/附件路由仍使用 GetAvailableCatalog。</summary>
+        public List<TraceContributionDescriptorData> GetAvailableActionCatalog(TraceTurnContext turn)
+        {
+            return callables.Values
+                .Where(x => x.IsAvailable(turn) && !IsDormantPlugin(x.Descriptor.PluginId))
+                .Where(x => x.Descriptor.Kind != TraceContributionKindValues.Effector ||
+                            string.IsNullOrWhiteSpace(x.Descriptor.BodyId) || MouthLogic.IsBodyLive(x.Descriptor.BodyId, turn))
+                .Select(x => Bind(x.Descriptor)).OrderBy(x => x.Id, StringComparer.Ordinal).ToList();
         }
 
         /// <summary>仅启用插件的贡献目录（感官目录等基础设施用）。休眠器官仍在册——它是「身体不在」不是「被关掉」。</summary>
@@ -286,6 +297,15 @@ namespace TraceSoul2.Manager
         public List<PluginEventData> PollBackgroundServices(long nowUnixMs)
         {
             var result = new List<PluginEventData>();
+            foreach (var execution in services.Executions.DrainEvents())
+                result.Add(new PluginEventData
+                {
+                    PluginId = "runtime.execution", ConversationId = execution.ConversationId,
+                    ExternalEventId = execution.ExecutionId, Role = "system_event", IsOperational = true,
+                    Wake = KernelWakeValues.Mind, OccurredUnixMs = nowUnixMs,
+                    Content = "执行回执：" + execution.CapabilityId + "｜" + execution.Status + "｜" + execution.Summary,
+                    PayloadJson = System.Text.Json.JsonSerializer.Serialize(execution)
+                });
             foreach (var service in backgroundServices.Values
                          .Where(x => x.IsAvailable && !IsDormantPlugin(x.Descriptor.PluginId)).ToList())
             {
@@ -403,28 +423,41 @@ namespace TraceSoul2.Manager
             var timer = Stopwatch.StartNew();
             services.LogTiming(turn == null ? null : turn.TraceId,
                 "能力执行开始 " + contribution.Descriptor.Id);
+            var executionId = services.Executions.Start(turn?.ConversationId ?? string.Empty, call,
+                MouthLogic.BodyOf(contribution.Descriptor), cancellationToken);
+            call.execution_id = executionId;
             try
             {
-                var result = await contribution.ExecuteAsync(call, turn, cancellationToken);
-                if (result == null) return Failed(call, "插件返回了空结果。");
+                var result = await contribution.ExecuteAsync(call, turn, services.Executions.Token(executionId));
+                if (result == null) result = Failed(call, "插件返回了空结果。");
+                result.ExecutionId = executionId;
                 result.CallId = call.call_id;
                 result.CapabilityId = contribution.Descriptor.Id;
                 result.Status = string.IsNullOrWhiteSpace(result.Status) ? "success" : result.Status;
                 result.Summary = result.Summary ?? string.Empty;
                 result.Payload = result.Payload ?? string.Empty;
                 result.EvidenceRefs = result.EvidenceRefs ?? new List<string>();
+                services.Executions.AcceptResult(executionId, result);
                 services.LogTiming(turn == null ? null : turn.TraceId,
                     "能力执行完成 " + contribution.Descriptor.Id,
                     timer.ElapsedMilliseconds, "status=" + result.Status);
                 return result;
             }
-            catch (OperationCanceledException) { throw; }
+            catch (OperationCanceledException)
+            {
+                services.Executions.Report(new TraceExecutionReceiptData { ExecutionId = executionId,
+                    Sequence = long.MaxValue, Status = "cancelled", Summary = "执行已取消。" });
+                throw;
+            }
             catch (Exception exception)
             {
                 services.LogTiming(turn == null ? null : turn.TraceId,
                     "能力执行失败 " + contribution.Descriptor.Id,
                     timer.ElapsedMilliseconds, exception.Message);
-                return Failed(call, exception.Message);
+                var failed = Failed(call, exception.Message);
+                failed.ExecutionId = executionId;
+                services.Executions.AcceptResult(executionId, failed);
+                return failed;
             }
         }
 
@@ -476,6 +509,7 @@ namespace TraceSoul2.Manager
 
         public void Dispose()
         {
+            services.Executions.Dispose();
             foreach (var id in plugins.Keys.ToList()) Deactivate(id);
             plugins.Clear();
         }
@@ -491,6 +525,8 @@ namespace TraceSoul2.Manager
         {
             LoadedPlugin loaded;
             if (!plugins.TryGetValue(id, out loaded)) return;
+            services.Executions.CancelCapabilities(callables.Values.Where(x => x.Descriptor.PluginId == id)
+                .Select(x => x.Descriptor.Id).ToList());
             foreach (var service in backgroundServices.Values
                          .Where(x => x.Descriptor.PluginId == id).ToList())
                 service.Shutdown();

@@ -20,6 +20,11 @@ internal static partial class Program
     private static void Main(string[] args)
     {
         SQLitePCL.Batteries_V2.Init();
+        if ((args ?? Array.Empty<string>()).Contains("--agent-loop"))
+        {
+            RunAgentLoopChecksAsync().GetAwaiter().GetResult();
+            return;
+        }
         if ((args ?? Array.Empty<string>()).Contains("--failure-protection"))
         {
             RunFailureProtectionChecksAsync().GetAwaiter().GetResult();
@@ -33,6 +38,7 @@ internal static partial class Program
             return;
         }
         RunTagRankCheck();
+        RunAgentLoopChecksAsync().GetAwaiter().GetResult();
         RunMindTemplateCheck();
         RunKimiOfficialRequestCheck();
         RunOfficialChannelCheck();

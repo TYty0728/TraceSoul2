@@ -147,12 +147,13 @@ namespace TraceSoul2.Logic
             return builder.ToString();
         }
 
-        private static string BuildTurnPrompt(
+        internal static string BuildTurnPrompt(
             TraceTurnContext turn,
             string leaveResult,
             bool alreadyLeft,
             IReadOnlyList<MindTemplate> templates,
-            string naturallyAwakenedPast)
+            string naturallyAwakenedPast,
+            bool includeLegacyTools = true)
         {
             var pair = turn.Services.Storage.LoadPairIdentity();
             var storage = turn.Services.Storage;
@@ -205,14 +206,15 @@ namespace TraceSoul2.Logic
                 builder.AppendLine(naturallyAwakenedPast.Trim());
             }
             builder.AppendLine();
-            builder.AppendLine(CorePrompts.Mind.TagCandidatesHeader);
-            var tags = MemoryRecallLogic.ListTagCandidates(turn, TagCandidateCap);
-            if (tags.Count == 0)
-                builder.AppendLine(CorePrompts.Mind.NoCloseTags);
-            else
+            if (includeLegacyTools)
             {
-                foreach (var tag in tags)
-                    builder.AppendLine("- " + tag.Label + "：" + Limit(tag.Definition, 40));
+                builder.AppendLine(CorePrompts.Mind.TagCandidatesHeader);
+                var tags = MemoryRecallLogic.ListTagCandidates(turn, TagCandidateCap);
+                if (tags.Count == 0)
+                    builder.AppendLine(CorePrompts.Mind.NoCloseTags);
+                else
+                    foreach (var tag in tags)
+                        builder.AppendLine("- " + tag.Label + "：" + Limit(tag.Definition, 40));
             }
             if (!string.IsNullOrWhiteSpace(leaveResult))
             {
@@ -231,7 +233,7 @@ namespace TraceSoul2.Logic
                 ? null
                 : turn.Workspace.ToolCandidates;
             var toolList = ToolLookupLogic.FormatForMind(toolCandidates);
-            if (!string.IsNullOrWhiteSpace(toolList))
+            if (includeLegacyTools && !string.IsNullOrWhiteSpace(toolList))
             {
                 builder.AppendLine();
                 builder.AppendLine(toolList);
@@ -270,11 +272,12 @@ namespace TraceSoul2.Logic
                 CorePrompts.Write(builder, CorePrompts.Mind.Heartbeat);
             }
             else if (turn.Wake == KernelWakeValues.Mind)
-                builder.AppendLine(CorePrompts.Mind.MindWake);
+                builder.AppendLine(includeLegacyTools ? CorePrompts.Mind.MindWake : CorePrompts.Mind.Background);
             else
             {
                 builder.AppendLine(turn.RequiresExpression
-                    ? pair.Apply(CorePrompts.Mind.HumanSpeak)
+                    ? pair.Apply(includeLegacyTools ? CorePrompts.Mind.HumanSpeak :
+                        "这是 {username} 正在对我说话。资料充分就直接回复；需要补充时先行动。结合她的安排决定后续联系时间，不把暂时结束当作无限期断联。")
                     : CorePrompts.Mind.Background);
             }
             return builder.ToString();
