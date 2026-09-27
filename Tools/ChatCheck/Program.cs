@@ -20,6 +20,8 @@ internal static partial class Program
     private static void Main(string[] args)
     {
         SQLitePCL.Batteries_V2.Init();
+        if (args?.Length == 2 && args[0] == "--agent-contract-dump") { RunAgentDumpReplay(args[1]); return; }
+        if ((args ?? Array.Empty<string>()).Contains("--agent-contract")) { RunAgentContractChecksAsync().GetAwaiter().GetResult(); return; }
         if ((args ?? Array.Empty<string>()).Contains("--goal-memory")) { RunGoalMemoryChecksAsync().GetAwaiter().GetResult(); return; }
         if ((args ?? Array.Empty<string>()).Contains("--web-search")) { RunWebSearchChecksAsync().GetAwaiter().GetResult(); return; }
         if (args?.Length == 2 && args[0] == "--cognition-migration") { RunCognitionMigrationContractChecks(args[1]); return; }
@@ -42,6 +44,7 @@ internal static partial class Program
             return;
         }
         RunCognitionGraphChecks();
+        RunAgentContractChecksAsync().GetAwaiter().GetResult();
         RunGoalMemoryChecksAsync().GetAwaiter().GetResult();
         RunWebSearchChecksAsync().GetAwaiter().GetResult();
         RunTagRankCheck();

@@ -1,0 +1,53 @@
+# Agent 输出契约与旧协议隔离
+
+2026-09-27，纳入 0.1.17 候选。运行日志中的两次失败响应内容相同，遗留 `speak` 字段使用了字符串，而旧心智 DTO 要求布尔；纠正只有位置，没有预期类型。本次修复从模型契约与运行状态的边界入手，不增加模型阶段。
+
+## 唯一模型契约
+
+`AgentOutputData` 是独立 DTO，不继承 `MindDecisionData`。只保留步骤、正文、润色选择、明确类型的状态字段、关注引用、目标变更及行动。`AgentActionData` 不接受执行器的 `execution_id`。提示中的 JSON schema 通过实际 DTO 的类型反射生成；字符串、布尔、整数、数组与嵌套对象使用同一份结构定义。
+
+模型结果校验后显式转换为内部 `AgentStepData`。它继承旧状态类型仅为现有状态消费者兼容，不再直接反序列化模型输出。`speak` 由最终正文或本轮对话身体已受理表达推导，模型不能覆盖。旧根字段 `beat/note/tags/query/leave/tool_call/tool_input/image/sticker/voice/voices/archive/review/cognition/speak` 不在新契约中；偶尔多填的旧字段被解析器忽略，不触发旧工具、媒体或归档流程。
+
+`mood_changed/state_force/sleep/refine` 仍是布尔；`next_heartbeat_minutes` 是整数。工具调用的 `arguments[].value` 是字符串，复杂参数需序列化成字符串。类型错误的纠正从实际 DTO 逐段解析异常路径，返回已知字段名、数组位置形状和期望类型；未知路径不回显，异常正文与任意模型字段名不进入诊断。纠正仍最多一次。
+
+## 状态机与注入边界
+
+- 收到用户消息必须实际回应，可以只使用照片、表情、语音或身体动作。未回应时不能 `wait`，也不能空 `finish`；媒体失败不算已回应。
+- 后台唤醒允许 `wait`；已在当前对话身体受理表达后可以不再追加文字。持续执行的受理仍不代表物理完成。
+- `continue` 必须有行动且不能同时要求最终润色；中间草稿不发送。`finish/wait` 不携带行动，`refine` 需要正文。
+- 心跳使用 Agent 专属提示，不再导入旧 `speak=true/false` 协议。
+- 旧 `MindPromptAppends/MindJsonFields` 以及 `.usage`、`senses.catalog`、`qq.reply.channel` 协议块不进入 Agent 根输出指令。它们保留给旧兼容流程；Agent 的能力 ID、说明和参数来自当前能力目录。动态生活数据仍保留。
+
+这次只隔离与新契约冲突的旧协议入口，没有重写插件功能或开展全套插件文案压缩。后续插件说明应围绕能力用途和该能力的参数格式，不再扩展 Agent 根 JSON。
+
+## 插件注入初步统计
+
+对用户提供的三份请求只统计结构与长度，不归档原始聊天。字符数和 UTF-8 字节数不是 token 数，当前没有对应模型的分段 token 计量。
+
+| 请求顺序 | messages 内容字符数 | UTF-8 字节数 | 能力目录字符数 | 能力数 |
+|---|---:|---:|---:|---:|
+| 首次记录 | 12,926 | 30,375 | 3,153 | 11 |
+| 出错记录 | 11,785 | 26,507 | 3,153 | 11 |
+| 纠正记录 | 12,416 | 27,798 | 3,153 | 11 |
+
+三份目录一致，目录总计 4,805 UTF-8 字节。逐项使用无额外空格的 JSON 序列化计数，包含 ID、描述、参数、身体、器官及使用条件等字段；不是纯插件说明的长度。
+
+| 能力 | 目录项字符数 | 其中描述 | 其中参数说明 |
+|---|---:|---:|---:|
+| dialogue.recent_history | 279 | 42 | 32 |
+| game.session.start | 302 | 26 | 118 |
+| inner.inspect | 271 | 46 | 15 |
+| media.source.inspect | 270 | 35 | 13 |
+| qq.qzone.publish | 249 | 32 | 63 |
+| qq.qzone.read | 290 | 24 | 34 |
+| qq.status.mood | 246 | 21 | 32 |
+| web.read | 340 | 47 | 38 |
+| web.search | 385 | 44 | 66 |
+| memory.recall | 243 | 23 | 63 |
+| execution.cancel | 266 | 29 | 77 |
+
+三份请求均未发现 `qq.voice.send`、`voice_emotion` 或 `voices`，目录中没有语音能力，因此不能据此确认“语音插件单独占 7k”。当前 QQ TTS 源码固定 Usage 为 182 字符/406 字节，EffectorDescription 为 21 字符/55 字节，EffectorBoundary 为 24 字符/40 字节；后两者不是各入口都同时注入。其他版本、运行配置及启用语音时的完整请求尚未计量。后续精简需区分固定说明、参数结构、动态资料、重复内容和历史工具结果，不能把整个请求都算给一个插件。
+
+## 验证入口
+
+`ChatCheck --agent-contract` 覆盖 DTO/schema 同源、旧字段隔离、布尔/整数/字符串/数组及嵌套参数纠正、心跳与旧插件协议隔离、代码推导开口状态。`--agent-contract-dump <response.txt>` 只读解析本地响应并验证新契约，不调用模型、工具或发送聊天，不打印原文；两份故障响应均已通过回放。完整回归仍包含目标、认知、发送与旧 Mind 兼容检查。

@@ -5,6 +5,7 @@
     已移入 TraceSoul2.PluginApi 项目（PluginApiSources.props），这里不再重复编译。
   -->
   <ItemGroup>
+    <Compile Include="$(MSBuildThisFileDirectory)../src/TraceSoul2/Logic/AgentOutputContractLogic.cs" />
     <Compile Include="$(MSBuildThisFileDirectory)../src/TraceSoul2/Logic/GoalMemoryLogic.cs" />
     <Compile Include="$(MSBuildThisFileDirectory)../src/TraceSoul2/Logic/CognitionFormationLogic.cs" />
     <Compile Include="$(MSBuildThisFileDirectory)../src/TraceSoul2/Manager/SqliteCognitionGraph.cs" />

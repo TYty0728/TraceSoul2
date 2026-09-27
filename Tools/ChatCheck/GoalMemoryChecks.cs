@@ -24,7 +24,7 @@ internal static partial class Program
         { operation = "create", kind = kind, content = text, applies_when = "日常聊天，真正需要了解的事仍可问",
             horizon = "ongoing", source = origin, evidence_quote = origin == "user" ? quote : "" };
         string Step(AgentGoalUpdateData update) => JsonSerializer.Serialize(new AgentStepData
-        { step = "wait", goal_updates = new() { update } }, json);
+        { step = "finish", reply = "记下了。", goal_updates = new() { update } }, json);
         try
         {
             using (var store = new SqliteMemoryManager(path))
@@ -38,8 +38,8 @@ internal static partial class Program
                 await new KernelLogic(store, llm, manager).ChatAsync(conversation, quote);
                 Require(llm.Requests.Count == 1 && llm.TextRequests == 0 &&
                     GoalMemoryLogic.Read(store, conversation).Single().Content == preference &&
-                    store.GetRecentMoments(conversation, 10).Count == 1,
-                    "明确偏好可随安静决定在当轮保存，不增加提取模型或强迫文字确认");
+                    store.GetRecentMoments(conversation, 10).Count == 2,
+                    "明确偏好随回应在当轮保存，不增加提取模型");
             }
             using (var store = new SqliteMemoryManager(path))
             {
@@ -134,7 +134,7 @@ internal static partial class Program
                 var actionStep = new AgentStepData { step = "continue", goal_updates = new() { Create() },
                     actions = new() { new() { call_id = "test", capability_id = "memory.recall",
                         arguments = new() { new() { name = "query", value = "资料" } } } } };
-                var actionLlm = new AgentSequenceLlm(JsonSerializer.Serialize(actionStep, json), "{\"step\":\"wait\"}");
+                var actionLlm = new AgentSequenceLlm(JsonSerializer.Serialize(actionStep, json), "{\"step\":\"finish\",\"reply\":\"没查成，但要求记下了。\"}");
                 await new AgentLoopLogic(actionLlm).RunAsync(loopTurn, "", () => new(), (_, _) =>
                 {
                     Require(GoalMemoryLogic.Read(store, "goal-before-action").Single().Content == preference,

@@ -1,5 +1,7 @@
 using System;
 using System.Collections.Generic;
+using System.Reflection;
+using System.Text.RegularExpressions;
 using System.Text;
 using System.Text.Json;
 using System.Threading;
@@ -41,7 +43,7 @@ namespace TraceSoul2.Logic
                 new DeepSeekMessageData("assistant", Limit(raw, 16000)),
                 new DeepSeekMessageData(
                     "user",
-                    CorePrompts.Retry.JsonRepairUser(DescribeFailure(firstError)) +
+                    CorePrompts.Retry.JsonRepairUser(DescribeFailure(firstError, typeof(T))) +
                     " 请重新输出完整 JSON，不要只输出修改片段；字符串中的双引号必须转义，属性和值之间用冒号，属性之间用逗号。")
             };
             var repairedRaw = await client.CompleteJsonAsync(repair, cancellationToken, promptCacheKey);
@@ -54,20 +56,50 @@ namespace TraceSoul2.Logic
             catch (Exception secondError)
             {
                 throw new InvalidOperationException(
-                    "语言模型连续两次返回不可用的结构化输出。首次错误：" + DescribeFailure(firstError) +
-                    "；纠正后错误：" + DescribeFailure(secondError),
+                    "语言模型连续两次返回不可用的结构化输出。首次错误：" + DescribeFailure(firstError, typeof(T)) +
+                    "；纠正后错误：" + DescribeFailure(secondError, typeof(T)),
                     secondError);
             }
         }
 
-        // JSON 异常正文/Path 可能夹带模型生成的字段；持久化与纠正仅使用类别和位置。
-        private static string DescribeFailure(Exception error)
+        // 路径必须能逐段对应实际 DTO，回显代码中的字段名和类型，不回显未知字段或异常正文。
+        private static string DescribeFailure(Exception error, Type contract)
         {
             if (error is JsonException json)
+            {
                 return "JSON 语法或字段类型错误（行 " + ((json.LineNumber ?? 0) + 1) +
-                    "，字节位置 " + (json.BytePositionInLine ?? 0) + "）";
+                    "，字节位置 " + (json.BytePositionInLine ?? 0) + "）" +
+                    ContractTypeHint(contract, json.Path);
+            }
             return error is InvalidOperationException
                 ? Limit(error.Message, 240) : "结构化输出解析失败";
+        }
+
+        private static string ContractTypeHint(Type contract, string path)
+        {
+            if (string.IsNullOrEmpty(path) || !Regex.IsMatch(path, @"^\$(?:\.[A-Za-z_][A-Za-z_0-9]*(?:\[\d{1,6}\])?)+$")) return "";
+            var safe = "$";
+            foreach (Match part in Regex.Matches(path, @"\.([A-Za-z_][A-Za-z_0-9]*)(\[\d{1,6}\])?"))
+            {
+                var field = contract.GetField(part.Groups[1].Value, BindingFlags.Public | BindingFlags.Instance | BindingFlags.IgnoreCase);
+                var property = contract.GetProperty(part.Groups[1].Value, BindingFlags.Public | BindingFlags.Instance | BindingFlags.IgnoreCase);
+                if (field == null && property == null) return "";
+                safe += "." + (field?.Name ?? property.Name);
+                contract = field?.FieldType ?? property.PropertyType;
+                if (part.Groups[2].Success)
+                {
+                    if (!contract.IsGenericType || contract.GetGenericTypeDefinition() != typeof(List<>)) return "";
+                    contract = contract.GetGenericArguments()[0]; safe += "[]";
+                }
+            }
+            contract = Nullable.GetUnderlyingType(contract) ?? contract;
+            var expected = contract == typeof(bool) ? "布尔 true/false（不加引号）" :
+                contract == typeof(string) ? "字符串（文字用双引号包裹）" :
+                contract == typeof(int) || contract == typeof(long) ? "整数（不加引号）" :
+                contract == typeof(float) || contract == typeof(double) || contract == typeof(decimal) ? "数字（不加引号）" :
+                contract == typeof(DateTime) || contract == typeof(DateTimeOffset) ? "日期时间字符串" :
+                contract.IsArray || (contract.IsGenericType && contract.GetGenericTypeDefinition() == typeof(List<>)) ? "数组 [...]" : "对象 {...}";
+            return "；字段 " + safe + " 必须是 JSON " + expected + "，请按输出结构修正字段类型。";
         }
 
         /// <summary>开口：收自然语言。校验失败再请它重说一次，不要求 JSON。</summary>
