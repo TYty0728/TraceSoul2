@@ -2,7 +2,7 @@ using System.Collections.Generic;
 
 namespace TraceSoul2.Data
 {
-    /// <summary>一次 Agent 推进。旧状态字段保留 ABI；正文与行动不再经过必选的第二个模型。</summary>
+    /// <summary>Agent 的内部运行决策，兼容旧状态消费者；模型只读写独立的 AgentOutputData。</summary>
     public sealed class AgentStepData : MindDecisionData
     {
         // 缺少步骤是无效输出，不能默认解释为一次有意的安静决定。

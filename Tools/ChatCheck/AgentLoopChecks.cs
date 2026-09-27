@@ -39,7 +39,10 @@ internal static partial class Program
         {
             var llm = new AgentSequenceLlm(responses);
             var kernel = new KernelLogic(store, llm, manager);
-            var result = conversation == "agent-voice" || conversation.StartsWith("agent-media", StringComparison.Ordinal)
+            var result = conversation == "agent-silent"
+                ? await kernel.ProcessPluginEventAsync(conversation, new PluginEventData { PluginId = "check.agent", Role = "system_event",
+                    Content = "后台观察", IsOperational = true, Wake = KernelWakeValues.Mind, OccurredUnixMs = DateTimeOffset.UtcNow.ToUnixTimeMilliseconds() })
+                : conversation == "agent-voice" || conversation.StartsWith("agent-media", StringComparison.Ordinal)
                 ? await kernel.ProcessPluginEventAsync(conversation, new PluginEventData
                 {
                     PluginId = "check.agent", Role = "小雨", Content = "请用声音回应", Organ = "voice",
@@ -63,8 +66,8 @@ internal static partial class Program
             next_heartbeat_plan = "稍后看看是否有想分享的事" };
         var silent = await Chat("agent-silent", Step(silentStep));
         Require(silent.llm.Requests.Count == 1 && silent.llm.TextRequests == 0 &&
-            store.GetRecentMoments("agent-silent", 10).Count == 1 && !expressionStarts.Contains("agent-silent"),
-            "收到用户消息可以明确保持安静：一次生成，不发送假回复，也不触发开始输入");
+            store.GetRecentMoments("agent-silent", 10).Count == 0 && !expressionStarts.Contains("agent-silent"),
+            "后台唤醒可以保持安静：一次生成，不发送假回复，也不触发开始输入");
         Require(store.LoadOrCreateInnerRuntime("agent-silent").Narrative == silentStep.inner,
             "选择安静仍须保存本轮内心变化");
         Require(!AgentLoopLogic.Valid(new AgentStepData(), true, false) &&
@@ -73,11 +76,12 @@ internal static partial class Program
             !AgentLoopLogic.Valid(new AgentStepData { step = "wait", reply = "还在说话" }, true, false) &&
             !AgentLoopLogic.Valid(new AgentStepData { step = "wait", refine = true }, true, false),
             "缺失步骤、空回复和矛盾的 wait 不能冒充有效的沉默决定");
-        var corrected = await Chat("agent-silence-repair", "{}", Step(new AgentStepData { step = "wait" }));
-        Require(corrected.llm.Requests.Count == 2 && !expressionStarts.Contains("agent-silence-repair"),
+        var corrected = await Chat("agent-silence-repair", "{}", Step(Finish()));
+        Require(corrected.llm.Requests.Count == 2 && expressionStarts.Contains("agent-silence-repair"),
             "无效模型输出必须经过纠正，不能悄悄当成不回应");
-        Require(!silent.llm.Requests[0].Contains("真实对话应回复") &&
-            !silent.llm.Requests[0].Contains("本轮是否必须回应"), "当前提示不得继续强制每条入站回复");
+        var required = await Chat("agent-user-wait", Step(new AgentStepData { step = "wait" }), Step(Finish()));
+        Require(required.llm.Requests.Count == 2 && store.GetRecentMoments("agent-user-wait", 10).Count == 2,
+            "未回应的用户入站不能选择 wait，须纠正为实际回应");
 
         var mediaStart = probe.Media;
         var photo = await Chat("agent-media-photo", Step(Continue(Action("photo", "check.agent.image"))), Step(Finish("")));
@@ -100,11 +104,11 @@ internal static partial class Program
             "照片后可以继续文字，不应由默认附件映射重复发送");
         probe.Fail = true;
         var failedPhoto = await Chat("agent-media-failure", Step(Continue(Action("photo", "check.agent.image"))),
-            Step(Finish("")), Step(new AgentStepData { step = "wait" }));
+            Step(Finish("")), Step(Finish("图片没发成功。")));
         probe.Fail = false;
         Require(failedPhoto.llm.Requests.Count == 3 && failedPhoto.llm.Requests[1].Contains("failed") &&
             store.GetRecentOperationalEvents("agent-media-failure", 10).All(x => x.Kind != OperationalEventKindValues.OutboundImage),
-            "图片失败不能充当已回应证据；空 finish 需纠正，但仍可明确选择安静");
+            "图片失败不能充当已回应证据；空 finish 需纠正为实际回应");
 
         var choicesTurn = new TraceTurnContext("agent-choices", Moment("agent-choices", "发张照片给我看看"),
             new List<MomentRecord>(), 0, true, services);
@@ -293,7 +297,7 @@ internal static partial class Program
                 if (Descriptor.Organ == "gesture") owner.Gestures++;
                 else if (Descriptor.Organ == "image" || Descriptor.Organ == "sticker") owner.Media++;
                 else if (Descriptor.Organ != "text") owner.Count++;
-                if (owner.Fail) throw new InvalidOperationException("模拟执行失败");
+                if (owner.Fail && Descriptor.Organ != "text") throw new InvalidOperationException("模拟执行失败");
                 if (Descriptor.Organ == "text")
                     return Task.FromResult(new TraceCapabilityResultData { Status = "success", Summary = "正文已发送",
                         ProducedEvent = new PluginEventData { PluginId = "check.agent", Role = "小光",

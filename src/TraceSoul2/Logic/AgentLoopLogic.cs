@@ -42,7 +42,7 @@ namespace TraceSoul2.Logic
                 var dynamic = MindLogic.BuildTurnPrompt(turn, null, false, Array.Empty<MindTemplate>(), string.Empty, false);
                 dynamic += GoalMemoryLogic.BuildContext(turn);
                 dynamic += "\n【本轮上下文】\n" + string.Join("\n", turn.Workspace.ContextBlocks
-                    .Where(x => x != null && x.FacetId != "identity.base").Select(x => x.Content));
+                    .Where(x => x != null && x.FacetId != "identity.base" && !MouthLogic.IsProtocolFacet(x.FacetId)).Select(x => x.Content));
                 dynamic += "\n【当前可用能力】\n" + JsonSerializer.Serialize(catalog.Select(x => new
                 {
                     id = x.Id, description = x.Description, body_id = MouthLogic.BodyOf(x), organ = MouthLogic.OrganOf(x),
@@ -54,7 +54,8 @@ namespace TraceSoul2.Logic
                         .OrderBy(x => TraceExecutionRegistry.Terminal(x.Status) ? 1 : 0).Take(24), Json);
                 if (history.Count > 0) dynamic += "\n【本轮行动与结果，未发送的 reply 不是对话历史】\n" + JsonSerializer.Serialize(history, Json);
                 dynamic += "\n本轮对话身体是否已受理表达：" + (responded ? "是" : "否") +
-                    "。由你决定是否继续表达；决定不再输出时明确使用 step=wait。最终步骤请包含仍需保存的状态变化。";
+                    (turn.RequiresExpression && !responded ? "。对方正在对你说话，本轮须用正文或可用表达能力回应。" :
+                        "。已回应或后台唤醒时，可以不再追加输出。") + "最终步骤请包含仍需保存的状态变化。";
                 if (!turn.RequiresExpression)
                     dynamic += "\n【当前运行事件，不是对方发言】\n" + (turn.Moment?.Content ?? string.Empty);
                 if (turn.Moment?.SourcePluginId == "runtime.execution")
@@ -63,10 +64,11 @@ namespace TraceSoul2.Logic
                 var messages = LlmContextPackLogic.Assemble(llm, LlmContextPackLogic.SharedSystem(llm, turn), turn,
                     memory, turn.RequiresExpression ? turn.Moment?.Content ?? string.Empty : string.Empty,
                     AgentLoopPrompts.Header, stable, dynamic);
-                var step = await DeepSeekStructuredOutputLogic.CompleteAsync<AgentStepData>(llm, messages,
-                    value => Valid(value, turn.RequiresExpression && !responded, round == MaxActionRounds) &&
+                var output = await DeepSeekStructuredOutputLogic.CompleteAsync<AgentOutputData>(llm, messages,
+                    value => value != null && Valid(value.ToRuntime(), turn.RequiresExpression && !responded, round == MaxActionRounds) &&
                         GoalMemoryLogic.Valid(turn, value.goal_updates),
                     AgentLoopPrompts.Invalid, token, LlmContextPackLogic.BuildPromptCacheKey(llm, turn.ConversationId));
+                var step = output.ToRuntime();
                 MindLogic.Normalize(step);
                 // 明确反馈在执行或发送前落库；后续行动失败也不会抹掉已经听取的调整。
                 GoalMemoryLogic.Apply(turn, step.goal_updates);
@@ -167,14 +169,14 @@ namespace TraceSoul2.Logic
             if (!string.IsNullOrWhiteSpace(value.tool_call) || value.WantsLeave() || value.WantsMemory()) return false;
             var actions = value.actions ?? new List<BrainCapabilityCallData>();
             if (actions.Count > 0)
-                return !finalOnly && value.step == "continue" && actions.Count <= MaxActionsPerStep && actions.All(x =>
+                return !finalOnly && !value.refine && value.step == "continue" && actions.Count <= MaxActionsPerStep && actions.All(x =>
                     x != null && !string.IsNullOrWhiteSpace(x.call_id) && x.call_id.Length <= 80 &&
                     !string.IsNullOrWhiteSpace(x.capability_id) && x.capability_id.Length <= 160 &&
                     (x.body_id?.Length ?? 0) <= 160 && (x.group_id?.Length ?? 0) <= 80 &&
                     (x.arguments == null || (x.arguments.Count <= 16 && x.arguments.All(a => a != null &&
                         !string.IsNullOrWhiteSpace(a.name) && a.name.Length <= 80 && (a.value?.Length ?? 0) <= 12000) &&
                         x.arguments.Select(a => a.name).Distinct(StringComparer.OrdinalIgnoreCase).Count() == x.arguments.Count)));
-            if (value.step == "wait") return string.IsNullOrWhiteSpace(value.reply) && !value.refine;
+            if (value.step == "wait") return !needsReply && string.IsNullOrWhiteSpace(value.reply) && !value.refine;
             return value.step == "finish" && (!(needsReply || value.refine) || !string.IsNullOrWhiteSpace(value.reply));
         }
 
@@ -182,12 +184,9 @@ namespace TraceSoul2.Logic
         {
             var builder = new StringBuilder(AgentLoopPrompts.Rules);
             builder.AppendLine().AppendLine(CorePrompts.Expressor.ExpressionPosture);
-            foreach (var append in turn.Services.MindPromptAppends.Concat(turn.Services.MindJsonFields).ToArray())
-            {
-                try { var text = append?.Invoke(turn); if (!string.IsNullOrWhiteSpace(text)) builder.AppendLine(text.Trim()); }
-                catch (Exception error) { turn.Services.LogTiming(turn.TraceId, "Agent 器官提示失败", detail: error.GetType().Name); }
-            }
+            // 旧 Mind/Expressor 的协议扩展不进入 Agent 根契约；插件通过能力目录声明调用格式。
             builder.AppendLine().AppendLine(AgentLoopPrompts.ExpressionChoice);
+            builder.AppendLine().AppendLine(AgentOutputContractLogic.Prompt);
             return builder.ToString();
         }
         private static bool HasRequiredArguments(BrainCapabilityCallData call, TraceContributionDescriptorData descriptor)

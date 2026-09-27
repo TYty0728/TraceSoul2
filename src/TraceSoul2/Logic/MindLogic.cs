@@ -269,7 +269,7 @@ namespace TraceSoul2.Logic
                     builder.AppendLine("上次安排这次醒来时，留下的重新检查计划：" + plan);
                     builder.AppendLine("这只是计划提示，不是她刚发来的话；本次要重新判断，不能照着上一拍续说。");
                 }
-                CorePrompts.Write(builder, CorePrompts.Mind.Heartbeat);
+                CorePrompts.Write(builder, includeLegacyTools ? CorePrompts.Mind.Heartbeat : AgentLoopPrompts.Heartbeat);
             }
             else if (turn.Wake == KernelWakeValues.Mind)
                 builder.AppendLine(includeLegacyTools ? CorePrompts.Mind.MindWake : CorePrompts.Mind.Background);
@@ -277,7 +277,7 @@ namespace TraceSoul2.Logic
             {
                 builder.AppendLine(turn.RequiresExpression
                     ? pair.Apply(includeLegacyTools ? CorePrompts.Mind.HumanSpeak :
-                        "这是 {username} 正在对我说话。结合此刻的关系、状态与意愿决定是否回应、用什么方式回应；需要补充资料时可以先行动。结合她的安排决定后续联系时间，不把暂时安静当作无限期断联。")
+                        "这是 {username} 正在对我说话，本轮要回应。结合此刻的关系、状态与意愿决定内容和方式；需要补充资料时可以先行动。结合她的安排决定后续联系时间。")
                     : CorePrompts.Mind.Background);
             }
             return builder.ToString();
