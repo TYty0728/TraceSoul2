@@ -2,6 +2,8 @@
 
 核对日期：2026-09-27。结论：本地发布验收通过，可进入发布流程；正式发布仍需候选版本的 Docker 升级 CI 通过。本记录不代表已发布或已部署。
 
+后续发布确认：v0.1.16（4a950ea）已公开，[正式发布 CI](https://github.com/TYty0728/TraceSoul2/actions/runs/36295973454) 已通过 Docker 升级/数据保留、Release 回归及三个平台打包；匿名 latest 已返回 v0.1.16。三个正式安装包均已匿名下载并验证 CRC、实际 SHA-256 与公开校验文件/GitHub digest 一致，八插件和 SDK 内容正确，SDK NuGet 也可匿名下载。下文保留提交前的本地候选证据与摘要，正式 CI 包摘要以发布资产为准，未替用户部署。
+
 范围说明：本记录已更新为认知改造与 Tavily 一起发布的最终候选，替代同日较早的七插件快照。Tavily 的源码与专项验收见 [插件说明](../ExternalPlugins/Tavily/README.md)。
 
 ## 候选范围
