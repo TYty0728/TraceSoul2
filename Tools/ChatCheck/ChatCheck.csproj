@@ -17,6 +17,7 @@
     <ProjectReference Include="../../ExternalPlugins/Tavily/TraceSoul2.Plugin.Tavily.csproj" />
     <Compile Include="Program.cs" />
     <Compile Include="AgentLoopChecks.cs" />
+    <Compile Include="GoalMemoryChecks.cs" />
     <Compile Include="WebSearchChecks.cs" />
     <Compile Include="CognitionGraphChecks.cs" />
     <Compile Include="FailureProtectionChecks.cs" />

@@ -12,7 +12,7 @@ using TraceSoul2.Prompts;
 
 namespace TraceSoul2.Logic
 {
-    /// <summary>有界的观察、行动、反馈循环。状态不自动对外发送，只有最终 reply 进入发送链。</summary>
+    /// <summary>有界的观察、行动、反馈循环。状态独立保存，最终正文与显式表达行动分别进入发送链。</summary>
     public sealed class AgentLoopLogic
     {
         public const int MaxActionRounds = 4;
@@ -40,6 +40,7 @@ namespace TraceSoul2.Logic
                 if (round > 0 && refreshContext != null) await refreshContext(token);
                 var catalog = BuildCatalog(catalogProvider());
                 var dynamic = MindLogic.BuildTurnPrompt(turn, null, false, Array.Empty<MindTemplate>(), string.Empty, false);
+                dynamic += GoalMemoryLogic.BuildContext(turn);
                 dynamic += "\n【本轮上下文】\n" + string.Join("\n", turn.Workspace.ContextBlocks
                     .Where(x => x != null && x.FacetId != "identity.base").Select(x => x.Content));
                 dynamic += "\n【当前可用能力】\n" + JsonSerializer.Serialize(catalog.Select(x => new
@@ -52,8 +53,8 @@ namespace TraceSoul2.Logic
                     JsonSerializer.Serialize(turn.Services.Executions.List(turn.ConversationId)
                         .OrderBy(x => TraceExecutionRegistry.Terminal(x.Status) ? 1 : 0).Take(24), Json);
                 if (history.Count > 0) dynamic += "\n【本轮行动与结果，未发送的 reply 不是对话历史】\n" + JsonSerializer.Serialize(history, Json);
-                dynamic += "\n本轮是否必须回应：" + (turn.RequiresExpression && !responded ? "是" : "否") +
-                    "。最终步骤请包含仍需保存的状态变化。";
+                dynamic += "\n本轮对话身体是否已受理表达：" + (responded ? "是" : "否") +
+                    "。由你决定是否继续表达；决定不再输出时明确使用 step=wait。最终步骤请包含仍需保存的状态变化。";
                 if (!turn.RequiresExpression)
                     dynamic += "\n【当前运行事件，不是对方发言】\n" + (turn.Moment?.Content ?? string.Empty);
                 if (turn.Moment?.SourcePluginId == "runtime.execution")
@@ -63,14 +64,18 @@ namespace TraceSoul2.Logic
                     memory, turn.RequiresExpression ? turn.Moment?.Content ?? string.Empty : string.Empty,
                     AgentLoopPrompts.Header, stable, dynamic);
                 var step = await DeepSeekStructuredOutputLogic.CompleteAsync<AgentStepData>(llm, messages,
-                    value => Valid(value, turn.RequiresExpression && !responded, round == MaxActionRounds),
+                    value => Valid(value, turn.RequiresExpression && !responded, round == MaxActionRounds) &&
+                        GoalMemoryLogic.Valid(turn, value.goal_updates),
                     AgentLoopPrompts.Invalid, token, LlmContextPackLogic.BuildPromptCacheKey(llm, turn.ConversationId));
                 MindLogic.Normalize(step);
+                // 明确反馈在执行或发送前落库；后续行动失败也不会抹掉已经听取的调整。
+                GoalMemoryLogic.Apply(turn, step.goal_updates);
                 turn.Services.LogTiming(turn.TraceId, "Agent 推进", detail: "step=" + step.step + "｜round=" + (round + 1));
                 if (step.actions == null || step.actions.Count == 0)
                 {
                     step.reply = (step.reply ?? string.Empty).Trim();
-                    step.speak = step.reply.Length > 0;
+                    // 已选择媒体/动作也算本轮表达，不能因没有文字就被心跳逻辑误判为全程安静。
+                    step.speak = step.reply.Length > 0 || responded;
                     return step;
                 }
 
@@ -103,9 +108,8 @@ namespace TraceSoul2.Logic
                         call.execution_id = null; // 运行标识只能由执行器分配。
                         result = await execute(call, token) ?? Failure(call, "执行没有返回结果。");
                         executed[signature] = result;
-                        var organ = MouthLogic.OrganOf(descriptor);
                         if ((result.Status == "success" || result.Status == "running" || result.Status == "accepted") &&
-                            (organ == BodyOrganValues.Voice || organ == BodyOrganValues.Text) &&
+                            IsConversationalExpression(descriptor) &&
                             IsReplyBody(turn, descriptor)) responded = true;
                     }
                     if (!callIds.ContainsKey(call.call_id)) callIds[call.call_id] = signature;
@@ -122,13 +126,27 @@ namespace TraceSoul2.Logic
         public static List<TraceContributionDescriptorData> BuildCatalog(IEnumerable<TraceContributionDescriptorData> source)
         {
             var result = (source ?? Enumerable.Empty<TraceContributionDescriptorData>())
-                .Where(x => ToolLookupLogic.IsLookupEligible(x) || x?.Id == "dialogue.recent_history").ToList();
+                .Where(x => ToolLookupLogic.IsLookupEligible(x) || x?.Id == "dialogue.recent_history" ||
+                    IsConversationalExpression(x)).ToList();
             result.RemoveAll(x => x.Id == "memory.recall" || x.Id == "execution.cancel");
             result.Add(new TraceContributionDescriptorData { Id = "memory.recall", Kind = TraceContributionKindValues.CallableNerve,
                 Description = "按具体问题检索真实共同记忆，不生成或改写记忆。", ParametersJsonSchema = "{\"required\":[\"query\"],\"properties\":{\"query\":{\"type\":\"string\"}}}" });
             result.Add(new TraceContributionDescriptorData { Id = "execution.cancel", Kind = TraceContributionKindValues.CallableNerve,
                 Description = "请求停止当前会话中的持续语音或动作；必须等待设备确认停止。", ParametersJsonSchema = "{\"required\":[\"execution_id\"],\"properties\":{\"execution_id\":{\"type\":\"string\"}}}" });
             return result.GroupBy(x => x.Id, StringComparer.Ordinal).Select(x => x.First()).ToList();
+        }
+
+        private static bool IsConversationalExpression(TraceContributionDescriptorData item)
+        {
+            if (item == null || string.IsNullOrWhiteSpace(item.Id) || item.Kind != TraceContributionKindValues.Effector)
+                return false;
+            if (item.Id.StartsWith("memory.", StringComparison.OrdinalIgnoreCase) ||
+                item.Id.StartsWith("identity.", StringComparison.OrdinalIgnoreCase) ||
+                item.Id.StartsWith("time.", StringComparison.OrdinalIgnoreCase)) return false;
+            var organ = MouthLogic.OrganOf(item);
+            return organ == BodyOrganValues.Text || organ == BodyOrganValues.Voice ||
+                organ == BodyOrganValues.Image || organ == BodyOrganValues.Sticker ||
+                organ == BodyOrganValues.Video || organ == "gesture";
         }
 
         private static bool IsReplyBody(TraceTurnContext turn, TraceContributionDescriptorData descriptor)
@@ -156,7 +174,7 @@ namespace TraceSoul2.Logic
                     (x.arguments == null || (x.arguments.Count <= 16 && x.arguments.All(a => a != null &&
                         !string.IsNullOrWhiteSpace(a.name) && a.name.Length <= 80 && (a.value?.Length ?? 0) <= 12000) &&
                         x.arguments.Select(a => a.name).Distinct(StringComparer.OrdinalIgnoreCase).Count() == x.arguments.Count)));
-            if (value.step == "wait") return !needsReply && string.IsNullOrWhiteSpace(value.reply) && !value.refine;
+            if (value.step == "wait") return string.IsNullOrWhiteSpace(value.reply) && !value.refine;
             return value.step == "finish" && (!(needsReply || value.refine) || !string.IsNullOrWhiteSpace(value.reply));
         }
 
@@ -169,6 +187,7 @@ namespace TraceSoul2.Logic
                 try { var text = append?.Invoke(turn); if (!string.IsNullOrWhiteSpace(text)) builder.AppendLine(text.Trim()); }
                 catch (Exception error) { turn.Services.LogTiming(turn.TraceId, "Agent 器官提示失败", detail: error.GetType().Name); }
             }
+            builder.AppendLine().AppendLine(AgentLoopPrompts.ExpressionChoice);
             return builder.ToString();
         }
         private static bool HasRequiredArguments(BrainCapabilityCallData call, TraceContributionDescriptorData descriptor)

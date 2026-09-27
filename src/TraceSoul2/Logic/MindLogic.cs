@@ -277,7 +277,7 @@ namespace TraceSoul2.Logic
             {
                 builder.AppendLine(turn.RequiresExpression
                     ? pair.Apply(includeLegacyTools ? CorePrompts.Mind.HumanSpeak :
-                        "这是 {username} 正在对我说话。资料充分就直接回复；需要补充时先行动。结合她的安排决定后续联系时间，不把暂时结束当作无限期断联。")
+                        "这是 {username} 正在对我说话。结合此刻的关系、状态与意愿决定是否回应、用什么方式回应；需要补充资料时可以先行动。结合她的安排决定后续联系时间，不把暂时安静当作无限期断联。")
                     : CorePrompts.Mind.Background);
             }
             return builder.ToString();

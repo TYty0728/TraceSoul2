@@ -1,6 +1,10 @@
 # TraceSoul2.PluginApi
 
-TraceSoul2 运行时插件的稳定契约（**1.6.0**，配套产品 **0.1.16**）。正式资产状态见 [版本说明](../../docs/RELEASES.md)。
+TraceSoul2 运行时插件的契约（**1.7.0**，配套产品 **0.1.17**）。正式资产状态见 [版本说明](../../docs/RELEASES.md)。
+
+## 1.7 起
+
+`AgentStepData` 新增可选 `goal_updates` 与 `AgentGoalUpdateData`，表示明确偏好、当下和未来目标的创建/修订/完成/撤回；没有新增 `IMemoryStore` 必须实现的方法。缺失 Agent `step` 不再默认 finish，须显式选择。宿主与官方插件应一并重建，共享程序集随宿主提供。行为与存储边界见 [当下与未来目标](../../docs/GOAL_MEMORY.md)。
 
 ## 1.6 起
 
