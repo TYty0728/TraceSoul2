@@ -261,7 +261,7 @@ namespace TraceSoul2.Migrate
             // ---------- 认知形成：跑完事件构筑后，直接用当天新增事件提炼第一人称理解 ----------
             context.Migration.SetReviewStage("认知形成");
             await RunCognitionFormationAsync(
-                context, pair, llm, dayKey, dayIndexes, dayEntries, lastMomentId);
+                context, pair, llm, dayKey, dayIndexes, dayEntries, lastMomentId, moments);
 
             // ---------- 日终三卡复盘 + 内心全字段同步 ----------
             context.Migration.SetReviewStage("身份复盘与内心同步");
@@ -439,33 +439,27 @@ namespace TraceSoul2.Migrate
             string dayKey,
             List<EventIndexRecord> dayIndexes,
             List<EventEntryRecord> dayEntries,
-            string lastMomentId)
+            string lastMomentId,
+            List<MomentRecord> sourceMoments = null)
         {
-            var activeCognitions = context.Migration.GetAllActiveCognitions();
-            var activeTags = context.Store.GetActiveLifeTags();
+            var activeCognitions = context.Store.GetCognitionNodes(5000).Where(x => PuzzleDomains.Live(x.Status)).Take(40).ToList();
+            var activeTags = context.Store.GetActiveLifeTags().OrderByDescending(x => x.ActivationCount)
+                .ThenBy(x => x.Label, StringComparer.Ordinal).Take(60).ToList();
+            var evidence = CognitionFormationLogic.SelectEvidence(sourceMoments ??
+                context.Store.GetEvidenceMoments(dayEntries.Select(x => x.SourceMomentId).Concat(dayIndexes.Select(x => x.FirstMomentId))));
             var cardsNow = context.Store.LoadIdentityCards(MigrationContext.ConversationId);
             var userPronoun = IdentityCardLogic.UserPronoun(cardsNow, pair);
             var prompt = ReplayPrompts.BuildCognitionFormationPrompt(
-                pair, dayKey, activeCognitions, activeTags, dayIndexes, dayEntries, userPronoun);
+                pair, dayKey, activeCognitions, activeTags, dayIndexes, dayEntries, userPronoun, evidence);
             var messages = new List<DeepSeekMessageData>
             {
                 new DeepSeekMessageData("system", prompt),
                 new DeepSeekMessageData("user", CorePrompts.Migration.CognitionUser)
             };
             var output = await DeepSeekStructuredOutputLogic.CompleteAsync<ReplayPrompts.CognitionFormationOutputData>(
-                llm, messages, x => x != null, "认知复盘输出无效。", CancellationToken.None);
-            var mutations = (output.cognitions ?? new List<BrainCognitionWriteData>())
-                .Where(x => x != null).ToList();
-            // 幂等守卫：与已有 active 认知同文的 create 直接跳过（回填重复跑不产生重复认知）。
-            var existingSummaries = new HashSet<string>(
-                (activeCognitions ?? new List<CognitionSliceRecord>()).Select(x => x.Summary ?? string.Empty),
-                StringComparer.Ordinal);
-            var filtered = mutations.Where(x =>
-                !(string.Equals(x.operation, "create", StringComparison.OrdinalIgnoreCase) &&
-                  existingSummaries.Contains((x.summary ?? string.Empty).Trim()))).ToList();
-            // 本管线没有事实切片：证据一律用 Moment，清掉模型可能填的 evidence_fact_ids。
-            foreach (var m in filtered) m.evidence_fact_ids = new List<string>();
-            var changed = context.Store.CommitCognitions(lastMomentId, filtered);
+                llm, messages, x => x != null && CognitionFormationLogic.Valid(x.cognitions, evidence, activeCognitions, activeTags),
+                "认知复盘输出无效：检查操作、四领域、已展示的目标/原始证据ID、范围与长度；无依据请输出空数组。", CancellationToken.None);
+            var changed = context.Store.CommitCognitions(lastMomentId, output.cognitions);
             LogCall(context, dayKey, "cognition_formation", 1,
                 "认知：" + changed.Count + " 条", TraceJson.ToJson(output));
             Console.WriteLine("  认知形成：" + (changed.Count == 0

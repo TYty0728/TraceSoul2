@@ -96,6 +96,22 @@ namespace TraceSoul2.Plugins.Builtin
                     }
                     if (held.Count > 0) attention = held.Take(2).ToList();
                 }
+                var linksJson = output.GetField("puzzle_attention_links", null);
+                if (attention != null && !string.IsNullOrWhiteSpace(linksJson))
+                {
+                    try
+                    {
+                        var links = System.Text.Json.JsonSerializer.Deserialize<List<AgentAttentionLinkData>>(linksJson,
+                            new System.Text.Json.JsonSerializerOptions { IncludeFields = true });
+                        foreach (var item in attention)
+                            item.source_refs = (links ?? new List<AgentAttentionLinkData>())
+                                .Where(x => x != null && x.attention == item.content)
+                                .SelectMany(x => x.cognition_ids ?? new List<string>())
+                                .Where(context.Workspace.RecalledCognitionIds.Contains).Distinct().Take(6)
+                                .Select(x => "cognition:" + x).ToList();
+                    }
+                    catch (System.Text.Json.JsonException) { /* 可选引用损坏不影响状态正文。 */ }
+                }
                 var proposed = new InnerRuntimeWriteData
                 {
                     narrative = output.GetField("narrative", null),

@@ -1212,6 +1212,9 @@ namespace TraceSoul2.Logic
                         }
                     }
                 }
+                if (mind is AgentStepData agentStep && agentStep.attention_links != null)
+                    WriteField(snapshot, "puzzle_attention_links", System.Text.Json.JsonSerializer.Serialize(
+                        agentStep.attention_links.Take(3), new System.Text.Json.JsonSerializerOptions { IncludeFields = true }));
                 if (!string.IsNullOrWhiteSpace(proposed.narrative)) snapshot.summary = proposed.narrative;
             }
             if (!string.IsNullOrWhiteSpace(mind.new_fact) &&

@@ -63,7 +63,8 @@ $bundledPlugins = @(
     @{ Name = 'qq-status'; Project = 'ExternalPlugins\QqStatus\TraceSoul2.Plugin.QqStatus.csproj' },
     @{ Name = 'game-session'; Project = 'ExternalPlugins\GameSession\TraceSoul2.Plugin.GameSession.csproj' },
     @{ Name = 'media-understanding'; Project = 'ExternalPlugins\MediaUnderstanding\TraceSoul2.Plugin.MediaUnderstanding.csproj' },
-    @{ Name = 'realtime-call'; Project = 'ExternalPlugins\RealtimeCall\TraceSoul2.Plugin.RealtimeCall.csproj' }
+    @{ Name = 'realtime-call'; Project = 'ExternalPlugins\RealtimeCall\TraceSoul2.Plugin.RealtimeCall.csproj' },
+    @{ Name = 'tavily'; Project = 'ExternalPlugins\Tavily\TraceSoul2.Plugin.Tavily.csproj' }
 )
 foreach ($plugin in $bundledPlugins) {
     $projectPath = Join-Path $repoRoot $plugin.Project

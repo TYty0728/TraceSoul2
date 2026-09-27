@@ -14,8 +14,11 @@
     <ProjectReference Include="../../ExternalPlugins/GameSession/TraceSoul2.Plugin.GameSession.csproj" />
     <ProjectReference Include="../../ExternalPlugins/QqStatus/TraceSoul2.Plugin.QqStatus.csproj" />
     <ProjectReference Include="../../ExternalPlugins/QqQzone/TraceSoul2.Plugin.QqQzone.csproj" />
+    <ProjectReference Include="../../ExternalPlugins/Tavily/TraceSoul2.Plugin.Tavily.csproj" />
     <Compile Include="Program.cs" />
     <Compile Include="AgentLoopChecks.cs" />
+    <Compile Include="WebSearchChecks.cs" />
+    <Compile Include="CognitionGraphChecks.cs" />
     <Compile Include="FailureProtectionChecks.cs" />
     <Compile Include="DailyBuildPreflightChecks.cs" />
     <Compile Include="ReviewOutputChecks.cs" />

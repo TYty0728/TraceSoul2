@@ -20,6 +20,9 @@ internal static partial class Program
     private static void Main(string[] args)
     {
         SQLitePCL.Batteries_V2.Init();
+        if ((args ?? Array.Empty<string>()).Contains("--web-search")) { RunWebSearchChecksAsync().GetAwaiter().GetResult(); return; }
+        if (args?.Length == 2 && args[0] == "--cognition-migration") { RunCognitionMigrationContractChecks(args[1]); return; }
+        if ((args ?? Array.Empty<string>()).Contains("--cognition-graph")) { RunCognitionGraphChecks(); return; }
         if ((args ?? Array.Empty<string>()).Contains("--agent-loop"))
         {
             RunAgentLoopChecksAsync().GetAwaiter().GetResult();
@@ -37,6 +40,8 @@ internal static partial class Program
             Console.WriteLine("Inbound vision checks passed.");
             return;
         }
+        RunCognitionGraphChecks();
+        RunWebSearchChecksAsync().GetAwaiter().GetResult();
         RunTagRankCheck();
         RunAgentLoopChecksAsync().GetAwaiter().GetResult();
         RunMindTemplateCheck();

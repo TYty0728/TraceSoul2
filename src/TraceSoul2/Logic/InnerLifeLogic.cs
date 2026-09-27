@@ -331,9 +331,8 @@ namespace TraceSoul2.Logic
                 {
                     kind = kind,
                     content = content,
-                    source_refs = old == null
-                        ? new List<string> { "moment:" + sourceMomentId }
-                        : new List<string>(old.source_refs ?? new List<string>()),
+                    source_refs = (old?.source_refs ?? new List<string>()).Concat(item.source_refs ?? new List<string>())
+                        .Append("moment:" + sourceMomentId).Distinct().TakeLast(12).ToList(),
                     UpdatedUnixMs = nowUnixMs
                 });
                 if (result.Count == 3) break;
@@ -371,7 +370,7 @@ namespace TraceSoul2.Logic
                 .ToList();
         }
 
-        private static List<AttentionItemData> LiveAttention(InnerRuntimeData runtime, long nowUnixMs)
+        public static List<AttentionItemData> LiveAttention(InnerRuntimeData runtime, long nowUnixMs)
         {
             if (runtime == null) return new List<AttentionItemData>();
             return PruneAttention(runtime.Attention, nowUnixMs, runtime.UpdatedUnixMs);

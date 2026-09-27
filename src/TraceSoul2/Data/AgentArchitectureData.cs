@@ -83,6 +83,8 @@ namespace TraceSoul2.Data
         public const string Reinforce = "reinforce";
         public const string Revise = "revise";
         public const string Weaken = "weaken";
+        public const string Retire = "retire";
+        public const string Link = "link";
     }
 
     /// <summary>
@@ -246,9 +248,18 @@ namespace TraceSoul2.Data
         [Indexed]
         public string OwnerId { get; set; }
 
+        // 认知主体与指向对象分开：OwnerId 通常是 Brain，About 描述认知关于谁/什么。
+        public string Domains { get; set; }
+        public long LastConfirmedUnixMs { get; set; }
+        public long LastChallengedUnixMs { get; set; }
+        public string About { get; set; }
+        public string Scope { get; set; }
+        public string Exceptions { get; set; }
+
         public string Summary { get; set; }
         public string Subtype { get; set; }
         public float Confidence { get; set; }
+        public float Strength { get; set; }
         public string Status { get; set; }
         public int Revision { get; set; }
         public long CreatedUnixMs { get; set; }
@@ -273,6 +284,7 @@ namespace TraceSoul2.Data
     [Table("cognition_evidence")]
     public sealed class CognitionEvidenceRecord
     {
+        public long CreatedUnixMs { get; set; }
         [PrimaryKey]
         public string Id { get; set; }
 
@@ -397,7 +409,15 @@ namespace TraceSoul2.Data
         public string target_id;
         public string summary;
         public string subtype;
+        public List<string> domains = new List<string>();
+        public List<string> evidence_moment_ids = new List<string>();
+        public string related_id;
+        public string relation;
+        public string about;
+        public string scope;
+        public string exceptions;
         public float confidence;
+        public float strength;
         public List<string> tag_ids = new List<string>();
         public List<string> evidence_fact_ids = new List<string>();
         public List<string> trace_cues = new List<string>();

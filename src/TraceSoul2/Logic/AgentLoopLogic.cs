@@ -143,6 +143,9 @@ namespace TraceSoul2.Logic
         internal static bool Valid(AgentStepData value, bool needsReply, bool finalOnly)
         {
             if (value == null || (value.step != "finish" && value.step != "continue" && value.step != "wait")) return false;
+            if (value.attention_links != null && (value.attention_links.Count > 3 || value.attention_links.Any(x =>
+                x == null || (x.attention?.Length ?? 0) > 160 || (x.cognition_ids?.Count ?? 0) > 6 ||
+                (x.cognition_ids != null && x.cognition_ids.Any(id => string.IsNullOrWhiteSpace(id) || id.Length > 80))))) return false;
             if (!string.IsNullOrWhiteSpace(value.tool_call) || value.WantsLeave() || value.WantsMemory()) return false;
             var actions = value.actions ?? new List<BrainCapabilityCallData>();
             if (actions.Count > 0)

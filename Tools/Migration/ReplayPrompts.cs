@@ -220,12 +220,13 @@ namespace TraceSoul2.Migrate
         [Serializable]
         public sealed class CognitionFormationOutputData
         {
-            public List<BrainCognitionWriteData> cognitions = new List<BrainCognitionWriteData>();
+            // 缺字段不能冒充显式的空数组，否则结构错误会被默认为“没有变化”。
+            public List<BrainCognitionWriteData> cognitions;
         }
 
         /// <summary>
         /// 认知形成：日终 Brain 第一人称复盘——只产出「今天的相处让我形成/改变的理解」。
-        /// 认知与事件并列但更短：一句话（≤19字），挂在生命标签（1-3 层）上，不带细节。
+        /// 四领域认知以原始 Moment 为依据，保留范围与例外。
         /// </summary>
         public static string BuildCognitionFormationPrompt(
             PairIdentity pair,
@@ -234,7 +235,8 @@ namespace TraceSoul2.Migrate
             List<LifeTagRecord> activeTags,
             List<EventIndexRecord> dayIndexes,
             List<EventEntryRecord> dayEntries,
-            string userPronoun)
+            string userPronoun,
+            IReadOnlyList<MomentRecord> evidenceMoments = null)
         {
             pair = pair ?? PairIdentity.Missing;
             var builder = new StringBuilder();
@@ -246,7 +248,7 @@ namespace TraceSoul2.Migrate
             var cognitions = activeCognitions ?? new List<CognitionSliceRecord>();
             if (cognitions.Count == 0) builder.AppendLine(CorePrompts.Migration.Empty);
             foreach (var c in cognitions.Take(40))
-                builder.AppendLine("- " + c.Id + " | " + c.Summary + " | 置信 " + c.Confidence.ToString("0.00") + " | " + c.Subtype);
+                builder.AppendLine("- " + c.Id + " | " + c.Summary + " | 领域 " + c.Domains + " | 范围 " + c.Scope + " | 例外 " + c.Exceptions + " | 状态 " + c.Status + " | 置信 " + c.Confidence.ToString("0.00") + " | " + c.Subtype);
             builder.AppendLine();
             builder.AppendLine(CorePrompts.Migration.CognitionTagsHeader);
             var tags = (activeTags ?? new List<LifeTagRecord>())
@@ -271,6 +273,9 @@ namespace TraceSoul2.Migrate
                         builder.AppendLine("  - " + entry.Summary + (string.IsNullOrWhiteSpace(entry.Detail) ? "" : "｜" + entry.Detail));
             }
             builder.AppendLine();
+            builder.AppendLine("【本次可引用的原始经历：未展示部分不得臆测；选择确实支持或挑战理解的 ID】");
+            foreach (var m in evidenceMoments ?? Array.Empty<MomentRecord>())
+                builder.AppendLine("- Moment " + m.Id + " | " + m.Realm + "/" + m.EvidenceType + " | " + FormatMoment(m, pair));
             CorePrompts.Write(builder, CorePrompts.Migration.CognitionJsonSchema);
             return builder.ToString();
         }

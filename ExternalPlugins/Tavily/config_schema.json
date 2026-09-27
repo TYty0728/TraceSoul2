@@ -1,0 +1,10 @@
+{
+  "hint": "填入 Tavily API Key 并保存重载后，可以自主搜索和读取公开网页。搜索与读取会消耗 Tavily 额度；不会把整段聊天或记忆库自动上传。",
+  "fields": [
+    { "key": "enabled", "label": "启用联网搜索", "type": "bool", "default": true },
+    { "key": "api_key", "label": "Tavily API Key", "type": "password" },
+    { "key": "search_depth", "label": "搜索模式", "type": "select", "options": ["basic", "fast", "ultra-fast", "advanced"], "default": "basic", "description": "basic 均衡；fast/ultra-fast 优先速度；advanced 更深入且消耗更多额度。" },
+    { "key": "max_results", "label": "每次最多搜索结果", "type": "number", "min": 1, "max": 5, "default": 5 },
+    { "key": "timeout_seconds", "label": "请求超时秒数", "type": "number", "min": 5, "max": 60, "default": 25 }
+  ]
+}
