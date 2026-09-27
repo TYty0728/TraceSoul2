@@ -23,6 +23,8 @@ internal static partial class Program
         manager.RegisterExternal(new TimeSchedulerPlugin());
         var probe = new AgentProbePlugin();
         manager.RegisterExternal(probe);
+        var expressionStarts = new List<string>();
+        services.ExpressionStartingHooks.Add(turn => { expressionStarts.Add(turn.ConversationId); return Task.CompletedTask; });
         var json = new JsonSerializerOptions { IncludeFields = true };
         string Step(AgentStepData value) => JsonSerializer.Serialize(value, json);
         BrainCapabilityCallData Action(string id, string capability = "check.agent.read", string value = "资料") => new BrainCapabilityCallData
@@ -37,7 +39,7 @@ internal static partial class Program
         {
             var llm = new AgentSequenceLlm(responses);
             var kernel = new KernelLogic(store, llm, manager);
-            var result = conversation == "agent-voice"
+            var result = conversation == "agent-voice" || conversation.StartsWith("agent-media", StringComparison.Ordinal)
                 ? await kernel.ProcessPluginEventAsync(conversation, new PluginEventData
                 {
                     PluginId = "check.agent", Role = "小雨", Content = "请用声音回应", Organ = "voice",
@@ -56,6 +58,64 @@ internal static partial class Program
         Require(store.LoadOrCreateInnerRuntime("agent-direct").Narrative == direct.inner, "同次生成的内心变化仍须落库");
         Require(!normal.llm.Requests[0].Contains("话留到开口") && normal.llm.Requests[0].Contains("【Agent 当下】"),
             "新循环不应被旧的禁说话提示覆盖");
+
+        var silentStep = new AgentStepData { step = "wait", inner = "这一刻安静听着。", next_heartbeat_minutes = 15,
+            next_heartbeat_plan = "稍后看看是否有想分享的事" };
+        var silent = await Chat("agent-silent", Step(silentStep));
+        Require(silent.llm.Requests.Count == 1 && silent.llm.TextRequests == 0 &&
+            store.GetRecentMoments("agent-silent", 10).Count == 1 && !expressionStarts.Contains("agent-silent"),
+            "收到用户消息可以明确保持安静：一次生成，不发送假回复，也不触发开始输入");
+        Require(store.LoadOrCreateInnerRuntime("agent-silent").Narrative == silentStep.inner,
+            "选择安静仍须保存本轮内心变化");
+        Require(!AgentLoopLogic.Valid(new AgentStepData(), true, false) &&
+            !AgentLoopLogic.Valid(new AgentStepData(), false, false) &&
+            !AgentLoopLogic.Valid(Finish(""), true, false) &&
+            !AgentLoopLogic.Valid(new AgentStepData { step = "wait", reply = "还在说话" }, true, false) &&
+            !AgentLoopLogic.Valid(new AgentStepData { step = "wait", refine = true }, true, false),
+            "缺失步骤、空回复和矛盾的 wait 不能冒充有效的沉默决定");
+        var corrected = await Chat("agent-silence-repair", "{}", Step(new AgentStepData { step = "wait" }));
+        Require(corrected.llm.Requests.Count == 2 && !expressionStarts.Contains("agent-silence-repair"),
+            "无效模型输出必须经过纠正，不能悄悄当成不回应");
+        Require(!silent.llm.Requests[0].Contains("真实对话应回复") &&
+            !silent.llm.Requests[0].Contains("本轮是否必须回应"), "当前提示不得继续强制每条入站回复");
+
+        var mediaStart = probe.Media;
+        var photo = await Chat("agent-media-photo", Step(Continue(Action("photo", "check.agent.image"))), Step(Finish("")));
+        var sticker = await Chat("agent-media-sticker", Step(Continue(Action("sticker", "check.agent.sticker"))), Step(Finish("")));
+        Require(probe.Media == mediaStart + 2 && photo.llm.Requests.Count == 2 && sticker.llm.Requests.Count == 2 &&
+            store.GetRecentMoments("agent-media-photo", 10).Count == 1 &&
+            store.GetRecentMoments("agent-media-sticker", 10).Count == 1 &&
+            store.GetRecentOperationalEvents("agent-media-photo", 10).Any(x => x.Kind == OperationalEventKindValues.OutboundImage) &&
+            store.GetRecentOperationalEvents("agent-media-sticker", 10).Any(x => x.Kind == OperationalEventKindValues.OutboundSticker),
+            "照片或表情可以独立回应：实际执行并保存媒体回执，不补文字、不伪造聊天正文");
+        Require(photo.result.MindDecision.speak && !silent.result.MindDecision.speak,
+            "无文字的媒体表达与全程安静须在后续状态判断中区分");
+        var bodyGesture = await Chat("agent-media-gesture", Step(Continue(Action("gesture", "check.agent.gesture"))), Step(Finish("")));
+        Require(bodyGesture.llm.Requests.Count == 2 && store.GetRecentMoments("agent-media-gesture", 10).Count == 1,
+            "真人发言也可只用身体动作回应");
+        probe.Gestures = 0;
+        mediaStart = probe.Media;
+        var combined = await Chat("agent-media-combined", Step(Continue(Action("photo", "check.agent.image"))), Step(Finish("给你看看。")));
+        Require(probe.Media == mediaStart + 1 && combined.llm.Requests.Count == 2,
+            "照片后可以继续文字，不应由默认附件映射重复发送");
+        probe.Fail = true;
+        var failedPhoto = await Chat("agent-media-failure", Step(Continue(Action("photo", "check.agent.image"))),
+            Step(Finish("")), Step(new AgentStepData { step = "wait" }));
+        probe.Fail = false;
+        Require(failedPhoto.llm.Requests.Count == 3 && failedPhoto.llm.Requests[1].Contains("failed") &&
+            store.GetRecentOperationalEvents("agent-media-failure", 10).All(x => x.Kind != OperationalEventKindValues.OutboundImage),
+            "图片失败不能充当已回应证据；空 finish 需纠正，但仍可明确选择安静");
+
+        var choicesTurn = new TraceTurnContext("agent-choices", Moment("agent-choices", "发张照片给我看看"),
+            new List<MomentRecord>(), 0, true, services);
+        var choices = manager.GetAvailableActionCatalog(choicesTurn);
+        var oldImageFlag = Finish("我这会儿不想拍。"); oldImageFlag.image = "有";
+        Require(ExpressorLogic.PrepareDirectReply(oldImageFlag.reply, choicesTurn, choices, oldImageFlag).expressions.Count == 0,
+            "Agent 正文出口不能因索图关键词、旧 image 字段或默认表情策略擅自添加动作");
+        var refineOnly = new AgentSequenceLlm("{\"reply\":\"给你看看。\",\"image\":\"多余照片\",\"sticker\":\"开心\"}");
+        var refinedOnly = await new ExpressorLogic(refineOnly).ExpressAsync(choicesTurn, manager.GetPlugins(), choices,
+            Array.Empty<TraceContextBlockData>(), oldImageFlag, "", false, null, CancellationToken.None);
+        Require(refinedOnly.expressions.Count == 0, "可选文字润色也不能重新选择媒体或补发附件");
 
         var lookup = await Chat("agent-tool", Step(Continue(Action("read-1"))), Step(Finish("查到了：答案42。")));
         Require(lookup.llm.Requests.Count == 2 && probe.Count == 1, "一次查资料后应由同一 Agent 继续，不能追加固定表达调用");
@@ -166,7 +226,7 @@ internal static partial class Program
         manager.SetEnabled("check.agent", false);
         Require(pluginToken.IsCancellationRequested && manager.GetAvailableActionCatalog(turn).All(x => x.PluginId != "check.agent"),
             "禁用插件必须先请求停止其持续动作，并移除行动目录");
-        Console.WriteLine("Agent loop checks passed: one-call reply, continuation, recall, actions, dedupe, optional refinement, independent voice/gesture, receipts, cancellation and bounds.");
+        Console.WriteLine("Agent loop checks passed: one-call reply/silence, independent media/voice/gesture, explicit output choice, continuation, recall, dedupe, refinement, failures, receipts, cancellation and bounds.");
     }
 
     private sealed class AgentSequenceLlm : ILlmClient
@@ -192,7 +252,7 @@ internal static partial class Program
 
     private sealed class AgentProbePlugin : ITracePlugin
     {
-        public int Count, Gestures;
+        public int Count, Gestures, Media;
         public bool Fail;
         public bool TextAvailable = true;
         public CancellationToken VoiceToken;
@@ -206,6 +266,8 @@ internal static partial class Program
             context.AddCallable(new Capability(this, "check.agent.voice", "voice", true));
             context.AddCallable(new Capability(this, "check.agent.gesture", "gesture", true));
             context.AddCallable(new Capability(this, "check.agent.look", "gesture", true));
+            context.AddCallable(new Capability(this, "check.agent.image", "image", true));
+            context.AddCallable(new Capability(this, "check.agent.sticker", "sticker", true));
         }
         public void Shutdown() { }
         private sealed class Capability : ITraceCallableContribution
@@ -228,8 +290,19 @@ internal static partial class Program
                     owner.VoiceToken = cancellationToken;
                     return Task.FromResult(new TraceCapabilityResultData { Status = "running", Summary = "开始播放，尚未完成。" });
                 }
-                if (Descriptor.Organ == "gesture") owner.Gestures++; else owner.Count++;
+                if (Descriptor.Organ == "gesture") owner.Gestures++;
+                else if (Descriptor.Organ == "image" || Descriptor.Organ == "sticker") owner.Media++;
+                else if (Descriptor.Organ != "text") owner.Count++;
                 if (owner.Fail) throw new InvalidOperationException("模拟执行失败");
+                if (Descriptor.Organ == "text")
+                    return Task.FromResult(new TraceCapabilityResultData { Status = "success", Summary = "正文已发送",
+                        ProducedEvent = new PluginEventData { PluginId = "check.agent", Role = "小光",
+                            Content = call.GetArgument("text"), OccurredUnixMs = DateTimeOffset.UtcNow.ToUnixTimeMilliseconds() } });
+                if (Descriptor.Organ == "image" || Descriptor.Organ == "sticker")
+                    return Task.FromResult(new TraceCapabilityResultData { Status = "success", Summary = "媒体已发送",
+                        ProducedEvent = new PluginEventData { PluginId = "check.agent", Role = "system_event",
+                            IsOperational = true, Content = Descriptor.Organ == "image" ? "发送图片完成" : "发送表情完成",
+                            OccurredUnixMs = DateTimeOffset.UtcNow.ToUnixTimeMilliseconds() } });
                 return Task.FromResult(new TraceCapabilityResultData { Status = "success", Summary = "完成", Payload = "答案42" });
             }
         }

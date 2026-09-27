@@ -27,6 +27,13 @@ namespace TraceSoul2.Logic
             IEnumerable<TraceContributionDescriptorData> catalog, MindDecisionData decision)
         {
             var expressed = new ExpressorOutputData { reply = reply ?? string.Empty };
+            if (decision is AgentStepData)
+            {
+                // Agent 已经通过 actions 选择附件；文字出口不能再自行补图、补表情或重发标签。
+                var textOnly = MapExpressor(expressed, catalog, true, decision, includeAutoSticker: false);
+                textOnly.expressions.Clear();
+                return textOnly;
+            }
             ApplyMindAtmosphere(expressed, decision, turn, false, catalog);
             EnsureExplicitImageRequest(expressed, turn, catalog);
             var output = MapExpressor(expressed, catalog, true, decision);
@@ -52,6 +59,8 @@ namespace TraceSoul2.Logic
                 ? string.Empty
                 : turn.Moment.Content ?? string.Empty;
             var roleStable = BuildExpressStablePrompt(turn, contextBlocks).TrimEnd();
+            if (mind is AgentStepData)
+                roleStable += "\n本轮只加工已选定的文字草稿。图片、表情、语音与动作已由 Agent 独立决定，不新增这些输出或标签，不改变是否表达的选择。";
             var roleDynamic = BuildExpressDynamicPrompt(
                 turn, contextBlocks, mind, memoryFlesh, waitOnly, leaveResult).TrimEnd();
             var messages = LlmContextPackLogic.AssembleExpress(
@@ -67,6 +76,8 @@ namespace TraceSoul2.Logic
                 cancellationToken,
                 promptCacheKey);
             var expressed = ParseSpoken(raw);
+            if (mind is AgentStepData)
+                return PrepareDirectReply(expressed.reply, turn, catalog, mind);
             ApplyMindAtmosphere(expressed, mind, turn, waitOnly, catalog);
             // 离场等待和归来使用同一个入站；只在最终回应补图，避免一次索图生成两次。
             if (!waitOnly) EnsureExplicitImageRequest(expressed, turn, catalog);
@@ -177,6 +188,7 @@ namespace TraceSoul2.Logic
                 builder.AppendLine();
             }
             builder.AppendLine(pair.Apply(CorePrompts.Expressor.NightResidueRequest));
+            builder.AppendLine(GoalMemoryLogic.BuildContext(turn));
             return builder.ToString();
         }
 
@@ -840,6 +852,7 @@ namespace TraceSoul2.Logic
                 builder.AppendLine();
             }
             builder.AppendLine(CorePrompts.Expressor.ThoughtHeader);
+            builder.AppendLine(GoalMemoryLogic.BuildContext(turn));
             builder.AppendLine(FormatMind(mind));
             if (mind is AgentStepData agentStep)
             {

@@ -5,11 +5,28 @@ namespace TraceSoul2.Data
     /// <summary>一次 Agent 推进。旧状态字段保留 ABI；正文与行动不再经过必选的第二个模型。</summary>
     public sealed class AgentStepData : MindDecisionData
     {
-        public string step = "finish";
+        // 缺少步骤是无效输出，不能默认解释为一次有意的安静决定。
+        public string step;
         public string reply;
         public bool refine;
+        public List<AgentGoalUpdateData> goal_updates = new List<AgentGoalUpdateData>();
         public List<AgentAttentionLinkData> attention_links = new List<AgentAttentionLinkData>();
         public List<BrainCapabilityCallData> actions = new List<BrainCapabilityCallData>();
+    }
+
+    /// <summary>当下/未来目标及明确偏好；同一次 Agent 生成内提出，由内核校验后保存。</summary>
+    public sealed class AgentGoalUpdateData
+    {
+        public string operation; // create / revise / complete / cancel
+        public string id; // 修改时必须使用当前目标目录的 ID
+        public string kind; // preference / goal
+        public string content;
+        public string applies_when;
+        public string horizon; // turn / ongoing / until
+        public string starts_at; // 可选 ISO 8601，必须带时区
+        public string expires_at; // until 必填
+        public string source; // user / self / feedback
+        public string evidence_quote;
     }
 
     public sealed class AgentAttentionLinkData

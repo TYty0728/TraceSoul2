@@ -401,11 +401,7 @@ namespace TraceSoul2.Logic
             plugins.Services.LogTiming(turn.TraceId, "记忆预激活完成", preludeTimer.ElapsedMilliseconds,
                 "top_k=" + recallTopK + "｜chars=" + naturallyAwakenedPast.Length);
 
-            // QQ 等对话入口本轮必须回应：在第一次 Agent 请求前就通知平台。
-            // 心跳/时间触发等可能保持沉默的轮次，仍由后面的表达分支在决定开口后通知。
-            if (turn.RequiresExpression)
-                await RunExpressionStartingHooksAsync(turn);
-
+            // 是否表达由 Agent 决定；只有实际选择输出后才通知平台开始表达。
             var decision = await agent.RunAsync(turn, naturallyAwakenedPast,
                 () => plugins.GetAvailableActionCatalog(turn),
                 (call, token) => ExecuteAgentActionAsync(call, turn, token), cancellationToken,

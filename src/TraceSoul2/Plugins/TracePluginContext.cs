@@ -90,7 +90,7 @@ namespace TraceSoul2.Plugins
             new List<Func<TraceTurnContext, Task>>();
 
         /// <summary>
-        /// 对话入口开始思考回应，或自主轮次已决定对外表达时的钩子。
+        /// 已决定对外表达时的钩子；收到消息但选择安静的轮次不触发。
         /// 平台可用它展示「正在输入」；钩子不得影响表达主链。
         /// </summary>
         public List<Func<TraceTurnContext, Task>> ExpressionStartingHooks { get; } =
