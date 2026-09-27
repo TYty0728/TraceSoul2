@@ -36,4 +36,6 @@
 
 2026-09-27：Release 全解决方案构建零警告零错误，联网专项、完整 ChatCheck 与 Prompt 布局通过。插件分别按 win-x64、linux-x64、linux-arm64 实际 publish，清单、配置表单、空默认 Key 和共享宿主 SDK 检查通过。尚未重新制作和发布包含 Tavily 的完整产品安装包，也未安装到正在运行的实例。
 
+同日发布更新：已随正式产品 v0.1.16 发布，三个平台完整安装包均包含 Tavily，发布 CI 与 Docker 升级验证通过。用户安装后需自行填写 Key；未替用户配置或调用真实 Tavily 服务。
+
 官方契约：[Search](https://docs.tavily.com/documentation/api-reference/endpoint/search)、[Extract](https://docs.tavily.com/documentation/api-reference/endpoint/extract)。尚未使用真实 Key 验证线上搜索质量、延迟或账户可用性。

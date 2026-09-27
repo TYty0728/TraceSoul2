@@ -10,6 +10,8 @@
 
 本地验证：独立候选的 Release 全解决方案、完整 ChatCheck、认知与联网专项、真实 Migration 契约、Prompt 布局、86 项媒体/通话、CoreCheck、更新器/UpdateCheck、Python 与 WebUI 检查全部通过。三个完整平台安装包均生成并核对八插件、SDK 与 SHA-256，Windows 包内更新器自检通过。正式安装包与 Docker 升级由本次发布 CI 再验证；发布是否完成以公开 Release 和更新接口为准。
 
+发布确认：v0.1.16（4a950ea）已公开，[发布 CI](https://github.com/TYty0728/TraceSoul2/actions/runs/36295973454) 的回归、真实 Docker 升级/数据保留和三个平台打包全部成功。三个正式安装包与校验文件已匿名下载，实际 SHA-256、校验文件与 GitHub digest 一致，包内八插件、Tavily 空默认 Key 与 SDK 1.6.0 已核对。匿名 latest 返回 v0.1.16，WebUI 可检查更新；未替用户安装服务器或填写 Tavily Key。
+
 ## 0.1.15（2026-09-26）
 
 - 普通对话改为 Agent 循环：资料充分时一次生成直接回复；需要记忆、工具或外部信息时，执行能力并根据实际结果继续生成。仅在明确需要加工正文时调用表达模型，保留后台记忆整理、身份复盘、心跳及图片路由。
