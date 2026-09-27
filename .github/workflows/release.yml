@@ -64,6 +64,7 @@ jobs:
           node scripts/tests/test-daily-build-ui.cjs
           dotnet Tools/ChatCheck/bin/Release/net8.0/ChatCheck.dll
           dotnet Tools/ChatCheck/bin/Release/net8.0/ChatCheck.dll --prompt-layout
+          dotnet Tools/ChatCheck/bin/Release/net8.0/ChatCheck.dll --cognition-migration Tools/Migration/bin/Release/net8.0/TraceSoul2.Migrate.dll
 
       - name: Build signed-by-hash release payload
         shell: pwsh

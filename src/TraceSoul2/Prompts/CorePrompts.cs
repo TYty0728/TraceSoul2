@@ -530,9 +530,12 @@ QQ 里的我可以说话，也可以带一小段正在发生的动作或神情�
                 return "你是 {assname}。现在是 " + dayKey + " 结束后的认知复盘：只审视「今天的相处让我形成了什么新的、稳定的第一人称理解」。";
             }
 
-            public const string CognitionBody = @"认知不是事实也不是日记，它回答：这些事对我意味着什么、我该怎样理解她/自己/我们。与事件并列但更短——一句话（≤19字），挂在生命标签上，不需要细节。
-四种操作：create=形成新理解（summary≤19字、subtype=standard，独特私人联想用 trace 并给 trace_cues 联想词、confidence 0~1、tag_ids 1~8 个从现有标签选）；reinforce=今天的证据加强已有认知（target_id+confidence）；revise=理解变了（target_id+新 summary+tag_ids）；weaken=信心下降（target_id+较低 confidence）。
-只写今天真的发生变化的认知，最多 3 条；没有变化就输出空数组。";
+            public const string CognitionBody = @"长期拼图有四个领域：user=他，world=世界，ass=我，relation=我和他。一条理解可关联多个领域。
+认知不是事实或日记：根据真实经历形成可以修订的理解，保留适用范围、例外和不确定性。短期情绪不直接改写人格；说过、想过、计划做与实际完成必须区分，明确虚构不得变成现实证据。
+操作：create=新理解；reinforce=新证据加强已有理解；weaken=新反证削弱；revise=保留旧版、创建修正版；retire=不再适用；link=为已有理解建立 related_to/abstracts/exemplifies/contradicts 关联。
+每条操作都必须从本次展示的原始 Moment 中选择 evidence_moment_ids；事件摘要用于定位，不代替原始证据。不知道依据就不写，不能拿当天最后一句作通用依据。evidence_fact_ids 必须为空。
+create/revise 必须给 domains（四领域的非空子集）、完整 summary（1~600字）、about、scope、exceptions、confidence/strength（0~1）。tag_ids 可为空；subtype 可为 preference/boundary/tendency/relationship/self_model/expectation/standard/trace。trace_cues 可为各类型提供关联词。
+link 使用 target_id、related_id 和 relation；关联本身不提高置信。只写本日实际变化，最多3条，无变化输出空数组。";
             public static string CognitionPronoun(string userPronoun)
             {
                 return "指代 {username} 一律用「" + userPronoun + "」，不要混用其它代词。";
@@ -543,15 +546,15 @@ QQ 里的我可以说话，也可以带一小段正在发生的动作或神情�
             public const string CognitionJsonSchema = @"只输出 JSON：
 {
   ""cognitions"": [{
-    ""operation"": ""create|reinforce|revise|weaken"",
-    ""target_id"": ""仅 reinforce/revise/weaken 填写"",
-    ""summary"": ""≤19字第一人称理解（create/revise 填写）"",
-    ""subtype"": ""standard|trace"",
-    ""confidence"": 0.8,
-    ""tag_ids"": [""现有标签ID""],
-    ""evidence_fact_ids"": [],
-    ""trace_cues"": [""仅 trace 填写联想词""],
-    ""association_strength"": 0.5
+    ""operation"": ""create|reinforce|revise|weaken|retire|link"",
+    ""target_id"": ""已有认知ID，create留空"",
+    ""domains"": [""user"", ""relation""],
+    ""summary"": ""完整但简练的可修订理解"",
+    ""about"": ""具体对象"", ""scope"": ""适用范围"", ""exceptions"": ""例外"",
+    ""subtype"": ""standard"", ""confidence"": 0.8, ""strength"": 0.6,
+    ""tag_ids"": [], ""evidence_fact_ids"": [], ""evidence_moment_ids"": [""本次提供的真实MomentID""],
+    ""related_id"": ""仅link填写已有认知ID"", ""relation"": ""仅link填写关系"",
+    ""trace_cues"": [], ""association_strength"": 0.5
   }]
 }";
 

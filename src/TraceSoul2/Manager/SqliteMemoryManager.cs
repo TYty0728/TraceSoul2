@@ -12,7 +12,7 @@ namespace TraceSoul2.Manager
     /// <summary>
     /// 全新的 TraceSoul2 持久层。事实与认知分表，写入权限由公开方法明确隔离。
     /// </summary>
-    public sealed class SqliteMemoryManager : IMemoryStore, IDisposable
+    public sealed partial class SqliteMemoryManager : IMemoryStore, ICognitionGraphStore, IDisposable
     {
         private readonly SQLiteConnection connection;
 
@@ -950,6 +950,10 @@ namespace TraceSoul2.Manager
             EnsureColumn("moments", "MemoryStatus", "TEXT");
             EnsureColumn("inner_runtime", "Asleep", "INTEGER");
             EnsureColumn("inner_runtime", "Idle", "INTEGER");
+            EnsureColumn("cognition_slices", "About", "TEXT");
+            EnsureColumn("cognition_slices", "Scope", "TEXT");
+            EnsureColumn("cognition_slices", "Exceptions", "TEXT");
+            EnsureColumn("cognition_slices", "Strength", "REAL");
             ArchiveLegacyOperationalMoments();
         }
 
@@ -1089,136 +1093,6 @@ namespace TraceSoul2.Manager
                 LastWokenUnixMs = 0,
                 CreatedUnixMs = now
             };
-        }
-
-        private CognitionSliceRecord ApplyCognitionMutation(
-            BrainCognitionWriteData mutation,
-            string triggerMomentId,
-            long now)
-        {
-            if (mutation == null) return null;
-            var operation = (mutation.operation ?? string.Empty).Trim().ToLowerInvariant();
-            if (operation != CognitionOperationValues.Create &&
-                operation != CognitionOperationValues.Reinforce &&
-                operation != CognitionOperationValues.Revise &&
-                operation != CognitionOperationValues.Weaken)
-                return null;
-            var target = string.IsNullOrWhiteSpace(mutation.target_id)
-                ? null
-                : connection.Find<CognitionSliceRecord>(mutation.target_id);
-
-            if ((operation == CognitionOperationValues.Reinforce ||
-                 operation == CognitionOperationValues.Weaken) && target != null)
-            {
-                target.Confidence = Clamp01(mutation.confidence);
-                target.Revision += 1;
-                target.UpdatedUnixMs = now;
-                connection.Update(target);
-                AddCognitionEvidence(target.Id, mutation, triggerMomentId);
-                return target;
-            }
-
-            if (operation != CognitionOperationValues.Create && target == null) return null;
-
-            var summary = Limit(LoadPairIdentity().RewriteRecordedText((mutation.summary ?? string.Empty).Trim()), 19);
-            if (summary.Length == 0) return null;
-            var validTagIds = (mutation.tag_ids ?? new List<string>()).Distinct().Take(8)
-                .Where(tagId => connection.Find<LifeTagRecord>(tagId) != null).ToList();
-            if (validTagIds.Count == 0) return null;
-            var created = new CognitionSliceRecord
-            {
-                Id = Guid.NewGuid().ToString("N"),
-                OwnerId = "ass",
-                Summary = summary,
-                Subtype = mutation.subtype == "trace" ? "trace" : "standard",
-                Confidence = Clamp01(mutation.confidence),
-                Status = "active",
-                Revision = 0,
-                CreatedUnixMs = now,
-                UpdatedUnixMs = now
-            };
-            connection.Insert(created);
-            foreach (var tagId in validTagIds)
-            {
-                connection.Insert(new CognitionTagLinkRecord
-                {
-                    Id = created.Id + "|" + tagId,
-                    CognitionId = created.Id,
-                    TagId = tagId,
-                    Weight = 1f
-                });
-            }
-            AddCognitionEvidence(created.Id, mutation, triggerMomentId);
-
-            if (operation == CognitionOperationValues.Revise && target != null)
-            {
-                target.Status = "revised";
-                target.UpdatedUnixMs = now;
-                connection.Update(target);
-                connection.Insert(new CognitionEdgeRecord
-                {
-                    Id = Guid.NewGuid().ToString("N"),
-                    FromCognitionId = created.Id,
-                    ToCognitionId = target.Id,
-                    Relation = "revises",
-                    Weight = 1f,
-                    CreatedUnixMs = now
-                });
-            }
-
-            if (created.Subtype == "trace")
-                foreach (var cue in (mutation.trace_cues ?? new List<string>())
-                             .Select(x => Limit((x ?? string.Empty).Trim(), 40))
-                             .Where(x => x.Length > 0).Distinct().Take(5))
-                    connection.Insert(new CognitionCueRecord
-                    {
-                        Id = Guid.NewGuid().ToString("N"),
-                        CognitionId = created.Id,
-                        Cue = cue,
-                        AssociationStrength = Clamp01(mutation.association_strength),
-                        SourceMomentId = triggerMomentId,
-                        CreatedUnixMs = now
-                    });
-            return created;
-        }
-
-        private void AddCognitionEvidence(string cognitionId, BrainCognitionWriteData mutation, string momentId)
-        {
-            var factIds = new HashSet<string>(mutation.evidence_fact_ids ?? new List<string>());
-            if (factIds.Count == 0)
-            {
-                connection.Insert(new CognitionEvidenceRecord
-                {
-                    Id = Guid.NewGuid().ToString("N"),
-                    CognitionId = cognitionId,
-                    FactId = string.Empty,
-                    MomentId = momentId,
-                    Relation = "supports",
-                    Weight = 1f
-                });
-                return;
-            }
-            foreach (var factId in factIds.Take(8))
-            {
-                try
-                {
-                    if (connection.Find<FactSliceRecord>(factId) == null) continue;
-                    connection.Insert(new CognitionEvidenceRecord
-                    {
-                        Id = Guid.NewGuid().ToString("N"),
-                        CognitionId = cognitionId,
-                        FactId = factId,
-                        MomentId = momentId,
-                        Relation = "supports",
-                        Weight = 1f
-                    });
-                }
-                catch
-                {
-                    // 事实表不存在或事实已失效：跳过该条事实证据，认知仍以 Moment 证据保留。
-                    continue;
-                }
-            }
         }
 
         private void WriteInnerRuntime(InnerRuntimeData next)

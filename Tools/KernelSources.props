@@ -5,6 +5,8 @@
     已移入 TraceSoul2.PluginApi 项目（PluginApiSources.props），这里不再重复编译。
   -->
   <ItemGroup>
+    <Compile Include="$(MSBuildThisFileDirectory)../src/TraceSoul2/Logic/CognitionFormationLogic.cs" />
+    <Compile Include="$(MSBuildThisFileDirectory)../src/TraceSoul2/Manager/SqliteCognitionGraph.cs" />
     <Compile Include="$(MSBuildThisFileDirectory)../src/TraceSoul2/Logic/AgentLoopLogic.cs" />
     <Compile Include="$(MSBuildThisFileDirectory)../src/TraceSoul2/Prompts/AgentLoopPrompts.cs" />
     <Compile Include="$(MSBuildThisFileDirectory)../src/TraceSoul2/Manager/SqliteMemoryManager.cs" />
@@ -59,6 +61,7 @@
     <Compile Include="$(MSBuildThisFileDirectory)../src/TraceSoul2/Logic/ToolLookupLogic.cs" />
     <Compile Include="$(MSBuildThisFileDirectory)../src/TraceSoul2/Logic/LadderRecallLogic.cs" />
     <Compile Include="$(MSBuildThisFileDirectory)../src/TraceSoul2/Logic/MemoryRecallLogic.cs" />
+    <Compile Include="$(MSBuildThisFileDirectory)../src/TraceSoul2/Logic/ContextRecallAdapter.cs" />
     <Compile Include="$(MSBuildThisFileDirectory)../src/TraceSoul2/Logic/VisionLogic.cs" />
     <Compile Include="$(MSBuildThisFileDirectory)../src/TraceSoul2/Logic/MouthLogic.cs" />
     <Compile Include="$(MSBuildThisFileDirectory)../src/TraceSoul2/Logic/KernelLogic.cs" />

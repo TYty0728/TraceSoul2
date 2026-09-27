@@ -47,6 +47,8 @@ KernelLogic → 保存输入 / 判断唤醒类型 / 识图 / 记忆预激活
 
 ## 数据与部署边界
 
+长期拼图围绕他/user、世界/world、我/ass、我和他/relation 四领域关联；runtime 保留当下状态。`ContextRecallAdapter` 已通过 `MemoryRecallLogic` 接入预激活与按需查询，`SqliteCognitionGraph` 管理证据和修订，`CognitionFormationLogic` 校验日构建可见证据。身份仍由公共短卡入口加载，执行仍看真实设备回执。能力和预算见 [四领域拼图](../COGNITION_PUZZLE.md)。
+
 - 主 SQLite：对话 Moment、运行事件、内心、身份、事实与索引等；向量 SQLite 由 `SqliteVectorManager` 管理。
 - 图片、表情、调度等运行痕迹保存为 `OperationalEventRecord`，不混成真实聊天历史。相机反馈从这里读取成功发图回执。
 - `MindLogic.Normalize` 当前清空普通轮的 `cognition`、`archive`；不要照旧交接文档恢复白天高频认知写入。

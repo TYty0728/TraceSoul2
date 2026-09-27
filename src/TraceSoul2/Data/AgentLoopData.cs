@@ -8,7 +8,14 @@ namespace TraceSoul2.Data
         public string step = "finish";
         public string reply;
         public bool refine;
+        public List<AgentAttentionLinkData> attention_links = new List<AgentAttentionLinkData>();
         public List<BrainCapabilityCallData> actions = new List<BrainCapabilityCallData>();
+    }
+
+    public sealed class AgentAttentionLinkData
+    {
+        public string attention;
+        public List<string> cognition_ids = new List<string>();
     }
 
     /// <summary>设备回执。确认的内容与进度来自执行端，不能从模型计划推算。</summary>

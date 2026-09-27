@@ -168,6 +168,7 @@ namespace TraceSoul2.Plugins
 
         /// <summary>本轮心智/开口共用的预激活记忆原文；插件装配上下文时应原样传入。</summary>
         public string SharedMemory { get; set; }
+        public HashSet<string> RecalledCognitionIds { get; } = new HashSet<string>(StringComparer.Ordinal);
 
         /// <summary>本轮已读到的 QQ 说说摘要；心智和开口共用，避免假装看过。</summary>
         public string QzoneSeen { get; set; }

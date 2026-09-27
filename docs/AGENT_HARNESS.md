@@ -28,6 +28,7 @@
 
 - `memory.recall(query)`：复用现有记忆检索，明确区分候选证据和空结果，不新增记忆总结 LLM。
 - `dialogue.recent_history`：目录可用时读取近期原文。
+- `web.search` / `web.read`：由可选 Tavily 插件提供，按需搜索、核对原文并带来源继续回答；没有 Key 时不暴露。联网观察通过既有事件入口留存，不新增固定模型阶段，见 [插件说明](../ExternalPlugins/Tavily/README.md)。
 - 外部插件的可调用能力、语音、动作等按实际目录及参数说明使用；插件仍负责参数和设备约束。
 - `execution.cancel(execution_id)`：只能请求停止当前会话的持续执行。请求停止与已确认停止分开。
 - QQ 空间发布、签名修改继续经过原有授权闸门。

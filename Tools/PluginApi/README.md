@@ -1,6 +1,10 @@
 # TraceSoul2.PluginApi
 
-TraceSoul2 运行时插件的稳定契约（版本 **1.5.0**，配套产品 **0.1.15**）。
+TraceSoul2 运行时插件的稳定契约（**1.6.0**，配套产品 **0.1.16**）。正式资产状态见 [版本说明](../../docs/RELEASES.md)。
+
+## 1.6 起
+
+认知增加四领域、完整理解、证据 Moment 列表、关联操作与确认/挑战时间；新增可选 `ICognitionGraphStore` 读取接口，不增加 `IMemoryStore` 必须实现的成员。Agent 的 `attention_links` 仅可引用本轮召回的认知，runtime 保存来源引用。旧库增量迁移，见 [四领域拼图](../../docs/COGNITION_PUZZLE.md)。
 
 ## 1.5 起
 

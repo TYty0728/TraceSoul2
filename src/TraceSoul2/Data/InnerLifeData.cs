@@ -63,6 +63,7 @@ namespace TraceSoul2.Data
     [Serializable]
     public sealed class AttentionWriteData
     {
+        public List<string> source_refs = new List<string>();
         public string kind;
         public string content;
     }

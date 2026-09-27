@@ -1,0 +1,8 @@
+{
+  "dll": "TraceSoul2.Plugin.Tavily.dll",
+  "enabled": true,
+  "api_key": "",
+  "search_depth": "basic",
+  "max_results": 5,
+  "timeout_seconds": 25
+}
