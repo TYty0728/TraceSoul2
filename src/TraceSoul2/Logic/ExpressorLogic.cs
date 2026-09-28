@@ -29,9 +29,14 @@ namespace TraceSoul2.Logic
             var expressed = new ExpressorOutputData { reply = reply ?? string.Empty };
             if (decision is AgentStepData)
             {
-                // Agent 已经通过 actions 选择附件；文字出口不能再自行补图、补表情或重发标签。
+                // Agent 只决定正文与显式媒体；表情由发送侧按语境自动匹配，不接受模型字段或标签。
                 var textOnly = MapExpressor(expressed, catalog, true, decision, includeAutoSticker: false);
                 textOnly.expressions.Clear();
+                if (!string.IsNullOrWhiteSpace(textOnly.reply))
+                    AddExtra(textOnly.expressions, (catalog ?? Enumerable.Empty<TraceContributionDescriptorData>())
+                            .Where(x => x != null && x.Kind == TraceContributionKindValues.Effector &&
+                                MouthLogic.OrganOf(x) == BodyOrganValues.Sticker).ToList(),
+                        BodyOrganValues.Sticker, "emotion", AutoStickerContext(decision));
                 return textOnly;
             }
             ApplyMindAtmosphere(expressed, decision, turn, false, catalog);
@@ -60,7 +65,7 @@ namespace TraceSoul2.Logic
                 : turn.Moment.Content ?? string.Empty;
             var roleStable = BuildExpressStablePrompt(turn, contextBlocks).TrimEnd();
             if (mind is AgentStepData)
-                roleStable += "\n本轮只加工已选定的文字草稿。图片、表情、语音与动作已由 Agent 独立决定，不新增这些输出或标签，不改变是否表达的选择。";
+                roleStable += "\n本轮只加工已选定的文字草稿。图片、语音与动作已由 Agent 独立决定，不新增这些输出或标签，不改变是否表达的选择。";
             var roleDynamic = BuildExpressDynamicPrompt(
                 turn, contextBlocks, mind, memoryFlesh, waitOnly, leaveResult).TrimEnd();
             var messages = LlmContextPackLogic.AssembleExpress(

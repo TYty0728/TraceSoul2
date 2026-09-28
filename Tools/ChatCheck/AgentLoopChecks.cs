@@ -85,13 +85,16 @@ internal static partial class Program
 
         var mediaStart = probe.Media;
         var photo = await Chat("agent-media-photo", Step(Continue(Action("photo", "check.agent.image"))), Step(Finish("")));
-        var sticker = await Chat("agent-media-sticker", Step(Continue(Action("sticker", "check.agent.sticker"))), Step(Finish("")));
-        Require(probe.Media == mediaStart + 2 && photo.llm.Requests.Count == 2 && sticker.llm.Requests.Count == 2 &&
+        var sticker = await Chat("agent-media-sticker", Step(Finish("真开心。")));
+        Require(!sticker.llm.Requests[0].Contains("check.agent.sticker") &&
+            !sticker.llm.Requests[0].Contains("照片、表情") && sticker.llm.Requests.Count == 1,
+            "表情能力和选择说明不进入 Agent prompt，自动匹配不增加生成轮次");
+        Require(probe.Media == mediaStart + 2 && photo.llm.Requests.Count == 2 && sticker.llm.Requests.Count == 1 &&
             store.GetRecentMoments("agent-media-photo", 10).Count == 1 &&
-            store.GetRecentMoments("agent-media-sticker", 10).Count == 1 &&
+            store.GetRecentMoments("agent-media-sticker", 10).Count == 2 &&
             store.GetRecentOperationalEvents("agent-media-photo", 10).Any(x => x.Kind == OperationalEventKindValues.OutboundImage) &&
             store.GetRecentOperationalEvents("agent-media-sticker", 10).Any(x => x.Kind == OperationalEventKindValues.OutboundSticker),
-            "照片或表情可以独立回应：实际执行并保存媒体回执，不补文字、不伪造聊天正文");
+            "照片仍可独立回应，文字自动附表情并保存媒体回执，不伪造聊天正文");
         Require(photo.result.MindDecision.speak && !silent.result.MindDecision.speak,
             "无文字的媒体表达与全程安静须在后续状态判断中区分");
         var bodyGesture = await Chat("agent-media-gesture", Step(Continue(Action("gesture", "check.agent.gesture"))), Step(Finish("")));
@@ -100,8 +103,8 @@ internal static partial class Program
         probe.Gestures = 0;
         mediaStart = probe.Media;
         var combined = await Chat("agent-media-combined", Step(Continue(Action("photo", "check.agent.image"))), Step(Finish("给你看看。")));
-        Require(probe.Media == mediaStart + 1 && combined.llm.Requests.Count == 2,
-            "照片后可以继续文字，不应由默认附件映射重复发送");
+        Require(probe.Media == mediaStart + 2 && combined.llm.Requests.Count == 2,
+            "照片后继续文字只增加一次自动表情，不重复发照片");
         probe.Fail = true;
         var failedPhoto = await Chat("agent-media-failure", Step(Continue(Action("photo", "check.agent.image"))),
             Step(Finish("")), Step(Finish("图片没发成功。")));
@@ -113,19 +116,37 @@ internal static partial class Program
         var choicesTurn = new TraceTurnContext("agent-choices", Moment("agent-choices", "发张照片给我看看"),
             new List<MomentRecord>(), 0, true, services);
         var choices = manager.GetAvailableActionCatalog(choicesTurn);
+        Require(AgentLoopLogic.BuildCatalog(choices).All(x => MouthLogic.OrganOf(x) != BodyOrganValues.Sticker),
+            "自动表情不能成为模型可执行的动作");
         var oldImageFlag = Finish("我这会儿不想拍。"); oldImageFlag.image = "有";
-        Require(ExpressorLogic.PrepareDirectReply(oldImageFlag.reply, choicesTurn, choices, oldImageFlag).expressions.Count == 0,
-            "Agent 正文出口不能因索图关键词、旧 image 字段或默认表情策略擅自添加动作");
+        var autoMapped = ExpressorLogic.PrepareDirectReply(oldImageFlag.reply, choicesTurn, choices, oldImageFlag);
+        Require(autoMapped.expressions.Count == 1 && autoMapped.expressions[0].capability_id == "check.agent.sticker",
+            "正文只自动匹配表情，不能因索图关键词或旧 image 字段擅自补图");
+        Require(ExpressorLogic.PrepareDirectReply("", choicesTurn, choices, Finish("")).expressions.Count == 0 &&
+            ExpressorLogic.PrepareDirectReply("嗯。", choicesTurn,
+                choices.Where(x => MouthLogic.OrganOf(x) != BodyOrganValues.Sticker), Finish()).expressions.Count == 0,
+            "没有文字或没有表情器官时不自动发表情");
         var refineOnly = new AgentSequenceLlm("{\"reply\":\"给你看看。\",\"image\":\"多余照片\",\"sticker\":\"开心\"}");
         var refinedOnly = await new ExpressorLogic(refineOnly).ExpressAsync(choicesTurn, manager.GetPlugins(), choices,
             Array.Empty<TraceContextBlockData>(), oldImageFlag, "", false, null, CancellationToken.None);
-        Require(refinedOnly.expressions.Count == 0, "可选文字润色也不能重新选择媒体或补发附件");
+        Require(refinedOnly.expressions.Count == 1 && refinedOnly.expressions[0].capability_id == "check.agent.sticker" &&
+            refinedOnly.expressions[0].GetArgument("emotion") != "开心" &&
+            !refineOnly.Requests[0].Contains("check.agent.sticker"),
+            "润色正文沿用一次自动匹配，忽略模型表情和图片字段，能力不注入 prompt");
+        var rejectedSticker = await Chat("agent-media-manual-sticker",
+            Step(Continue(Action("manual", "check.agent.sticker"))), Step(Finish("我在。")));
+        Require(rejectedSticker.llm.Requests[1].Contains("能力不在当前可用目录") &&
+            store.GetRecentOperationalEvents("agent-media-manual-sticker", 10)
+                .Count(x => x.Kind == OperationalEventKindValues.OutboundSticker) == 1,
+            "幻觉出的表情动作必须拒绝，最后文字只触发一次自动匹配");
 
         var lookup = await Chat("agent-tool", Step(Continue(Action("read-1"))), Step(Finish("查到了：答案42。")));
         Require(lookup.llm.Requests.Count == 2 && probe.Count == 1, "一次查资料后应由同一 Agent 继续，不能追加固定表达调用");
         Require(lookup.llm.Requests[1].Contains("答案42") &&
+            !lookup.llm.Requests[1].Contains("\"sticker\"") &&
+            !lookup.llm.Requests[1].Contains("\"speak\"") &&
             store.GetRecentMoments("agent-tool", 10).All(x => x.Content != "这句只是中间草稿，不能发送"),
-            "实际结果必须进入续推上下文，中间草稿不发送");
+            "实际结果进入续推上下文，中间草稿不发送，内部遗留字段不回流到 prompt");
 
         var before = probe.Count;
         var sameArguments = Action("same-2");

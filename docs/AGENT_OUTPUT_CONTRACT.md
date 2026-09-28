@@ -51,3 +51,5 @@
 ## 验证入口
 
 `ChatCheck --agent-contract` 覆盖 DTO/schema 同源、旧字段隔离、布尔/整数/字符串/数组及嵌套参数纠正、心跳与旧插件协议隔离、代码推导开口状态。`--agent-contract-dump <response.txt>` 只读解析本地响应并验证新契约，不调用模型、工具或发送聊天，不打印原文；两份故障响应均已通过回放。完整回归仍包含目标、认知、发送与旧 Mind 兼容检查。
+
+2026-09-28：表情能力退出 Agent 目录及表达选择提示，最终文字由程序自动匹配。工具续推的 state 也使用独立模型 DTO，不再序列化包含 speak/sticker 等兼容字段的内部 AgentStepData。
