@@ -341,7 +341,7 @@ namespace TraceSoul2.Plugins.Builtin
                             .Append("，上一段停在")
                             .Append(lastTime.ToString("M月d日 HH:mm"))
                             .Append("。");
-                        if (pair.IsCompanionMoment(lastReal.Role))
+                        if (!context.RequiresExpression && pair.IsCompanionMoment(lastReal.Role))
                         {
                             builder.Append("上一条真实消息由我发出，至今没有她的新回复；内容：")
                                 .Append(Limit(lastReal.Content, 80))

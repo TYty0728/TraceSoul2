@@ -159,36 +159,43 @@ namespace TraceSoul2.Logic
             var storage = turn.Services.Storage;
             var builder = new StringBuilder();
             var now = DateTimeOffset.Now;
-            builder.AppendLine(CorePrompts.Mind.NowPrefix + TimeLanguageUtil.NaturalNow(now) + "。");
-            var bodyScene = MouthLogic.LoadState(
-                turn == null || turn.Services == null ? null : turn.Services.DataDirectory).scene;
-            var life = turn != null && turn.Services != null && turn.Services.LifeState != null
-                ? turn.Services.LifeState.Load(turn.ConversationId)
-                : null;
-            if (life != null && !string.IsNullOrWhiteSpace(life.location))
-                bodyScene = life.location;
-            builder.AppendLine(CorePrompts.Mind.BodyScenePrefix + BodySceneValues.Label(bodyScene) + "。这是物理所在，不是我们共同的文字场景；它只作为当前生活上下文参考。");
-            var doing = LifeStateLogic.FormatDoing(life);
-            builder.AppendLine(CorePrompts.Mind.DoingPrefix +
-                              (doing.Length == 0 ? "空闲" : doing) +
-                              "。这是可变化的生活状态；没有明确变化不要擅自改写。");
-            var lastReal = storage.GetRecentMoments(turn.ConversationId, 200)
-                .Where(x => x != null &&
-                            (pair.IsHumanMoment(x.Role) || pair.IsCompanionMoment(x.Role)) &&
-                            (turn.Moment == null || x.Id != turn.Moment.Id))
-                .OrderByDescending(x => x.CreatedUnixMs)
-                .FirstOrDefault();
-            if (lastReal != null && lastReal.CreatedUnixMs > 0)
+            var timeContext = !includeLegacyTools ? turn.Workspace.ContextBlocks
+                .FirstOrDefault(x => x?.FacetId == "time.context" && !string.IsNullOrWhiteSpace(x.Content)) : null;
+            if (!includeLegacyTools) builder.AppendLine("【当前状态】");
+            if (timeContext != null) builder.AppendLine(timeContext.Content.Trim());
+            else
             {
-                var lastTime = DateTimeOffset.FromUnixTimeMilliseconds(lastReal.CreatedUnixMs).ToLocalTime();
-                builder.AppendLine("距离上一段真实相处约" +
-                                  TimeLanguageUtil.ElapsedZh(lastReal.CreatedUnixMs, now.ToUnixTimeMilliseconds()) +
-                                  "，上一段停在" + lastTime.ToString("M月d日 HH:mm") + "。");
+                builder.AppendLine(CorePrompts.Mind.NowPrefix + TimeLanguageUtil.NaturalNow(now) + "。");
+                var bodyScene = MouthLogic.LoadState(
+                    turn == null || turn.Services == null ? null : turn.Services.DataDirectory).scene;
+                var life = turn != null && turn.Services != null && turn.Services.LifeState != null
+                    ? turn.Services.LifeState.Load(turn.ConversationId)
+                    : null;
+                if (life != null && !string.IsNullOrWhiteSpace(life.location))
+                    bodyScene = life.location;
+                builder.AppendLine(CorePrompts.Mind.BodyScenePrefix + BodySceneValues.Label(bodyScene) + "。这是物理所在，不是我们共同的文字场景；它只作为当前生活上下文参考。");
+                var doing = LifeStateLogic.FormatDoing(life);
+                builder.AppendLine(CorePrompts.Mind.DoingPrefix +
+                                  (doing.Length == 0 ? "空闲" : doing) +
+                                  "。这是可变化的生活状态；没有明确变化不要擅自改写。");
+                var lastReal = storage.GetRecentMoments(turn.ConversationId, 200)
+                    .Where(x => x != null &&
+                                (pair.IsHumanMoment(x.Role) || pair.IsCompanionMoment(x.Role)) &&
+                                (turn.Moment == null || x.Id != turn.Moment.Id))
+                    .OrderByDescending(x => x.CreatedUnixMs)
+                    .FirstOrDefault();
+                if (lastReal != null && lastReal.CreatedUnixMs > 0)
+                {
+                    var lastTime = DateTimeOffset.FromUnixTimeMilliseconds(lastReal.CreatedUnixMs).ToLocalTime();
+                    builder.AppendLine("距离上一段真实相处约" +
+                                      TimeLanguageUtil.ElapsedZh(lastReal.CreatedUnixMs, now.ToUnixTimeMilliseconds()) +
+                                      "，上一段停在" + lastTime.ToString("M月d日 HH:mm") + "。");
+                }
             }
             builder.AppendLine();
             var runtime = storage.LoadOrCreateInnerRuntime(turn.ConversationId);
             builder.AppendLine(InnerLifeLogic.FormatForMind(runtime));
-            builder.AppendLine(CorePrompts.Mind.InnerAttentionRule);
+            if (includeLegacyTools) builder.AppendLine(CorePrompts.Mind.InnerAttentionRule);
             var todayItems = storage.GetTodayNewItems(
                 turn.ConversationId, TodayBoundary(DateTimeOffset.Now).ToUnixTimeMilliseconds(), 10);
             if (todayItems != null && todayItems.Count > 0)

@@ -30,6 +30,7 @@ namespace TraceSoul2.Logic
         {
             var stable = BuildStable(turn);
             var history = new List<object>();
+            var pendingState = new Dictionary<string, object>();
             var callIds = new Dictionary<string, string>(StringComparer.Ordinal);
             var executed = new Dictionary<string, TraceCapabilityResultData>(StringComparer.Ordinal);
             var groups = new Dictionary<string, string>(StringComparer.Ordinal);
@@ -39,20 +40,12 @@ namespace TraceSoul2.Logic
                 token.ThrowIfCancellationRequested();
                 if (round > 0 && refreshContext != null) await refreshContext(token);
                 var catalog = BuildCatalog(catalogProvider());
-                var dynamic = MindLogic.BuildTurnPrompt(turn, null, false, Array.Empty<MindTemplate>(), string.Empty, false);
-                dynamic += GoalMemoryLogic.BuildContext(turn);
-                dynamic += "\n【本轮上下文】\n" + string.Join("\n", turn.Workspace.ContextBlocks
-                    .Where(x => x != null && x.FacetId != "identity.base" && !MouthLogic.IsProtocolFacet(x.FacetId)).Select(x => x.Content));
-                dynamic += "\n【当前可用能力】\n" + JsonSerializer.Serialize(catalog.Select(x => new
-                {
-                    id = x.Id, description = x.Description, body_id = MouthLogic.BodyOf(x), organ = MouthLogic.OrganOf(x),
-                    parameters = x.ParametersJsonSchema, external_effect = x.HasExternalSideEffect,
-                    when_to_use = x.WhenToUse, when_not_to_use = x.WhenNotToUse
-                }), Json);
-                dynamic += "\n【执行账本：仅设备回执是完成证据】\n" +
-                    JsonSerializer.Serialize(turn.Services.Executions.List(turn.ConversationId)
-                        .OrderBy(x => TraceExecutionRegistry.Terminal(x.Status) ? 1 : 0).Take(24), Json);
-                if (history.Count > 0) dynamic += "\n【本轮行动与结果，未发送的 reply 不是对话历史】\n" + JsonSerializer.Serialize(history, Json);
+                if (!AgentPromptContextLogic.HasActiveExecution(turn)) catalog.RemoveAll(x => x.Id == "execution.cancel");
+                var dynamic = (catalog.Any(x => x.Id == "web.search" || x.Id == "web.read") ? AgentLoopPrompts.Search + "\n" : "") +
+                    AgentPromptContextLogic.Context(turn) + AgentPromptContextLogic.Catalog(catalog) +
+                    AgentPromptContextLogic.Executions(turn);
+                if (history.Count > 0) dynamic += AgentPromptContextLogic.Results(history);
+                dynamic += AgentPromptContextLogic.PendingState(pendingState);
                 dynamic += "\n本轮对话身体是否已受理表达：" + (responded ? "是" : "否") +
                     (turn.RequiresExpression && !responded ? "。对方正在对你说话，本轮须用正文或可用表达能力回应。" :
                         "。已回应或后台唤醒时，可以不再追加输出。") + "最终步骤请包含仍需保存的状态变化。";
@@ -65,9 +58,9 @@ namespace TraceSoul2.Logic
                     memory, turn.RequiresExpression ? turn.Moment?.Content ?? string.Empty : string.Empty,
                     AgentLoopPrompts.Header, stable, dynamic);
                 var output = await DeepSeekStructuredOutputLogic.CompleteAsync<AgentOutputData>(llm, messages,
-                    value => value != null && Valid(value.ToRuntime(), turn.RequiresExpression && !responded, round == MaxActionRounds) &&
-                        GoalMemoryLogic.Valid(turn, value.goal_updates),
-                    AgentLoopPrompts.Invalid, token, LlmContextPackLogic.BuildPromptCacheKey(llm, turn.ConversationId));
+                    null, AgentLoopPrompts.Invalid, token, LlmContextPackLogic.BuildPromptCacheKey(llm, turn.ConversationId),
+                    value => ValidationError(value.ToRuntime(), turn.RequiresExpression && !responded, round == MaxActionRounds) ??
+                        GoalMemoryLogic.ValidationError(turn, value.goal_updates));
                 var step = output.ToRuntime();
                 MindLogic.Normalize(step);
                 // 明确反馈在执行或发送前落库；后续行动失败也不会抹掉已经听取的调整。
@@ -116,12 +109,11 @@ namespace TraceSoul2.Logic
                     }
                     if (!callIds.ContainsKey(call.call_id)) callIds[call.call_id] = signature;
                     if (!turn.Workspace.Results.Contains(result)) turn.Workspace.Results.Add(result);
-                    results.Add(new { call, result = new { result.Status, result.Summary,
-                        Payload = Limit(result.Payload, 12000), result.ExecutionId } });
+                    results.Add(AgentPromptContextLogic.Result(call, result));
                 }
-                // 不把中间草稿写入历史，也不向平台发送；完整请求/结果供下一步修正判断。
-                // 续推也只回放模型契约，避免内部兼容字段重新泄漏到下一轮 prompt。
-                history.Add(new { state = output, results });
+                // 尚未落库的状态变化单独保留，续推不复制整份输出或未发送草稿。
+                AgentPromptContextLogic.UpdatePendingState(pendingState, output);
+                history.AddRange(results);
             }
             throw new InvalidOperationException("Agent 行动预算耗尽。");
         }
@@ -161,27 +153,71 @@ namespace TraceSoul2.Logic
             return reply != null && MouthLogic.BodyOf(reply) == MouthLogic.BodyOf(descriptor);
         }
 
-        internal static bool Valid(AgentStepData value, bool needsReply, bool finalOnly)
+        internal static bool Valid(AgentStepData value, bool needsReply, bool finalOnly) =>
+            ValidationError(value, needsReply, finalOnly) == null;
+
+        internal static string ValidationError(AgentStepData value, bool needsReply, bool finalOnly)
         {
-            if (value == null || (value.step != "finish" && value.step != "continue" && value.step != "wait")) return false;
-            if (value.attention_links != null && (value.attention_links.Count > 3 || value.attention_links.Any(x =>
-                x == null || (x.attention?.Length ?? 0) > 160 || (x.cognition_ids?.Count ?? 0) > 6 ||
-                (x.cognition_ids != null && x.cognition_ids.Any(id => string.IsNullOrWhiteSpace(id) || id.Length > 80))))) return false;
-            if (!string.IsNullOrWhiteSpace(value.tool_call) || value.WantsLeave() || value.WantsMemory()) return false;
+            if (value == null) return "$ 必须是 JSON 对象。";
+            if (value.step != "finish" && value.step != "continue" && value.step != "wait")
+                return "$.step 必须填写 finish、continue 或 wait。";
             var actions = value.actions ?? new List<BrainCapabilityCallData>();
             if (actions.Count > 0)
-                return !finalOnly && !value.refine && value.step == "continue" && actions.Count <= MaxActionsPerStep && actions.All(x =>
-                    x != null && !string.IsNullOrWhiteSpace(x.call_id) && x.call_id.Length <= 80 &&
-                    !string.IsNullOrWhiteSpace(x.capability_id) && x.capability_id.Length <= 160 &&
-                    (x.body_id?.Length ?? 0) <= 160 && (x.group_id?.Length ?? 0) <= 80 &&
-                    (x.arguments == null || (x.arguments.Count <= 16 && x.arguments.All(a => a != null &&
-                        !string.IsNullOrWhiteSpace(a.name) && a.name.Length <= 80 && (a.value?.Length ?? 0) <= 12000) &&
-                        x.arguments.Select(a => a.name).Distinct(StringComparer.OrdinalIgnoreCase).Count() == x.arguments.Count)));
-            if (value.step == "wait") return !needsReply && string.IsNullOrWhiteSpace(value.reply) && !value.refine;
-            return value.step == "finish" && (!(needsReply || value.refine) || !string.IsNullOrWhiteSpace(value.reply));
+            {
+                if (finalOnly) return "$.actions：本轮行动预算已用完，清空 actions，根据已有结果输出最终 reply。";
+                if (value.step != "continue")
+                    return "$.step 与 $.actions 冲突：actions 非空时 step 必须为 continue；保留行动并改为 continue，执行结果回来后再 finish。当前 reply 是草稿，不会发送。若不需要行动则清空 actions。";
+                if (value.refine) return "$.refine 与 $.actions 冲突：行动步骤必须 refine=false；仅最终有正文的 finish 可润色。";
+                if (actions.Count > MaxActionsPerStep) return "$.actions 每步最多4项，请拆到后续步骤。";
+                for (var i = 0; i < actions.Count; i++)
+                {
+                    var x = actions[i]; var path = "$.actions[" + i + "]";
+                    if (x == null) return path + " 必须是行动对象，不能为 null。";
+                    if (string.IsNullOrWhiteSpace(x.call_id) || x.call_id.Length > 80) return path + ".call_id 须为1～80字符的唯一标识。";
+                    if (string.IsNullOrWhiteSpace(x.capability_id) || x.capability_id.Length > 160) return path + ".capability_id 须为目录中的能力ID，长度1～160。";
+                    if ((x.body_id?.Length ?? 0) > 160 || (x.group_id?.Length ?? 0) > 80) return path + " 的 body_id/group_id 过长；分别最多160/80字符。";
+                    if (x.arguments == null) continue;
+                    if (x.arguments.Count > 16) return path + ".arguments 最多16项。";
+                    for (var j = 0; j < x.arguments.Count; j++)
+                    {
+                        var argument = x.arguments[j]; var argumentPath = path + ".arguments[" + j + "]";
+                        if (argument == null) return argumentPath + " 必须是参数对象，不能为 null。";
+                        if (string.IsNullOrWhiteSpace(argument.name) || argument.name.Length > 80) return argumentPath + ".name 须为1～80字符的参数名。";
+                        if ((argument.value?.Length ?? 0) > 12000) return argumentPath + ".value 超过12000字符。";
+                    }
+                    if (x.arguments.Select(a => a.name).Distinct(StringComparer.OrdinalIgnoreCase).Count() != x.arguments.Count)
+                        return path + ".arguments 的 name 不能重复（忽略大小写）。";
+                }
+            }
+            else
+            {
+                if (value.step == "continue") return "$.step=continue 时 $.actions 必须至少包含一项有效行动；准备直接回应时改为 finish 并填写 reply。";
+                if (value.step == "wait")
+                {
+                    if (needsReply) return "$.step=wait 不可用于尚未回应的用户消息；请用 finish+reply 回应，或 continue+actions 执行表达。";
+                    if (!string.IsNullOrWhiteSpace(value.reply) || value.refine) return "$.step=wait 时 reply 须为空且 refine=false；需要发送正文请改为 finish。";
+                }
+                if (value.step == "finish" && (needsReply || value.refine) && string.IsNullOrWhiteSpace(value.reply))
+                    return "$.reply 不能为空：尚未回应用户或 refine=true 的 finish 必须有正文；需要表达行动请用 continue+actions。";
+            }
+            if (value.attention_links != null)
+            {
+                if (value.attention_links.Count > 3) return "$.attention_links 最多3项。";
+                for (var i = 0; i < value.attention_links.Count; i++)
+                {
+                    var x = value.attention_links[i]; var path = "$.attention_links[" + i + "]";
+                    if (x == null) return path + " 必须是对象，不能为 null。";
+                    if ((x.attention?.Length ?? 0) > 160) return path + ".attention 最多160字符。";
+                    if ((x.cognition_ids?.Count ?? 0) > 6 || (x.cognition_ids != null && x.cognition_ids.Any(id => string.IsNullOrWhiteSpace(id) || id.Length > 80)))
+                        return path + ".cognition_ids 最多6个非空ID，每个至多80字符。";
+                }
+            }
+            if (!string.IsNullOrWhiteSpace(value.tool_call) || value.WantsLeave() || value.WantsMemory())
+                return "旧心智工具字段不能驱动 Agent；请仅通过 actions 请求能力。";
+            return null;
         }
 
-        private static string BuildStable(TraceTurnContext turn)
+        internal static string BuildStable(TraceTurnContext turn)
         {
             var builder = new StringBuilder(AgentLoopPrompts.Rules);
             builder.AppendLine().AppendLine(CorePrompts.Expressor.ExpressionPosture);

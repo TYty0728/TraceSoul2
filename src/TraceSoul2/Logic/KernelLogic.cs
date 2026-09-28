@@ -403,7 +403,7 @@ namespace TraceSoul2.Logic
 
             // 是否表达由 Agent 决定；只有实际选择输出后才通知平台开始表达。
             var decision = await agent.RunAsync(turn, naturallyAwakenedPast,
-                () => plugins.GetAvailableActionCatalog(turn),
+                () => FilterExpressionCatalog(plugins.GetAvailableActionCatalog(turn), turn),
                 (call, token) => ExecuteAgentActionAsync(call, turn, token), cancellationToken,
                 async token => { await plugins.BuildContextBlocksAsync(turn, token); });
             expressionCatalog = FilterExpressionCatalog(plugins.GetAvailableCatalog(turn), turn);
