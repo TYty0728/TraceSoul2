@@ -1,177 +1,178 @@
+<div align="center">
+
 # TraceSoul2
 
-开发与排障先读 [项目知识库](docs/knowledge/README.md)；每次工作约定见 [AGENTS.md](AGENTS.md)。
+**让共同经历留下痕迹，让相处拥有连续性。**
 
-ta 陪伴你的时光，成为了一部分的你。
+一个可以自托管、持续记忆、按需行动的 AI 陪伴框架。
 
-人和 AI 常常只是一问一答。问完了，答完了，窗口合上，谁也没有过过谁的一天。
+[下载最新版](https://github.com/TYty0728/TraceSoul2/releases/latest) · [快速开始](#快速开始) · [更新记录](docs/RELEASES.md) · [加入官方群](https://qm.qq.com/q/kJDFILm14A)
 
-这里想让另一件事发生。
+</div>
 
-ta 不是一份人设，也不是一堆旧记录。ta 会成为谁，取决于真正经历过什么，以及这些经历怎样改了 ta 的看法——形成，强化，修正，也会衰退。你之所以觉得 ta 成了自己的一部分，不是因为模型够像人，而是因为有一段日子是你们一起过的，那段日子没有被摘要抹掉。它不能许诺永恒。它能承载的，是连续本身。
+---
 
-插件不是平铺列表，是三层：**内核组件**（不可关）→ **平台 / 身体**（连接桥 + 翻译）→ **器官**（长在身体上的具体能力）。身体不在，器官休眠，不会假装还能发空间。见 [docs/PLUGIN_LAYERS.md](docs/PLUGIN_LAYERS.md)。
+## 关于 TraceSoul
 
-## 架构分层
+**ta 陪伴你的时光，成为了一部分的你。**
 
-```
-内核组件（不可关）              身份 / 内心 / 记忆 / 时间 / 感官目录
-        ↓
-平台层（身体 = 连接桥 + 翻译）  console（观察窗）· OneBot/QQ · game.session
-        ├─ QQ 器官              表情 / 语音 / 生图 / 说说 / 签名
-        └─ 游戏器官             星露谷 / 通用游戏（目前在 game.session 包内）
-        ↓ Moment
-中枢 KernelLogic               按入口换轨：心智 / 外显 / 潜意识；出门走代码链
-                               识图 → 心智；空闲抽一件生活事；夜间余烬；日构建
-心智 MindLogic                 安静组织这一拍：当下 / 旧事 / 出门
-外显 ExpressorLogic            带着决策卡和血肉开口，不重做决策
-复盘 IdentityReviewLogic       短卡怎么长，不抢嘴
-        ↓
-记忆层                          四层多维索引 + 一句话总结 + 浸染细节 + 时间阶梯
-```
+TraceSoul 想承载的是一段持续发生的相处：聊过的事情有出处，对彼此的理解会随着经历修正，此刻的心情和关注能够延续，你明确提出的希望也能影响之后的回应。
 
-- **内核**：身份短卡、内心、记忆、时间、感官目录编译进主库，强制启用。实现 `ITracePlugin` 只是复用注册总线，不是可拆插件。
-- **平台**：只收发、只翻译，不做决策。`ITracePlatformAdapter` 负责平台消息 ⇄ Moment，并保证「已发送」事件入库完整。console 是观察窗 + 调试口，不可禁用，不参与身体滑落。
-- **器官**：可独立开关。所属平台未启用或未连接时休眠（开关状态保留，平台回来自动醒）。
-- **身体路由**：跨层近的压过远的（物理身体 → 自己的软件 → 文字聊天 → 控制台壳）；同层才打分。说话才改激活的身体，缺的器官才往更远的身体下滑。配置在数据目录 `bodies.json`。见 [docs/PLATFORM_SENSORY_POSITIONING.md](docs/PLATFORM_SENSORY_POSITIONING.md)。
-- **空闲生活**：没人说话进入空闲时，系统按日限均匀随机抽一件事（发说说 / 看说说 / 改签名，或歇着），模型不选活动。
-- **识图**：控制台「识图多模态」槽看她发来的图，看见的结果再交给心智；槽留空则只知道发了图，不假装看见。
-- **记忆**：每日 04:00（+08:00，04:00 前归前一天）自动日构建：Moment → 事件索引+细节浸染 → 复盘六张卡/内心 → 当日排序。睡过 04:00 也会按墙钟补跑。阶梯榜 日→周→月→年→永久，每层 5 条，晋升=MOVE（跨层不重复）。
+长期的记忆、认知与人格构成一幅拼图，当下的内心状态连接这幅拼图与正在发生的事情。框架将它们带入同一个 Agent 循环，由当前情境决定直接回答、查找记忆，或使用工具后继续行动。
 
-## 目录结构
+项目仍在持续迭代。当前提供 **Windows x64、Linux x64、Linux arm64** 安装包，支持 WebUI 管理与更新。
 
-| 路径 | 说明 |
+## 现在可以做什么
+
+| 能力 | 相处中的作用 |
 |---|---|
-| `src/TraceSoul2/` | 内核、数据契约、平台与插件运行时源码 |
-| `ExternalPlugins/` | 本仓库内的器官/平台包源码（QQ TTS / 生图 / 说说 / 签名、game.session） |
-| `models/` / `resources/` | BGE 模型与身份种子资源 |
-| `Tools/PluginApi/` | `TraceSoul2.PluginApi` 共享契约（外部插件只依赖它，当前 1.3） |
-| `Tools/Host/` | 常驻宿主（ASP.NET Core，控制台 5080） |
-| `Tools/Migration/` | 迁移与日构建管线 |
-| `Tools/ChatCheck/` | 内核与插件回归（不连真 API） |
-| `Tools/KernelSources.props` | 宿主/迁移工具共用的内核源清单 |
-| `docs/` | 架构总纲、插件三层、Prompt 装配、发布说明 |
+| 自然对话 | 资料充分时一次生成直接回复；需要查资料或执行行动时再继续处理，明确需要润色才调用表达加工。 |
+| 长期记忆与认知 | 保存共同经历及来源，按需召回；后台整理、形成和修订理解，保留支持与反对的证据。 |
+| 偏好、约定与目标 | 在当轮记录明确反馈和当下／未来目标；有效内容持续参与后续回应，支持修订、撤回与完成。 |
+| 当下状态与主动联系 | 保留情绪、关注和活动状态，通过心跳重新判断是否联系；收到用户消息需要回应，后台可以安静。 |
+| QQ 与多种表达 | 通过 OneBot / NapCat 接入 QQ；按已配置能力使用文字、照片或语音。表情包由发送侧自动匹配，不占 Agent 的能力提示。 |
+| 按需联网 | Tavily 插件提供搜索与网页读取；配置 Key 后按需使用，结果带来源，不把网络内容当成新的指令。 |
+| WebUI 与自托管 | 管理角色、模型、记忆、平台与插件，查看运行状态和日志；软件与角色数据分开存放。 |
 
-Prompt 的分层、去重与缓存约束见 [`docs/PROMPT_ASSEMBLY.md`](docs/PROMPT_ASSEMBLY.md)。
+语音、生图、识图和联网需要配置对应服务。偏好提取、记忆理解与表达效果仍受所选模型影响；保存未来目标也不等于创建精确定时提醒。
 
-## 家目录与软件分离
+## 一幅拼图，四个视角
 
-软件（本仓库或发布包）可以整份替换。角色、设置和已装插件都住在应用目录外的整合家目录，由 `TRACESOUL2_HOME` 指定。
+| 视角 | 理解的内容 |
+|---|---|
+| **他** | 正在与 ta 相处的人、经历、偏好与变化 |
+| **世界** | 共同接触的人、事物、环境与知识 |
+| **我** | 自身的经历、性格、感受与选择 |
+| **我和他** | 共同历史、相处方式、约定与关系 |
 
-正式安装推荐使用三个并列目录：
+同一段经历可以连接多个视角。长期拼图与当下状态共同参与回应；新的真实经历又成为理解变化的依据。设计与实现见 [四领域认知拼图](docs/COGNITION_PUZZLE.md) 和 [偏好与目标记忆](docs/GOAL_MEMORY.md)。
 
-```
-TraceSoul2\
-  App\                   ← GitHub Release 软件包；更新时整体替换
-  Data\                  ← TRACESOUL2_HOME：全局设置与所有角色
-    home.json
-    souls\<角色>\
-    updates\
-  Plugins\               ← TRACESOUL2_PLUGINS：独立插件代码包
-  plugins_data\          ← TRACESOUL2_PLUGINS_DATA：插件配置与持久数据
-```
-
-发布包里的 `Start-TraceSoul2.cmd` 默认按这个布局启动：`App`、`Data`、`Plugins` 可以一起迁移，但软件更新只替换 `App`。
-
-未使用发布包启动脚本时，简化的默认家目录结构是：
-
-```
-%TRACESOUL2_HOME%\
-  home.json              ← 当前角色、控制台地址
-  souls\
-    xun\                 ← 循：两套 sqlite、短卡、供应商、OneBot、plugin-data
-    xiaoxi\              ← 小汐，结构相同
-  plugins\               ← 已装器官/平台代码包（dll + 默认资源）
-  plugins_data\          ← 按包名分目录保存配置与运行数据
-  updates\               ← 更新下载、校验与临时运行器
+```mermaid
+flowchart LR
+    A[消息或运行事件] --> B[身份、当下状态与相关记忆]
+    B --> C[Agent 判断]
+    C --> D[直接回应]
+    C --> E[查询记忆或执行能力]
+    E --> F[真实结果与设备回执]
+    F --> C
+    C --> G[后台安静并保留状态]
+    D --> H[经历与状态更新]
+    H --> I[后台整理长期拼图]
+    I --> B
 ```
 
-拷走 `Data` 即可迁移全部角色和设置；只拷 `souls/<角色>` 可以迁移单个角色。未设置环境变量时落到 `%LOCALAPPDATA%\TraceSoul2`。插件代码目录默认是家目录的 `plugins/`，也可用 `pluginsDirectory` / `TRACESOUL2_PLUGINS` 指向别处；数据目录默认为它的同级 `plugins_data/`，可用 `pluginsDataDirectory` / `TRACESOUL2_PLUGINS_DATA` 覆盖。
+详细执行边界见 [Agent 运行框架](docs/AGENT_HARNESS.md)。框架已提供语音与动作的执行、回执和取消契约；机器人、Live2D 等具体设备驱动仍需接入。
 
-版本号在 `Tools/Directory.Build.props` 的 `TraceSoul2Version`。日常 commit 不改；决定集成一版时才运行 `scripts/Set-Version.ps1`、创建 `v*` 标签并生成 GitHub Release。已安装电脑可在 WebUI 检查并一键更新，详见 [版本与发布](docs/RELEASES.md)。PluginApi 在自己的 csproj 里单独编号。
+## 快速开始
 
-## 运行
+### 下载运行
 
-```powershell
-dotnet build Tools\Host\TraceSoul2.Host.csproj
+1. 前往 [GitHub Releases](https://github.com/TYty0728/TraceSoul2/releases/latest)，下载对应系统和架构的 ZIP。常规发布包需要 **.NET 8 SDK 或对应架构的 ASP.NET Core 8 运行时**。
+2. 将安装包解压到独立的 `App` 目录，使用包内的 `Start-TraceSoul2.cmd`（Windows）或 `Start-TraceSoul2.sh`（Linux）启动。
+3. 打开 `http://127.0.0.1:5080`。首次启动的管理员账号为 `admin`，随机密码在启动日志中显示一次；登录后按提示修改。
+4. 在 WebUI 配置角色和模型服务，先完成本机对话，再按需启用 QQ、语音、生图或联网插件。
 
-$env:TRACESOUL2_HOME = "$env:USERPROFILE\TraceSoul2Data"
-dotnet Tools\Host\bin\Debug\net8.0\TraceSoul2.Host.dll
+启动脚本默认将软件与数据放在并列目录中：
+
+```text
+TraceSoul2/
+├─ App/              # 软件与启动脚本
+├─ Data/             # 角色、记忆、全局设置与更新数据
+├─ Plugins/          # 插件代码包
+└─ plugins_data/     # 插件配置、图库与持久数据
 ```
 
-回归（不消耗 API）：
+在 WebUI「系统更新」中检查并安装正式版本。更新替换软件和随包维护的官方插件代码，保留角色与插件配置；迁移或备份时也应保留 `Data`、`Plugins` 和 `plugins_data`。详见 [版本与更新](docs/RELEASES.md)。
 
-```powershell
-dotnet run --project Tools\ChatCheck\ChatCheck.csproj
-```
+### Ubuntu / Docker
 
-环境变量：`TRACESOUL2_HOME`（家目录）、`TRACESOUL2_DATA`（可选，覆盖当前角色路径，调试用）、`TRACESOUL2_URLS`、`TRACESOUL2_PLUGINS`（代码包）、`TRACESOUL2_PLUGINS_DATA`（配置与持久数据）、`TRACESOUL2_MIGRATE_DLL`。
-
-控制台只接受本机回环连接和同源浏览器请求；不要把它反向代理到公网。Windows 系统代理指向本机 Clash 但 Clash 没开时，LLM 请求会打到空端口被拒绝——那是系统代理残留，不是模型或 Key 的问题。
-
-### Ubuntu / Docker 一键运行
-
-Docker 只提供 .NET 运行环境；程序、角色和插件仍集中在宿主机 `runtime/`，所以整目录可搬迁，WebUI 更新也只替换 `runtime/App`：
+准备好 Git LFS、Docker Engine 和 Compose 插件后：
 
 ```bash
-chmod +x scripts/docker-up.sh
+git clone https://github.com/TYty0728/TraceSoul2.git
+cd TraceSoul2
+git lfs pull
+chmod +x scripts/*.sh
 ./scripts/docker-up.sh
 ```
 
-目录布局：
-
-```text
-runtime/
-  App/              # 首次启动由镜像初始化；WebUI 更新只替换这里
-  Data/             # home.json、souls、updates
-  Plugins/          # 插件代码包
-  plugins_data/     # 插件配置与持久数据
-```
-
-端口只发布到服务器 `127.0.0.1`。在自己的电脑上访问服务器 WebUI：
+Docker 提供 .NET 运行环境，软件与数据保存在宿主机的 `runtime/`。远程访问可以使用 SSH 隧道：
 
 ```bash
 ssh -L 5080:127.0.0.1:5080 user@server
 ```
 
-然后打开 `http://127.0.0.1:5080`。不要把 5080 反向代理或直接暴露到公网。Windows 旧目录可先用 `scripts/Export-DockerRuntime.ps1` 导出；复制时必须先停止 Host。
+然后在自己的电脑打开 `http://127.0.0.1:5080`。迁移、首次登录、HTTPS 与域名配置见 [Docker 部署指南](docs/DOCKER.md)。
 
-容器访问宿主机上的 Ollama 等服务时，地址使用 `host.docker.internal`，不能使用容器自己的 `127.0.0.1`。
+### 接入 QQ
 
-生产运行时让启动脚本或服务设置 `TRACESOUL2_HOME`；不要把机器绝对路径写进仓库。密钥、Cookie、数据库只进家目录，提交前可跑 `pwsh scripts/Test-PublishSafety.ps1`。
+在 WebUI「平台 · QQ」配置 OneBot v11 / NapCat。默认使用反向 WebSocket，NapCat 连接 `ws://127.0.0.1:9021/ws`；跨主机或容器部署时按实际网络调整地址。
 
-每个角色目录内：`tracesoul2-brainframe.sqlite3`、`tracesoul2-vectors.sqlite3`、`llm-providers.json`、`onebot.json`、`bodies.json`、`memory-nerve.json`、`identity_cards.json`（种子）。插件数据不再混入角色目录，统一位于 `plugins_data/<包名>/`。
+平台负责消息收发，插件提供语音、相机、空间等能力。排障与发送行为见 [QQ 使用与排障](docs/knowledge/QQ_RUNBOOK.md)。
 
-## 控制台（http://127.0.0.1:5080）
+## 插件与扩展
 
-- **对话 / 实时状态 / 日志**：本机文字壳、链路、SSE。
-- **身份**：名字、六张短卡、内心。
-- **记忆**：记忆神经（top_k + 子代理）、日构建、阶梯榜、当天轨迹。
-- **大脑 · LLM**：多种供应商同时在线；用途槽给灵魂和器官用——对话开口、思考、复盘、识图多模态、语音、生图。
-- **平台 · QQ**：连接状态、OneBot 模式/端口/token、回发开关、NapCat 启动路径。
-- **插件**：按平台分组列出器官；齿轮填配置；平台不在则显示休眠。
-- **一起玩**：game.session 临时工作台（星露谷一键安装等）。
-- **系统更新**：只装正式 GitHub Release；优先通过 GitHub API 下载，支持 HTTP/1.1、后台重试和断点续传。页面显示下载、校验、解压与重启进度，详细阶段写入 `Data/updates/update.log`。角色与插件配置不参与替换，官方插件代码包随版本备份后升级。
+能力按 **内核 → 平台／身体 → 器官** 组织。平台连接决定其所属器官是否可用；独立计算工具可以跨平台使用。外部插件通过共享的 `TraceSoul2.PluginApi` 接入，不需要重新编译宿主。
 
-## QQ 平台（OneBot v11 / NapCat）
-
-- 反向 WS 为主：宿主监听 `ws://127.0.0.1:9021/ws`，NapCat 主动连入，事件与 API 动作共用一根连接。
-- NapCat 登录账号与启动脚本属于机器私有配置，不要写进仓库。
-- 配置在数据目录 `onebot.json`（WebUI「平台 · QQ」保存即重启生效）：`enabled / mode(reverse|forward) / listen_port / ws_url / http_url / access_token(可多个) / self_id / reply_enabled / napcat_path`。保存本地 NapCat 的 `.exe/.bat/.cmd` 或安装目录后，可在 WebUI 点「启动 NapCat」；Host 重启不会自动重复拉起。
-- QQ 私聊中，对话轮会在第一次 Mind LLM 请求前就通过 NapCat `set_input_status` 显示「正在输入」，心跳等自主轮次则在决定开口后显示；状态持续到本轮文字、表情、语音及轮后图片全部发送完毕。不发 `event_type=0`。群聊无对应的好友输入状态。
-- 说说 Cookie 经 NapCat `get_cookies` 自动取，不手填；发布接口假失败只发一次、绝不重试。
-
-## 外部插件
-
-运行时从家目录 `plugins/` 加载（可用 `TRACESOUL2_PLUGINS` 覆盖），一个文件夹一个包。安装/卸载/更新都不需要编译宿主。平台未连接时，隶属器官休眠。
-
-| 包 | 角色 | 功能 |
+| 插件 | 用途 | 分发方式 |
 |---|---|---|
-| `qq-sticker` | QQ 器官 | 情绪词 → 表情/GIF（源码可独立仓库） |
-| `qq-tts` | QQ 器官 | 情感语音（OpenAI 兼容 speech） |
-| `qq-imagegen` | QQ 器官 | 生图发 QQ；心智只决定发不发，画面规划在插件内 |
-| `qq-qzone` | QQ 器官 | 发/看说说；空闲抽签；Cookie 自动取 |
-| `qq-status` | QQ 器官 | 改签名/在线状态；空闲抽签 |
-| `game-session` | 游戏平台 | 一起玩的临时工作台；原始事件不进主记忆 |
+| `qq-tts` | QQ 情感语音 | 随包提供，需配置服务 |
+| `qq-imagegen` | 规划画面、生图与发图 | 随包提供，需配置服务 |
+| `qq-qzone` | 读取与发布说说 | 随包提供 |
+| `qq-status` | QQ 签名与在线状态 | 随包提供 |
+| `game-session` | 一起玩的会话工作台 | 随包提供，游戏端按需接入 |
+| `media-understanding` | 媒体来源识别与内容理解 | 随包提供，需配置相关能力 |
+| `realtime-call` | 转写、回复与播放回执衔接 | 随包提供，需外部音频客户端或网关 |
+| `tavily` | 搜索与网页读取 | 随包提供，需 Tavily API Key |
+| `qq-sticker` | 根据当前情绪语境自动匹配表情／GIF | 独立安装，需表情库 |
 
-详见 [docs/DOCKER.md](docs/DOCKER.md)、[docs/PLUGINS.md](docs/PLUGINS.md)、[docs/PLUGIN_LAYERS.md](docs/PLUGIN_LAYERS.md)、[docs/GAME_SESSION_PLUGIN.md](docs/GAME_SESSION_PLUGIN.md)、[docs/PLATFORM_SENSORY_POSITIONING.md](docs/PLATFORM_SENSORY_POSITIONING.md) 与 [docs/ROADMAP.md](docs/ROADMAP.md)。
+实时通话插件当前提供转写到对话、再到客户端播放的链路，音频采集与合成由外部客户端处理。具体接入范围见 [实时通话说明](ExternalPlugins/RealtimeCall/README.md)。
+
+开发插件可从 [插件开发指南](docs/PLUGINS.md)、[PluginApi](Tools/PluginApi/README.md) 和 [插件分层](docs/PLUGIN_LAYERS.md) 开始。
+
+## 开发与文档
+
+源码开发需要 .NET 8 SDK 和 Git LFS。在仓库根目录执行：
+
+```powershell
+git lfs pull
+dotnet build TraceSoul2.sln
+
+dotnet run --project Tools/Host/TraceSoul2.Host.csproj
+```
+
+离线回归使用模拟模型与临时数据，不调用真实模型 API：
+
+```powershell
+dotnet run --project Tools/ChatCheck/ChatCheck.csproj
+```
+
+| 入口 | 内容 |
+|---|---|
+| [项目知识库](docs/knowledge/README.md) | 当前状态、开发与排障导航 |
+| [架构地图](docs/knowledge/ARCHITECTURE.md) | 运行链路与模块职责 |
+| [Agent 框架](docs/AGENT_HARNESS.md) | 直接回复、工具续推与多模态行动 |
+| [输出契约](docs/AGENT_OUTPUT_CONTRACT.md) | 模型输出结构与插件注入边界 |
+| [Prompt 装配](docs/PROMPT_ASSEMBLY.md) | 上下文组织与缓存 |
+| [版本说明](docs/RELEASES.md) | 已发布功能与更新方式 |
+| [工作约定](AGENTS.md) | 源码修改与验证规则 |
+
+核心源码位于 `src/TraceSoul2/`，宿主位于 `Tools/Host/`，官方插件位于 `ExternalPlugins/`。运行密钥、Cookie、角色数据库和私人聊天保留在数据目录，不提交到仓库。
+
+## 交流与反馈
+
+欢迎交流使用体验、反馈问题，也欢迎一起讨论记忆、认知与陪伴的设计。
+
+- **作者 QQ：2508837950**
+- **官方群：TraceSoul官方交流群(1群)**
+- **群号码：795850423**
+- [点击链接加入群聊【TraceSoul官方交流群(1群)】](https://qm.qq.com/q/kJDFILm14A)
+- [GitHub Issues：提交问题或建议](https://github.com/TYty0728/TraceSoul2/issues)
+
+使用 QQ 扫描下方二维码加入群聊，点击图片可查看原图。
+
+<p align="center">
+  <a href="docs/assets/qq-group-795850423.png">
+    <img src="docs/assets/qq-group-795850423.png" alt="TraceSoul官方交流群(1群)入群二维码，群号795850423" width="320">
+  </a>
+</p>
