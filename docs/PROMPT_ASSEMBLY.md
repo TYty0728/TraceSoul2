@@ -99,6 +99,8 @@ Kimi 官网的心智、开口、复盘与同模型的插件调用共用 `prompt_
 
 公共 system 跨 Moment 保持字节级相同；身份复盘真正修改身份卡时允许它低频失效。设置 `TRACESOUL2_LLM_DUMP_DIR` 后，每次请求除 `prompt.txt` / `response.txt` 外还会生成 `usage.txt`。控制台「LLM#n 请求完成」同一行也会打出命中。
 
+Dump 保留策略：2026-09-28 用户明确要求服务器每天检测一次，已在服务器设置；不要另加每小时清理。当前仓库的模型客户端只负责导出 dump，未实现定时清理，部署脚本也未发现对应任务。本次仅核对本地源码与下载日志，服务器 cron/systemd 等实际调度未直接核实；清理检测频率与日志保留时长是两个不同设置。
+
 各家字段名不同，解析口在 `LlmUsageLogic`。没上报缓存字段时写「未上报」，不要写成 0%。
 
 - DeepSeek：`prompt_cache_hit_tokens` / `prompt_cache_miss_tokens`
