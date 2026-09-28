@@ -120,7 +120,8 @@ namespace TraceSoul2.Logic
                         Payload = Limit(result.Payload, 12000), result.ExecutionId } });
                 }
                 // 不把中间草稿写入历史，也不向平台发送；完整请求/结果供下一步修正判断。
-                history.Add(new { state = step, results });
+                // 续推也只回放模型契约，避免内部兼容字段重新泄漏到下一轮 prompt。
+                history.Add(new { state = output, results });
             }
             throw new InvalidOperationException("Agent 行动预算耗尽。");
         }
@@ -147,7 +148,7 @@ namespace TraceSoul2.Logic
                 item.Id.StartsWith("time.", StringComparison.OrdinalIgnoreCase)) return false;
             var organ = MouthLogic.OrganOf(item);
             return organ == BodyOrganValues.Text || organ == BodyOrganValues.Voice ||
-                organ == BodyOrganValues.Image || organ == BodyOrganValues.Sticker ||
+                organ == BodyOrganValues.Image ||
                 organ == BodyOrganValues.Video || organ == "gesture";
         }
 
