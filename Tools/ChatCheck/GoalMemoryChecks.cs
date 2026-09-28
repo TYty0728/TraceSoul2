@@ -65,6 +65,9 @@ internal static partial class Program
                 revise.operation = "revise"; revise.id = original.Id; revise.evidence_quote = "困惑时请直接问";
                 var invalid = Create(); invalid.evidence_quote = "对方没有说过的内容";
                 Require(!GoalMemoryLogic.Valid(turn, new() { revise, invalid }), "整批存在伪造依据必须拒绝");
+                var evidenceError = GoalMemoryLogic.ValidationError(turn, new() { revise, invalid });
+                Require(evidenceError.Contains("$.goal_updates[1].evidence_quote") && !evidenceError.Contains(invalid.evidence_quote),
+                    "目标纠正指出具体项和依据字段，不回显私人原文");
                 try { GoalMemoryLogic.Apply(turn, new() { revise, invalid }); throw new Exception("无效批次应失败"); }
                 catch (ArgumentException) { }
                 Require(GoalMemoryLogic.Read(store, conversation).Single().Status == "active", "无效批次不能部分保存");
@@ -92,6 +95,8 @@ internal static partial class Program
                     .Contains(timed.content), "限时偏好到期自动退出决策");
                 timed.expires_at = "2026-12-01T12:00:00";
                 Require(!GoalMemoryLogic.Valid(transientTurn, new() { timed }), "时间必须带时区，不能静默猜时区");
+                Require(GoalMemoryLogic.ValidationError(transientTurn, new() { timed }).Contains("$.goal_updates[0].expires_at"),
+                    "目标时间格式错误须明确指出开始或到期字段");
 
                 var future = Create("周末整理照片", "self", "goal");
                 future.starts_at = DateTimeOffset.UtcNow.AddDays(2).ToString("o");

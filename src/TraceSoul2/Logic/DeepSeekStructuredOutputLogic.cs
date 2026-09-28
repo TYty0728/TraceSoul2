@@ -21,7 +21,8 @@ namespace TraceSoul2.Logic
             Func<T, bool> validator,
             string missingMessage,
             CancellationToken cancellationToken,
-            string promptCacheKey = null)
+            string promptCacheKey = null,
+            Func<T, string> validationError = null)
             where T : class
         {
             var raw = await client.CompleteJsonAsync(messages, cancellationToken, promptCacheKey);
@@ -30,8 +31,9 @@ namespace TraceSoul2.Logic
             try
             {
                 parsed = Parse<T>(raw);
-                if (parsed != null && (validator == null || validator(parsed))) return parsed;
-                throw new InvalidOperationException(missingMessage);
+                var detail = parsed == null ? null : validationError?.Invoke(parsed);
+                if (parsed != null && string.IsNullOrEmpty(detail) && (validator == null || validator(parsed))) return parsed;
+                throw new InvalidOperationException(string.IsNullOrEmpty(detail) ? missingMessage : detail);
             }
             catch (Exception exception)
             {
@@ -50,8 +52,9 @@ namespace TraceSoul2.Logic
             try
             {
                 parsed = Parse<T>(repairedRaw);
-                if (parsed != null && (validator == null || validator(parsed))) return parsed;
-                throw new InvalidOperationException(missingMessage);
+                var detail = parsed == null ? null : validationError?.Invoke(parsed);
+                if (parsed != null && string.IsNullOrEmpty(detail) && (validator == null || validator(parsed))) return parsed;
+                throw new InvalidOperationException(string.IsNullOrEmpty(detail) ? missingMessage : detail);
             }
             catch (Exception secondError)
             {

@@ -18,6 +18,7 @@
     <Compile Include="Program.cs" />
     <Compile Include="AgentLoopChecks.cs" />
     <Compile Include="AgentContractChecks.cs" />
+    <Compile Include="AgentPromptChecks.cs" />
     <Compile Include="GoalMemoryChecks.cs" />
     <Compile Include="WebSearchChecks.cs" />
     <Compile Include="CognitionGraphChecks.cs" />

@@ -10,6 +10,7 @@
     <Compile Include="$(MSBuildThisFileDirectory)../src/TraceSoul2/Logic/CognitionFormationLogic.cs" />
     <Compile Include="$(MSBuildThisFileDirectory)../src/TraceSoul2/Manager/SqliteCognitionGraph.cs" />
     <Compile Include="$(MSBuildThisFileDirectory)../src/TraceSoul2/Logic/AgentLoopLogic.cs" />
+    <Compile Include="$(MSBuildThisFileDirectory)../src/TraceSoul2/Logic/AgentPromptContextLogic.cs" />
     <Compile Include="$(MSBuildThisFileDirectory)../src/TraceSoul2/Prompts/AgentLoopPrompts.cs" />
     <Compile Include="$(MSBuildThisFileDirectory)../src/TraceSoul2/Manager/SqliteMemoryManager.cs" />
     <Compile Include="$(MSBuildThisFileDirectory)../src/TraceSoul2/Manager/SqliteVectorManager.cs" />
