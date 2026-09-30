@@ -39,3 +39,6 @@ TraceSoul2 运行时插件的契约（源码 **1.9.0**；已发布产品 **0.1.1
 - 插件角色：`kernel` / `platform` / `organ`。器官声明 `PlatformId`；所属平台不在则由框架休眠。
 
 只使用旧贡献接口的插件不必改源码。包布局、manifest 与生命周期见主仓库的 `docs/PLUGINS.md` 与 `docs/PLUGIN_LAYERS.md`。
+
+
+1.10.0 增加 `TracePluginServices.EventCompletedHooks`：有效事件的本轮发送（含延迟图片）完成、或处理提前返回/异常时通知。用于释放平台在收件时持有的状态；钩子异常不影响主处理。既有表达开始/完成钩子保留。

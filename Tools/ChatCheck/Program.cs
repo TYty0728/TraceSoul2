@@ -24,6 +24,7 @@ internal static partial class Program
         if (args.Contains("--environment")) { RunEnvironmentChecksAsync().GetAwaiter().GetResult(); return; }
         if (args?.Length == 2 && args[0] == "--agent-prompt-audit") { RunAgentPromptAudit(args[1]); return; }
         if ((args ?? Array.Empty<string>()).Contains("--agent-prompt")) { RunAgentPromptChecksAsync().GetAwaiter().GetResult(); return; }
+        if ((args ?? Array.Empty<string>()).Contains("--qq-typing")) { RunQqTypingChecksAsync().GetAwaiter().GetResult(); return; }
         if ((args ?? Array.Empty<string>()).Contains("--camera-sharing")) { RunQqDeliveryAndCameraContextCheck(); Console.WriteLine("Camera sharing checks passed."); return; }
         if ((args ?? Array.Empty<string>()).Contains("--heartbeat")) { RunHeartbeatContinuityChecksAsync().GetAwaiter().GetResult(); Console.WriteLine("Heartbeat continuity checks passed."); return; }
         if (args?.Length == 2 && args[0] == "--agent-contract-dump") { RunAgentDumpReplay(args[1]); return; }
@@ -87,6 +88,7 @@ internal static partial class Program
         RunLeaveNerveCheck();
         RunBodyRoutingCheck();
         RunOneBotSessionMemoryCheck();
+        RunQqTypingChecksAsync().GetAwaiter().GetResult();
         RunQqDeliveryAndCameraContextCheck();
         RunExpressorImageRoutingCheck();
         RunMindAtmosphereCheck();

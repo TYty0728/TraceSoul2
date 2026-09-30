@@ -77,7 +77,7 @@ namespace TraceSoul2.Plugins.Builtin
         {
             Id = PluginId,
             DisplayName = "QQ 平台（OneBot v11 / NapCat）",
-            Version = "1.5.0",
+            Version = "1.5.1",
             Author = "TraceSoul2",
             Role = PluginRoleValues.Platform,
             PlatformId = BodyIds.Qq,
@@ -211,9 +211,10 @@ namespace TraceSoul2.Plugins.Builtin
             context.AddBackgroundService(new OneBotInboxService(this));
             // 整轮收尾：把暂存的文字（可能带结尾表情）合并成一条 QQ 消息发出。
             context.Services.TurnCompleteHooks.Add(FlushStagedAsync);
-            // 心智决定开口后立即显示输入状态；整轮的文字/表情/图片都发完后再恢复。
+            // 入站在收件时开启；主动表达从输出开始。整轮文字/表情/图片结束后停止刷新。
             context.Services.ExpressionStartingHooks.Add(StartTypingAsync);
             context.Services.ExpressionCompletedHooks.Add(StopTypingAsync);
+            context.Services.EventCompletedHooks.Add(source => StopTypingAsync(source.TraceId));
             LoadLastSession();
             if (!config.enabled) return;
             waitingSinceUnixMs = DateTimeOffset.UtcNow.ToUnixTimeMilliseconds();
@@ -290,38 +291,31 @@ namespace TraceSoul2.Plugins.Builtin
                 timer.ElapsedMilliseconds);
         }
 
-        // ---------- NapCat 好友输入状态（一整轮表达的生命周期） ----------
+        // ---------- NapCat 好友输入状态（从收件到本轮所有发送结束） ----------
 
-        private async Task StartTypingAsync(TraceTurnContext turn)
+        private Task StartTypingAsync(TraceTurnContext turn)
         {
-            if (turn == null || !CanOutbound()) return;
-            string sessionType;
-            string sessionId;
-            if (!TryResolveSession(turn, out sessionType, out sessionId) ||
-                !string.Equals(sessionType, "private", StringComparison.OrdinalIgnoreCase) ||
-                string.IsNullOrWhiteSpace(sessionId)) return;
+            if (turn != null && CanOutbound() &&
+                TryResolveSession(turn, out var type, out var id) && type == "private")
+                StartTyping(turn.TraceId, id, turn.Environment?.AccountId);
+            return Task.CompletedTask;
+        }
 
-            var state = turn.Workspace.GetOrCreateState(PluginId, () => new TypingTurnState());
-            if (Interlocked.CompareExchange(ref state.Started, 1, 0) != 0) return;
-            state.UserId = sessionId.Trim();
-            state.AccountId = turn.Environment?.AccountId;
-            state.Cancellation = new CancellationTokenSource();
-            lock (gate) activeTypingStates.Add(state);
-
-            var first = TrySetInputStatusAsync(state.UserId, 1, turn.TraceId, state.AccountId);
-            var firstFinished = await Task.WhenAny(first, Task.Delay(1500));
-            if (firstFinished == first && !await first)
+        // 在入队的同一临界区登记，避免处理线程已经收尾才开始刷新；不阻塞 WS 回包线程。
+        private void StartTyping(string traceId, string userId, string accountId)
+        {
+            if (string.IsNullOrWhiteSpace(userId)) return;
+            lock (gate)
             {
-                Interlocked.Exchange(ref state.Stopped, 1);
-                lock (gate) activeTypingStates.Remove(state);
-                state.Cancellation.Dispose();
-                state.Cancellation = null;
-                return;
+                if (activeTypingStates.Any(x => x.TraceId == traceId)) return;
+                var state = new TypingTurnState
+                {
+                    TraceId = traceId, UserId = userId, AccountId = accountId,
+                    Cancellation = new CancellationTokenSource()
+                };
+                activeTypingStates.Add(state);
+                state.RefreshTask = RefreshTypingAsync(state, traceId);
             }
-
-            services?.LogTiming(turn.TraceId, "QQ 正在输入已开启", 0,
-                "session=private");
-            state.RefreshTask = RefreshTypingAsync(state, turn.TraceId);
         }
 
         private async Task RefreshTypingAsync(TypingTurnState state, string traceId)
@@ -330,63 +324,43 @@ namespace TraceSoul2.Plugins.Builtin
             var startedAt = Stopwatch.StartNew();
             try
             {
-                while (!token.IsCancellationRequested &&
+                while (!token.IsCancellationRequested && CanOutbound() &&
                        startedAt.ElapsedMilliseconds < InputStatusMaximumMilliseconds)
                 {
+                    if (!await TrySetInputStatusAsync(state.UserId, 1, traceId, state.AccountId, token)) break;
                     await Task.Delay(InputStatusRefreshMilliseconds, token);
-                    if (token.IsCancellationRequested) break;
-                    if (!await TrySetInputStatusAsync(state.UserId, 1, traceId, state.AccountId)) break;
                 }
             }
-            catch (OperationCanceledException) when (token.IsCancellationRequested)
-            {
-                // 本轮正常收尾。
-            }
+            catch (OperationCanceledException) when (token.IsCancellationRequested) { }
             finally
             {
-                var timedOut = false;
-                if (!token.IsCancellationRequested &&
-                    Interlocked.CompareExchange(ref state.Stopped, 1, 0) == 0)
-                {
-                    timedOut = true;
-                }
-                RemoveTypingStateAndHasSameSession(state);
-                // NapCat/NTQQ 的 event_type=0 会显示「对方正在说话」，并不是取消状态。
-                // 只停止刷新；正常轮次由最后一条 QQ 消息自然清除，异常轮次由 QQ 超时恢复。
-                if (timedOut)
-                    services?.LogTiming(traceId, "QQ 正在输入已停止刷新（超时）", 0);
+                Interlocked.Exchange(ref state.Stopped, 1);
+                RemoveTypingState(state);
+                state.Cancellation.Dispose();
+                // event_type=0 是「正在说话」，不是取消。正常末条消息清除状态；异常由 QQ 超时恢复。
+                services?.LogTiming(traceId, "QQ 正在输入已停止刷新", 0);
             }
         }
 
-        private async Task StopTypingAsync(TraceTurnContext turn)
-        {
-            if (turn == null) return;
-            var state = turn.Workspace.GetOrCreateState(PluginId, () => new TypingTurnState());
-            if (Interlocked.CompareExchange(ref state.Stopped, 1, 0) != 0 || state.Started == 0) return;
+        private Task StopTypingAsync(TraceTurnContext turn) => StopTypingAsync(turn?.TraceId);
 
-            try { state.Cancellation?.Cancel(); } catch { /* ignored */ }
+        private async Task StopTypingAsync(string traceId)
+        {
+            TypingTurnState state;
+            lock (gate) state = activeTypingStates.FirstOrDefault(x => x.TraceId == traceId);
+            if (state == null || Interlocked.Exchange(ref state.Stopped, 1) != 0) return;
+            try { state.Cancellation.Cancel(); } catch (ObjectDisposedException) { }
             if (state.RefreshTask != null)
                 await Task.WhenAny(state.RefreshTask, Task.Delay(1500));
-            var anotherTurnIsTyping = RemoveTypingStateAndHasSameSession(state);
-            try { state.Cancellation?.Dispose(); } catch { /* ignored */ }
-            state.Cancellation = null;
-            services?.LogTiming(turn.TraceId,
-                anotherTurnIsTyping ? "QQ 输入状态仍由其它轮次持有" : "QQ 正在输入已停止刷新", 0);
+            RemoveTypingState(state);
         }
 
-        private bool RemoveTypingStateAndHasSameSession(TypingTurnState state)
+        private void RemoveTypingState(TypingTurnState state)
         {
-            lock (gate)
-            {
-                activeTypingStates.Remove(state);
-                return activeTypingStates.Any(other =>
-                    other != null && Volatile.Read(ref other.Stopped) == 0 &&
-                    string.Equals(other.UserId, state.UserId, StringComparison.Ordinal) &&
-                    string.Equals(other.AccountId, state.AccountId, StringComparison.Ordinal));
-            }
+            lock (gate) activeTypingStates.Remove(state);
         }
 
-        private async Task<bool> TrySetInputStatusAsync(string userId, int eventType, string traceId, string accountId = null)
+        private async Task<bool> TrySetInputStatusAsync(string userId, int eventType, string traceId, string accountId, CancellationToken token)
         {
             try
             {
@@ -394,9 +368,10 @@ namespace TraceSoul2.Plugins.Builtin
                 {
                     { "user_id", userId },
                     { "event_type", eventType }
-                }, accountId);
+                }, accountId, token);
                 return true;
             }
+            catch (OperationCanceledException) when (token.IsCancellationRequested) { return false; }
             catch (Exception exception)
             {
                 services?.LogTiming(traceId, "QQ 输入状态更新失败", 0,
@@ -407,7 +382,7 @@ namespace TraceSoul2.Plugins.Builtin
 
         private sealed class TypingTurnState
         {
-            public int Started;
+            public string TraceId;
             public int Stopped;
             public string UserId = string.Empty;
             public string AccountId;
@@ -703,6 +678,8 @@ namespace TraceSoul2.Plugins.Builtin
                 lastSessionSocket = sourceSocket;
                 if (sourceSocket != null && !string.IsNullOrWhiteSpace(moment.Environment?.AccountId))
                     accountSockets[moment.Environment.AccountId] = sourceSocket;
+                if (CanOutbound() && session?.session_type == "private")
+                    StartTyping(moment.TraceId, session.session_id, moment.Environment?.AccountId);
                 inbound.Enqueue(moment);
             }
             if (remembered) SaveLastSession();
@@ -815,10 +792,10 @@ namespace TraceSoul2.Plugins.Builtin
 
         // ---------- OneBot API 动作（传输层） ----------
 
-        internal async Task<string> CallActionAsync(string action, Dictionary<string, object> parameters, string accountId = null)
+        internal async Task<string> CallActionAsync(string action, Dictionary<string, object> parameters, string accountId = null, CancellationToken cancellationToken = default)
         {
-            if (IsReverseMode) return await CallActionOverSocketAsync(action, parameters, accountId);
-            if (!string.IsNullOrWhiteSpace(config.http_url)) return await CallActionOverHttpAsync(action, parameters);
+            if (IsReverseMode) return await CallActionOverSocketAsync(action, parameters, accountId, cancellationToken);
+            if (!string.IsNullOrWhiteSpace(config.http_url)) return await CallActionOverHttpAsync(action, parameters, cancellationToken);
             throw new InvalidOperationException("OneBot 未配置任何动作通道（反向模式需 NapCat 已连接；正向模式需 http_url）。");
         }
 
@@ -847,7 +824,7 @@ namespace TraceSoul2.Plugins.Builtin
         }
 
         /// <summary>反向模式：API 动作写回 NapCat 主动连进来的那根连接（aiocqhttp 同款），用 echo 配对回包。</summary>
-        private async Task<string> CallActionOverSocketAsync(string action, Dictionary<string, object> parameters, string accountId = null)
+        private async Task<string> CallActionOverSocketAsync(string action, Dictionary<string, object> parameters, string accountId, CancellationToken cancellationToken)
         {
             var socket = LiveReverseSocket(accountId);
             if (socket == null || socket.State != WebSocketState.Open)
@@ -856,14 +833,13 @@ namespace TraceSoul2.Plugins.Builtin
             var pending = new TaskCompletionSource<string>(TaskCreationOptions.RunContinuationsAsynchronously);
             lock (gate) pendingActions[echo] = pending;
             var payload = SerializeActionRequest(action, parameters, echo);
-            await SendSocketAsync(socket, payload);
-            var finished = await Task.WhenAny(pending.Task, Task.Delay(30000));
-            if (finished != pending.Task)
+            string response;
+            try
             {
-                lock (gate) pendingActions.Remove(echo);
-                throw new TimeoutException("OneBot 动作超时（30s）：" + action);
+                await SendSocketAsync(socket, payload, cancellationToken);
+                response = await pending.Task.WaitAsync(TimeSpan.FromSeconds(30), cancellationToken);
             }
-            var response = await pending.Task;
+            finally { lock (gate) pendingActions.Remove(echo); }
             var status = JsonText.ExtractString(response, "status");
             var retcode = JsonText.ExtractLong(response, "retcode");
             if (status != "ok" || retcode != 0)
@@ -877,19 +853,21 @@ namespace TraceSoul2.Plugins.Builtin
             return response;
         }
 
-        private async Task SendSocketAsync(WebSocket socket, string payload)
+        private async Task SendSocketAsync(WebSocket socket, string payload, CancellationToken cancellationToken = default)
         {
             var bytes = Encoding.UTF8.GetBytes(payload);
-            await sendLock.WaitAsync();
+            await sendLock.WaitAsync(cancellationToken);
             try
             {
+                cancellationToken.ThrowIfCancellationRequested();
+                // 已开始写入的帧必须完整发送，避免取消输入状态时中断共享 QQ 连接。
                 await socket.SendAsync(new ArraySegment<byte>(bytes), WebSocketMessageType.Text, true, CancellationToken.None);
             }
             finally { sendLock.Release(); }
         }
 
         /// <summary>正向模式：HTTP 动作（POST {http_url}/{action}），返回原始响应文本。</summary>
-        private async Task<string> CallActionOverHttpAsync(string action, Dictionary<string, object> parameters)
+        private async Task<string> CallActionOverHttpAsync(string action, Dictionary<string, object> parameters, CancellationToken cancellationToken)
         {
             var body = SerializeActionRequest(action, parameters);
             using (var request = new HttpRequestMessage(HttpMethod.Post, config.http_url.TrimEnd('/') + "/" + action))
@@ -897,11 +875,11 @@ namespace TraceSoul2.Plugins.Builtin
                 if (!string.IsNullOrWhiteSpace(config.access_token))
                     request.Headers.TryAddWithoutValidation("Authorization", "Bearer " + config.access_token);
                 request.Content = new StringContent(body, Encoding.UTF8, "application/json");
-                using (var response = await http.SendAsync(request))
+                using (var response = await http.SendAsync(request, cancellationToken))
                 {
                     if (!response.IsSuccessStatusCode)
                         throw new InvalidOperationException("OneBot 动作失败：" + action + " → HTTP " + (int)response.StatusCode);
-                    return await response.Content.ReadAsStringAsync();
+                    return await response.Content.ReadAsStringAsync(cancellationToken);
                 }
             }
         }

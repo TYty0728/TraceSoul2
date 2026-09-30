@@ -85,6 +85,12 @@ namespace TraceSoul2.Plugins
         /// <summary>显式行动目录；保留同一身体上多个同类动作，不经过默认回复器官择一。</summary>
         public Func<TraceTurnContext, List<TraceContributionDescriptorData>> AvailableActionCatalogProvider { get; set; }
 
+        /// <summary>入站事件处理及本轮延迟发送全部结束；前置校验、识图或模型异常也会调用。
+        /// 平台可释放收件时持有的输入状态；钩子不得影响主链。
+        /// </summary>
+        public List<Func<PluginEventData, Task>> EventCompletedHooks { get; } =
+            new List<Func<PluginEventData, Task>>();
+
         /// <summary>整轮表达结束后的收尾钩子（平台插件用来把暂存文字与表情合并成一条消息发送等）。</summary>
         public List<Func<TraceTurnContext, Task>> TurnCompleteHooks { get; } =
             new List<Func<TraceTurnContext, Task>>();

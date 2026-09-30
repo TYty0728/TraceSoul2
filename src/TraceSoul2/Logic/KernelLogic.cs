@@ -97,6 +97,36 @@ namespace TraceSoul2.Logic
             CancellationToken cancellationToken = default(CancellationToken),
             int historyWindowAlign = 0)
         {
+            TraceTurnContext processingTurn = null;
+            var succeeded = false;
+            try
+            {
+                var result = await ProcessPluginEventCoreAsync(conversationId, source, historyWindowMax,
+                    cancellationToken, historyWindowAlign, turn =>
+                    {
+                        processingTurn = turn;
+                        GetExpressionLifecycleState(turn).Source = source;
+                    });
+                succeeded = true;
+                return result;
+            }
+            finally
+            {
+                if (processingTurn == null)
+                    await RunEventCompletedHooksAsync(source);
+                else
+                {
+                    if (!succeeded)
+                        Interlocked.Exchange(ref GetExpressionLifecycleState(processingTurn).PendingOutboundBatches, 0);
+                    await TryCompleteExpressionAsync(processingTurn);
+                }
+            }
+        }
+
+        private async Task<ChatTurnResultData> ProcessPluginEventCoreAsync(
+            string conversationId, PluginEventData source, int historyWindowMax,
+            CancellationToken cancellationToken, int historyWindowAlign, Action<TraceTurnContext> onPrepared)
+        {
             if (string.IsNullOrWhiteSpace(conversationId))
                 throw new ArgumentException("conversationId 不能为空。", "conversationId");
             if (source == null || string.IsNullOrWhiteSpace(source.Content))
@@ -207,6 +237,7 @@ namespace TraceSoul2.Logic
                 wake == KernelWakeValues.Dialogue && pair.IsHumanMoment(source.Role) && environment.DirectAddress,
                 plugins.Services,
                 environment, wake, source.TraceId, historyWindow.Align);
+            onPrepared(turn);
             SubjectRuntimeLogic.Begin(turn);
             MouthLogic.NoticeInbound(source, turn);
             // console 观察窗：任何来源的入站消息都在 console 留一份运行痕迹（不入对话历史）。
@@ -216,10 +247,6 @@ namespace TraceSoul2.Logic
                 await MirrorToConsoleAsync(turn, conversationId, "in",
                     ConsoleViaLabel(source.PluginId), source.Content, source.Role);
             }
-
-            var turnFinished = false;
-            try
-            {
 
             var catalog = plugins.GetAvailableCatalog(turn);
             plugins.Services.LogTiming(turn.TraceId, "输入落库与轮次准备完成",
@@ -291,7 +318,6 @@ namespace TraceSoul2.Logic
             plugins.Services.LogTiming(turn.TraceId, "Brain 整轮完成", totalTimer.ElapsedMilliseconds,
                 "mode=" + final.mode + "｜results=" + turn.Workspace.Results.Count);
 
-            turnFinished = true;
             return new ChatTurnResultData(
                 expression == null ? string.Empty : expression.ProducedEvent.Content,
                 final.mode,
@@ -301,15 +327,6 @@ namespace TraceSoul2.Logic
                 turn.Workspace.FacetOutputs.ToList(),
                 turn.Workspace.Results.ToList(),
                 mindDecision);
-            }
-            finally
-            {
-                // 表达器、平台发送或轮次审查异常时也不能让「正在输入」悬挂。
-                if (!turnFinished)
-                    Interlocked.Exchange(
-                        ref GetExpressionLifecycleState(turn).PendingOutboundBatches, 0);
-                await TryCompleteExpressionAsync(turn);
-            }
         }
 
         private async Task<BrainStructuredOutputData> RunSubconsciousAsync(
@@ -1122,6 +1139,19 @@ namespace TraceSoul2.Logic
             }
         }
 
+        private async Task RunEventCompletedHooksAsync(PluginEventData source)
+        {
+            if (source == null) return;
+            foreach (var hook in plugins.Services.EventCompletedHooks)
+            {
+                try { await hook(source); }
+                catch (Exception exception)
+                {
+                    plugins.Services.LogTiming(source.TraceId, "事件完成钩子失败", 0, exception.GetType().Name);
+                }
+            }
+        }
+
         private static ExpressionLifecycleState GetExpressionLifecycleState(TraceTurnContext turn)
         {
             return turn.Workspace.GetOrCreateState(
@@ -1134,10 +1164,12 @@ namespace TraceSoul2.Logic
             if (Volatile.Read(ref lifecycle.PendingOutboundBatches) > 0 ||
                 Interlocked.CompareExchange(ref lifecycle.Completed, 1, 0) != 0) return;
             await RunExpressionCompletedHooksAsync(turn);
+            await RunEventCompletedHooksAsync(lifecycle.Source);
         }
 
         private sealed class ExpressionLifecycleState
         {
+            public PluginEventData Source;
             public int PendingOutboundBatches;
             public int Completed;
         }

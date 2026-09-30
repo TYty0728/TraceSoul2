@@ -34,6 +34,7 @@
     <Compile Include="../Host/DailyBuildPreflight.cs" Link="DailyBuildPreflight.cs" />
     <Compile Include="../Host/FailureProtection.cs" Link="FailureProtection.cs" />
     <Compile Include="QqDeliveryChecks.cs" />
+    <Compile Include="QqTypingChecks.cs" />
     <Compile Include="VisionTransportChecks.cs" />
     <Compile Include="RecentEventLogChecks.cs" />
     <Compile Include="QzoneMediaChecks.cs" />
