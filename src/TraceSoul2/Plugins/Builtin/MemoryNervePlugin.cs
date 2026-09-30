@@ -25,7 +25,7 @@ namespace TraceSoul2.Plugins.Builtin
         {
             Id = PluginId,
             DisplayName = "人生记忆神经",
-            Version = "3.3.0",
+            Version = "3.3.1",
             Author = "TraceSoul2",
             Role = PluginRoleValues.Kernel,
             Description = "子代理沿四层记忆定位，语义向量在定位范围内拼装最相近的细节；累计几十条对话后做批量小复盘，只读召回不写历史。"
@@ -46,8 +46,6 @@ namespace TraceSoul2.Plugins.Builtin
         /// </summary>
         private sealed class TodayNewFacet : ITraceMountedFacet
         {
-            private static readonly TimeSpan ChinaOffset = TimeSpan.FromHours(8);
-            private const int BoundaryHour = 4;
             private const int MaxShown = 10;
 
             public TraceContributionDescriptorData Descriptor { get; } = new TraceContributionDescriptorData
@@ -115,10 +113,7 @@ namespace TraceSoul2.Plugins.Builtin
             /// <summary>记忆日 04:00 边界：04:00 前归前一天。</summary>
             private static DateTimeOffset TodayBoundary(DateTimeOffset now)
             {
-                var local = now.ToOffset(ChinaOffset);
-                var boundary = local.Date.AddHours(BoundaryHour);
-                if (local < boundary) boundary = boundary.AddDays(-1);
-                return boundary;
+                return MemoryDayLogic.CurrentStart(now);
             }
         }
 
