@@ -20,6 +20,7 @@ internal static partial class Program
     private static void Main(string[] args)
     {
         SQLitePCL.Batteries_V2.Init();
+        if (args.Length == 3 && args[0] == "--day-card-dump") { RunDayCardDumpCheck(args[1], args[2]); return; }
         if (args.Contains("--runtime-continuity")) { RunRuntimeContinuityChecksAsync().GetAwaiter().GetResult(); return; }
         if (args.Contains("--existence")) { RunExistenceChecksAsync().GetAwaiter().GetResult(); return; }
         if (args.Contains("--environment")) { RunEnvironmentChecksAsync().GetAwaiter().GetResult(); return; }

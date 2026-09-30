@@ -15,6 +15,7 @@ internal static partial class Program
     {
         // 读取真实 Migration DTO/Prompt，并用显式临时依赖核对夜间批处理；不加载运行配置。
         var assembly = System.Reflection.Assembly.LoadFrom(Path.GetFullPath(assemblyPath));
+        RunDayCardReviewChecks(assembly);
         var prompts = assembly.GetType("TraceSoul2.Migrate.ReplayPrompts", true);
         var outputType = prompts.GetNestedType("CognitionFormationOutputData");
         var options = new JsonSerializerOptions { IncludeFields = true };

@@ -62,7 +62,8 @@ namespace TraceSoul2.Migrate
             [System.Text.Json.Serialization.JsonIgnore]
             public long SubjectRevision;
             public string summary;
-            public List<CardUpdateData> cards = new List<CardUpdateData>();
+            // Omission is not an explicit decision to leave cards unchanged.
+            public List<CardUpdateData> cards;
             public string inner_narrative;
             public string inner_mood;
             public string inner_relationship_lens;
