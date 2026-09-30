@@ -50,6 +50,7 @@ namespace TraceSoul2.Logic
             return new InnerRuntimeData
             {
                 ConversationId = current.ConversationId,
+                Environment = current.Environment,
                 SnapshotId = Guid.NewGuid().ToString("N"),
                 Revision = checked(current.Revision + 1),
                 Narrative = KeepOrLimit(proposed == null ? null : proposed.narrative, current.Narrative, 300),

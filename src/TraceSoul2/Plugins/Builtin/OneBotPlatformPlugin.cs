@@ -11,6 +11,7 @@ using System.Text.Json;
 using System.Threading;
 using System.Threading.Tasks;
 using TraceSoul2.Data;
+using TraceSoul2.Logic;
 using TraceSoul2.Util;
 
 namespace TraceSoul2.Plugins.Builtin
@@ -55,11 +56,19 @@ namespace TraceSoul2.Plugins.Builtin
         private string lastSessionType = string.Empty;
         private string lastSessionId = string.Empty;
         private WebSocket lastSessionSocket;
+        private readonly Dictionary<string, WebSocket> accountSockets = new(StringComparer.Ordinal);
         // 暂存消息：文字先暂存，表情追加到结尾，整轮收尾钩子里合并成一条发出。
         // 图片不往文字上拼，生图成功后单独发。
-        private string stagedText;
-        private string stagedSessionType;
-        private string stagedSessionId;
+        private sealed class StagedMessage
+        {
+            public string Text;
+            public string SessionType;
+            public string SessionId;
+        }
+
+        private static StagedMessage Staging(TraceTurnContext turn) =>
+            (turn ?? throw new ArgumentNullException(nameof(turn))).Workspace
+                .GetOrCreateState(PluginId + ".outbound", () => new StagedMessage());
         private TracePluginServices services;
         private long nextEcho;
         private volatile string lastError = string.Empty;
@@ -68,7 +77,7 @@ namespace TraceSoul2.Plugins.Builtin
         {
             Id = PluginId,
             DisplayName = "QQ 平台（OneBot v11 / NapCat）",
-            Version = "1.4.2",
+            Version = "1.5.0",
             Author = "TraceSoul2",
             Role = PluginRoleValues.Platform,
             PlatformId = BodyIds.Qq,
@@ -80,7 +89,17 @@ namespace TraceSoul2.Plugins.Builtin
         internal OneBotConfig Config { get { return config; } }
         internal bool TryResolveSession(TraceTurnContext context, out string sessionType, out string sessionId)
         {
-            // 入站轮次及其延迟图片始终跟随原会话；新入站不能改写旧轮次的收件人。
+            if (context?.Environment != null)
+            {
+                var environment = context.Environment;
+                sessionType = environment.SessionType;
+                sessionId = environment.SessionId;
+                return EnvironmentLogic.CanDeliver(context.Services.Storage, environment) &&
+                    environment.PlatformId == PluginId && sessionType is "private" or "group" &&
+                    long.TryParse(sessionId, out var parsed) && parsed > 0 &&
+                    (string.IsNullOrWhiteSpace(config.self_id) || config.self_id.Trim() == environment.AccountId);
+            }
+            // 旧插件/离线检查兼容路径；生产轮次总是提供环境快照。
             if (context?.Moment?.SourcePluginId == PluginId)
             {
                 try
@@ -217,39 +236,47 @@ namespace TraceSoul2.Plugins.Builtin
 
         // ---------- 消息组装（文字暂存 + 结尾表情追加 + 整轮合并发送） ----------
 
-        internal void StageText(string text, string sessionType, string sessionId)
+        internal void StageText(string text, string sessionType, string sessionId, TraceTurnContext turn)
         {
+            var staged = Staging(turn);
             lock (gate)
             {
-                stagedText = text;
-                stagedSessionType = sessionType;
-                stagedSessionId = sessionId;
+                staged.Text = text;
+                staged.SessionType = sessionType;
+                staged.SessionId = sessionId;
             }
         }
 
-        /// <summary>把表情段追加到暂存文字结尾；没有暂存文字返回 false（走单独发送）。图片不要走这里。</summary>
-        internal bool TryAppendSegment(string segment)
+        /// <summary>只追加到同轮文字，防止并发环境互相拼接。图片仍单独发送。</summary>
+        internal bool TryAppendSegment(string segment, TraceTurnContext turn)
         {
+            if (turn == null) return false;
+            var staged = Staging(turn);
             lock (gate)
             {
-                if (string.IsNullOrWhiteSpace(stagedText)) return false;
-                stagedText += segment;
+                if (string.IsNullOrWhiteSpace(staged.Text)) return false;
+                staged.Text += segment;
                 return true;
             }
         }
 
         private async Task FlushStagedAsync(TraceTurnContext turn)
         {
+            if (turn == null) return;
+            var staged = Staging(turn);
             string text, sessionType, sessionId;
             lock (gate)
             {
-                if (string.IsNullOrWhiteSpace(stagedText)) return;
-                text = stagedText;
-                sessionType = stagedSessionType;
-                sessionId = stagedSessionId;
-                stagedText = null;
+                if (string.IsNullOrWhiteSpace(staged.Text)) return;
+                text = staged.Text;
+                sessionType = staged.SessionType;
+                sessionId = staged.SessionId;
+                staged.Text = null;
             }
             if (string.IsNullOrWhiteSpace(sessionId)) return;
+            if (turn?.Environment != null && (!TryResolveSession(turn, out var currentType, out var currentId) ||
+                currentType != sessionType || currentId != sessionId))
+                throw new InvalidOperationException("环境目标已失效，未发送暂存文字。");
             var timer = Stopwatch.StartNew();
             services?.LogTiming(turn == null ? null : turn.TraceId, "QQ 合并文字发送开始",
                 detail: "session=" + sessionType);
@@ -258,7 +285,7 @@ namespace TraceSoul2.Plugins.Builtin
                 {
                     { sessionType == "group" ? "group_id" : "user_id", long.Parse(sessionId) },
                     { "message", text }
-                });
+                }, turn?.Environment?.AccountId);
             services?.LogTiming(turn == null ? null : turn.TraceId, "QQ 合并文字发送完成",
                 timer.ElapsedMilliseconds);
         }
@@ -277,10 +304,11 @@ namespace TraceSoul2.Plugins.Builtin
             var state = turn.Workspace.GetOrCreateState(PluginId, () => new TypingTurnState());
             if (Interlocked.CompareExchange(ref state.Started, 1, 0) != 0) return;
             state.UserId = sessionId.Trim();
+            state.AccountId = turn.Environment?.AccountId;
             state.Cancellation = new CancellationTokenSource();
             lock (gate) activeTypingStates.Add(state);
 
-            var first = TrySetInputStatusAsync(state.UserId, 1, turn.TraceId);
+            var first = TrySetInputStatusAsync(state.UserId, 1, turn.TraceId, state.AccountId);
             var firstFinished = await Task.WhenAny(first, Task.Delay(1500));
             if (firstFinished == first && !await first)
             {
@@ -307,7 +335,7 @@ namespace TraceSoul2.Plugins.Builtin
                 {
                     await Task.Delay(InputStatusRefreshMilliseconds, token);
                     if (token.IsCancellationRequested) break;
-                    if (!await TrySetInputStatusAsync(state.UserId, 1, traceId)) break;
+                    if (!await TrySetInputStatusAsync(state.UserId, 1, traceId, state.AccountId)) break;
                 }
             }
             catch (OperationCanceledException) when (token.IsCancellationRequested)
@@ -353,11 +381,12 @@ namespace TraceSoul2.Plugins.Builtin
                 activeTypingStates.Remove(state);
                 return activeTypingStates.Any(other =>
                     other != null && Volatile.Read(ref other.Stopped) == 0 &&
-                    string.Equals(other.UserId, state.UserId, StringComparison.Ordinal));
+                    string.Equals(other.UserId, state.UserId, StringComparison.Ordinal) &&
+                    string.Equals(other.AccountId, state.AccountId, StringComparison.Ordinal));
             }
         }
 
-        private async Task<bool> TrySetInputStatusAsync(string userId, int eventType, string traceId)
+        private async Task<bool> TrySetInputStatusAsync(string userId, int eventType, string traceId, string accountId = null)
         {
             try
             {
@@ -365,7 +394,7 @@ namespace TraceSoul2.Plugins.Builtin
                 {
                     { "user_id", userId },
                     { "event_type", eventType }
-                });
+                }, accountId);
                 return true;
             }
             catch (Exception exception)
@@ -381,6 +410,7 @@ namespace TraceSoul2.Plugins.Builtin
             public int Started;
             public int Stopped;
             public string UserId = string.Empty;
+            public string AccountId;
             public CancellationTokenSource Cancellation;
             public Task RefreshTask;
         }
@@ -565,7 +595,11 @@ namespace TraceSoul2.Plugins.Builtin
                 var selfId = JsonText.ExtractLong(json, "self_id");
                 if (selfId > 0)
                 {
-                    lock (gate) learnedSelfIds.Add(selfId.ToString());
+                    lock (gate)
+                    {
+                        learnedSelfIds.Add(selfId.ToString());
+                        if (socket != null) accountSockets[selfId.ToString()] = socket;
+                    }
                 }
                 return;
             }
@@ -667,6 +701,8 @@ namespace TraceSoul2.Plugins.Builtin
                     remembered = true;
                 }
                 lastSessionSocket = sourceSocket;
+                if (sourceSocket != null && !string.IsNullOrWhiteSpace(moment.Environment?.AccountId))
+                    accountSockets[moment.Environment.AccountId] = sourceSocket;
                 inbound.Enqueue(moment);
             }
             if (remembered) SaveLastSession();
@@ -718,6 +754,7 @@ namespace TraceSoul2.Plugins.Builtin
             public TraceContributionDescriptorData Descriptor { get; } = new TraceContributionDescriptorData
             {
                 Id = "qq.text.send",
+                SupportsPublicEnvironment = true,
                 Kind = TraceContributionKindValues.Effector,
                 DisplayName = "QQ 发文字",
                 Description = OneBotPlatformPrompts.TextEffectorDescription,
@@ -778,17 +815,19 @@ namespace TraceSoul2.Plugins.Builtin
 
         // ---------- OneBot API 动作（传输层） ----------
 
-        internal async Task<string> CallActionAsync(string action, Dictionary<string, object> parameters)
+        internal async Task<string> CallActionAsync(string action, Dictionary<string, object> parameters, string accountId = null)
         {
-            if (IsReverseMode) return await CallActionOverSocketAsync(action, parameters);
+            if (IsReverseMode) return await CallActionOverSocketAsync(action, parameters, accountId);
             if (!string.IsNullOrWhiteSpace(config.http_url)) return await CallActionOverHttpAsync(action, parameters);
             throw new InvalidOperationException("OneBot 未配置任何动作通道（反向模式需 NapCat 已连接；正向模式需 http_url）。");
         }
 
-        private WebSocket LiveReverseSocket()
+        private WebSocket LiveReverseSocket(string accountId = null)
         {
             lock (gate)
             {
+                if (!string.IsNullOrWhiteSpace(accountId))
+                    return accountSockets.TryGetValue(accountId, out var socket) && socket.State == WebSocketState.Open ? socket : null;
                 if (lastSessionSocket != null && lastSessionSocket.State == WebSocketState.Open)
                     return lastSessionSocket;
             }
@@ -808,9 +847,9 @@ namespace TraceSoul2.Plugins.Builtin
         }
 
         /// <summary>反向模式：API 动作写回 NapCat 主动连进来的那根连接（aiocqhttp 同款），用 echo 配对回包。</summary>
-        private async Task<string> CallActionOverSocketAsync(string action, Dictionary<string, object> parameters)
+        private async Task<string> CallActionOverSocketAsync(string action, Dictionary<string, object> parameters, string accountId = null)
         {
-            var socket = LiveReverseSocket();
+            var socket = LiveReverseSocket(accountId);
             if (socket == null || socket.State != WebSocketState.Open)
                 throw new InvalidOperationException("NapCat 反向连接当前不可用。" + WaitingHint());
             var echo = Interlocked.Increment(ref nextEcho).ToString();

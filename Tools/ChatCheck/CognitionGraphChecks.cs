@@ -13,7 +13,7 @@ internal static partial class Program
 {
     private static void RunCognitionMigrationContractChecks(string assemblyPath)
     {
-        // 读取真实 Migration 的纯 DTO/Prompt，绝不创建 MigrationContext 或接触运行配置。
+        // 读取真实 Migration DTO/Prompt，并用显式临时依赖核对夜间批处理；不加载运行配置。
         var assembly = System.Reflection.Assembly.LoadFrom(Path.GetFullPath(assemblyPath));
         var prompts = assembly.GetType("TraceSoul2.Migrate.ReplayPrompts", true);
         var outputType = prompts.GetNestedType("CognitionFormationOutputData");
@@ -32,6 +32,13 @@ internal static partial class Program
         });
         Require(prompt.Contains("visible-evidence") && prompt.Contains(evidence[0].Content) && prompt.Contains("evidence_moment_ids") &&
             prompt.Contains("user=他") && prompt.Contains("world=世界"), "真实日构建Prompt必须提供证据原文、ID及四领域规则");
+        var cardType = prompts.GetNestedType("CardUpdateData");
+        Require(cardType?.GetField("cognition_ids") != null, "实际 Migration 身份摘要 DTO 必须包含认知依据");
+        var migrationPrompts = assembly.GetType("TraceSoul2.Prompts.CorePrompts+Migration", true);
+        var cardRules = (string)migrationPrompts.GetField("DayCardRules").GetRawConstantValue();
+        Require(cardRules.Contains("cognition_ids") && cardRules.Contains("cards: []") && prompt.Contains("identity_slot"),
+            "实际身份复盘和认知形成契约必须连接依据，允许无依据时不更新");
+        RunRuntimeSliceMigrationChecks(assembly);
         Console.WriteLine("Cognition migration contract checks passed: missing-field rejection, explicit empty array and evidence prompt.");
     }
 

@@ -304,6 +304,8 @@ namespace TraceSoul2.Data
         public string RefreshMode { get; set; }
         public int Priority { get; set; }
         public int MaxContextChars { get; set; }
+        /// <summary>已核对只读取本轮可见内容并遵守明确目标的能力；旧插件默认仅私密可用。</summary>
+        public bool SupportsPublicEnvironment { get; set; }
         public bool HasInternalMutation { get; set; }
         public bool HasExternalSideEffect { get; set; }
         /// <summary>

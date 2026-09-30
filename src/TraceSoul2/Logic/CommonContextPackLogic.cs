@@ -72,9 +72,7 @@ namespace TraceSoul2.Logic
         {
             if (turn == null || turn.Services == null || turn.Services.Storage == null)
                 return string.Empty;
-            var pair = turn.Services.Storage.LoadPairIdentity();
-            var cards = turn.Services.Storage.LoadIdentityCards(turn.ConversationId);
-            return IdentityCardLogic.FormatForExpressor(cards, pair);
+            return IdentityProjectionLogic.Build(turn);
         }
 
         public static List<DeepSeekMessageData> AssembleMind(
@@ -225,14 +223,15 @@ namespace TraceSoul2.Logic
                 .Where(x => x != null &&
                             (pair.IsHumanMoment(x.Role) || pair.IsCompanionMoment(x.Role)) &&
                             !string.IsNullOrWhiteSpace(x.Content) &&
-                            !MindLogic.IsOutboundProtocolMoment(x.Content))
+                            !MindLogic.IsOutboundProtocolMoment(x.Content) &&
+                            (!EnvironmentLogic.IsPublic(turn) || x.ConversationId == turn.ConversationId))
                 .ToList();
             var align = turn.HistoryWindowAlign > 0 ? turn.HistoryWindowAlign : HistoryWindowAlign;
             var lines = filtered.Skip(AlignedWindowStart(filtered.Count, turn.RawHistoryLimit, align)).ToList();
             foreach (var item in lines)
             {
                 var role = pair.IsHumanMoment(item.Role) ? "user" : "assistant";
-                var text = item.Content.Trim();
+                var text = EnvironmentLogic.IsPublic(turn) ? EnvironmentLogic.PublicDialogue(item) : item.Content.Trim();
                 var reasoning = includeAssistantReasoning ? ExtractReasoningContent(item) : null;
                 if (result.Count > 0 &&
                     string.Equals(result[result.Count - 1].role, role, StringComparison.Ordinal) &&

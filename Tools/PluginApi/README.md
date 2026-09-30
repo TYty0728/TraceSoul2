@@ -1,6 +1,14 @@
 # TraceSoul2.PluginApi
 
-TraceSoul2 运行时插件的契约（**1.7.0**，配套产品 **0.1.19**）。正式资产状态见 [版本说明](../../docs/RELEASES.md)。
+TraceSoul2 运行时插件的契约（源码 **1.9.0**；已发布产品 **0.1.19** 使用 1.7.0）。正式资产状态见 [版本说明](../../docs/RELEASES.md)。
+
+## 1.9 起
+
+认知增加来源环境、可见范围、参与者来源与身份用途；身份卡增加来源、人工固定与认知版本引用；Agent 增加可选有限 `affect`。新增 `RuntimeSliceRecord` / `RuntimeDayReviewRecord`，供白天追加切片、夜间落地拼图。没有新增 `IMemoryStore` 必须实现的方法，SQLite 通过核心实现提供切片与版本事务。Host 与官方插件已一起重建；未发布。见 [完整存在实施](../../docs/EXISTENCE_IMPLEMENTATION.md)。
+
+## 1.8 起
+
+新增 `EnvironmentObservationData` / `EnvironmentSnapshotData`、`TraceTurnContext.Environment`、事件和持续执行的环境来源，以及 `SupportsPublicEnvironment` 能力声明。原构造器和执行注册签名保留重载；旧插件默认只在私密环境启用。平台须报告结构化身份/受众并按轮次目标发送，器官须核对数据可见范围后才声明公开支持。宿主和官方插件应一起重建；当前源码未发布，详见 [在场环境](../../docs/RUNTIME_ENVIRONMENT.md)。
 
 ## 1.7 起
 

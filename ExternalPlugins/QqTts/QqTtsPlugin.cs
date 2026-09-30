@@ -67,7 +67,7 @@ namespace TraceSoul2.ExternalPlugins
         {
             Id = PluginId,
             DisplayName = "QQ 语音（情感 TTS）",
-            Version = "2.0.1",
+            Version = "2.0.2",
             Author = "TraceSoul2",
             Role = PluginRoleValues.Organ,
             PlatformId = BodyIds.Qq,
@@ -395,6 +395,7 @@ namespace TraceSoul2.ExternalPlugins
             public VoiceEffector(QqTtsPlugin owner) { this.owner = owner; }
             public TraceContributionDescriptorData Descriptor { get; } = new TraceContributionDescriptorData
             {
+                SupportsPublicEnvironment = true,
                 Id = "qq.voice.send", Kind = TraceContributionKindValues.Effector,
                 DisplayName = "QQ 发语音", Description = QqTtsPrompts.EffectorDescription,
                 Provides = "expression.qq.voice", Boundary = QqTtsPrompts.EffectorBoundary,

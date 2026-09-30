@@ -134,10 +134,10 @@ namespace TraceSoul2.Manager
         public List<TraceContributionDescriptorData> GetAvailableCatalog(TraceTurnContext turn)
         {
             return MouthLogic.Apply(
-                callables.Values.Where(x => x.IsAvailable(turn) && !IsDormantPlugin(x.Descriptor.PluginId)).Select(x => Bind(x.Descriptor))
-                .Concat(facets.Values.Where(x => x.IsAvailable(turn) && !IsDormantPlugin(x.Descriptor.PluginId)).Select(x => Bind(x.Descriptor)))
-                .Concat(momentSources.Values.Where(x => x.IsAvailable && !IsDormantPlugin(x.Descriptor.PluginId)).Select(x => Bind(x.Descriptor)))
-                .Concat(backgroundServices.Values.Where(x => x.IsAvailable && !IsDormantPlugin(x.Descriptor.PluginId)).Select(x => Bind(x.Descriptor))),
+                callables.Values.Where(x => EnvironmentLogic.CanUse(turn, x.Descriptor) && x.IsAvailable(turn) && !IsDormantPlugin(x.Descriptor.PluginId)).Select(x => Bind(x.Descriptor, turn))
+                .Concat(facets.Values.Where(x => EnvironmentLogic.CanUse(turn, x.Descriptor) && x.IsAvailable(turn) && !IsDormantPlugin(x.Descriptor.PluginId)).Select(x => Bind(x.Descriptor, turn)))
+                .Concat(momentSources.Values.Where(x => x.IsAvailable && !IsDormantPlugin(x.Descriptor.PluginId)).Select(x => Bind(x.Descriptor, turn)))
+                .Concat(backgroundServices.Values.Where(x => x.IsAvailable && !IsDormantPlugin(x.Descriptor.PluginId)).Select(x => Bind(x.Descriptor, turn))),
                 turn);
         }
 
@@ -154,10 +154,10 @@ namespace TraceSoul2.Manager
         public List<TraceContributionDescriptorData> GetAvailableActionCatalog(TraceTurnContext turn)
         {
             return callables.Values
-                .Where(x => x.IsAvailable(turn) && !IsDormantPlugin(x.Descriptor.PluginId))
+                .Where(x => EnvironmentLogic.CanUse(turn, x.Descriptor) && x.IsAvailable(turn) && !IsDormantPlugin(x.Descriptor.PluginId))
                 .Where(x => x.Descriptor.Kind != TraceContributionKindValues.Effector ||
                             string.IsNullOrWhiteSpace(x.Descriptor.BodyId) || MouthLogic.IsBodyLive(x.Descriptor.BodyId, turn))
-                .Select(x => Bind(x.Descriptor)).OrderBy(x => x.Id, StringComparer.Ordinal).ToList();
+                .Select(x => Bind(x.Descriptor, turn)).OrderBy(x => x.Id, StringComparer.Ordinal).ToList();
         }
 
         /// <summary>仅启用插件的贡献目录（感官目录等基础设施用）。休眠器官仍在册——它是「身体不在」不是「被关掉」。</summary>
@@ -213,23 +213,26 @@ namespace TraceSoul2.Manager
             return IsOrganDormant(loaded.Metadata);
         }
 
-        private TraceContributionDescriptorData Bind(TraceContributionDescriptorData source)
+        private TraceContributionDescriptorData Bind(TraceContributionDescriptorData source, TraceTurnContext turn = null)
         {
             var pair = storage.LoadPairIdentity();
             if (source == null) return null;
+            string Format(string value) => EnvironmentLogic.IsPublic(turn)
+                ? (value ?? string.Empty).Replace("{username}", "当前发言者").Replace("{callname}", "当前发言者").Replace("{assname}", pair.Assname)
+                : pair.Apply(value);
             return new TraceContributionDescriptorData
             {
                 Id = source.Id,
                 PluginId = source.PluginId,
                 Kind = source.Kind,
-                DisplayName = pair.Apply(source.DisplayName),
-                Description = pair.Apply(source.Description),
+                DisplayName = Format(source.DisplayName),
+                Description = Format(source.Description),
                 Provides = source.Provides,
-                WhenToUse = pair.Apply(source.WhenToUse),
-                WhenNotToUse = pair.Apply(source.WhenNotToUse),
-                ParametersJsonSchema = pair.Apply(source.ParametersJsonSchema),
-                OutputJsonSchema = pair.Apply(source.OutputJsonSchema),
-                Boundary = pair.Apply(source.Boundary),
+                WhenToUse = Format(source.WhenToUse),
+                WhenNotToUse = Format(source.WhenNotToUse),
+                ParametersJsonSchema = Format(source.ParametersJsonSchema),
+                OutputJsonSchema = Format(source.OutputJsonSchema),
+                Boundary = Format(source.Boundary),
                 BodyId = source.BodyId,
                 BodyTier = source.BodyTier,
                 BodyScale = source.BodyScale,
@@ -239,6 +242,7 @@ namespace TraceSoul2.Manager
                 MaxContextChars = source.MaxContextChars,
                 HasInternalMutation = source.HasInternalMutation,
                 HasExternalSideEffect = source.HasExternalSideEffect,
+                SupportsPublicEnvironment = source.SupportsPublicEnvironment,
                 IdleDailyCap = source.IdleDailyCap
             };
         }
@@ -300,7 +304,7 @@ namespace TraceSoul2.Manager
             foreach (var execution in services.Executions.DrainEvents())
                 result.Add(new PluginEventData
                 {
-                    PluginId = "runtime.execution", ConversationId = execution.ConversationId,
+                    PluginId = "runtime.execution", ConversationId = execution.ConversationId, Environment = execution.Environment,
                     ExternalEventId = execution.ExecutionId, Role = "system_event", IsOperational = true,
                     Wake = KernelWakeValues.Mind, OccurredUnixMs = nowUnixMs,
                     Content = "执行回执：" + execution.CapabilityId + "｜" + execution.Status + "｜" + execution.Summary,
@@ -327,7 +331,8 @@ namespace TraceSoul2.Manager
             CancellationToken cancellationToken)
         {
             var blocks = new List<TraceContextBlockData>();
-            foreach (var facet in facets.Values.Where(x => x.IsAvailable(turn) &&
+            foreach (var facet in facets.Values.Where(x => EnvironmentLogic.CanUse(turn, x.Descriptor) && x.IsAvailable(turn) &&
+                                                           (turn.Environment == null || x.Descriptor.Id is not ("identity.base" or "inner.snapshot" or "day.trajectory")) &&
                                                            !MouthLogic.IsProtocolFacet(x.Descriptor.Id) &&
                                                            !IsDormantPlugin(x.Descriptor.PluginId))
                          .OrderByDescending(x => x.Descriptor.Priority))
@@ -380,7 +385,7 @@ namespace TraceSoul2.Manager
                 .ToDictionary(x => x.Key, x => x.Last(), StringComparer.OrdinalIgnoreCase);
             turn.Workspace.FacetOutputs.Clear();
             turn.Workspace.FacetOutputs.AddRange(byId.Values);
-            foreach (var facet in facets.Values.Where(x => x.IsAvailable(turn)))
+            foreach (var facet in facets.Values.Where(x => EnvironmentLogic.CanUse(turn, x.Descriptor) && x.IsAvailable(turn)))
             {
                 var timer = Stopwatch.StartNew();
                 services.LogTiming(turn == null ? null : turn.TraceId,
@@ -416,7 +421,7 @@ namespace TraceSoul2.Manager
             if (string.IsNullOrWhiteSpace(call.call_id)) call.call_id = Guid.NewGuid().ToString("N");
             ITraceCallableContribution contribution;
             if (!callables.TryGetValue(call.capability_id ?? string.Empty, out contribution) ||
-                !contribution.IsAvailable(turn))
+                !EnvironmentLogic.CanUse(turn, contribution.Descriptor) || !contribution.IsAvailable(turn))
                 return Failed(call, "能力当前不可用。");
             if (IsDormantPlugin(contribution.Descriptor == null ? null : contribution.Descriptor.PluginId))
                 return Failed(call, "所属平台不在，器官休眠中。");
@@ -424,7 +429,7 @@ namespace TraceSoul2.Manager
             services.LogTiming(turn == null ? null : turn.TraceId,
                 "能力执行开始 " + contribution.Descriptor.Id);
             var executionId = services.Executions.Start(turn?.ConversationId ?? string.Empty, call,
-                MouthLogic.BodyOf(contribution.Descriptor), cancellationToken);
+                MouthLogic.BodyOf(contribution.Descriptor), cancellationToken, EnvironmentLogic.Observation(turn?.Environment));
             call.execution_id = executionId;
             try
             {

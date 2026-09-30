@@ -33,6 +33,13 @@ internal static partial class Program
         Require(success && called.SequenceEqual(plan.Days), "历史解决后才按顺序执行目标日，重复日期只执行一次");
         var empty = DailyBuildPreflight.Plan("2026-09-17", "2026-09-20", Array.Empty<string>(), states, Array.Empty<DailyBuildAttempt>());
         Require(empty.Days.Count == 0 && !empty.Ready, "已经完成的目标不能再次产生模型请求");
+        var publicOnly = DailyBuildPreflight.Plan("2026-09-17", "2026-09-20", Array.Empty<string>(), states,
+            Array.Empty<DailyBuildAttempt>(), new[] { "2026-09-17" });
+        Require(publicOnly.Days.SequenceEqual(new[] { "2026-09-17" }),
+            "私密已完成日仍能单独补建后来到达的公开经历，不重跑已完成私密复盘");
+        var slicesOnly = DailyBuildPreflight.Plan("2026-09-17", "2026-09-20", Array.Empty<string>(), states,
+            Array.Empty<DailyBuildAttempt>(), pendingSlices: new[] { "2026-09-17" });
+        Require(slicesOnly.Days.SequenceEqual(new[] { "2026-09-17" }), "没有新聊天也要补齐待复盘切片，完成日的迟到切片不会丢失");
         try
         {
             DailyBuildPreflight.Plan("2026-09-21", "2026-09-20", Array.Empty<string>(), states, Array.Empty<DailyBuildAttempt>());

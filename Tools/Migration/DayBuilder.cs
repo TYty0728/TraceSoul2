@@ -19,7 +19,7 @@ namespace TraceSoul2.Migrate
     /// <summary>
     /// 新路线单天构筑：
     /// 1 天对话（已入库 moments）→ 批量构筑第四层多维索引 + 条目（一句话总结客观）
-    /// → 细节浸染（助手第一人称逐条写细节）→ 日终复盘三张小卡（我是谁/对方是谁/我们的关系 必须成长）。
+    /// → 当下切片整理、细节浸染与有依据的认知修订 → 身份摘要按依据更新（允许不变）。
     /// 时间维度由 TimeLanguage 确定性翻译。榜单暂停，不建 ladder。
     /// </summary>
     public static class DayBuilder
@@ -31,6 +31,12 @@ namespace TraceSoul2.Migrate
                 throw new InvalidOperationException("需要 --day yyyy-MM-dd。");
             if (context.Migration.IsDayCompleted(dayKey))
             {
+                if (context.Store.GetRuntimeSlices(MigrationContext.ConversationId, dayKey, true).Count > 0)
+                    await RuntimeSliceLogic.ReviewDayAsync(context.Store, context.RequireLlm(), MigrationContext.ConversationId, dayKey);
+                var finishedDay = DateTime.ParseExact(dayKey, "yyyy-MM-dd", CultureInfo.InvariantCulture);
+                var finishedRange = DateRange.Parse(new[] { "--from", dayKey, "--to", dayKey });
+                if (context.Store.GetPublicMomentsInRange(finishedRange.DayStartMs(finishedDay), finishedRange.DayEndMs(finishedDay)).Count > 0)
+                    await PublicExperienceLogic.BuildAsync(context.Store, context.RequireLlm(), finishedRange.DayStartMs(finishedDay), finishedRange.DayEndMs(finishedDay));
                 // 完成标记早于临时样本清理：即使上次进程恰好在两者之间退出，也能在这里补清理。
                 context.Store.RetireDayRuntimeSamples(MigrationContext.ConversationId, dayKey);
                 Console.WriteLine("日终复盘已完成，跳过重复构筑：" + dayKey);
@@ -69,6 +75,15 @@ namespace TraceSoul2.Migrate
                 range.DayStartMs(day), range.DayEndMs(day));
             var pair = context.RequirePair();
             var llm = context.RequireLlm();
+            context.Migration.SetReviewStage("当下切片夜间整理");
+            await RuntimeSliceLogic.ReviewDayAsync(context.Store, llm, MigrationContext.ConversationId, dayKey);
+            context.Migration.SetReviewStage("公开经历按环境整理");
+            var publicCount = await PublicExperienceLogic.BuildAsync(context.Store, llm, range.DayStartMs(day), range.DayEndMs(day));
+            if (moments.Count == 0 && publicCount > 0)
+            {
+                context.Migration.MarkDayCompleted(dayKey);
+                return 0;
+            }
             if (moments.Count == 0)
             {
                 MigrationLive.Start(context);
@@ -81,7 +96,7 @@ namespace TraceSoul2.Migrate
             var referenceTime = new DateTimeOffset(day.Date.AddHours(12), MigrationContext.ChinaOffset);
             var lastMomentId = moments[moments.Count - 1].Id;
             var cardsBefore = context.Store.LoadIdentityCards(MigrationContext.ConversationId);
-            PrintCards("构筑前四张卡", cardsBefore, pair);
+            PrintCards("构筑前身份摘要", cardsBefore, pair);
 
             var chunks = ChunkMoments(moments);
             var dayIndexes = new List<EventIndexRecord>();
@@ -261,16 +276,16 @@ namespace TraceSoul2.Migrate
             // ---------- 认知形成：跑完事件构筑后，直接用当天新增事件提炼第一人称理解 ----------
             context.Migration.SetReviewStage("认知形成");
             await RunCognitionFormationAsync(
-                context, pair, llm, dayKey, dayIndexes, dayEntries, lastMomentId, moments);
+                context, pair, llm, dayKey, dayIndexes, dayEntries, moments);
 
-            // ---------- 日终三卡复盘 + 内心全字段同步 ----------
+            // ---------- 日终身份摘要复盘 + 内心全字段同步 ----------
             context.Migration.SetReviewStage("身份复盘与内心同步");
             var cardsNow = context.Store.LoadIdentityCards(MigrationContext.ConversationId);
             var reviewOutput = await RunDayReviewAsync(
                 context, pair, llm, dayKey, cardsNow, userProfileCard, dayIndexes, dayEntries);
             var changed = ApplyReviewOutput(context, pair, reviewOutput, cardsNow, lastMomentId, false);
             Console.WriteLine();
-            Console.WriteLine("三卡与内心变化：" + (changed.Count == 0 ? "（无变化）" : string.Join("；", changed)));
+            Console.WriteLine("身份摘要与内心变化：" + (changed.Count == 0 ? "（无变化）" : string.Join("；", changed)));
 
             // ---------- 当天排序：日榜（事件/认知各持榜单）+ 周/月/年/永久晋升 ----------
             context.Migration.SetReviewStage("日榜排序与长期晋升");
@@ -288,7 +303,7 @@ namespace TraceSoul2.Migrate
             context.Store.RetireDayRuntimeSamples(MigrationContext.ConversationId, dayKey);
 
             var cardsAfter = context.Store.LoadIdentityCards(MigrationContext.ConversationId);
-            PrintCards("构筑后四张卡", cardsAfter, pair);
+            PrintCards("构筑后身份摘要", cardsAfter, pair);
             PrintDayResult(dayKey, moments, dayIndexes, dayEntries, observationCalls, detailCalls, context);
             return 0;
         }
@@ -307,7 +322,7 @@ namespace TraceSoul2.Migrate
                 context, pair, llm, dayKey, cardsNow, userProfileCard,
                 new List<EventIndexRecord>(), new List<EventEntryRecord>());
             var changed = ApplyReviewOutput(context, pair, reviewOutput, cardsNow, string.Empty, true);
-            Console.WriteLine("三卡与内心变化：" + (changed.Count == 0 ? "（无变化）" : string.Join("；", changed)));
+            Console.WriteLine("身份摘要与内心变化：" + (changed.Count == 0 ? "（无变化）" : string.Join("；", changed)));
             var day = DateTime.ParseExact(dayKey, "yyyy-MM-dd", CultureInfo.InvariantCulture);
             context.Migration.SetReviewStage("空天日榜排序与长期晋升");
             var range = DateRange.Parse(new[] { "--from", dayKey, "--to", dayKey });
@@ -318,7 +333,7 @@ namespace TraceSoul2.Migrate
             await DayLadderLogic.PromoteAsync(context, pair, dayKey, llm);
             context.Migration.MarkDayCompleted(dayKey);
             context.Store.RetireDayRuntimeSamples(MigrationContext.ConversationId, dayKey);
-            PrintCards("空天复盘后四张卡", context.Store.LoadIdentityCards(MigrationContext.ConversationId), pair);
+            PrintCards("空天复盘后身份摘要", context.Store.LoadIdentityCards(MigrationContext.ConversationId), pair);
             return 0;
         }
 
@@ -332,14 +347,21 @@ namespace TraceSoul2.Migrate
             List<EventIndexRecord> dayIndexes,
             List<EventEntryRecord> dayEntries)
         {
-            var selfCard = Card(cardsNow, IdentityCardSlotValues.Self).Body;
-            var otherCard = Card(cardsNow, IdentityCardSlotValues.Other).Body;
-            var relationCard = Card(cardsNow, IdentityCardSlotValues.Relation).Body;
-            var expressionCard = Card(cardsNow, IdentityCardSlotValues.ExpressionHabit).Body;
+            var graphNodes = context.Store.GetCognitionNodes(5000);
+            string CurrentBody(string slot)
+            {
+                var card = Card(cardsNow, slot);
+                return IdentityProjectionLogic.Current(card, graphNodes) ? card.Body : "（原摘要依据已变化，需从当前认知重新形成）";
+            }
+            var selfCard = CurrentBody(IdentityCardSlotValues.Self);
+            var otherCard = CurrentBody(IdentityCardSlotValues.Other);
+            var relationCard = CurrentBody(IdentityCardSlotValues.Relation);
+            var expressionCard = CurrentBody(IdentityCardSlotValues.ExpressionHabit);
             var trajectory = context.Store.LoadDayTrajectory(dayKey);
             var todayNewItems = context.Store.GetTodayNewItemsByDay(
                 MigrationContext.ConversationId, dayKey);
             var currentInner = context.Store.LoadOrCreateInnerRuntime(MigrationContext.ConversationId);
+            var subjectRevision = SubjectRuntimeLogic.Read(context.Store, MigrationContext.ConversationId).Revision;
             var currentLife = context.LifeState == null
                 ? null : context.LifeState.Load(MigrationContext.ConversationId);
             var reviewPrompt = ReplayPrompts.BuildDayCardReviewPrompt(
@@ -349,6 +371,15 @@ namespace TraceSoul2.Migrate
                 todayNewItems,
                 InnerLifeLogic.FormatForMind(currentInner),
                 FormatLifeState(currentLife));
+            var identityNodes = graphNodes.Where(x => x.Status == "active" &&
+                x.MemoryVisibility != "public" && (string.IsNullOrEmpty(x.ContextConversationId) || x.ContextConversationId == MigrationContext.ConversationId) &&
+                !string.IsNullOrEmpty(x.IdentitySlot)).Take(40).ToList();
+            reviewPrompt += "\n【可用于摘要的认知与来源】\n" + TraceJson.ToJson(identityNodes) +
+                "\n【本人固定，不能覆盖的卡】\n" + string.Join(",", cardsNow.Where(x => x.Pinned).Select(x => x.Slot));
+            reviewPrompt += "\n【本日切片已形成的经历与感受拼图】\n（主观痕迹不等于外部事实；摘要仍必须引用上面的认知依据。）\n" +
+                string.Join("\n", context.Store.GetRuntimeDayReviews(MigrationContext.ConversationId, dayKey)
+                    .Where(x => x.MemoryVisibility != "public" && x.ContextConversationId == MigrationContext.ConversationId)
+                    .Select(x => x.Summary));
             var reviewMessages = new List<DeepSeekMessageData>
             {
                 new DeepSeekMessageData("system", reviewPrompt),
@@ -356,10 +387,17 @@ namespace TraceSoul2.Migrate
             };
             var output = await DeepSeekStructuredOutputLogic.CompleteAsync<ReplayPrompts.DayCardReviewOutputData>(
                 llm, reviewMessages,
-                x => x != null && x.cards != null && x.cards.Count > 0,
-                "三卡复盘输出缺少 cards。", CancellationToken.None);
+                x => x != null && x.cards != null && x.cards.Count <= 5 &&
+                    x.cards.Where(c => c != null).Select(c => c.slot).Distinct().Count() == x.cards.Count &&
+                    x.cards.All(c => c != null && PuzzleViewLogic.IdentitySlot(c.slot) && !string.IsNullOrEmpty(c.slot) &&
+                        !cardsNow.Any(old => old.Slot == c.slot && old.Pinned) &&
+                        !string.IsNullOrWhiteSpace(c.body) && c.body.Length <= IdentityCardSlotValues.BodyLimit(c.slot) &&
+                        c.cognition_ids != null && c.cognition_ids.Count > 0 && c.cognition_ids.Count <= 12 &&
+                        c.cognition_ids.All(id => identityNodes.Any(n => n.Id == id && n.IdentitySlot == c.slot))),
+                "身份摘要缺少有效认知依据或覆盖了本人固定内容；无变化请给 cards: []。", CancellationToken.None);
+            output.SubjectRevision = subjectRevision;
             LogCall(context, dayKey, "card_review", 0,
-                "三卡复盘：" + Limit(output.summary, 60), TraceJson.ToJson(output));
+                "身份摘要复盘：" + Limit(output.summary, 60), TraceJson.ToJson(output));
             return output;
         }
 
@@ -372,7 +410,7 @@ namespace TraceSoul2.Migrate
                    (string.IsNullOrWhiteSpace(life.activity_detail) ? string.Empty : "｜" + life.activity_detail);
         }
 
-        /// <summary>应用复盘输出：三卡只写真正变化的；内心全字段经 Reduce 同步（空字段=保留现状）。空天不清手上未结束的事。</summary>
+        /// <summary>应用复盘输出：身份摘要只写真正变化的；内心全字段经 Reduce 同步（空字段=保留现状）。空天不清手上未结束的事。</summary>
         private static List<string> ApplyReviewOutput(
             MigrationContext context,
             PairIdentity pair,
@@ -384,16 +422,13 @@ namespace TraceSoul2.Migrate
             var changed = new List<string>();
             foreach (var card in reviewOutput.cards ?? new List<ReplayPrompts.CardUpdateData>())
             {
-                if (card == null || !IdentityCardSlotValues.IsKnown(card.slot)
-                    || card.slot == IdentityCardSlotValues.Personality) continue;
+                if (emptyDay || card == null || !PuzzleViewLogic.IdentitySlot(card.slot) || string.IsNullOrEmpty(card.slot) ||
+                    cardsNow.Any(x => x.Slot == card.slot && x.Pinned)) continue;
                 var body = pair.RewriteRecordedText((card.body ?? string.Empty).Trim());
                 if (body.Length == 0) continue;
-                if (card.slot == IdentityCardSlotValues.UserProfile &&
-                    body.IndexOf("姓名", StringComparison.Ordinal) < 0) continue;
                 if (body.Length > IdentityCardSlotValues.BodyLimit(card.slot))
                     body = SmartTrim(body, IdentityCardSlotValues.BodyLimit(card.slot));
-                if (body == Card(cardsNow, card.slot).Body) continue;
-                context.Store.SaveIdentityCard(MigrationContext.ConversationId, card.slot, body, lastMomentId);
+                context.Store.SaveDerivedIdentityCard(MigrationContext.ConversationId, card.slot, body, card.cognition_ids, lastMomentId);
                 changed.Add(IdentityCardSlotValues.Title(card.slot, pair) + "：" + Limit(card.reason, 40));
             }
 
@@ -412,7 +447,7 @@ namespace TraceSoul2.Migrate
                 attention = attention
             };
             var hasInner = proposed.narrative.Length > 0 || proposed.mood.Length > 0 ||
-                           proposed.relationship_update.Length > 0 || proposed.ongoing_activity.Length > 0 ||
+                           proposed.relationship_update.Length > 0 || (proposed.ongoing_activity?.Length ?? 0) > 0 ||
                            (attention != null && attention.Count > 0);
             if (hasInner)
             {
@@ -425,8 +460,9 @@ namespace TraceSoul2.Migrate
                 var currentInner = context.Store.LoadOrCreateInnerRuntime(MigrationContext.ConversationId);
                 var nextInner = InnerLifeLogic.Reduce(
                     currentInner, proposed, sourceMomentId, DateTimeOffset.UtcNow.ToUnixTimeMilliseconds());
-                context.Store.SaveInnerRuntime(nextInner);
-                changed.Add("内心：" + Limit(nextInner.Narrative, 60));
+                if (SubjectRuntimeLogic.CommitReview(context.Store, MigrationContext.ConversationId, reviewOutput.SubjectRevision, nextInner, proposed))
+                    changed.Add("内心：" + Limit(nextInner.Narrative, 60));
+                else changed.Add("已有较新当下，日复盘未覆盖实时内心");
             }
             return changed;
         }
@@ -439,33 +475,40 @@ namespace TraceSoul2.Migrate
             string dayKey,
             List<EventIndexRecord> dayIndexes,
             List<EventEntryRecord> dayEntries,
-            string lastMomentId,
             List<MomentRecord> sourceMoments = null)
         {
-            var activeCognitions = context.Store.GetCognitionNodes(5000).Where(x => PuzzleDomains.Live(x.Status)).Take(40).ToList();
-            var activeTags = context.Store.GetActiveLifeTags().OrderByDescending(x => x.ActivationCount)
-                .ThenBy(x => x.Label, StringComparer.Ordinal).Take(60).ToList();
-            var evidence = CognitionFormationLogic.SelectEvidence(sourceMoments ??
-                context.Store.GetEvidenceMoments(dayEntries.Select(x => x.SourceMomentId).Concat(dayIndexes.Select(x => x.FirstMomentId))));
-            var cardsNow = context.Store.LoadIdentityCards(MigrationContext.ConversationId);
-            var userPronoun = IdentityCardLogic.UserPronoun(cardsNow, pair);
-            var prompt = ReplayPrompts.BuildCognitionFormationPrompt(
-                pair, dayKey, activeCognitions, activeTags, dayIndexes, dayEntries, userPronoun, evidence);
-            var messages = new List<DeepSeekMessageData>
+            var sources = sourceMoments ?? context.Store.GetEvidenceMoments(
+                dayEntries.Select(x => x.SourceMomentId).Concat(dayIndexes.Select(x => x.FirstMomentId)));
+            var batches = RuntimeSliceLogic.EvidenceBatches(context.Store, sources).ToList();
+            var allChanged = new List<CognitionSliceRecord>();
+            var batchIndex = 0;
+            foreach (var evidence in batches)
             {
-                new DeepSeekMessageData("system", prompt),
-                new DeepSeekMessageData("user", CorePrompts.Migration.CognitionUser)
-            };
-            var output = await DeepSeekStructuredOutputLogic.CompleteAsync<ReplayPrompts.CognitionFormationOutputData>(
-                llm, messages, x => x != null && CognitionFormationLogic.Valid(x.cognitions, evidence, activeCognitions, activeTags),
-                "认知复盘输出无效：检查操作、四领域、已展示的目标/原始证据ID、范围与长度；无依据请输出空数组。", CancellationToken.None);
-            var changed = context.Store.CommitCognitions(lastMomentId, output.cognitions);
-            LogCall(context, dayKey, "cognition_formation", 1,
-                "认知：" + changed.Count + " 条", TraceJson.ToJson(output));
-            Console.WriteLine("  认知形成：" + (changed.Count == 0
-                ? "无变化"
-                : changed.Count + " 条：" + string.Join("；", changed.Select(x => Limit(x.Summary, 30)))));
-            return changed;
+                var scope = evidence[0].ConversationId;
+                var activeCognitions = context.Store.GetCognitionNodes(5000).Where(x => PuzzleDomains.Live(x.Status) && x.MemoryVisibility != "public" &&
+                    (string.IsNullOrEmpty(x.ContextConversationId) || x.ContextConversationId == scope)).Take(40).ToList();
+                var activeTags = context.Store.GetActiveLifeTags().OrderByDescending(x => x.ActivationCount)
+                    .ThenBy(x => x.Label, StringComparer.Ordinal).Take(60).ToList();
+                var cardsNow = context.Store.LoadIdentityCards(MigrationContext.ConversationId);
+                var userPronoun = IdentityCardLogic.UserPronoun(cardsNow, pair);
+                var prompt = ReplayPrompts.BuildCognitionFormationPrompt(
+                    pair, dayKey, activeCognitions, activeTags, dayIndexes, dayEntries, userPronoun, evidence)
+                    + RuntimeSliceLogic.EvidenceContext(context.Store, evidence);
+                var messages = new List<DeepSeekMessageData>
+                {
+                    new DeepSeekMessageData("system", prompt),
+                    new DeepSeekMessageData("user", CorePrompts.Migration.CognitionUser)
+                };
+                var output = await DeepSeekStructuredOutputLogic.CompleteAsync<ReplayPrompts.CognitionFormationOutputData>(
+                    llm, messages, x => x != null && CognitionFormationLogic.Valid(x.cognitions, evidence, activeCognitions, activeTags),
+                    "认知复盘输出无效：检查操作、四领域、已展示的目标/原始证据ID、范围与长度；无依据请输出空数组。", CancellationToken.None);
+                var changed = context.Store.CommitCognitions(evidence[^1].Id, output.cognitions);
+                allChanged.AddRange(changed);
+                LogCall(context, dayKey, "cognition_formation", ++batchIndex,
+                    "认知：" + changed.Count + " 条", TraceJson.ToJson(output));
+            }
+            Console.WriteLine("  认知形成：" + batches.Count + " 批，" + allChanged.Count + " 条变更。");
+            return allChanged;
         }
 
         /// <summary>
@@ -498,9 +541,8 @@ namespace TraceSoul2.Migrate
                     .ToList();
                 if (dayIndexes.Count == 0) continue;
                 var dayEntries = context.Migration.GetEntriesByIndexIds(dayIndexes.Select(x => x.Id).ToList());
-                var lastMomentId = dayIndexes[dayIndexes.Count - 1].FirstMomentId ?? "day-review";
                 var changed = await RunCognitionFormationAsync(
-                    context, pair, llm, dayKey, dayIndexes, dayEntries, lastMomentId);
+                    context, pair, llm, dayKey, dayIndexes, dayEntries);
                 if (changed.Count > 0)
                 {
                     total += changed.Count;

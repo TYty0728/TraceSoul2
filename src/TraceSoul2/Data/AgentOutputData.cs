@@ -11,6 +11,7 @@ namespace TraceSoul2.Data
         public List<AgentActionData> actions = new();
         public List<AgentGoalUpdateData> goal_updates = new();
         public List<AgentAttentionLinkData> attention_links = new();
+        public string affect;
         public string mood, inner, scene, attention, today, new_fact;
         public string location, activity, activity_detail, speak_center, heartbeat_intent, next_heartbeat_plan;
         public bool mood_changed, state_force, sleep;
@@ -18,7 +19,7 @@ namespace TraceSoul2.Data
 
         public AgentStepData ToRuntime() => new()
         {
-            step = step, reply = reply, refine = refine, goal_updates = goal_updates, attention_links = attention_links,
+            affect = affect, step = step, reply = reply, refine = refine, goal_updates = goal_updates, attention_links = attention_links,
             actions = actions?.Select(x => x?.ToRuntime()).ToList(),
             mood = mood, mood_changed = mood_changed, inner = inner, scene = scene, attention = attention,
             today = today, new_fact = new_fact, location = location, activity = activity, activity_detail = activity_detail,

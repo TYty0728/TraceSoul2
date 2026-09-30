@@ -23,7 +23,7 @@ public sealed class TavilyPlugin : ITracePlugin
 
     public TracePluginMetadataData Metadata { get; } = new()
     {
-        Id = "web.tavily", DisplayName = "联网搜索（Tavily）", Version = "0.1.0",
+        Id = "web.tavily", DisplayName = "联网搜索（Tavily）", Version = "0.1.1",
         Author = "TraceSoul2", Role = PluginRoleValues.Organ, PlatformId = "",
         Description = "自主搜索公开网页、按需读取正文，保留来源与获取时间。"
     };
@@ -55,6 +55,7 @@ public sealed class TavilyPlugin : ITracePlugin
             this.owner = owner; this.read = read;
             Descriptor = new TraceContributionDescriptorData
             {
+                SupportsPublicEnvironment = true,
                 Id = read ? "web.read" : "web.search", Kind = TraceContributionKindValues.CallableNerve,
                 DisplayName = read ? "读取网页" : "搜索网页", Provides = read ? "web.page" : "web.search",
                 Description = read

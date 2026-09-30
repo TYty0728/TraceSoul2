@@ -65,7 +65,12 @@ namespace TraceSoul2.Logic
     {
         private readonly IMemoryStore store;
         public string SourceId { get { return "cognition"; } }
-        public CognitionContextRecallSource(IMemoryStore store) { this.store = store; }
+        private readonly Func<CognitionSliceRecord, bool> visible;
+        private readonly Func<MomentRecord, bool> evidenceVisible;
+        public CognitionContextRecallSource(IMemoryStore store) : this(store, null, null) { }
+        public CognitionContextRecallSource(IMemoryStore store, Func<CognitionSliceRecord, bool> visible,
+            Func<MomentRecord, bool> evidenceVisible)
+        { this.store = store; this.visible = visible ?? (_ => true); this.evidenceVisible = evidenceVisible ?? (_ => true); }
 
         public IReadOnlyList<ContextRecallCandidate> Retrieve(ContextRecallQuery query)
         {
@@ -83,6 +88,7 @@ namespace TraceSoul2.Logic
             }
             if (graph == null)
                 nodes.AddRange(store.GetCognitionCandidates(query.Cues, 40).Where(c => nodes.All(x => x.Id != c.Id)));
+            nodes = nodes.Where(visible).ToList();
             var terms = Terms(query.Text);
             foreach (var c in nodes.Where(c => PuzzleDomains.Live(c.Status)))
             {
@@ -95,7 +101,8 @@ namespace TraceSoul2.Logic
             var byId = nodes.GroupBy(x => x.Id).ToDictionary(g => g.Key, g => g.First());
             var selected = seeds.Where(x => byId.ContainsKey(x.Key)).OrderByDescending(x => x.Value)
                 .Take(Math.Min(24, query.MaxItems * 2)).ToDictionary(x => x.Key, x => x.Value);
-            var edges = graph?.GetCognitionEdges(selected.Keys) ?? new List<CognitionEdgeRecord>();
+            var edges = (graph?.GetCognitionEdges(selected.Keys) ?? new List<CognitionEdgeRecord>())
+                .Where(x => byId.ContainsKey(x.FromCognitionId) && byId.ContainsKey(x.ToCognitionId)).ToList();
             var conflicts = new HashSet<string>();
             // 一跳有界扩展：相关、抽象、反证和新版替代关系。禁止无限漫游。
             var seedScores = new Dictionary<string, float>(selected);
@@ -109,7 +116,8 @@ namespace TraceSoul2.Logic
             }
             var evidence = graph?.GetCognitionEvidence(selected.Keys) ?? new List<CognitionEvidenceRecord>();
             var moments = (graph?.GetEvidenceMoments(evidence.Select(x => x.MomentId)) ?? new List<MomentRecord>())
-                .ToDictionary(x => x.Id);
+                .Where(evidenceVisible).ToDictionary(x => x.Id);
+            evidence = evidence.Where(x => moments.ContainsKey(x.MomentId ?? "")).ToList();
             return selected.Where(x => byId.ContainsKey(x.Key) && PuzzleDomains.Live(byId[x.Key].Status))
                 .Select(x =>
                 {
@@ -134,7 +142,7 @@ namespace TraceSoul2.Logic
                             text += " [" + m.Realm + "/" + m.EvidenceType + "] " + Clip(m.Content, 100);
                         else text += "（原始来源当前不可读取，不能当作已核实）";
                     }
-                    if (refs.Count == 0) text += "；旧认知尚无可追溯证据";
+                    if (refs.Count == 0) text += "；本轮未提供可读取的原始证据，不据此推测原文";
                     return new ContextRecallCandidate { Id = c.Id, SourceId = "cognition", Kind = c.Subtype,
                         Text = c.Summary, RenderedText = text, Relevance = x.Value, Strength = c.Strength,
                         Confidence = c.Confidence, Freshness = 0, ContradictsCurrent = conflicts.Contains(c.Id) || c.Status == "weakened",
@@ -142,7 +150,7 @@ namespace TraceSoul2.Logic
                 }).ToList();
         }
         // 本地双字片段匹配兜底；语义入口仍由既有 Tag 路由负责，避免32维字符哈希碰撞召回无关认知。
-        private static HashSet<string> Terms(string value)
+        internal static HashSet<string> Terms(string value)
         {
             var terms = new HashSet<string>(StringComparer.Ordinal);
             var run = new StringBuilder();

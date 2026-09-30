@@ -288,7 +288,11 @@ app.MapGet("/identity/cards", (SoulRuntime runtime) =>
         x.Slot,
         title = IdentityCardSlotValues.Title(x.Slot, pair),
         x.Body,
-        x.Revision,
+        x.Revision, x.Origin, x.Pinned,
+        sources = PuzzleViewLogic.Read<Dictionary<string, string>>(x.CognitionSourcesJson),
+        current = IdentityProjectionLogic.Current(x, runtime.Store.GetCognitionNodes(5000)),
+        stamp = PuzzleViewLogic.Stamp(x),
+        shared = PuzzleViewLogic.Shared(runtime.Store, x.Id, PuzzleViewLogic.Stamp(x)),
         template = IdentityCardLogic.CardTemplate(x.Slot, pair)
     }));
 });
@@ -309,11 +313,69 @@ app.MapPut("/identity/cards/{slot}", (SoulRuntime runtime, string slot, CardWrit
     return Results.Json(new { card.Slot, card.Body, card.Revision });
 });
 
+app.MapGet("/identity/puzzle", (SoulRuntime runtime) => Results.Json(runtime.Store.GetCognitionNodes(5000)
+    .Where(x => string.IsNullOrEmpty(x.ContextConversationId) || x.ContextConversationId == runtime.ConversationId ||
+        x.ContextConversationId.StartsWith(runtime.ConversationId + ":environment:", StringComparison.Ordinal))
+    .Select(x => new { x.Id, x.Summary, x.IdentitySlot, x.Status, x.Revision, x.Domains, x.SubjectKey,
+        x.About, x.Scope, x.Exceptions, x.ContextConversationId, x.MemoryVisibility,
+        evidence = runtime.Store.GetCognitionEvidence(new[] { x.Id }).Select(e => new { e.MomentId, e.Relation }),
+        stamp = PuzzleViewLogic.Stamp(x), shared = PuzzleViewLogic.Shared(runtime.Store, x.Id, PuzzleViewLogic.Stamp(x)) })));
+app.MapPut("/identity/visibility", (SoulRuntime runtime, IdentityPolicyWrite body) =>
+{
+    string id, stamp;
+    if (body.kind == "card")
+    {
+        var card = runtime.Store.LoadIdentityCards(runtime.ConversationId).FirstOrDefault(x => x.Slot == body.id);
+        if (card == null || !IdentityProjectionLogic.Current(card, runtime.Store.GetCognitionNodes(5000)))
+            return Results.BadRequest(new { error = "卡片不存在或依据已变化，请先更新。" });
+        id = card.Id; stamp = PuzzleViewLogic.Stamp(card);
+    }
+    else if (body.kind == "cognition")
+    {
+        var node = runtime.Store.GetCognitionNodes(5000).FirstOrDefault(x => x.Id == body.id);
+        if (node == null || node.Status != "active") return Results.BadRequest(new { error = "认知不存在或已失效。" });
+        if (!string.IsNullOrEmpty(node.ContextConversationId) && node.ContextConversationId != runtime.ConversationId &&
+            !node.ContextConversationId.StartsWith(runtime.ConversationId + ":environment:", StringComparison.Ordinal))
+            return Results.BadRequest(new { error = "认知不属于当前主体。" });
+        id = node.Id; stamp = PuzzleViewLogic.Stamp(node);
+    }
+    else return Results.BadRequest(new { error = "未知来源类型。" });
+    if (stamp != body.stamp) return Results.Conflict(new { error = "内容已变化，请重新查看后设置。" });
+    PuzzleViewLogic.SetShared(runtime.Store, id, stamp, body.shared);
+    return Results.Ok(new { saved = true });
+});
+app.MapPut("/identity/cards/{slot}/pin", (SoulRuntime runtime, string slot, IdentityPolicyWrite body) =>
+{
+    var card = runtime.Store.LoadIdentityCards(runtime.ConversationId).FirstOrDefault(x => x.Slot == slot);
+    if (card == null) return Results.BadRequest(new { error = "未知身份卡。" });
+    if (PuzzleViewLogic.Stamp(card) != body.stamp) return Results.Conflict(new { error = "内容已变化，请刷新。" });
+    runtime.Store.SetIdentityPinned(runtime.ConversationId, slot, body.pinned);
+    return Results.Ok(new { saved = true });
+});
+
+app.MapGet("/environment/settings", (SoulRuntime runtime) => Results.Json(EnvironmentLogic.Settings(runtime.Store)));
+app.MapPut("/environment/settings", (SoulRuntime runtime, EnvironmentSettings body) =>
+{
+    try { EnvironmentLogic.SaveSettings(runtime.Store, body); return Results.Ok(new { saved = true }); }
+    catch (ArgumentException error) { return Results.BadRequest(new { error = error.Message }); }
+});
+
+app.MapGet("/runtime/slices", (HttpRequest request, SoulRuntime runtime) =>
+{
+    var day = request.Query["day"].FirstOrDefault() ?? MemoryDayLogic.CurrentDayKey(DateTimeOffset.Now);
+    if (!DailyBuildPreflight.ValidDay(day)) return Results.BadRequest(new { error = "日期格式须为 yyyy-MM-dd。" });
+    var slices = runtime.Store.GetRuntimeSlices(runtime.ConversationId, day);
+    return Results.Json(new { day, total = slices.Count, pending = slices.Count(x => string.IsNullOrEmpty(x.ReviewId)),
+        slices = slices.TakeLast(100), reviews = runtime.Store.GetRuntimeDayReviews(runtime.ConversationId, day) });
+});
+
 app.MapGet("/inner", (SoulRuntime runtime) =>
 {
     var inner = runtime.Store.LoadOrCreateInnerRuntime(runtime.ConversationId);
     return Results.Json(new
     {
+        subject = SubjectRuntimeLogic.Read(runtime.Store, runtime.ConversationId),
+        inner.Environment,
         inner.Narrative,
         inner.Mood,
         inner.Revision,
@@ -1286,4 +1348,13 @@ static class ProviderSlotApi
         if (value == null) return;
         runtime.Providers.SetSlot(slot, value.providerId, value.model);
     }
+}
+
+internal sealed class IdentityPolicyWrite
+{
+    public string kind { get; set; }
+    public string id { get; set; }
+    public string stamp { get; set; }
+    public bool shared { get; set; }
+    public bool pinned { get; set; }
 }

@@ -158,55 +158,8 @@ namespace TraceSoul2.Logic
             var pair = turn.Services.Storage.LoadPairIdentity();
             var storage = turn.Services.Storage;
             var builder = new StringBuilder();
-            var now = DateTimeOffset.Now;
-            var timeContext = !includeLegacyTools ? turn.Workspace.ContextBlocks
-                .FirstOrDefault(x => x?.FacetId == "time.context" && !string.IsNullOrWhiteSpace(x.Content)) : null;
-            if (!includeLegacyTools) builder.AppendLine("【当前状态】");
-            if (timeContext != null) builder.AppendLine(timeContext.Content.Trim());
-            else
-            {
-                builder.AppendLine(CorePrompts.Mind.NowPrefix + TimeLanguageUtil.NaturalNow(now) + "。");
-                var bodyScene = MouthLogic.LoadState(
-                    turn == null || turn.Services == null ? null : turn.Services.DataDirectory).scene;
-                var life = turn != null && turn.Services != null && turn.Services.LifeState != null
-                    ? turn.Services.LifeState.Load(turn.ConversationId)
-                    : null;
-                if (life != null && !string.IsNullOrWhiteSpace(life.location))
-                    bodyScene = life.location;
-                builder.AppendLine(CorePrompts.Mind.BodyScenePrefix + BodySceneValues.Label(bodyScene) + "。这是物理所在，不是我们共同的文字场景；它只作为当前生活上下文参考。");
-                var doing = LifeStateLogic.FormatDoing(life);
-                builder.AppendLine(CorePrompts.Mind.DoingPrefix +
-                                  (doing.Length == 0 ? "空闲" : doing) +
-                                  "。这是可变化的生活状态；没有明确变化不要擅自改写。");
-                var lastReal = storage.GetRecentMoments(turn.ConversationId, 200)
-                    .Where(x => x != null &&
-                                (pair.IsHumanMoment(x.Role) || pair.IsCompanionMoment(x.Role)) &&
-                                (turn.Moment == null || x.Id != turn.Moment.Id))
-                    .OrderByDescending(x => x.CreatedUnixMs)
-                    .FirstOrDefault();
-                if (lastReal != null && lastReal.CreatedUnixMs > 0)
-                {
-                    var lastTime = DateTimeOffset.FromUnixTimeMilliseconds(lastReal.CreatedUnixMs).ToLocalTime();
-                    builder.AppendLine("距离上一段真实相处约" +
-                                      TimeLanguageUtil.ElapsedZh(lastReal.CreatedUnixMs, now.ToUnixTimeMilliseconds()) +
-                                      "，上一段停在" + lastTime.ToString("M月d日 HH:mm") + "。");
-                }
-            }
-            builder.AppendLine();
-            var runtime = storage.LoadOrCreateInnerRuntime(turn.ConversationId);
-            builder.AppendLine(InnerLifeLogic.FormatForMind(runtime));
+            builder.AppendLine(RuntimeContextLogic.State(turn));
             if (includeLegacyTools) builder.AppendLine(CorePrompts.Mind.InnerAttentionRule);
-            var todayItems = storage.GetTodayNewItems(
-                turn.ConversationId, TodayBoundary(DateTimeOffset.Now).ToUnixTimeMilliseconds(), 10);
-            if (todayItems != null && todayItems.Count > 0)
-            {
-                builder.AppendLine(CorePrompts.Mind.TodayNewHeader);
-                foreach (var item in todayItems)
-                    builder.AppendLine("- " + item.Content);
-            }
-            var trajectory = storage.LoadDayTrajectory(MemoryDayKey(DateTimeOffset.Now));
-            if (trajectory != null && !string.IsNullOrWhiteSpace(trajectory.Text))
-                builder.AppendLine(CorePrompts.Mind.TrajectoryPrefix + trajectory.Text.Trim());
             if (!string.IsNullOrWhiteSpace(naturallyAwakenedPast))
             {
                 builder.AppendLine();
@@ -350,19 +303,6 @@ namespace TraceSoul2.Logic
             if (text.Length < 4 || text[0] != '[') return false;
             return text.StartsWith("[QQ ", StringComparison.Ordinal) ||
                    text.StartsWith("[CQ:", StringComparison.OrdinalIgnoreCase);
-        }
-
-        private static DateTimeOffset TodayBoundary(DateTimeOffset now)
-        {
-            var local = now.ToOffset(TimeSpan.FromHours(8));
-            var boundary = local.Date.AddHours(4);
-            if (local < boundary) boundary = boundary.AddDays(-1);
-            return boundary;
-        }
-
-        private static string MemoryDayKey(DateTimeOffset now)
-        {
-            return TodayBoundary(now).ToString("yyyy-MM-dd");
         }
 
         private static string OneLine(string value)

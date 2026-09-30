@@ -84,6 +84,7 @@ namespace TraceSoul2.Plugins.Builtin
             public TraceContributionDescriptorData Descriptor { get; } = new TraceContributionDescriptorData
             {
                 Id = "dialogue.recent_history",
+                SupportsPublicEnvironment = true,
                 Kind = TraceContributionKindValues.CallableNerve,
                 DisplayName = "定向读取近期原文",
                 Description = DialogueTracePrompts.HistoryDescription,
@@ -127,6 +128,7 @@ namespace TraceSoul2.Plugins.Builtin
             public TraceContributionDescriptorData Descriptor { get; } = new TraceContributionDescriptorData
             {
                 Id = "dialogue.send",
+                SupportsPublicEnvironment = true,
                 Kind = TraceContributionKindValues.Effector,
                 DisplayName = "发送文字",
                 Description = DialogueTracePrompts.EffectorDescription,
@@ -181,6 +183,7 @@ namespace TraceSoul2.Plugins.Builtin
             public TraceContributionDescriptorData Descriptor { get; } = new TraceContributionDescriptorData
             {
                 Id = "dialogue.print",
+                SupportsPublicEnvironment = true,
                 Kind = TraceContributionKindValues.Effector,
                 DisplayName = "console 打印",
                 Description = "观察窗打印：把收发在 console 留一份运行痕迹，不进对话历史。",

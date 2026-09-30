@@ -202,6 +202,7 @@ namespace TraceSoul2.Plugins
     public sealed class TraceTurnContext
     {
         public string ConversationId { get; private set; }
+        public EnvironmentSnapshotData Environment { get; private set; }
         public MomentRecord Moment { get; private set; }
         public IReadOnlyList<MomentRecord> RecentMoments { get; private set; }
         public int RawHistoryLimit { get; private set; }
@@ -214,19 +215,19 @@ namespace TraceSoul2.Plugins
         public TraceTurnWorkspace Workspace { get; private set; }
         public string TraceId { get; private set; }
 
-        public TraceTurnContext(
-            string conversationId,
-            MomentRecord moment,
-            List<MomentRecord> recentMoments,
-            int rawHistoryLimit,
-            bool requiresExpression,
-            TracePluginServices services,
-            string wake = null,
-            string traceId = null,
-            int historyWindowAlign = 0)
+        public TraceTurnContext(string conversationId, MomentRecord moment, List<MomentRecord> recentMoments,
+            int rawHistoryLimit, bool requiresExpression, TracePluginServices services,
+            string wake = null, string traceId = null, int historyWindowAlign = 0)
+            : this(conversationId, moment, recentMoments, rawHistoryLimit, requiresExpression, services,
+                null, wake, traceId, historyWindowAlign) { }
+
+        public TraceTurnContext(string conversationId, MomentRecord moment, List<MomentRecord> recentMoments,
+            int rawHistoryLimit, bool requiresExpression, TracePluginServices services,
+            EnvironmentSnapshotData environment, string wake = null, string traceId = null, int historyWindowAlign = 0)
         {
             ConversationId = conversationId;
             Moment = moment;
+            Environment = environment;
             RecentMoments = recentMoments ?? new List<MomentRecord>();
             RawHistoryLimit = Math.Max(0, rawHistoryLimit);
             HistoryWindowAlign = Math.Max(0, historyWindowAlign);

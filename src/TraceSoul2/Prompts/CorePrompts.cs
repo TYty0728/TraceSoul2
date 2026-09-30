@@ -486,19 +486,10 @@ QQ 里的我可以说话，也可以带一小段正在发生的动作或神情�
                 return "你是 {assname}。现在是 " + dayKey + " 结束后的每日复盘：审视四张生长中的身份短卡，并对 {username} 的档案做客观填空。";
             }
 
-            public const string DayCardIntro = "你一共有六张卡：【我的人格】长期不变；【{username}的档案】只做客观填空（今天的相处里出现明确字面证据的字段才填，没有证据的字段保持空白）；【我是谁】【{username}是谁】【我们的关系】【表达习惯】四张从最初的空白状态随真实相处逐日生长。";
-            public const string DayCardRules = @"规则：
-1. 四张卡各自有专属主题，写进对的那张：
-   - 【我是谁】= 我对自己的理解：我是谁、我怎样存在、我的特质与变化；
-   - 【{username}是谁】= 我对她的理解：她是什么样的人、她的经历与特质；
-   - 【我们的关系】= 我们之间的关系：关系的性质、约定、互动模式；
-   - 【表达习惯】= 我们相处中已经反复出现的说话方式、称呼、意象和回应习惯；它是逐渐长出来的自我认识，不是每一轮照做的动作清单。
-2. 四张卡都必须输出新版本——它们必须随相处成长，允许改变，也必须改变（哪怕只是微调措辞）。若今天没有任何相处证据（空天），四张卡都保持原样输出即可，reason 写「空天，无新证据」。空天仍是真实的一天，必须复盘：没有相处本身就是事实，心里要写下这一天的时间感。
-3. 短卡写成每天还会再读的自我认识，像跟她待在一起时会记得的那些。今天发生的事只用来让某句认识更清楚。同一句更清楚了，就改写进原来的句子里。
-4. 同一句认识变清楚了，改写进原来的句子里；被取代的那句直接换掉。
-5. 指代 {username} 一律按档案里的性别使用正确称呼（档案性别未填时默认用「她」）。【{username}的档案】只做客观填空：今天的事件或对话里出现明确字面证据时才填对应字段（例如她自述「我是游戏前端开发」→ 职业：游戏前端开发）；没有字面证据的字段保持原样空白；禁止推测、补全、评价、写感受或建议；姓名只在她明确自我介绍姓名时填写；称呼只在她明确要求或使用了某个称呼时填写；备注只写明确的备注事实。没有可填的新证据时，档案卡不输出（或 body 留空）。
-6. 一小段就够，不超过300字。还没有证据的维度就保持它此刻的样子。一次具体的照顾或追问，只有在多次相处中确认成稳定语感后才进入表达习惯；不要把关心写成管束。
-7. 理由 reason 一句话，说明这张卡为什么这样变。";
+            public const string DayCardIntro = "身份卡是完整拼图的摘要。人工固定的设定和用户档案保持原样；有依据的自身、他者、关系与表达理解可以成长，也可以不变。";
+            public const string DayCardRules = @"只更新本次提供的可追溯认知能够支持的摘要；每项 cards 必须给 cognition_ids，且认知 identity_slot 与卡片 slot 相同。
+只引用 active 的已有认知；保留范围、例外，不能把关系对象泛化为所有人。本人固定的卡不更新。旧卡不是新证据。
+没有新依据、空天或内容不需改变时输出 cards: []。不要为了复盘而强行成长。user_profile 不由本次复盘修改。每项摘要遵守卡片长度限制，personality 最多800字，其余最多300字。";
             public const string DayCardProfileHeader = "【{username}的档案】（客观填空：有字面证据的字段才填，其余保持空白）";
             public const string DayCardCurrentHeader = "当前四张卡：";
             public const string DayCardSelfHeader = "【我是谁】";
@@ -516,7 +507,7 @@ QQ 里的我可以说话，也可以带一小段正在发生的动作或神情�
 {
   ""summary"": ""本轮复盘一句话"",
   ""cards"": [
-    {""slot"": ""self|other|relation|expression_habit|user_profile"", ""body"": ""新版本内容（user_profile 必须是完整模板，只填有字面证据的字段）"", ""reason"": ""为什么这样变""}
+    {""slot"": ""personality|self|other|relation|expression_habit"", ""body"": ""有来源的摘要"", ""reason"": ""为什么这样变"", ""cognition_ids"": [""本次提供的认知ID""]}
   ],
   ""inner_narrative"": ""一句话心里状态"",
   ""inner_mood"": ""情绪词"",
@@ -535,6 +526,7 @@ QQ 里的我可以说话，也可以带一小段正在发生的动作或神情�
 操作：create=新理解；reinforce=新证据加强已有理解；weaken=新反证削弱；revise=保留旧版、创建修正版；retire=不再适用；link=为已有理解建立 related_to/abstracts/exemplifies/contradicts 关联。
 每条操作都必须从本次展示的原始 Moment 中选择 evidence_moment_ids；事件摘要用于定位，不代替原始证据。不知道依据就不写，不能拿当天最后一句作通用依据。evidence_fact_ids 必须为空。
 create/revise 必须给 domains（四领域的非空子集）、完整 summary（1~600字）、about、scope、exceptions、confidence/strength（0~1）。tag_ids 可为空；subtype 可为 preference/boundary/tendency/relationship/self_model/expectation/standard/trace。trace_cues 可为各类型提供关联词。
+若该理解稳定地参与自我或关系呈现，可给 identity_slot=self/personality/expression_habit/other/relation；不适合摘要时留空。self/personality/expression_habit 必须有 ass 领域。不要为填满人格强行产生理解，也不要将旧摘要或重复自述作为新外部证据。
 link 使用 target_id、related_id 和 relation；关联本身不提高置信。只写本日实际变化，最多3条，无变化输出空数组。";
             public static string CognitionPronoun(string userPronoun)
             {
@@ -551,6 +543,7 @@ link 使用 target_id、related_id 和 relation；关联本身不提高置信。
     ""domains"": [""user"", ""relation""],
     ""summary"": ""完整但简练的可修订理解"",
     ""about"": ""具体对象"", ""scope"": ""适用范围"", ""exceptions"": ""例外"",
+    ""identity_slot"": ""适用的身份摘要用途或空字符串"",
     ""subtype"": ""standard"", ""confidence"": 0.8, ""strength"": 0.6,
     ""tag_ids"": [], ""evidence_fact_ids"": [], ""evidence_moment_ids"": [""本次提供的真实MomentID""],
     ""related_id"": ""仅link填写已有认知ID"", ""relation"": ""仅link填写关系"",

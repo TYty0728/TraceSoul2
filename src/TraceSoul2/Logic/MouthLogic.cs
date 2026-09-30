@@ -29,7 +29,7 @@ namespace TraceSoul2.Logic
         /// <summary>本轮消息来自 console 调试口：说话只回 console。</summary>
         public static bool IsConsoleTurn(TraceTurnContext turn)
         {
-            var src = turn == null || turn.Moment == null ? null : turn.Moment.SourcePluginId;
+            var src = turn?.Environment?.PlatformId ?? turn?.Moment?.SourcePluginId;
             return string.Equals(src, "builtin.dialogue", StringComparison.Ordinal);
         }
 

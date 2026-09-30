@@ -9,6 +9,7 @@ namespace TraceSoul2.Data
         public string step;
         public string reply;
         public bool refine;
+        public string affect;
         public List<AgentGoalUpdateData> goal_updates = new List<AgentGoalUpdateData>();
         public List<AgentAttentionLinkData> attention_links = new List<AgentAttentionLinkData>();
         public List<BrainCapabilityCallData> actions = new List<BrainCapabilityCallData>();
@@ -48,6 +49,7 @@ namespace TraceSoul2.Data
 
     public sealed class TraceExecutionSnapshotData
     {
+        public EnvironmentObservationData Environment { get; set; }
         public string ExecutionId { get; set; }
         public string ConversationId { get; set; }
         public string CapabilityId { get; set; }

@@ -64,16 +64,20 @@ internal static partial class Program
                     var empty = CameraSharingContext.Build(turn);
                     Require(empty.Contains("最近可查") && empty.Contains("不必等索图"), "没有近期回执时提示自然分享，不能虚构已发照片");
                     var now = DateTimeOffset.UtcNow.ToUnixTimeMilliseconds();
-                    void Receipt(string receiptId, string kind, string payload) => store.SaveOperationalEvent(new OperationalEventRecord
+                    void Receipt(string receiptId, string kind, string payload, long? timestamp = null) => store.SaveOperationalEvent(new OperationalEventRecord
                     {
                         Id = receiptId, ConversationId = turn.ConversationId, Kind = kind,
-                        SourcePluginId = "builtin.onebot", PayloadJson = payload, CreatedUnixMs = now - 1000
+                        SourcePluginId = "builtin.onebot", PayloadJson = payload, CreatedUnixMs = timestamp ?? now - 1000
                     });
                     Receipt("sticker", OperationalEventKindValues.OutboundSticker, moment.PayloadJson);
                     Receipt("other-session", OperationalEventKindValues.OutboundImage, "{\"session_type\":\"private\",\"session_id\":\"456\"}");
                     Require(CameraSharingContext.Build(turn).Contains("没有给她发过照片"), "表情与其他会话照片不能当成本会话已分享");
+                    Receipt("old-photo", OperationalEventKindValues.OutboundImage, moment.PayloadJson, now - 86400000);
+                    Require(CameraSharingContext.Build(turn).Contains("距今约1440分钟") &&
+                            CameraSharingContext.Build(turn).Contains("不代表照片刚发过"),
+                        "即使没有后续文字，一天前的照片也不能被描述成刚分享过");
                     Receipt("photo", OperationalEventKindValues.OutboundImage, moment.PayloadJson);
-                    Require(CameraSharingContext.Build(turn).Contains("刚分享过"), "成功发图后应提醒避免机械连发");
+                    Require(CameraSharingContext.Build(turn).Contains("已成功发出"), "成功发图应呈现实际回执");
                     for (var i = 0; i < 6; i++) store.SaveMoment(new MomentRecord
                     {
                         Id = "reply-" + i, ConversationId = turn.ConversationId, Role = "小光", Content = "在听呢",
@@ -110,6 +114,30 @@ internal static partial class Program
                         string.Empty, true, null, default).GetAwaiter().GetResult();
                     Require(!waiting.expressions.Any(ExpressorLogic.IsImageExpression),
                         "同一索图的离场等待不能提前补图，避免最终回应再生成一张");
+
+                    // 使用真实插件注册与目录装配，模型和执行器仍是模拟的，不调用生图或 QQ。
+                    services.Platforms.Unregister(BodyIds.Qq);
+                    services.Platforms.Register(new PlatformHandle { Id = BodyIds.Qq, IsConnected = () => true });
+                    services.Providers = new FakeVisionDirectory { Endpoint = new LlmEndpointData
+                        { ApiKey = "offline-test", BaseUrl = "https://camera.invalid", Model = "offline-image" } };
+                    manager.RegisterExternal(new QqImageGenPlugin(), pluginDataDirectory: path + ".data");
+                    moment.Content = "今天过得怎么样";
+                    var agent = new AgentSequenceLlm("{\"step\":\"finish\",\"reply\":\"在听呢。\"}");
+                    new AgentLoopLogic(agent).RunAsync(turn, "", () => manager.GetAvailableActionCatalog(turn),
+                        (_, _) => throw new Exception("纯文字选择不应执行相机"), default).GetAwaiter().GetResult();
+                    Require(agent.Requests.Single().Contains(QqImageGenPrompts.AgentUsage),
+                        "真实相机目录须把主动分享语义传入 Agent");
+                    Require(agent.Requests.Single().Contains(QqImageGenPrompts.AgentBoundary),
+                        "真实相机目录须保留分享边界");
+                    Require(agent.Requests.Single().Contains("【相机此刻】"), "真实相机动态回执须进入 Agent");
+                    Require(!agent.Requests.Single().Contains("旧心智流程"), "不能带入旧 image 根协议");
+                    services.Providers = null;
+                    var unavailable = new AgentSequenceLlm("{\"step\":\"finish\",\"reply\":\"在听呢。\"}");
+                    new AgentLoopLogic(unavailable).RunAsync(turn, "", () => manager.GetAvailableActionCatalog(turn),
+                        (_, _) => throw new Exception("不可用相机不能执行"), default).GetAwaiter().GetResult();
+                    Require(!unavailable.Requests.Single().Contains(QqImageGenPrompts.AgentUsage) &&
+                            !unavailable.Requests.Single().Contains("【相机此刻】"),
+                        "相机未配置时不得提示主动调用不可用能力");
                 }
             }
         }

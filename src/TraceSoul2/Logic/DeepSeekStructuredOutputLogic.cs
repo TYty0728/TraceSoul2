@@ -22,7 +22,8 @@ namespace TraceSoul2.Logic
             string missingMessage,
             CancellationToken cancellationToken,
             string promptCacheKey = null,
-            Func<T, string> validationError = null)
+            Func<T, string> validationError = null,
+            Action<T, IReadOnlyCollection<string>> onParsed = null)
             where T : class
         {
             var raw = await client.CompleteJsonAsync(messages, cancellationToken, promptCacheKey);
@@ -30,7 +31,7 @@ namespace TraceSoul2.Logic
             T parsed;
             try
             {
-                parsed = Parse<T>(raw);
+                parsed = Parse<T>(raw, onParsed);
                 var detail = parsed == null ? null : validationError?.Invoke(parsed);
                 if (parsed != null && string.IsNullOrEmpty(detail) && (validator == null || validator(parsed))) return parsed;
                 throw new InvalidOperationException(string.IsNullOrEmpty(detail) ? missingMessage : detail);
@@ -51,7 +52,7 @@ namespace TraceSoul2.Logic
             var repairedRaw = await client.CompleteJsonAsync(repair, cancellationToken, promptCacheKey);
             try
             {
-                parsed = Parse<T>(repairedRaw);
+                parsed = Parse<T>(repairedRaw, onParsed);
                 var detail = parsed == null ? null : validationError?.Invoke(parsed);
                 if (parsed != null && string.IsNullOrEmpty(detail) && (validator == null || validator(parsed))) return parsed;
                 throw new InvalidOperationException(string.IsNullOrEmpty(detail) ? missingMessage : detail);
@@ -167,9 +168,18 @@ namespace TraceSoul2.Logic
             return inString || depth != 0;
         }
 
-        private static T Parse<T>(string raw) where T : class
+        private static T Parse<T>(string raw, Action<T, IReadOnlyCollection<string>> onParsed = null) where T : class
         {
-            return TraceJson.FromJson<T>(EscapeRawControlsInJsonStrings(StripCodeFence(raw)));
+            var json = EscapeRawControlsInJsonStrings(StripCodeFence(raw));
+            var result = TraceJson.FromJson<T>(json);
+            if (result != null && onParsed != null)
+            {
+                using var document = JsonDocument.Parse(json);
+                var fields = new HashSet<string>(StringComparer.OrdinalIgnoreCase);
+                foreach (var field in document.RootElement.EnumerateObject()) fields.Add(field.Name);
+                onParsed(result, fields);
+            }
+            return result;
         }
 
         /// <summary>

@@ -4,6 +4,37 @@ using SQLite;
 
 namespace TraceSoul2.Data
 {
+    /// <summary>白天追加的当下切片。内容是当时的感受/轨迹，不是经过确认的长期事实。</summary>
+    [Table("runtime_slices")]
+    public sealed class RuntimeSliceRecord
+    {
+        [PrimaryKey] public string Id { get; set; }
+        [Indexed] public string RootConversationId { get; set; }
+        [Indexed] public string ContextConversationId { get; set; }
+        [Indexed] public string DayKey { get; set; }
+        public string MomentId { get; set; }
+        public string MemoryVisibility { get; set; }
+        public string SnapshotJson { get; set; }
+        public long CreatedUnixMs { get; set; }
+        public string ReviewId { get; set; }
+    }
+
+    /// <summary>夜间形成的经历/感受拼图，保留切片依据；不等同于稳定人格结论。</summary>
+    [Table("runtime_day_reviews")]
+    public sealed class RuntimeDayReviewRecord
+    {
+        [PrimaryKey] public string Id { get; set; }
+        [Indexed] public string RootConversationId { get; set; }
+        [Indexed] public string ContextConversationId { get; set; }
+        [Indexed] public string DayKey { get; set; }
+        public string MemoryVisibility { get; set; }
+        public string Summary { get; set; }
+        public string SliceIdsJson { get; set; }
+        public string MomentIdsJson { get; set; }
+        public long FirstUnixMs { get; set; }
+        public long CreatedUnixMs { get; set; }
+    }
+
     [Serializable]
     public sealed class AttentionItemData
     {
@@ -24,6 +55,7 @@ namespace TraceSoul2.Data
     public sealed class InnerRuntimeData
     {
         public string ConversationId { get; set; }
+        public EnvironmentSnapshotData Environment { get; set; }
         public string SnapshotId { get; set; }
         public int Revision { get; set; }
         public string Narrative { get; set; }
@@ -46,6 +78,7 @@ namespace TraceSoul2.Data
     {
         [PrimaryKey]
         public string ConversationId { get; set; }
+        public string EnvironmentJson { get; set; }
         public string SnapshotId { get; set; }
         public int Revision { get; set; }
         public string Narrative { get; set; }

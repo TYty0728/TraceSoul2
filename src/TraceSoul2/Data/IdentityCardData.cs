@@ -57,6 +57,9 @@ namespace TraceSoul2.Data
         public string Slot { get; set; }
 
         public string Body { get; set; }
+        public string Origin { get; set; }
+        public bool Pinned { get; set; }
+        public string CognitionSourcesJson { get; set; }
         public int Revision { get; set; }
         public string SourceMomentId { get; set; }
         public long UpdatedUnixMs { get; set; }

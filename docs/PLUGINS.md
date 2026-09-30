@@ -1,5 +1,9 @@
 # 插件体系（身体上的器官包）
 
+当前源码 PluginApi **1.9.0** 还增加认知来源、身份投影及昼夜切片数据契约，没有新增存储接口必需方法。见 [PluginApi](../Tools/PluginApi/README.md)。
+
+PluginApi 1.8 起增加通用环境契约；旧插件默认仅私密启用，公开能力须声明 `SupportsPublicEnvironment` 并保证数据和输出目标遵守本轮环境。旧构造签名保留，Host/插件需一起重建。详见 [在场环境](RUNTIME_ENVIRONMENT.md)。
+
 PluginApi 1.5 源码新增持续执行、设备进度和取消契约，Agent 可独立调用语音/动作能力。接入方式与兼容边界见 [AGENT_HARNESS](AGENT_HARNESS.md)。
 
 插件不是内核。身份、内心、记忆、时间、感官目录挂在贡献总线上，但**不是可关的插件**。控制台「插件」页按 **平台 → 器官** 分层：上层是 QQ / 游戏这类身体，下面才是表情 / 语音 / 生图 / 说说 / 签名。三层定义与休眠规则见 [PLUGIN_LAYERS.md](PLUGIN_LAYERS.md)。
