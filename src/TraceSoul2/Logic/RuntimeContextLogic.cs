@@ -65,9 +65,11 @@ namespace TraceSoul2.Logic
                 .Append(TimeLanguageUtil.ElapsedZh(last.CreatedUnixMs, DateTimeOffset.UtcNow.ToUnixTimeMilliseconds())).AppendLine("。");
             if (!EnvironmentLogic.IsPublic(turn))
             {
-                var items = storage.GetTodayNewItems(turn.ConversationId, MemoryDayLogic.CurrentStart(DateTimeOffset.Now).ToUnixTimeMilliseconds(), 10);
+                var items = storage is TraceSoul2.Manager.SqliteMemoryManager sqlite
+                    ? sqlite.GetTodayNewItemsByDay(turn.ConversationId, MemoryDayLogic.CurrentDayKey(DateTimeOffset.Now))
+                    : storage.GetTodayNewItems(turn.ConversationId, MemoryDayLogic.CurrentStart(DateTimeOffset.Now).ToUnixTimeMilliseconds(), 20);
                 if (items?.Count > 0) builder.AppendLine("今日新识：").AppendLine(string.Join("\n", items.Select(x => "- " + x.Content)));
-                var trajectory = storage.LoadDayTrajectory(MemoryDayLogic.CurrentDayKey(DateTimeOffset.Now));
+                var trajectory = DayTrajectoryLogic.Read(storage, turn.ConversationId, MemoryDayLogic.CurrentDayKey(DateTimeOffset.Now));
                 if (!string.IsNullOrWhiteSpace(trajectory?.Text)) builder.Append("当天轨迹：").AppendLine(trajectory.Text.Trim());
             }
             return builder.ToString();

@@ -7,6 +7,7 @@ using System.Text;
 using System.Text.Json;
 using System.Threading;
 using TraceSoul2.Data;
+using TraceSoul2.Logic;
 
 namespace TraceSoul2.Migrate
 {
@@ -247,8 +248,7 @@ namespace TraceSoul2.Migrate
             var timeText = BuildTimeText();
             builder.AppendLine();
             builder.AppendLine(timeText);
-            var trajectory = context.Store.LoadDayTrajectory(
-                DateTimeOffset.Now.ToOffset(MigrationContext.ChinaOffset).AddHours(-4).ToString("yyyy-MM-dd"));
+            var trajectory = DayTrajectoryLogic.Read(context.Store, MigrationContext.ConversationId, MemoryDayLogic.CurrentDayKey(DateTimeOffset.Now));
             if (trajectory != null && !string.IsNullOrWhiteSpace(trajectory.Text))
             {
                 builder.AppendLine();

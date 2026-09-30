@@ -129,7 +129,7 @@ namespace TraceSoul2.Logic
             builder.Append(CorePrompts.IdleDeed.DoingPrefix)
                 .AppendLine(doing.Length == 0 ? CorePrompts.IdleDeed.Empty : doing);
 
-            var trajectory = turn.Services.Storage.LoadDayTrajectory(MemoryDayLogic.CurrentDayKey(now));
+            var trajectory = DayTrajectoryLogic.Read(turn.Services.Storage, turn.ConversationId, MemoryDayLogic.CurrentDayKey(now));
             var today = trajectory == null ? string.Empty : OneLine(trajectory.Text, 1200);
             if (today.Length > 0)
                 builder.Append(CorePrompts.IdleDeed.TodayPrefix).AppendLine(today);

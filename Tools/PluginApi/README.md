@@ -1,6 +1,10 @@
 # TraceSoul2.PluginApi
 
-TraceSoul2 运行时插件的契约（源码 **1.9.0**；已发布产品 **0.1.19** 使用 1.7.0）。正式资产状态见 [版本说明](../../docs/RELEASES.md)。
+TraceSoul2 运行时插件的契约（源码 **1.11.0**，产品 **0.1.22**）。正式资产状态见 [版本说明](../../docs/RELEASES.md)。
+
+## 1.11 起
+
+`AgentStepData` 增加仅供运行时保存的 `state_fields` 和 `applied_goal_updates`，模型 DTO 不增加字段。`TurnPayloadSnapshotData.agent_decision` 保存完整 Agent 决策，旧 `mind_decision` 保持兼容；增加 `DayTrajectoryEntryRecord` 来源条目。没有新增 `IMemoryStore` 必须实现的方法，宿主及官方插件应一起重建。
 
 ## 1.9 起
 

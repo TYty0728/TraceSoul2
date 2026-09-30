@@ -16,7 +16,7 @@ namespace TraceSoul2.Plugins.Builtin
         {
             Id = PluginId,
             DisplayName = "内心",
-            Version = "2.0.0",
+            Version = "2.0.1",
             Author = "TraceSoul2",
             Role = PluginRoleValues.Kernel,
             Description = "每轮只挂载一句当前内心；需要时提供完整自省，并在本轮完成时消费属于自己的变化。"
@@ -95,7 +95,7 @@ namespace TraceSoul2.Plugins.Builtin
                             content = content
                         });
                     }
-                    if (held.Count > 0) attention = held.Take(2).ToList();
+                    if (held.Count > 0) attention = held.Take(3).ToList();
                 }
                 var linksJson = output.GetField("puzzle_attention_links", null);
                 if (attention != null && !string.IsNullOrWhiteSpace(linksJson))

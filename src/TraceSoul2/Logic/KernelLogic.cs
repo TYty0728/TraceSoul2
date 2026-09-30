@@ -1221,8 +1221,7 @@ namespace TraceSoul2.Logic
             InnerRuntimeData runtime = null;
             if (turn != null && turn.Services != null && turn.Services.Storage != null)
                 runtime = turn.Services.Storage.LoadOrCreateInnerRuntime(turn.ConversationId);
-            // 真实对话是新的心理时刻：旧碎片默认沉下去，避免“自己问过的问题”
-            // 被下一拍误认成仍需完成的目标。心跳等非对话入口仍可保留有温度的碎片。
+            // Agent 的状态补丁保留字段存在性；旧 Mind 入口继续使用原结算规则。
             var proposed = InnerLifeLogic.ProposeFromMind(mind, runtime, turn != null && turn.RequiresExpression);
             if (InnerLifeLogic.HasProposedWrite(proposed))
             {
@@ -1491,6 +1490,7 @@ namespace TraceSoul2.Logic
         {
             var snapshot = new TurnPayloadSnapshotData();
             snapshot.mind_decision = mindDecision == null ? null : MindLogic.Normalize(mindDecision);
+            snapshot.agent_decision = mindDecision as AgentStepData;
             foreach (var block in turn.Workspace.ContextBlocks)
             {
                 if (block == null) continue;

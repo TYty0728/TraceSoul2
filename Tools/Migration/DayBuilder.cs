@@ -357,7 +357,7 @@ namespace TraceSoul2.Migrate
             var otherCard = CurrentBody(IdentityCardSlotValues.Other);
             var relationCard = CurrentBody(IdentityCardSlotValues.Relation);
             var expressionCard = CurrentBody(IdentityCardSlotValues.ExpressionHabit);
-            var trajectory = context.Store.LoadDayTrajectory(dayKey);
+            var trajectory = DayTrajectoryLogic.Read(context.Store, MigrationContext.ConversationId, dayKey);
             var todayNewItems = context.Store.GetTodayNewItemsByDay(
                 MigrationContext.ConversationId, dayKey);
             var currentInner = context.Store.LoadOrCreateInnerRuntime(MigrationContext.ConversationId);

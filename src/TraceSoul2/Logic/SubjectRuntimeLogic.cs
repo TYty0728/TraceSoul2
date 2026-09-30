@@ -55,20 +55,25 @@ namespace TraceSoul2.Logic
             var current = Read(turn.Services.Storage, PuzzleViewLogic.Root(turn));
             turn.Workspace.GetOrCreateState(StoreId, () => new TurnVersion { Revision = current.Revision });
         }
-        private static bool Visible(TraceTurnContext turn, SubjectFragment fragment) => fragment != null &&
-            (!EnvironmentLogic.IsPublic(turn) || fragment.Context == turn.ConversationId);
-
         public static InnerRuntimeData View(TraceTurnContext turn)
         {
             var local = turn.Services.Storage.LoadOrCreateInnerRuntime(turn.ConversationId);
             if (turn.Environment == null) return local;
-            var current = Read(turn.Services.Storage, PuzzleViewLogic.Root(turn));
-            local.Narrative = Visible(turn, current.Narrative) ? current.Narrative.Text : "";
-            local.Mood = Visible(turn, current.Mood) ? current.Mood.Text : AffectLabel(current.Affect);
-            local.Attention = Visible(turn, current.Attention)
+            return View(turn.Services.Storage, PuzzleViewLogic.Root(turn), turn.ConversationId,
+                EnvironmentLogic.IsPublic(turn), EnvironmentLogic.IsHumanInput(turn));
+        }
+
+        public static InnerRuntimeData View(IMemoryStore store, string root, string context, bool isPublic, bool humanInput = false)
+        {
+            var local = store.LoadOrCreateInnerRuntime(context);
+            var current = Read(store, root);
+            bool VisibleFragment(SubjectFragment fragment) => fragment != null && (!isPublic || fragment.Context == context);
+            local.Narrative = VisibleFragment(current.Narrative) ? current.Narrative.Text : "";
+            local.Mood = VisibleFragment(current.Mood) ? current.Mood.Text : AffectLabel(current.Affect);
+            local.Attention = VisibleFragment(current.Attention)
                 ? PuzzleViewLogic.Read<List<AttentionItemData>>(current.Attention.Text) ?? new() : new();
-            local.Asleep = current.Asleep && !EnvironmentLogic.IsHumanInput(turn);
-            local.Idle = current.Idle && !EnvironmentLogic.IsHumanInput(turn);
+            local.Asleep = current.Asleep && !humanInput;
+            local.Idle = current.Idle && !humanInput;
             return local;
         }
 
@@ -85,8 +90,8 @@ namespace TraceSoul2.Logic
                 Visibility = turn.Environment.Visibility, MomentId = turn.Moment.Id,
                 UpdatedUnixMs = DateTimeOffset.UtcNow.ToUnixTimeMilliseconds() };
             if (!string.IsNullOrWhiteSpace(step.inner)) current.Narrative = Fragment(local.Narrative);
-            if (step.mood_changed && !string.IsNullOrWhiteSpace(step.mood)) current.Mood = Fragment(local.Mood);
-            if (step.attention != null) current.Attention = Fragment(TraceJson.ToJson(local.Attention));
+            if (step.HasStateField("mood") && !string.IsNullOrWhiteSpace(step.mood)) current.Mood = Fragment(local.Mood);
+            if (step.HasStateField("attention")) current.Attention = Fragment(TraceJson.ToJson(local.Attention));
             if (!string.IsNullOrEmpty(step.affect) && ValidAffect(step.affect)) current.Affect = step.affect;
             current.Asleep = step.sleep;
             current.Idle = local.Idle;

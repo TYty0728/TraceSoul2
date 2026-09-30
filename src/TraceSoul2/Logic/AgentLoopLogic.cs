@@ -31,6 +31,7 @@ namespace TraceSoul2.Logic
             var stable = BuildStable(turn);
             var history = new List<object>();
             var pendingState = new AgentTurnStateLogic();
+            var appliedGoals = new List<AgentGoalUpdateData>();
             var callIds = new Dictionary<string, string>(StringComparer.Ordinal);
             var executed = new Dictionary<string, TraceCapabilityResultData>(StringComparer.Ordinal);
             var groups = new Dictionary<string, string>(StringComparer.Ordinal);
@@ -65,9 +66,12 @@ namespace TraceSoul2.Logic
                 pendingState.Update(output, providedFields);
                 pendingState.ApplyTo(output);
                 var step = output.ToRuntime();
+                step.state_fields = pendingState.Values.Keys.ToList();
                 MindLogic.Normalize(step);
                 // 明确反馈在执行或发送前落库；后续行动失败也不会抹掉已经听取的调整。
                 GoalMemoryLogic.Apply(turn, step.goal_updates);
+                appliedGoals.AddRange(step.goal_updates ?? new());
+                step.applied_goal_updates = appliedGoals.ToList();
                 turn.Services.LogTiming(turn.TraceId, "Agent 推进", detail: "step=" + step.step + "｜round=" + (round + 1));
                 if (step.actions == null || step.actions.Count == 0)
                 {
