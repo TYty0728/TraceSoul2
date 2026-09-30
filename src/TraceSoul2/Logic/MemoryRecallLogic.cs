@@ -24,6 +24,7 @@ namespace TraceSoul2.Logic
         {
             if (turn == null || turn.Services == null || turn.Services.Storage == null)
                 return string.Empty;
+            if (EnvironmentLogic.IsPublic(turn)) return RecallPublic(turn, turn.Moment?.Content, topK) + RecallPuzzle(turn, turn.Moment?.Content, topK);
             var storage = turn.Services.Storage;
             var indexes = storage.GetActiveEventIndexes() ?? new List<EventIndexRecord>();
             var query = BuildPreludeQuery(turn);
@@ -45,8 +46,19 @@ namespace TraceSoul2.Logic
             return FormatPreview(picked, indexById, new List<CognitionSliceRecord>()) + "\n" + cognitionText;
         }
 
+        private static string RecallPublic(TraceTurnContext turn, string query, int topK)
+        {
+            var items = turn.Services.Storage.GetRecentDialogueMoments(turn.ConversationId, 200)
+                .Where(x => x.Id != turn.Moment?.Id && x.ConversationId == turn.ConversationId && !string.IsNullOrWhiteSpace(x.Content))
+                .OrderByDescending(x => (query ?? "").Any(c => !char.IsWhiteSpace(c) && x.Content.Contains(c)))
+                .ThenByDescending(x => x.CreatedUnixMs).Take(Math.Clamp(topK, 1, 10)).ToList();
+            return items.Count == 0 ? "" : "【本环境的真实经历】\n" + string.Join("\n", items.Select(x =>
+                "- " + EnvironmentLogic.PublicDialogue(x)));
+        }
+
         public static List<LifeTagRecord> ListTagCandidates(TraceTurnContext turn, int cap)
         {
+            if (EnvironmentLogic.IsPublic(turn)) return new List<LifeTagRecord>();
             cap = Math.Max(1, cap);
             var storage = turn == null || turn.Services == null ? null : turn.Services.Storage;
             var source = storage == null ? new List<LifeTagRecord>() : storage.GetActiveLifeTags() ?? new List<LifeTagRecord>();
@@ -116,6 +128,13 @@ namespace TraceSoul2.Logic
             hasEvidence = false;
             if (turn == null || turn.Services == null || turn.Services.Storage == null)
                 return string.Empty;
+            if (EnvironmentLogic.IsPublic(turn))
+            {
+                var recalled = RecallPublic(turn, mind?.query ?? turn.Moment?.Content, topK) +
+                    RecallPuzzle(turn, mind?.query ?? turn.Moment?.Content, topK);
+                hasEvidence = recalled.Length > 0;
+                return recalled;
+            }
             var storage = turn.Services.Storage;
             var query = mind == null || string.IsNullOrWhiteSpace(mind.query)
                 ? turn.Moment.Content
@@ -268,7 +287,7 @@ namespace TraceSoul2.Logic
             }
             if (turn.Moment != null && !string.IsNullOrWhiteSpace(turn.Moment.Content))
                 parts.Add(turn.Moment.Content.Trim());
-            var runtime = turn.Services.Storage.LoadOrCreateInnerRuntime(turn.ConversationId);
+            var runtime = SubjectRuntimeLogic.View(turn);
             var hold = InnerLifeLogic.FormatHold(runtime);
             if (hold.Length > 0) parts.Add("此刻仍关注：" + hold);
             var life = turn.Services.LifeState?.Load(turn.ConversationId);
@@ -312,18 +331,19 @@ namespace TraceSoul2.Logic
         internal static string RecallPuzzle(TraceTurnContext turn, string query, int topK)
         {
             var storage = turn.Services.Storage;
-            var tags = RankByMoment(turn.Services.Router, query, storage.GetActiveLifeTags(), 8);
+            var tags = EnvironmentLogic.IsPublic(turn) ? new List<LifeTagRecord>() : RankByMoment(turn.Services.Router, query, storage.GetActiveLifeTags(), 8);
             var adapter = new ContextRecallAdapter();
             const string heading = "【此刻唤起的长期拼图：理解可修订，依据不等于已完成行动】";
-            var runtime = storage.LoadOrCreateInnerRuntime(turn.ConversationId);
+            var runtime = SubjectRuntimeLogic.View(turn);
             var related = InnerLifeLogic.LiveAttention(runtime, DateTimeOffset.UtcNow.ToUnixTimeMilliseconds())
                 .SelectMany(x => x.source_refs ?? new List<string>()).Where(x => x != null && x.StartsWith("cognition:", StringComparison.Ordinal))
                 .Select(x => x.Substring(10)).Distinct().Take(6).ToList();
             var selected = adapter.Recall(new ContextRecallQuery { Text = query, RelatedIds = related,
                 Cues = tags.Select(x => x.Id).ToList(), MaxItems = Math.Max(0, Math.Min(10, topK)),
                 MaxChars = 3200 - heading.Length - Environment.NewLine.Length },
-                new IContextRecallSource[] { new CognitionContextRecallSource(storage) });
-            foreach (var item in selected) turn.Workspace.RecalledCognitionIds.Add(item.Id);
+                new IContextRecallSource[] { new CognitionContextRecallSource(storage, n => PuzzleViewLogic.CanRead(turn, n), m => PuzzleViewLogic.CanReadEvidence(turn, m)),
+                    new DelegateContextRecallSource("runtime_day", q => RuntimeSliceLogic.Recall(turn, q)) });
+            foreach (var item in selected.Where(x => x.SourceId == "cognition")) turn.Workspace.RecalledCognitionIds.Add(item.Id);
             return adapter.RenderNatural(heading, selected);
         }
 

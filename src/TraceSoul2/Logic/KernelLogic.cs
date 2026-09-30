@@ -81,6 +81,10 @@ namespace TraceSoul2.Logic
                 throw new InvalidOperationException("相处开始前，需要先保存两个人的名字。");
             var source = plugins.ReceiveMoment(sourceId, pair.Username, userText, null);
             source.TraceId = traceId;
+            source.Environment = new EnvironmentObservationData { PlatformId = "builtin.dialogue",
+                SessionType = "private", SessionId = "local", SpeakerId = "local-owner",
+                SpeakerName = pair.Username, ExclusivePair = true, DirectAddress = true,
+                ParticipantIds = new[] { "local-owner" } };
             source.Breaking = true;
             return ProcessPluginEventAsync(
                 conversationId, source, historyWindowMax, cancellationToken, historyWindowAlign);
@@ -108,13 +112,38 @@ namespace TraceSoul2.Logic
             var historyWindow = CommonContextPackLogic.NormalizeHistoryWindow(
                 historyWindowMax, historyWindowAlign);
 
+            var environment = EnvironmentLogic.Resolve(storage, conversationId, source);
+            if (environment.Visibility == "public" && !pair.IsHumanMoment(source.Role))
+            {
+                storage.SaveOperationalEvent(new OperationalEventRecord { Id = Guid.NewGuid().ToString("N"),
+                    ConversationId = conversationId, Kind = OperationalEventKindValues.PluginRuntime,
+                    SourcePluginId = "kernel.environment", SourceEventId = source.ExternalEventId, TraceId = source.TraceId,
+                    Role = "system_event", Content = "后台目标未确认为私密，本次未执行或发送。",
+                    EnvironmentJson = TraceSoul2.Util.TraceJson.ToJson(environment),
+                    OccurredUnixMs = DateTimeOffset.UtcNow.ToUnixTimeMilliseconds(), CreatedUnixMs = DateTimeOffset.UtcNow.ToUnixTimeMilliseconds() });
+                plugins.Services.LogTiming(source.TraceId, "后台环境未确认，未执行或发送");
+                return new ChatTurnResultData(string.Empty, "wait", "环境待确认", "后台目标未确认为私密，本次未执行或发送",
+                    new List<TraceContextBlockData>(), new List<BrainFacetOutputData>(), new List<TraceCapabilityResultData>());
+            }
+            EnvironmentLogic.Remember(storage, environment);
+            conversationId = environment.ContextConversationId;
             var prepareTimer = Stopwatch.StartNew();
             var wake = KernelWakeLogic.Resolve(source);
             var inner = storage.LoadOrCreateInnerRuntime(conversationId);
+            if (inner.Environment != environment && conversationId != environment.RootConversationId)
+            {
+                inner.Environment = environment;
+                inner.Revision++;
+                inner.SnapshotId = Guid.NewGuid().ToString("N");
+                storage.SaveInnerRuntime(inner);
+            }
+            var subject = SubjectRuntimeLogic.Read(storage, environment.RootConversationId);
+            inner.Asleep = subject.Asleep;
+            inner.Idle = subject.Idle;
             if (inner.Asleep && HeartbeatLogic.ShouldSkipWhileAsleep(source, pair, wake) &&
                 !HeartbeatLogic.IsBreaking(source, pair))
             {
-                PersistPluginEvent(conversationId, source);
+                PersistPluginEvent(conversationId, source, environment);
                 plugins.Services.LogTiming(source.TraceId, "睡着，跳过非打破性 Moment",
                     prepareTimer.ElapsedMilliseconds);
                 return new ChatTurnResultData(
@@ -126,7 +155,7 @@ namespace TraceSoul2.Logic
             if (inner.Idle && HeartbeatLogic.ShouldSkipWhileIdle(source, pair) &&
                 !HeartbeatLogic.IsBreaking(source, pair))
             {
-                PersistPluginEvent(conversationId, source);
+                PersistPluginEvent(conversationId, source, environment);
                 plugins.Services.LogTiming(source.TraceId, "空闲，跳过旧版连续思考事件",
                     prepareTimer.ElapsedMilliseconds);
                 return new ChatTurnResultData(
@@ -148,7 +177,7 @@ namespace TraceSoul2.Logic
             }
 
             // 运行事件也会临时成为本轮刺激，但不会进入可复盘的 Moment 账本。
-            var triggerMoment = PersistPluginEvent(conversationId, source);
+            var triggerMoment = PersistPluginEvent(conversationId, source, environment);
             if ((inner.Asleep || inner.Idle) && HeartbeatLogic.IsBreaking(source, pair))
             {
                 var woken = InnerLifeLogic.WithAwake(inner, triggerMoment.Id,
@@ -175,11 +204,10 @@ namespace TraceSoul2.Logic
                 triggerMoment,
                 recent,
                 historyWindow.Min,
-                wake == KernelWakeValues.Dialogue && pair.IsHumanMoment(source.Role),
+                wake == KernelWakeValues.Dialogue && pair.IsHumanMoment(source.Role) && environment.DirectAddress,
                 plugins.Services,
-                wake,
-                source.TraceId,
-                historyWindow.Align);
+                environment, wake, source.TraceId, historyWindow.Align);
+            SubjectRuntimeLogic.Begin(turn);
             MouthLogic.NoticeInbound(source, turn);
             // console 观察窗：任何来源的入站消息都在 console 留一份运行痕迹（不入对话历史）。
             if (!source.IsOperational &&
@@ -434,6 +462,13 @@ namespace TraceSoul2.Logic
             StampDecision(final, decision);
             MergePrivateFacets(final, decision, turn);
             await plugins.ApplyFacetOutputsAsync(final.facet_outputs, turn, cancellationToken);
+
+            // 决策状态/下一次唤醒不依赖平台发送成功。发送回执仍在执行后独立入库。
+            var persistTimer = Stopwatch.StartNew();
+            await SyncHeartbeatAsync(turn, catalog, decision, cancellationToken);
+            RuntimeSliceLogic.Capture(turn, decision as AgentStepData);
+            SubjectRuntimeLogic.Commit(turn, decision as AgentStepData);
+            plugins.Services.LogTiming(turn.TraceId, "轮次状态与后续唤醒已提交", persistTimer.ElapsedMilliseconds);
             if (final.should_express)
                 expression = await ExecuteExpressionAsync(final, turn, turn.ConversationId, cancellationToken);
 
@@ -447,11 +482,6 @@ namespace TraceSoul2.Logic
                 await TryCompleteExpressionAsync(turn);
             }
 
-            var persistTimer = Stopwatch.StartNew();
-            // 白天只维护本日实时样本（内心/生活/轨迹/今日新识）。长期事件、认知与身份卡
-            // 统一留给完整日终复盘，避免同一批 Moment 被多条归档旁路提前消费。
-            await SyncHeartbeatAsync(turn, catalog, decision, cancellationToken);
-            plugins.Services.LogTiming(turn.TraceId, "轮后实时状态处理完成", persistTimer.ElapsedMilliseconds);
             return new AgentTurnResult(final, expression, responseFlushed, decision);
         }
 
@@ -523,7 +553,7 @@ namespace TraceSoul2.Logic
                     }
                     if (result?.ProducedEvent != null &&
                         ((result.Status != "running" && result.Status != "accepted") || result.ProducedEvent.IsOperational))
-                        PersistPluginEvent(turn.ConversationId, result.ProducedEvent);
+                        PersistPluginEvent(turn.ConversationId, result.ProducedEvent, turn.Environment);
                     // 平台合并发送必须在反馈给 Agent 前提交，避免把仅暂存的语音/文字当作已发送。
                     if (descriptor.Kind == TraceContributionKindValues.Effector)
                         await RunTurnCompleteHooksAsync(turn);
@@ -562,7 +592,7 @@ namespace TraceSoul2.Logic
                 if (expression.Status != "success" || expression.ProducedEvent == null)
                     throw new InvalidOperationException("外部表达器执行失败：" + expression.Summary);
                 turn.Workspace.Results.Add(expression);
-                PersistPluginEvent(conversationId, expression.ProducedEvent);
+                PersistPluginEvent(conversationId, expression.ProducedEvent, turn.Environment);
             }
             // console 观察窗：她说的每句话都在 console 留一份运行痕迹；
             // 没有活的真实身体时，这份打印就是保底出口。调试口直答（文字本就走了 console）不重复打印。
@@ -624,7 +654,7 @@ namespace TraceSoul2.Logic
             {
                 var extraResult = await ExecuteWithQzoneMediaAsync(extraCall, turn, cancellationToken);
                 if (extraResult != null && extraResult.ProducedEvent != null)
-                    PersistPluginEvent(conversationId, extraResult.ProducedEvent);
+                    PersistPluginEvent(conversationId, extraResult.ProducedEvent, turn.Environment);
                 turn.Workspace.Results.Add(extraResult);
             }
             catch (Exception exception)
@@ -724,7 +754,7 @@ namespace TraceSoul2.Logic
                 var extraResult = await plugins.ExecuteAsync(sendCall, turn, cancellationToken);
                 var sent = extraResult != null && extraResult.Status == "success";
                 if (sent && extraResult.ProducedEvent != null)
-                    PersistPluginEvent(conversationId, extraResult.ProducedEvent);
+                    PersistPluginEvent(conversationId, extraResult.ProducedEvent, turn.Environment);
                 plugins.Services.LogTiming(turn.TraceId, sent ? "TA的相机 后台图已发出" : "TA的相机 后台发图未成功", 0,
                     extraResult == null ? "null" : extraResult.Summary);
             }
@@ -1020,7 +1050,7 @@ namespace TraceSoul2.Logic
                 var result = await ExecuteWithQzoneMediaAsync(call, turn, cancellationToken);
                 turn.Workspace.Results.Add(result);
                 if (result != null && result.ProducedEvent != null)
-                    PersistPluginEvent(turn.ConversationId, result.ProducedEvent);
+                    PersistPluginEvent(turn.ConversationId, result.ProducedEvent, turn.Environment);
                 return result;
             }
             catch (Exception exception)
@@ -1245,7 +1275,7 @@ namespace TraceSoul2.Logic
 
         private static void ApplyLifeState(MindDecisionData mind, TraceTurnContext turn)
         {
-            if (mind == null || turn == null || turn.Services == null || turn.Services.LifeState == null)
+            if (EnvironmentLogic.IsPublic(turn) || mind == null || turn == null || turn.Services == null || turn.Services.LifeState == null)
                 return;
             var location = mind.LocationValue();
             var activity = (mind.activity ?? string.Empty).Trim();
@@ -1275,6 +1305,7 @@ namespace TraceSoul2.Logic
             MindDecisionData decision,
             CancellationToken cancellationToken)
         {
+            if (EnvironmentLogic.IsPublic(turn)) return;
             if (turn == null || turn.Services == null || turn.Services.Storage == null) return;
             var runtime = turn.Services.Storage.LoadOrCreateInnerRuntime(turn.ConversationId);
             var heartbeatTurn = HeartbeatLogic.IsHeartbeatContent(
@@ -1489,9 +1520,11 @@ namespace TraceSoul2.Logic
                 .Select(x => x.facet_id + " | changed=" + x.changed + " | " + x.summary));
         }
 
-        private MomentRecord PersistPluginEvent(string conversationId, PluginEventData source)
+        private MomentRecord PersistPluginEvent(string conversationId, PluginEventData source, EnvironmentSnapshotData environment = null)
         {
             var moment = ToMoment(conversationId, source);
+            moment.EnvironmentJson = environment == null ? null : TraceSoul2.Util.TraceJson.ToJson(environment);
+            moment.MemoryVisibility = environment?.Visibility ?? "private";
             if (!source.IsOperational)
             {
                 storage.SaveMoment(moment);
@@ -1512,6 +1545,7 @@ namespace TraceSoul2.Logic
                 Realm = moment.Realm,
                 EvidenceType = moment.EvidenceType,
                 PayloadJson = moment.PayloadJson,
+                EnvironmentJson = moment.EnvironmentJson,
                 OccurredUnixMs = moment.CreatedUnixMs,
                 CreatedUnixMs = DateTimeOffset.UtcNow.ToUnixTimeMilliseconds()
             });

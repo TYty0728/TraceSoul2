@@ -97,6 +97,7 @@ namespace TraceSoul2.Data
         public string TraceId { get; set; }
         public string PluginId { get; set; }
         public string ConversationId { get; set; }
+        public EnvironmentObservationData Environment { get; set; }
         public string ExternalEventId { get; set; }
         public string Role { get; set; }
         public string Content { get; set; }
@@ -250,6 +251,10 @@ namespace TraceSoul2.Data
 
         // 认知主体与指向对象分开：OwnerId 通常是 Brain，About 描述认知关于谁/什么。
         public string Domains { get; set; }
+        public string ContextConversationId { get; set; }
+        public string MemoryVisibility { get; set; }
+        public string SubjectKey { get; set; }
+        public string IdentitySlot { get; set; }
         public long LastConfirmedUnixMs { get; set; }
         public long LastChallengedUnixMs { get; set; }
         public string About { get; set; }
@@ -409,6 +414,7 @@ namespace TraceSoul2.Data
         public string target_id;
         public string summary;
         public string subtype;
+        public string identity_slot;
         public List<string> domains = new List<string>();
         public List<string> evidence_moment_ids = new List<string>();
         public string related_id;

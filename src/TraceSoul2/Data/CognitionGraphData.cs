@@ -11,7 +11,7 @@ namespace TraceSoul2.Data
             (domains ?? Array.Empty<string>()).Where(LifeRouteValues.IsDomain)
             .Select(x => x.ToLowerInvariant()).Distinct().OrderBy(x => x, StringComparer.Ordinal));
         public static string Label(string domains) => string.Join("、", (domains ?? "").Split(',')
-            .Select(x => x == "user" ? "他" : x == "world" ? "世界" : x == "ass" ? "我" : x == "relation" ? "我和他" : "待分类"));
+            .Select(x => x == "user" ? "他" : x == "world" ? "世界" : x == "ass" ? "我" : x == "relation" ? "关系" : "待分类"));
         public static bool Live(string status) => status == "active" || status == "weakened";
     }
 }

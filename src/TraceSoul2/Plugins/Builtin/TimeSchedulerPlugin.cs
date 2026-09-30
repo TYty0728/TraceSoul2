@@ -21,7 +21,7 @@ namespace TraceSoul2.Plugins.Builtin
         {
             Id = PluginId,
             DisplayName = "时间与调度",
-            Version = "1.1.0",
+            Version = "1.1.1",
             Author = "TraceSoul2",
             Role = PluginRoleValues.Kernel,
             Description = "提供当前时间、今天两人的轨迹、未来计划；到期只叫醒中枢该跑的那一套循环，不直接改短卡或开口。"
@@ -29,7 +29,7 @@ namespace TraceSoul2.Plugins.Builtin
 
         public void Register(TracePluginContext context)
         {
-            state = new SchedulerState(context.Services.Storage);
+            state = new SchedulerState(context.Services);
             context.AddMountedFacet(new TimeContextFacet(state));
             context.AddMountedFacet(new DayTrajectoryFacet());
             context.AddCallable(new TimeNowNerve());
@@ -48,6 +48,7 @@ namespace TraceSoul2.Plugins.Builtin
         {
             public string id;
             public string conversation_id;
+            public EnvironmentObservationData environment;
             public string content;
             public long due_unix_ms;
                     public string recurrence;
@@ -64,12 +65,14 @@ namespace TraceSoul2.Plugins.Builtin
         private sealed class SchedulerState
         {
             private readonly IMemoryStore storage;
+            private readonly TracePluginServices services;
             private readonly object gate = new object();
             private ScheduleDocument document;
 
-            public SchedulerState(IMemoryStore storage)
+            public SchedulerState(TracePluginServices services)
             {
-                this.storage = storage;
+                this.services = services;
+                storage = services.Storage;
                 var json = storage.LoadPluginDocument(PluginId, "schedules");
             try { document = string.IsNullOrWhiteSpace(json) ? null : TraceJson.FromJson<ScheduleDocument>(json); }
                 catch { document = null; }
@@ -91,7 +94,7 @@ namespace TraceSoul2.Plugins.Builtin
                 if (changed) SaveUnsafe();
             }
 
-            public ScheduleEntry Add(string conversationId, string content, long due, string recurrence, string wake = null)
+            public ScheduleEntry Add(string conversationId, string content, long due, string recurrence, string wake = null, EnvironmentObservationData environment = null)
             {
                 lock (gate)
                 {
@@ -99,6 +102,7 @@ namespace TraceSoul2.Plugins.Builtin
                     {
                         id = Guid.NewGuid().ToString("N"),
                         conversation_id = conversationId,
+                        environment = environment,
                         content = Limit(content.Trim(), 500),
                         due_unix_ms = due,
                         recurrence = NormalizeRecurrence(recurrence),
@@ -163,7 +167,7 @@ namespace TraceSoul2.Plugins.Builtin
                 }
             }
 
-            public ScheduleEntry EnsureHeartbeat(string conversationId, long dueUnixMs, string nextPlan)
+            public ScheduleEntry EnsureHeartbeat(string conversationId, long dueUnixMs, string nextPlan, EnvironmentObservationData environment = null)
             {
                 lock (gate)
                 {
@@ -178,6 +182,7 @@ namespace TraceSoul2.Plugins.Builtin
                     {
                         id = Guid.NewGuid().ToString("N"),
                         conversation_id = conversationId,
+                        environment = environment,
                         content = HeartbeatLogic.BuildContent(nextPlan),
                         due_unix_ms = dueUnixMs,
                         recurrence = "none",
@@ -230,11 +235,19 @@ namespace TraceSoul2.Plugins.Builtin
                     var events = new List<PluginEventData>();
                     foreach (var item in due)
                     {
+                        var heartbeat = HeartbeatLogic.IsHeartbeatContent(item.content);
+                        if (heartbeat && (!HeartbeatLogic.IsEnabled(services.HeartbeatMinMinutes, services.HeartbeatMaxMinutes) ||
+                            SubjectRuntimeLogic.Read(storage, item.conversation_id).Asleep))
+                        {
+                            item.enabled = false;
+                            continue;
+                        }
                         var wake = ResolveWake(item.content, item.wake);
                         events.Add(new PluginEventData
                         {
                             PluginId = PluginId,
                             ConversationId = item.conversation_id,
+                            Environment = item.environment,
                             ExternalEventId = "schedule:" + item.id + ":" + item.due_unix_ms,
                             Role = "system_event",
                             Content = TimeSchedulerPrompts.DuePrefix + item.content,
@@ -249,7 +262,14 @@ namespace TraceSoul2.Plugins.Builtin
                         });
                         var interval = item.recurrence == "daily" ? TimeSpan.FromDays(1).TotalMilliseconds
                             : item.recurrence == "weekly" ? TimeSpan.FromDays(7).TotalMilliseconds : 0;
-                        if (interval <= 0) item.enabled = false;
+                        if (heartbeat)
+                        {
+                            // 心跳是持续唤醒链，不是消费一次即结束的提醒。先持久保留下次机会，
+                            // 成功轮次再用明确计划替换/睡眠清除；失败或退出也不重放本次行动。
+                            item.due_unix_ms = checked(now + HeartbeatLogic.DefaultLongFollowUpMinutes * 60000L);
+                            item.content = HeartbeatLogic.BuildContent(HeartbeatLogic.DefaultNextPlan);
+                        }
+                        else if (interval <= 0) item.enabled = false;
                         else
                         {
                             do { item.due_unix_ms = checked(item.due_unix_ms + (long)interval); }
@@ -277,6 +297,7 @@ namespace TraceSoul2.Plugins.Builtin
                 {
                     id = value.id,
                     conversation_id = value.conversation_id,
+                    environment = value.environment,
                     content = value.content,
                     due_unix_ms = value.due_unix_ms,
                     recurrence = value.recurrence,
@@ -294,6 +315,7 @@ namespace TraceSoul2.Plugins.Builtin
             public TraceContributionDescriptorData Descriptor { get; } = new TraceContributionDescriptorData
             {
                 Id = "time.context",
+                SupportsPublicEnvironment = true,
                 Kind = TraceContributionKindValues.MountedFacet,
                 DisplayName = "当前时间感",
                 Description = TimeSchedulerPrompts.TimeContextDescription,
@@ -308,47 +330,8 @@ namespace TraceSoul2.Plugins.Builtin
             public Task<TraceContextBlockData> BuildContextAsync(TraceTurnContext context, CancellationToken token)
             {
                 var now = DateTimeOffset.Now;
-                var routing = MouthLogic.LoadState(
-                    context == null || context.Services == null ? null : context.Services.DataDirectory);
-                var scene = routing.scene;
-                var life = context == null || context.Services == null || context.Services.LifeState == null
-                    ? null : context.Services.LifeState.Load(context.ConversationId);
-                if (life != null && !string.IsNullOrWhiteSpace(life.location))
-                    scene = life.location;
                 var builder = new StringBuilder();
-                builder.Append(TimeSchedulerPrompts.NowPrefix)
-                    .Append(TimeLanguageUtil.NaturalNow(now))
-                    .Append("。身体场景：")
-                    .Append(BodySceneValues.Label(scene))
-                    .Append("。");
-                var doing = LifeStateLogic.FormatDoing(life);
-                if (doing.Length > 0)
-                    builder.Append("正在做：").Append(doing).Append("。");
-                if (context != null && context.Services != null && context.Services.Storage != null)
-                {
-                    var pair = context.Services.Storage.LoadPairIdentity();
-                    var lastReal = context.Services.Storage.GetRecentMoments(context.ConversationId, 200)
-                        .Where(x => x != null &&
-                                    (pair.IsHumanMoment(x.Role) || pair.IsCompanionMoment(x.Role)) &&
-                                    (context.Moment == null || x.Id != context.Moment.Id))
-                        .OrderByDescending(x => x.CreatedUnixMs)
-                        .FirstOrDefault();
-                    if (lastReal != null && lastReal.CreatedUnixMs > 0)
-                    {
-                        var lastTime = DateTimeOffset.FromUnixTimeMilliseconds(lastReal.CreatedUnixMs).ToLocalTime();
-                        builder.Append("距离上一段真实相处约")
-                            .Append(TimeLanguageUtil.ElapsedZh(lastReal.CreatedUnixMs, now.ToUnixTimeMilliseconds()))
-                            .Append("，上一段停在")
-                            .Append(lastTime.ToString("M月d日 HH:mm"))
-                            .Append("。");
-                        if (!context.RequiresExpression && pair.IsCompanionMoment(lastReal.Role))
-                        {
-                            builder.Append("上一条真实消息由我发出，至今没有她的新回复；内容：")
-                                .Append(Limit(lastReal.Content, 80))
-                                .Append("。");
-                        }
-                    }
-                }
+                builder.Append(TimeSchedulerPrompts.NowPrefix).Append(TimeLanguageUtil.NaturalNow(now)).Append("。");
                 if (state != null && context != null)
                 {
                     var upcoming = state.UpcomingDescriptions(
@@ -499,7 +482,7 @@ namespace TraceSoul2.Plugins.Builtin
                 if (due <= DateTimeOffset.UtcNow.ToUnixTimeMilliseconds())
                     throw new InvalidOperationException("到期时间必须在未来。");
                 var item = state.Add(context.ConversationId, content, due,
-                    call.GetArgument("recurrence", "none"), call.GetArgument("wake"));
+                    call.GetArgument("recurrence", "none"), call.GetArgument("wake"), EnvironmentLogic.Observation(context.Environment));
                 return Task.FromResult(Success("时间任务已建立。",
                     item.id + " | " + DateTimeOffset.FromUnixTimeMilliseconds(item.due_unix_ms).ToLocalTime().ToString("O") +
                     " | " + item.recurrence + " | " + item.wake + " | " + item.content));
@@ -600,7 +583,7 @@ namespace TraceSoul2.Plugins.Builtin
                 var nextPlan = call.GetArgument("next_plan").Trim();
                 if (nextPlan.Length == 0)
                     nextPlan = HeartbeatLogic.ExtractPlan(call.GetArgument("content"));
-                var item = state.EnsureHeartbeat(context.ConversationId, due, nextPlan);
+                var item = state.EnsureHeartbeat(context.ConversationId, due, nextPlan, EnvironmentLogic.Observation(context.Environment));
                 return Task.FromResult(Success("已排一次心跳。",
                     item.id + " | " + DateTimeOffset.FromUnixTimeMilliseconds(item.due_unix_ms).ToLocalTime().ToString("O") +
                     " | " + item.wake + " | " + item.content));

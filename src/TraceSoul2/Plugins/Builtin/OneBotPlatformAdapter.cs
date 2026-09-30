@@ -57,12 +57,13 @@ namespace TraceSoul2.Plugins.Builtin
 
             var content = BuildMessageText(platformPayload);
             var prefix = sessionType == "group"
-                ? "[QQ·群" + sessionId + "] "
+                ? "[QQ·群" + sessionId + "·" + nickname + "(" + userId + ")] "
                 : "[QQ·私聊" + (string.IsNullOrWhiteSpace(nickname) ? string.Empty : " " + nickname) + "] ";
 
             return new PluginEventData
             {
                 PluginId = PlatformId,
+                Environment = ReadEnvironment(platformPayload),
                 ExternalEventId = JsonText.ExtractLong(platformPayload, "message_id").ToString(),
                 Role = "user",
                 Content = prefix + content,
@@ -78,6 +79,35 @@ namespace TraceSoul2.Plugins.Builtin
                 }),
                 Breaking = true,
                 OccurredUnixMs = DateTimeOffset.UtcNow.ToUnixTimeMilliseconds()
+            };
+        }
+
+        private static EnvironmentObservationData ReadEnvironment(string json)
+        {
+            using var document = JsonDocument.Parse(json);
+            var root = document.RootElement;
+            string Text(JsonElement obj, string key) => obj.TryGetProperty(key, out var value) ? value.ToString() : "";
+            var speaker = Text(root, "user_id");
+            var account = Text(root, "self_id");
+            var group = Text(root, "message_type") == "group";
+            var name = "";
+            if (root.TryGetProperty("sender", out var sender) && sender.ValueKind == JsonValueKind.Object)
+            { name = Text(sender, "card"); if (name.Length == 0) name = Text(sender, "nickname"); }
+            var mentioned = false;
+            var reply = "";
+            if (root.TryGetProperty("message", out var message) && message.ValueKind == JsonValueKind.Array)
+                foreach (var segment in message.EnumerateArray())
+                {
+                    if (segment.ValueKind != JsonValueKind.Object || !segment.TryGetProperty("data", out var data) || data.ValueKind != JsonValueKind.Object) continue;
+                    if (Text(segment, "type") == "at" && Text(data, "qq") == account) mentioned = true;
+                    if (Text(segment, "type") == "reply") reply = Text(data, "id");
+                }
+            return new EnvironmentObservationData
+            {
+                PlatformId = "builtin.onebot", AccountId = account,
+                SessionType = group ? "group" : "private", SessionId = group ? Text(root, "group_id") : speaker,
+                SpeakerId = speaker, SpeakerName = name, ParticipantIds = new[] { account, speaker },
+                ExclusivePair = !group, DirectAddress = !group || mentioned, ReplyToEventId = reply
             };
         }
 
@@ -231,10 +261,18 @@ namespace TraceSoul2.Plugins.Builtin
                 detail: "kind=" + (message.Kind ?? string.Empty));
             var sessionType = message.SessionType;
             var sessionId = message.SessionId;
-            if (string.IsNullOrWhiteSpace(sessionId))
-                owner.TryResolveSession(context, out sessionType, out sessionId);
-            if (string.IsNullOrWhiteSpace(sessionId))
-                throw new InvalidOperationException("还没有记住 QQ 会话。先从 QQ 发一条过来，之后心跳也会发回那里。");
+            if (context?.Environment != null)
+            {
+                if (!owner.TryResolveSession(context, out var targetType, out var targetId))
+                    throw new InvalidOperationException("本轮 QQ 环境目标未确认或身份绑定已失效，未发送。");
+                if ((!string.IsNullOrWhiteSpace(sessionId) && sessionId != targetId) ||
+                    (!string.IsNullOrWhiteSpace(sessionType) && sessionType != targetType))
+                    throw new InvalidOperationException("出站目标与本轮环境不一致，未发送。");
+                sessionType = targetType;
+                sessionId = targetId;
+            }
+            else if (string.IsNullOrWhiteSpace(sessionId) && !owner.TryResolveSession(context, out sessionType, out sessionId))
+                throw new InvalidOperationException("尚未确认 QQ 会话目标。");
 
             string payload = null;
             string canonicalContent;
@@ -248,7 +286,7 @@ namespace TraceSoul2.Plugins.Builtin
                     payload = text;
                     canonicalContent = text;
                     summary = "QQ 文字已暂存（本轮结束时与结尾表情合并成一条发出）。";
-                    owner.StageText(text, sessionType, sessionId);
+                    owner.StageText(text, sessionType, sessionId, context);
                     deferred = true;
                     break;
                 case TraceOutboundKinds.Image:
@@ -260,7 +298,7 @@ namespace TraceSoul2.Plugins.Builtin
                     if (IsStickerAsset(file))
                     {
                         canonicalContent = OneBotPlatformPrompts.SendStickerMoment;
-                        deferred = owner.TryAppendSegment(payload);
+                        deferred = owner.TryAppendSegment(payload, context);
                         summary = deferred ? "已把图片表情追加到 QQ 文字消息结尾。" : "已通过 QQ 发送图片表情。";
                         break;
                     }
@@ -271,7 +309,7 @@ namespace TraceSoul2.Plugins.Builtin
                     var faceId = (message.File ?? string.Empty).Trim();
                     if (faceId.Length == 0) throw new InvalidOperationException("QQ 表情需要 face id。");
                     payload = "[CQ:face,id=" + faceId + "]";
-                    if (owner.TryAppendSegment(payload))
+                    if (owner.TryAppendSegment(payload, context))
                     {
                         canonicalContent = OneBotPlatformPrompts.SendStickerMoment;
                         summary = "已把表情追加到 QQ 文字消息结尾。";
@@ -299,7 +337,7 @@ namespace TraceSoul2.Plugins.Builtin
                     {
                         { sessionType == "group" ? "group_id" : "user_id", long.Parse(sessionId) },
                         { "message", payload }
-                    });
+                    }, context?.Environment?.AccountId);
             }
 
             context?.Services?.LogTiming(context.TraceId,

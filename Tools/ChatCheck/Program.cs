@@ -20,14 +20,18 @@ internal static partial class Program
     private static void Main(string[] args)
     {
         SQLitePCL.Batteries_V2.Init();
+        if (args.Contains("--existence")) { RunExistenceChecksAsync().GetAwaiter().GetResult(); return; }
+        if (args.Contains("--environment")) { RunEnvironmentChecksAsync().GetAwaiter().GetResult(); return; }
         if (args?.Length == 2 && args[0] == "--agent-prompt-audit") { RunAgentPromptAudit(args[1]); return; }
         if ((args ?? Array.Empty<string>()).Contains("--agent-prompt")) { RunAgentPromptChecksAsync().GetAwaiter().GetResult(); return; }
+        if ((args ?? Array.Empty<string>()).Contains("--camera-sharing")) { RunQqDeliveryAndCameraContextCheck(); Console.WriteLine("Camera sharing checks passed."); return; }
+        if ((args ?? Array.Empty<string>()).Contains("--heartbeat")) { RunHeartbeatContinuityChecksAsync().GetAwaiter().GetResult(); Console.WriteLine("Heartbeat continuity checks passed."); return; }
         if (args?.Length == 2 && args[0] == "--agent-contract-dump") { RunAgentDumpReplay(args[1]); return; }
         if (args?.Length == 2 && args[0] == "--agent-repair-dump") { RunAgentRepairDumpAsync(args[1]).GetAwaiter().GetResult(); return; }
         if ((args ?? Array.Empty<string>()).Contains("--agent-contract")) { RunAgentContractChecksAsync().GetAwaiter().GetResult(); return; }
         if ((args ?? Array.Empty<string>()).Contains("--goal-memory")) { RunGoalMemoryChecksAsync().GetAwaiter().GetResult(); return; }
         if ((args ?? Array.Empty<string>()).Contains("--web-search")) { RunWebSearchChecksAsync().GetAwaiter().GetResult(); return; }
-        if (args?.Length == 2 && args[0] == "--cognition-migration") { RunCognitionMigrationContractChecks(args[1]); return; }
+        if (args?.Length == 2 && args[0] == "--cognition-migration") { RunCognitionMigrationContractChecks(args[1]); RunEnvironmentMigrationChecks(args[1]); return; }
         if ((args ?? Array.Empty<string>()).Contains("--cognition-graph")) { RunCognitionGraphChecks(); return; }
         if ((args ?? Array.Empty<string>()).Contains("--agent-loop"))
         {
@@ -46,6 +50,8 @@ internal static partial class Program
             Console.WriteLine("Inbound vision checks passed.");
             return;
         }
+        RunExistenceChecksAsync().GetAwaiter().GetResult();
+        RunEnvironmentChecksAsync().GetAwaiter().GetResult();
         RunCognitionGraphChecks();
         RunAgentPromptChecksAsync().GetAwaiter().GetResult();
         RunAgentContractChecksAsync().GetAwaiter().GetResult();
@@ -333,6 +339,7 @@ internal static partial class Program
                         dueMoments[0].Wake == KernelWakeValues.Mind &&
                         dueMoments[0].IsOperational,
                     "时间到期只能产生运行事件并叫醒心智，不能进入 Moment");
+                pluginManager.Services.HeartbeatMinMinutes = pluginManager.Services.HeartbeatMaxMinutes = 10;
                 var continueResult = pluginManager.ExecuteAsync(new BrainCapabilityCallData
                 {
                     call_id = "continue-check",
@@ -368,6 +375,7 @@ internal static partial class Program
                     arguments = new List<BrainCallArgumentData>()
                 }, facetTurn, default).GetAwaiter().GetResult();
                 Require(cleared.Status == "success", "应能取消心跳");
+                pluginManager.Services.HeartbeatMinMinutes = pluginManager.Services.HeartbeatMaxMinutes = 0;
                 var directReply = ExpressorLogic.NormalizeStep(new BrainStructuredOutputData
                 {
                     state = BrainStepStateValues.Finish,
@@ -862,8 +870,8 @@ internal static partial class Program
                         !mindSystem.Contains("当场做完"),
                     "情境模版不得写入心智 system");
                 Require(mindSystem.Contains("【可选生命标签】") && mindSystem.Contains("【此刻】") &&
-                        mindSystem.Contains("刚才心里还停着的") &&
-                        mindSystem.Contains("刚才浮起过的") &&
+                        mindSystem.Contains("上一刻感受：") &&
+                        mindSystem.Contains("状态：") &&
                         mindSystem.Contains("【此刻自然浮起的过去】"),
                     "自然浮起的过去、标签候选、上一拍心里状态与浮动碎片应在心智请求尾部");
                 Require(mindSystem.Contains("没有值得留下的就写「无」") &&

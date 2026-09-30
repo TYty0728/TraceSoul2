@@ -7,7 +7,7 @@ using TraceSoul2.Prompts;
 
 namespace TraceSoul2.Migrate
 {
-    /// <summary>新路线三类 LLM 提示：事件构筑（多维索引）、细节浸染、日终三卡+内心复盘。</summary>
+    /// <summary>新路线三类 LLM 提示：事件构筑（多维索引）、细节浸染、日终身份摘要+内心复盘。</summary>
     public static class ReplayPrompts
     {
         [Serializable]
@@ -53,11 +53,14 @@ namespace TraceSoul2.Migrate
             public string slot;
             public string body;
             public string reason;
+            public List<string> cognition_ids = new();
         }
 
         [Serializable]
         public sealed class DayCardReviewOutputData
         {
+            [System.Text.Json.Serialization.JsonIgnore]
+            public long SubjectRevision;
             public string summary;
             public List<CardUpdateData> cards = new List<CardUpdateData>();
             public string inner_narrative;
@@ -152,8 +155,8 @@ namespace TraceSoul2.Migrate
         }
 
         /// <summary>
-        /// 日终三卡+内心复盘：我的人格卡不变；我是谁 / 对方是谁 / 我们的关系三张必须随真实相处成长；
-        /// 内心随三卡一起更新。
+        /// 日终身份摘要与内心复盘：人工固定内容受保护；成长摘要必须引用有效认知，允许保持不变；
+        /// 内心随身份摘要一起更新。
         /// </summary>
         public static string BuildDayCardReviewPrompt(
             PairIdentity pair,
@@ -186,7 +189,7 @@ namespace TraceSoul2.Migrate
             builder.AppendLine(CorePrompts.Migration.DayCardRelationHeader + (string.IsNullOrWhiteSpace(relationCard) ? CorePrompts.Migration.BlankCard : relationCard));
             builder.AppendLine(CorePrompts.Migration.DayCardHabitHeader + (string.IsNullOrWhiteSpace(expressionCard) ? CorePrompts.Migration.BlankCard : expressionCard));
             builder.AppendLine();
-            builder.AppendLine("本日实时样本（只作为完整复盘证据，复盘成功后退出）：");
+            builder.AppendLine("本日实时样本（主观轨迹与便签，不等于已核实事实；对应日复盘成功后退出实时区）：");
             builder.AppendLine("- 本日轨迹：" + (string.IsNullOrWhiteSpace(dayTrajectory) ? CorePrompts.Migration.Empty : dayTrajectory.Trim()));
             builder.AppendLine("- 今日新识：");
             var todayItems = todayNewItems ?? new List<TodayNewItemRecord>();
@@ -248,7 +251,7 @@ namespace TraceSoul2.Migrate
             var cognitions = activeCognitions ?? new List<CognitionSliceRecord>();
             if (cognitions.Count == 0) builder.AppendLine(CorePrompts.Migration.Empty);
             foreach (var c in cognitions.Take(40))
-                builder.AppendLine("- " + c.Id + " | " + c.Summary + " | 领域 " + c.Domains + " | 范围 " + c.Scope + " | 例外 " + c.Exceptions + " | 状态 " + c.Status + " | 置信 " + c.Confidence.ToString("0.00") + " | " + c.Subtype);
+                builder.AppendLine("- " + c.Id + " | " + c.Summary + " | 领域 " + c.Domains + " | 范围 " + c.Scope + " | 例外 " + c.Exceptions + " | 状态 " + c.Status + " | 置信 " + c.Confidence.ToString("0.00") + " | " + c.Subtype + " | 摘要用途 " + c.IdentitySlot + " | 对象 " + c.About);
             builder.AppendLine();
             builder.AppendLine(CorePrompts.Migration.CognitionTagsHeader);
             var tags = (activeTags ?? new List<LifeTagRecord>())

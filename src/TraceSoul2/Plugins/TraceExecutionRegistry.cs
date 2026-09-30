@@ -21,7 +21,10 @@ namespace TraceSoul2.Plugins
         private readonly Queue<TraceExecutionSnapshotData> events = new Queue<TraceExecutionSnapshotData>();
         private bool disposed;
 
-        public string Start(string conversationId, BrainCapabilityCallData call, string bodyId, CancellationToken token)
+        public string Start(string conversationId, BrainCapabilityCallData call, string bodyId, CancellationToken token) =>
+            Start(conversationId, call, bodyId, token, null);
+
+        public string Start(string conversationId, BrainCapabilityCallData call, string bodyId, CancellationToken token, EnvironmentObservationData environment)
         {
             lock (gate)
             {
@@ -40,7 +43,7 @@ namespace TraceSoul2.Plugins
                     Cancellation = CancellationTokenSource.CreateLinkedTokenSource(token),
                     State = new TraceExecutionSnapshotData
                     {
-                        ExecutionId = id, ConversationId = conversationId, CapabilityId = call.capability_id,
+                        Environment = environment, ExecutionId = id, ConversationId = conversationId, CapabilityId = call.capability_id,
                         BodyId = bodyId ?? string.Empty, GroupId = call.group_id ?? string.Empty,
                         Status = "running", Sequence = -1, ConfirmedContent = string.Empty
                     }
@@ -142,7 +145,7 @@ namespace TraceSoul2.Plugins
         private static string Limit(string value) => (value ?? string.Empty).Length <= 4000 ? value ?? string.Empty : value.Substring(0, 4000);
         private static TraceExecutionSnapshotData Copy(TraceExecutionSnapshotData value) => new TraceExecutionSnapshotData
         {
-            ExecutionId = value.ExecutionId, ConversationId = value.ConversationId, CapabilityId = value.CapabilityId,
+            Environment = value.Environment, ExecutionId = value.ExecutionId, ConversationId = value.ConversationId, CapabilityId = value.CapabilityId,
             BodyId = value.BodyId, GroupId = value.GroupId, Status = value.Status, Sequence = value.Sequence,
             ProgressMs = value.ProgressMs, ConfirmedContent = value.ConfirmedContent, Summary = value.Summary
         };

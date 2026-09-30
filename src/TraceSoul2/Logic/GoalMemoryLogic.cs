@@ -125,7 +125,8 @@ namespace TraceSoul2.Logic
                 Check(change.source is "user" or "self" or "feedback", path + ".source 必须为 user/self/feedback。");
                 var quote = (change.evidence_quote ?? "").Trim();
                 if (change.source == "user")
-                    Check(turn.RequiresExpression && turn.Services.Storage.LoadPairIdentity().IsHumanMoment(turn.Moment.Role) &&
+                    Check((turn.Environment == null || turn.Environment.SpeakerIsOwner) &&
+                        turn.RequiresExpression && turn.Services.Storage.LoadPairIdentity().IsHumanMoment(turn.Moment.Role) &&
                         quote.Length >= 2 && (turn.Moment.Content ?? "").Contains(quote, StringComparison.Ordinal),
                         path + ".evidence_quote：source=user 时须逐字引用当前对方发言，长度2～240字符；不能引用历史或自行概括。");
                 else if (change.source == "feedback")

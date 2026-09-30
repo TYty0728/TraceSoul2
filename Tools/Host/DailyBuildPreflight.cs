@@ -111,7 +111,8 @@ namespace TraceSoul2.Host
             DateTimeStyles.None, out _);
 
         public static DailyBuildPlan Plan(string target, string closedDay, IEnumerable<string> unbuilt,
-            IEnumerable<DailyReviewState> states, IEnumerable<DailyBuildAttempt> attempts)
+            IEnumerable<DailyReviewState> states, IEnumerable<DailyBuildAttempt> attempts, IEnumerable<string> pendingPublic = null,
+            IEnumerable<string> pendingSlices = null)
         {
             if (!ValidDay(target) || string.CompareOrdinal(target, closedDay) > 0)
                 throw new ArgumentException("请选择已结束的记忆日（yyyy-MM-dd），最晚为 " + closedDay + "。");
@@ -134,8 +135,9 @@ namespace TraceSoul2.Host
                 Reason = x.Status == "done" ? "完成" : x.Status == "running" || x.Status == "interrupted"
                     ? "未正常结束或仍在运行" : FailureProtection.SafeReason(new InvalidOperationException(x.Error))
             }).ToList();
-            result.Days = unbuilt.Concat(unfinished.Select(x => x.DayKey)).Append(target)
-                .Where(x => ValidDay(x) && string.CompareOrdinal(x, target) <= 0 && !done.Contains(x))
+            var publicDays = (pendingPublic ?? Array.Empty<string>()).Concat(pendingSlices ?? Array.Empty<string>()).ToHashSet(StringComparer.Ordinal);
+            result.Days = unbuilt.Concat(publicDays).Concat(unfinished.Select(x => x.DayKey)).Append(target)
+                .Where(x => ValidDay(x) && string.CompareOrdinal(x, target) <= 0 && (!done.Contains(x) || publicDays.Contains(x)))
                 .Distinct(StringComparer.Ordinal).OrderBy(x => x, StringComparer.Ordinal).ToList();
             return result;
         }

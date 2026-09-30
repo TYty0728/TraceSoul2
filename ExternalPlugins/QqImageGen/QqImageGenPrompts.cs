@@ -32,6 +32,11 @@ namespace TraceSoul2.ExternalPlugins
         public const string RequestPrefix = "本次要求：";
         public const string AspectPrefix = "画面比例为 ";
         public const string EffectorDescription = "自拍、生活照片、画图、基于来图修改或发送 URL 图片。";
+        public const string AgentUsage =
+            "照片也是日常表达：想让对方看看自己或眼前时，可以主动分享普通神情、日常穿着或熟悉场景，不必等索图或新事件。" +
+            "用 step=continue + actions 调用本能力，prompt 写想分享什么，具体镜头交给相机；可以只发照片，或在结果回来后用最终 reply 配文字。";
+        public const string AgentBoundary =
+            "尊重对方不收图和安静时段的约定；不按固定配额拍照，不机械重复上一张，不编造未发生的经历。";
         public const string EffectorBoundary =
             "QQ相机｜prompt + mode(selfie/photo/draw/edit/url) + refs/aspect_ratio/url（可选）";
         /// <summary>仅当本插件已加载且相机就绪时，挂到心智 system。只判断要不要出图，不选种类。</summary>

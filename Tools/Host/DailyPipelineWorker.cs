@@ -40,7 +40,9 @@ namespace TraceSoul2.Host
             {
                 plan = DailyBuildPreflight.Plan(target, closed,
                     runtime.Store.GetUnbuiltMemoryDayKeysBefore(MemoryDayLogic.CurrentStart(now).ToUnixTimeMilliseconds()),
-                    DailyBuildHistory.ReadStates(HistoryPath), DailyBuildHistory.ReadAttempts(HistoryPath, target));
+                    DailyBuildHistory.ReadStates(HistoryPath), DailyBuildHistory.ReadAttempts(HistoryPath, target),
+                    runtime.Store.GetUnbuiltPublicMemoryDayKeysBefore(MemoryDayLogic.CurrentStart(now).ToUnixTimeMilliseconds()),
+                    runtime.Store.GetUnreviewedRuntimeDayKeysBefore(MemoryDayLogic.CurrentStart(now).ToUnixTimeMilliseconds()));
             }
             catch (Exception)
             {

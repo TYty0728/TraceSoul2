@@ -712,12 +712,31 @@
         </div>
         <div class="box">
           <h2>身份短卡（常驻 / 每日复盘维护）</h2>
-          <p class="muted">「用户的档案」由本人填写，AI 复盘绝不修改；其余几张由日终复盘生长，也可以直接改。</p>
+          <p class="muted">人工编辑的卡默认固定；解除固定后，深夜复盘可依据认知更新。没有足够依据时保持不变。「用户的档案」始终由本人填写。</p>
           <div id="cardsBox"></div>
+        </div>
+        <div class="box">
+          <h2>在场环境</h2>
+          <p class="muted">只有你和他单独相处时才是私密。其他人的单独聊天、群聊以及身份未确认的交流，都按公开处理。本控制台是你的私密入口。</p>
+          <label>你本人的 QQ 账号</label><input id="environmentOwnerQq" inputmode="numeric" placeholder="填写你的 QQ 号，不是机器人的 QQ 号" />
+          <label>跨环境共同使用的自我描述</label><textarea id="environmentPublicIdentity" rows="4" maxlength="2000" placeholder="这里的内容同时参与私密和公开交流；填写可分享的自我特点，私人经历保留在各自来源中"></textarea>
+          <p class="muted">未绑定账号时，QQ 消息均按公开处理。可在身份卡和下方拼图中逐项允许跨环境使用；共享摘要不会同时公开私人证据。</p>
+          <button class="primary" onclick="saveEnvironment()">保存环境设置</button>
+        </div>
+        <div class="box">
+          <h2>经历形成的身份与理解</h2>
+          <p class="muted">这里的理解属于同一主体。允许跨环境使用后，其他环境也能使用这段理解；来源原文仍保留原范围。内容修订后需要重新设置。</p>
+          <div id="identityPuzzle"></div>
         </div>
         <div class="box">
           <h2>内心 Runtime</h2>
           <pre id="inner"></pre>
+        </div>
+        <div class="box">
+          <h2>当下切片与夜间拼图</h2>
+          <p class="muted">白天先留住感受和轨迹，深夜再整理。未形成稳定结论的经历也会保留；复盘失败时切片仍在。</p>
+          <div class="row"><input id="runtimeSliceDay" type="date" /><button onclick="loadRuntimeSlices()">查看这一天</button></div>
+          <div id="runtimeSliceHistory"></div>
         </div>
       </section>
 
@@ -1483,14 +1502,28 @@
   }
 
   /* ================= 身份 ================= */
+  let environmentSettings = { ownerAccounts: [], publicIdentity: "" };
   async function loadIdentity() {
     const st = await api("/status");
     $("username").value = st.username || "";
     $("assname").value = st.assname || "";
     renderCards(await api("/identity/cards"));
+    renderIdentityPuzzle(await api("/identity/puzzle"));
+    environmentSettings = await api("/environment/settings");
+    $("environmentOwnerQq").value = (environmentSettings.ownerAccounts || []).find(x => x.platformId === "builtin.onebot")?.userId || "";
+    $("environmentPublicIdentity").value = environmentSettings.publicIdentity || "";
     const inner = await api("/inner");
+    const subject = inner.subject;
+    if (subject) {
+      inner.narrative = subject.narrative?.text || inner.narrative;
+      inner.mood = subject.mood?.text || inner.mood;
+      inner.asleep = subject.asleep;
+      inner.idle = subject.idle;
+      try { inner.attention = JSON.parse(subject.attention?.text || "[]"); } catch { inner.attention = []; }
+    }
     const att = (inner.attention || []).map(a => "[" + esc(a.kind) + "] " + esc(a.content)).join("；") || "（无）";
     $("inner").textContent = "revision " + inner.revision +
+      "\n环境：" + (inner.environment ? (inner.environment.visibility === "private" ? "私密" : "公开") : "尚未确认") +
       "\n状态：" + (inner.asleep ? "睡着" : (inner.idle ? "空闲" : "醒着")) +
       "\n下次心跳：" + formatHeartbeatDue(inner.nextHeartbeatUnixMs) +
       "\n此刻：" + (inner.narrative || "—") +
@@ -1498,6 +1531,42 @@
       "\n关系视角：" + (inner.relationshipLens || "—") +
       "\n浮着的碎片：" + att +
       "\nsnapshot：" + (inner.snapshotId || "—") + " · 来源moment：" + (inner.sourceMomentId || "无");
+    await loadRuntimeSlices();
+  }
+  async function loadRuntimeSlices() {
+    try {
+      const day = $("runtimeSliceDay").value;
+      const data = await api("/runtime/slices" + (day ? "?day=" + encodeURIComponent(day) : ""));
+      $("runtimeSliceDay").value = data.day;
+      const box = $("runtimeSliceHistory"); box.replaceChildren();
+      const status = document.createElement("p");
+      status.textContent = "共 " + data.total + " 片，待复盘 " + data.pending + " 片；显示最近 100 片。记忆日以凌晨 04:00 为界。";
+      box.appendChild(status);
+      for (const item of data.reviews || []) {
+        const p = document.createElement("p");
+        p.textContent = "夜间拼图 · " + (item.memoryVisibility === "public" ? "公开环境" : "两人私密") + "：" + item.summary;
+        box.appendChild(p);
+      }
+      for (const item of data.slices || []) {
+        const detail = document.createElement("details"), title = document.createElement("summary"), body = document.createElement("pre");
+        title.textContent = new Date(item.createdUnixMs).toLocaleString() + " · " + (item.memoryVisibility === "public" ? "公开" : "私密") + " · " + (item.reviewId ? "已复盘" : "待复盘");
+        const state = JSON.parse(item.snapshotJson);
+        const labels = {inner:"感受",mood:"心情",affect:"总体情绪",scene:"共同场景",attention:"关注",today:"轨迹",new_fact:"今日便签",location:"地点",activity:"活动",activity_detail:"活动细节",heartbeat_intent:"当下意向"};
+        body.textContent = Object.entries(labels).filter(([key]) => state[key]).map(([key,label]) => label + "：" + state[key]).join("\n") || "这一轮没有新增状态描述。";
+        detail.append(title, body); box.appendChild(detail);
+      }
+    } catch (error) { $("runtimeSliceHistory").textContent = "读取失败：" + error.message; }
+  }
+  async function saveEnvironment() {
+    try {
+      const accounts = (environmentSettings.ownerAccounts || []).filter(x => x.platformId !== "builtin.onebot");
+      const qq = $("environmentOwnerQq").value.trim();
+      if (qq && !/^[1-9][0-9]{4,19}$/.test(qq)) throw new Error("请输入有效的本人 QQ 账号");
+      if (qq) accounts.push({ platformId: "builtin.onebot", userId: qq });
+      await api("/environment/settings", "PUT", { ownerAccounts: accounts, publicIdentity: $("environmentPublicIdentity").value });
+      logLine("环境设置已保存，下次事件按新绑定确认身份");
+      await loadIdentity();
+    } catch (error) { alert("保存环境设置失败：" + error.message); }
   }
   async function savePair() {
     await api("/identity/pair", "PUT", {
@@ -1522,9 +1591,46 @@
       const btn = document.createElement("button");
       btn.textContent = "保存「" + c.title + "」";
       btn.onclick = () => saveCard(c.slot);
-      wrap.append(label, ta, btn);
+      const status = document.createElement("p");
+      status.className = "muted";
+      status.textContent = "来源：" + (c.origin || "旧版，来源待核对") +
+        (c.current ? "" : " · 依据已变化，当前不注入") +
+        (c.sources ? " · 认知依据：" + Object.keys(c.sources).join("、") : "");
+      const sharing = document.createElement("button");
+      sharing.textContent = c.shared ? "收回跨环境使用" : "允许跨环境使用这版内容";
+      sharing.disabled = !c.current;
+      sharing.onclick = () => setIdentityVisibility("card", c.slot, c.stamp, !c.shared);
+      const pin = document.createElement("button");
+      pin.textContent = c.pinned ? "允许随有依据的理解更新" : "固定此内容";
+      pin.onclick = async () => {
+        try { await api("/identity/cards/" + c.slot + "/pin", "PUT", { stamp: c.stamp, pinned: !c.pinned }); await loadIdentity(); }
+        catch (e) { alert(e.message); }
+      };
+      wrap.append(label, ta, btn, status, sharing, pin);
       box.append(wrap);
     }
+  }
+  async function setIdentityVisibility(kind, id, stamp, shared) {
+    try { await api("/identity/visibility", "PUT", { kind, id, stamp, shared }); await loadIdentity(); }
+    catch (e) { alert(e.message); }
+  }
+  function renderIdentityPuzzle(items) {
+    const box = $("identityPuzzle");
+    box.replaceChildren();
+    for (const item of items) {
+      const row = document.createElement("details");
+      const title = document.createElement("summary");
+      title.textContent = (item.identitySlot || "认知") + " · " + item.status + " · " + item.summary;
+      const detail = document.createElement("p");
+      detail.textContent = "对象：" + (item.about || "未标注") + "（" + (item.subjectKey || "旧版待核对") + "）" + "；范围：" + (item.scope || "未标注") +
+        "；例外：" + (item.exceptions || "无") + "；依据：" + (item.evidence || []).map(e => e.relation + " " + e.momentId).join("、");
+      const btn = document.createElement("button");
+      btn.textContent = item.shared ? "收回跨环境使用" : "允许跨环境使用这版理解";
+      btn.disabled = item.status !== "active";
+      btn.onclick = () => setIdentityVisibility("cognition", item.id, item.stamp, !item.shared);
+      row.append(title, detail, btn); box.append(row);
+    }
+    if (!items.length) box.textContent = "还没有形成认知拼图。";
   }
   async function saveCard(slot) {
     try {

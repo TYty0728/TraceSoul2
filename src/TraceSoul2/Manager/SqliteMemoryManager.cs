@@ -45,7 +45,10 @@ namespace TraceSoul2.Manager
         {
             if (moment == null) throw new ArgumentNullException("moment");
             var pair = LoadPairIdentity();
-            if (pair.IsComplete) moment.Role = pair.CanonicalMomentRole(moment.Role);
+            if (pair.IsComplete)
+                moment.Role = moment.MemoryVisibility == "public"
+                    ? (pair.IsHumanMoment(moment.Role) ? "user" : pair.IsCompanionMoment(moment.Role) ? "assistant" : moment.Role)
+                    : pair.CanonicalMomentRole(moment.Role);
             connection.Insert(moment);
         }
 
@@ -498,7 +501,7 @@ namespace TraceSoul2.Manager
         {
             return connection.QueryScalars<string>(
                 "SELECT DISTINCT strftime('%Y-%m-%d', datetime(CreatedUnixMs/1000, 'unixepoch', '+8 hours', '-4 hours')) " +
-                "FROM moments WHERE CreatedUnixMs<? " +
+                "FROM moments WHERE CreatedUnixMs<? AND COALESCE(MemoryVisibility,'private')!='public' " +
                 "AND (MemoryStatus IS NULL OR MemoryStatus NOT IN ('built','operational')) ORDER BY 1",
                 endUnixMs);
         }
@@ -698,12 +701,20 @@ namespace TraceSoul2.Manager
                         Id = conversationId + "|" + slot,
                         ConversationId = conversationId,
                         Slot = slot,
+                        Origin = "seed",
                         Body = body,
                         Revision = 0,
                         SourceMomentId = string.Empty,
                         UpdatedUnixMs = now
                     };
                     connection.Insert(card);
+                }
+                if (string.IsNullOrEmpty(card.Origin))
+                {
+                    card.Origin = "legacy";
+                    // 旧库无法区分种子与本人手改；没有复盘来源时先保留，不能猜成可自动覆盖。
+                    card.Pinned = string.IsNullOrWhiteSpace(card.SourceMomentId);
+                    connection.Update(card);
                 }
                 result.Add(card);
             }
@@ -722,6 +733,10 @@ namespace TraceSoul2.Manager
             var now = DateTimeOffset.UtcNow.ToUnixTimeMilliseconds();
             var id = conversationId + "|" + slot;
             var card = connection.Find<IdentityCardRecord>(id);
+            if (card?.Pinned == true && !string.IsNullOrWhiteSpace(sourceMomentId))
+                throw new InvalidOperationException("本人固定的身份内容不能被自动改写。");
+            if (card != null)
+                SavePluginDocument("kernel.identity.history", card.Id + ":" + card.Revision + ":" + PuzzleViewLogic.Stamp(card), TraceJson.ToJson(card));
             if (card == null)
             {
                 card = new IdentityCardRecord
@@ -744,6 +759,10 @@ namespace TraceSoul2.Manager
                 card.UpdatedUnixMs = now;
                 connection.Update(card);
             }
+            card.Origin = string.IsNullOrWhiteSpace(sourceMomentId) ? "manual" : "legacy_review";
+            card.Pinned = string.IsNullOrWhiteSpace(sourceMomentId);
+            card.CognitionSourcesJson = null;
+            connection.Update(card);
             if (slot == IdentityCardSlotValues.Personality)
                 SyncBasePersonality(conversationId, body, now);
             return card;
@@ -941,6 +960,8 @@ namespace TraceSoul2.Manager
             connection.CreateTable<IdentityCardRecord>();
             connection.CreateTable<LadderItemRecord>();
             connection.CreateTable<DayTrajectoryRecord>();
+            connection.CreateTable<RuntimeSliceRecord>();
+            connection.CreateTable<RuntimeDayReviewRecord>();
             connection.CreateTable<TodayNewItemRecord>();
             connection.CreateTable<EventIndexRecord>();
             connection.CreateTable<EventEntryRecord>();
@@ -1168,6 +1189,7 @@ namespace TraceSoul2.Manager
             if (next == null || !next.IsComplete) return;
             foreach (var moment in connection.Table<MomentRecord>().ToList())
             {
+                if (moment.MemoryVisibility == "public") continue;
                 var role = moment.Role ?? string.Empty;
                 if (previous != null && previous.IsComplete &&
                     (string.Equals(role, previous.Username, StringComparison.OrdinalIgnoreCase) ||
@@ -1237,6 +1259,8 @@ namespace TraceSoul2.Manager
 
             foreach (var inner in connection.Table<InnerRuntimeRecord>().ToList())
             {
+                // 环境作用域中的其他人不随专属用户改名；根 runtime 仍按原身份迁移。
+                if ((inner.ConversationId ?? "").Contains(":environment:", StringComparison.Ordinal)) continue;
                 inner.Narrative = next.RewriteRecordedText(inner.Narrative, previous);
                 inner.RelationshipLens = next.RewriteRecordedText(inner.RelationshipLens, previous);
                 inner.Mood = next.RewriteRecordedText(inner.Mood, previous);
@@ -1278,6 +1302,7 @@ namespace TraceSoul2.Manager
             {
                 ConversationId = data.ConversationId,
                 SnapshotId = data.SnapshotId,
+                EnvironmentJson = data.Environment == null ? null : TraceJson.ToJson(data.Environment),
                 Revision = data.Revision,
                 Narrative = data.Narrative,
                 RelationshipLens = data.RelationshipLens,
@@ -1304,6 +1329,7 @@ namespace TraceSoul2.Manager
             {
                 ConversationId = record.ConversationId,
                 SnapshotId = record.SnapshotId,
+                Environment = string.IsNullOrWhiteSpace(record.EnvironmentJson) ? null : TraceJson.FromJson<EnvironmentSnapshotData>(record.EnvironmentJson),
                 Revision = record.Revision,
                 Narrative = record.Narrative,
                 RelationshipLens = record.RelationshipLens,

@@ -804,28 +804,11 @@ namespace TraceSoul2.Logic
         {
             var pair = turn.Services.Storage.LoadPairIdentity();
             var builder = new StringBuilder();
-            var blocks = (contextBlocks ?? Enumerable.Empty<TraceContextBlockData>())
-                .Where(x => x != null && !IsRedundantProtocolFacet(x.FacetId) &&
-                            !IsTurnDynamicFacet(x.FacetId) &&
-                            !string.Equals(x.FacetId, "identity.base", StringComparison.Ordinal))
-                .OrderByDescending(x => x.Priority)
-                .ThenBy(x => x.FacetId, StringComparer.Ordinal)
-                .ToList();
-            if (blocks.Count > 0)
-            {
-                builder.AppendLine(CorePrompts.Expressor.ContinuingHeader);
-                builder.AppendLine(CorePrompts.Expressor.ContinuingHint);
-                foreach (var block in blocks)
-                {
-                    builder.AppendLine(block.Content);
-                    builder.AppendLine();
-                }
-            }
             builder.AppendLine(CorePrompts.Expressor.ExpressionPosture);
             builder.AppendLine();
             AppendOutputFormat(builder);
             builder.AppendLine();
-            builder.AppendLine(pair.Apply(CorePrompts.Expressor.SubjectBoundary));
+            builder.AppendLine(EnvironmentLogic.IsPublic(turn) ? "保持自己的第一人称；发言者与受众以本轮环境为准。" : pair.Apply(CorePrompts.Expressor.SubjectBoundary));
             return builder.ToString();
         }
 
@@ -845,17 +828,15 @@ namespace TraceSoul2.Logic
             var builder = new StringBuilder();
             if (!string.IsNullOrWhiteSpace(memoryFlesh))
             {
-                builder.AppendLine(pair.Apply(CorePrompts.Expressor.MemoryFlesh));
+                builder.AppendLine(EnvironmentLogic.IsPublic(turn) ? "这些是当前环境中的交流记录；区分每位参与者，不将其当作两人的私密经历。" : pair.Apply(CorePrompts.Expressor.MemoryFlesh));
                 builder.AppendLine();
             }
-            var time = (contextBlocks ?? Enumerable.Empty<TraceContextBlockData>())
-                .FirstOrDefault(x => x != null &&
-                                     string.Equals(x.FacetId, "time.context", StringComparison.Ordinal));
-            if (time != null && !string.IsNullOrWhiteSpace(time.Content))
-            {
-                builder.AppendLine(time.Content.Trim());
-                builder.AppendLine();
-            }
+            builder.AppendLine(RuntimeContextLogic.State(turn));
+            foreach (var block in (contextBlocks ?? Enumerable.Empty<TraceContextBlockData>())
+                .Where(x => x != null && !IsRedundantProtocolFacet(x.FacetId) &&
+                    x.FacetId is not ("time.context" or "inner.snapshot" or "identity.base" or "day.trajectory"))
+                .GroupBy(x => x.Content).Select(x => x.First()))
+                if (!string.IsNullOrWhiteSpace(block.Content)) builder.AppendLine(block.Content.Trim());
             builder.AppendLine(CorePrompts.Expressor.ThoughtHeader);
             builder.AppendLine(GoalMemoryLogic.BuildContext(turn));
             builder.AppendLine(FormatMind(mind));
@@ -894,6 +875,10 @@ namespace TraceSoul2.Logic
             {
                 builder.AppendLine(CorePrompts.Expressor.LeaveWait);
             }
+            else if (EnvironmentLogic.IsPublic(turn))
+            {
+                builder.AppendLine("面向当前环境里的在场者表达，依照实际发言和指向自然参与。");
+            }
             else if (turn.RequiresExpression)
             {
                 builder.AppendLine(pair.Apply(CorePrompts.Expressor.PrivateChat));
@@ -913,7 +898,9 @@ namespace TraceSoul2.Logic
             var current = turn == null || turn.Moment == null
                 ? string.Empty
                 : turn.Moment.Content ?? string.Empty;
-            if (HeartbeatLogic.IsHeartbeatContent(current))
+            if (EnvironmentLogic.IsPublic(turn))
+                builder.AppendLine("按当前环境加工正文，不补写私人经历或关系。");
+            else if (HeartbeatLogic.IsHeartbeatContent(current))
                 builder.AppendLine(pair.Apply(CorePrompts.Expressor.HeartbeatRequest));
             else if (NightResidueLogic.LooksLike(current) ||
                      KernelWakeLogic.IsNightResidue(turn.Wake))

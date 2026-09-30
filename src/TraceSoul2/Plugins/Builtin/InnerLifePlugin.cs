@@ -35,6 +35,7 @@ namespace TraceSoul2.Plugins.Builtin
             public TraceContributionDescriptorData Descriptor { get; } = new TraceContributionDescriptorData
             {
                 Id = "inner.snapshot",
+                SupportsPublicEnvironment = true,
                 Kind = TraceContributionKindValues.MountedFacet,
                 DisplayName = "当前内心切片",
                 Description = InnerLifePrompts.FacetDescription,
@@ -52,7 +53,7 @@ namespace TraceSoul2.Plugins.Builtin
                 TraceTurnContext context,
                 CancellationToken cancellationToken)
             {
-                var runtime = context.Services.Storage.LoadOrCreateInnerRuntime(context.ConversationId);
+                var runtime = SubjectRuntimeLogic.View(context);
                 var mood = (runtime.Mood ?? string.Empty).Trim();
                 var life = context.Services.LifeState == null
                     ? null : context.Services.LifeState.Load(context.ConversationId);
@@ -157,7 +158,7 @@ namespace TraceSoul2.Plugins.Builtin
                 TraceTurnContext context,
                 CancellationToken cancellationToken)
             {
-                var runtime = context.Services.Storage.LoadOrCreateInnerRuntime(context.ConversationId);
+                var runtime = SubjectRuntimeLogic.View(context);
                 return Task.FromResult(new TraceCapabilityResultData
                 {
                     Status = "success",

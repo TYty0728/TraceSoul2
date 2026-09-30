@@ -38,7 +38,10 @@ namespace TraceSoul2.Logic
             var unavailable = new HashSet<string>();
             foreach (var w in list)
             {
-                if (w == null || !new[] { "create", "reinforce", "weaken", "revise", "retire", "link" }.Contains(w.operation)) return false;
+                if (w == null || !PuzzleViewLogic.IdentitySlot(w.identity_slot)) return false;
+                if (!string.IsNullOrEmpty(w.identity_slot) && w.identity_slot is "self" or "personality" or "expression_habit" &&
+                    !(w.domains ?? new List<string>()).Contains("ass")) return false;
+                if (!new[] { "create", "reinforce", "weaken", "revise", "retire", "link" }.Contains(w.operation)) return false;
                 if (w.evidence_moment_ids == null || w.evidence_moment_ids.Count == 0 || w.evidence_moment_ids.Count > 16 ||
                     w.evidence_moment_ids.Any(id => !moments.Contains(id)) || (w.evidence_fact_ids?.Count ?? 0) > 0) return false;
                 if (w.operation != "create" && !nodes.Contains(w.target_id ?? "")) return false;

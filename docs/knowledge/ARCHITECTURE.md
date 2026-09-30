@@ -1,5 +1,11 @@
 # 当前架构地图
 
+## 整体结构
+
+完整存在由**经历与认知的完整拼图〔主体自身、用户、世界、关系〕 + runtime + 衔接与运行逻辑**构成。以下文件和数据模块服务于这三个部分；身份卡是拼图的摘要视图，不是与拼图独立的自我。整体结构见 [完整存在架构](../EXISTENCE_ARCHITECTURE.md)，正式修订见 [架构总纲第 38 节](../ARCHITECTURE_ALIGNMENT.md#38-完整存在的三部分与人格拼图2026-09-29)。
+
+当前源码已接通同源身份、连续主体、环境局部状态与昼夜拼图闭环。白天追加切片，深夜按来源范围整合经历与感受、形成认知及更新有依据的身份摘要。实现与离线验收见 [实施记录](../EXISTENCE_IMPLEMENTATION.md)，真实模型自然度未验收。
+
 ## 一轮对话
 
 ```text
@@ -12,7 +18,7 @@ KernelLogic → 保存输入 / 判断唤醒类型 / 识图 / 记忆预激活
             → 可选能力执行 → 结果返回同一 Agent 循环
             → ExpressorLogic 公共表达映射（仅 refine 才再次调用模型）
             → MouthLogic 身体路由 → 平台适配器
-            → 文字与表情合并发送 / 更新内心与轨迹 / 安排下一次心跳
+            → 文字与表情合并发送 / 追加当下切片 / 更新连续状态 / 安排下一次心跳
                          ↓
 生图立即后台生成 → DeferredTurnWork → SoulRuntime 轮后队列
                 → 取得运行锁提交发送与回执入库
@@ -34,6 +40,10 @@ KernelLogic → 保存输入 / 判断唤醒类型 / 识图 / 记忆预激活
 | `Plugins/TraceExecutionRegistry.cs` | 持续执行、进度、取消请求与终态回执 |
 | `Logic/CommonContextPackLogic.cs`、`Logic/LlmContextPackLogic.cs` | 公共前缀、历史窗口和供应商策略路由 |
 | `Prompts/CorePrompts.cs`、插件的 `*Prompts.cs` | 核心与器官提示词；不要在路由层散落提示词 |
+| `Logic/IdentityProjectionLogic.cs`、`Logic/PuzzleViewLogic.cs` | 身份来源、版本失效、分享批准及证据可见性 |
+| `Logic/SubjectRuntimeLogic.cs`、`Logic/RuntimeContextLogic.cs` | 连续主体与局部状态的统一视图、版本提交 |
+| `Logic/RuntimeSliceLogic.cs`、`Manager/SqliteRuntimeSlices.cs` | 白天追加切片、夜间日回望、来源保存与召回 |
+| `Logic/PublicExperienceLogic.cs` | 公开原文与切片按环境进入夜间认知整理 |
 | `Logic/MouthLogic.cs` | 身体/器官匹配与通道收口 |
 | `Manager/TracePluginManager.cs` | 插件注册、启停、休眠、贡献目录和调用 |
 | `Plugins/TracePluginContext.cs` | 服务、钩子、插件注册契约（编进 PluginApi） |
@@ -47,7 +57,7 @@ KernelLogic → 保存输入 / 判断唤醒类型 / 识图 / 记忆预激活
 
 ## 数据与部署边界
 
-长期拼图围绕他/user、世界/world、我/ass、我和他/relation 四领域关联；runtime 保留当下状态。`ContextRecallAdapter` 已通过 `MemoryRecallLogic` 接入预激活与按需查询，`SqliteCognitionGraph` 管理证据和修订，`CognitionFormationLogic` 校验日构建可见证据。身份仍由公共短卡入口加载，执行仍看真实设备回执。能力和预算见 [四领域拼图](../COGNITION_PUZZLE.md)。
+长期拼图围绕他/user、世界/world、我/ass、我和他/relation 四领域关联；runtime 保留当下状态。`ContextRecallAdapter` 已通过 `MemoryRecallLogic` 接入预激活与按需查询，`SqliteCognitionGraph` 管理证据和修订，`CognitionFormationLogic` 校验日构建可见证据。身份由共同投影视图加载，夜间回望保留主观痕迹并参与有界召回，执行仍看真实设备回执。能力和预算见 [四领域拼图](../COGNITION_PUZZLE.md)。
 
 - 主 SQLite：对话 Moment、运行事件、内心、身份、事实与索引等；向量 SQLite 由 `SqliteVectorManager` 管理。
 - 图片、表情、调度等运行痕迹保存为 `OperationalEventRecord`，不混成真实聊天历史。相机反馈从这里读取成功发图回执。

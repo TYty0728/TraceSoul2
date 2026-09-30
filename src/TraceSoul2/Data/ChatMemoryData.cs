@@ -31,6 +31,8 @@ namespace TraceSoul2.Data
         public string SourcePluginId { get; set; }
         public string SourceEventId { get; set; }
         public string PayloadJson { get; set; }
+        public string EnvironmentJson { get; set; }
+        public string MemoryVisibility { get; set; }
 
         /// <summary>记忆落库标记：live=已保存未构筑；built=已归档进多维索引/条目。</summary>
         public string MemoryStatus { get; set; }
@@ -61,6 +63,7 @@ namespace TraceSoul2.Data
         public string Realm { get; set; }
         public string EvidenceType { get; set; }
         public string PayloadJson { get; set; }
+        public string EnvironmentJson { get; set; }
         public long OccurredUnixMs { get; set; }
         public long CreatedUnixMs { get; set; }
     }

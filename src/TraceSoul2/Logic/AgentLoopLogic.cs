@@ -30,7 +30,7 @@ namespace TraceSoul2.Logic
         {
             var stable = BuildStable(turn);
             var history = new List<object>();
-            var pendingState = new Dictionary<string, object>();
+            var pendingState = new AgentTurnStateLogic();
             var callIds = new Dictionary<string, string>(StringComparer.Ordinal);
             var executed = new Dictionary<string, TraceCapabilityResultData>(StringComparer.Ordinal);
             var groups = new Dictionary<string, string>(StringComparer.Ordinal);
@@ -45,22 +45,25 @@ namespace TraceSoul2.Logic
                     AgentPromptContextLogic.Context(turn) + AgentPromptContextLogic.Catalog(catalog) +
                     AgentPromptContextLogic.Executions(turn);
                 if (history.Count > 0) dynamic += AgentPromptContextLogic.Results(history);
-                dynamic += AgentPromptContextLogic.PendingState(pendingState);
-                dynamic += "\n本轮对话身体是否已受理表达：" + (responded ? "是" : "否") +
-                    (turn.RequiresExpression && !responded ? "。对方正在对你说话，本轮须用正文或可用表达能力回应。" :
-                        "。已回应或后台唤醒时，可以不再追加输出。") + "最终步骤请包含仍需保存的状态变化。";
-                if (!turn.RequiresExpression)
+                dynamic += AgentPromptContextLogic.PendingState(pendingState.Values);
+                dynamic += "\n本轮表达受理情况：" + (responded ? "已受理，无需重复追加。" : "尚未受理。") +
+                    "已提案状态由程序保留，后续只需填写修订。";
+                if (!EnvironmentLogic.IsHumanInput(turn))
                     dynamic += "\n【当前运行事件，不是对方发言】\n" + (turn.Moment?.Content ?? string.Empty);
                 if (turn.Moment?.SourcePluginId == "runtime.execution")
                     dynamic += "\n【设备确认回执】\n" + Limit(turn.Moment.PayloadJson, 12000);
                 if (round == MaxActionRounds) dynamic += "\n" + AgentLoopPrompts.Budget;
                 var messages = LlmContextPackLogic.Assemble(llm, LlmContextPackLogic.SharedSystem(llm, turn), turn,
-                    memory, turn.RequiresExpression ? turn.Moment?.Content ?? string.Empty : string.Empty,
+                    memory, EnvironmentLogic.IsHumanInput(turn) ? turn.Moment?.Content ?? string.Empty : string.Empty,
                     AgentLoopPrompts.Header, stable, dynamic);
+                IReadOnlyCollection<string> providedFields = null;
                 var output = await DeepSeekStructuredOutputLogic.CompleteAsync<AgentOutputData>(llm, messages,
                     null, AgentLoopPrompts.Invalid, token, LlmContextPackLogic.BuildPromptCacheKey(llm, turn.ConversationId),
                     value => ValidationError(value.ToRuntime(), turn.RequiresExpression && !responded, round == MaxActionRounds) ??
-                        GoalMemoryLogic.ValidationError(turn, value.goal_updates));
+                        GoalMemoryLogic.ValidationError(turn, value.goal_updates),
+                    (_, fields) => providedFields = fields);
+                pendingState.Update(output, providedFields);
+                pendingState.ApplyTo(output);
                 var step = output.ToRuntime();
                 MindLogic.Normalize(step);
                 // 明确反馈在执行或发送前落库；后续行动失败也不会抹掉已经听取的调整。
@@ -112,7 +115,6 @@ namespace TraceSoul2.Logic
                     results.Add(AgentPromptContextLogic.Result(call, result));
                 }
                 // 尚未落库的状态变化单独保留，续推不复制整份输出或未发送草稿。
-                AgentPromptContextLogic.UpdatePendingState(pendingState, output);
                 history.AddRange(results);
             }
             throw new InvalidOperationException("Agent 行动预算耗尽。");
@@ -159,6 +161,7 @@ namespace TraceSoul2.Logic
         internal static string ValidationError(AgentStepData value, bool needsReply, bool finalOnly)
         {
             if (value == null) return "$ 必须是 JSON 对象。";
+            if (!SubjectRuntimeLogic.ValidAffect(value.affect)) return "$.affect 必须为 calm/joyful/sad/angry/anxious/tired/curious/mixed，不能包含私人原因。";
             if (value.step != "finish" && value.step != "continue" && value.step != "wait")
                 return "$.step 必须填写 finish、continue 或 wait。";
             var actions = value.actions ?? new List<BrainCapabilityCallData>();
@@ -220,6 +223,7 @@ namespace TraceSoul2.Logic
         internal static string BuildStable(TraceTurnContext turn)
         {
             var builder = new StringBuilder(AgentLoopPrompts.Rules);
+            builder.AppendLine().AppendLine(AgentLoopPrompts.SubjectContinuity);
             builder.AppendLine().AppendLine(CorePrompts.Expressor.ExpressionPosture);
             // 旧 Mind/Expressor 的协议扩展不进入 Agent 根契约；插件通过能力目录声明调用格式。
             builder.AppendLine().AppendLine(AgentLoopPrompts.ExpressionChoice);

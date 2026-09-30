@@ -80,11 +80,27 @@ internal static partial class Program
             continuation.Requests[1].Contains("新产生的关注需要延续") &&
             continuation.Requests[1].Split("唯一实际检索结果").Length == 2 && continuation.Requests[1].Contains("read-1"),
             "续推仅回放一次可关联的真实调用与结果，不复制整份输出或草稿");
-        var pending = new Dictionary<string, object>();
-        AgentPromptContextLogic.UpdatePendingState(pending, new AgentOutputData { sleep = true, next_heartbeat_minutes = 30 });
-        AgentPromptContextLogic.UpdatePendingState(pending, new AgentOutputData { sleep = false, next_heartbeat_minutes = 0 });
-        Require(pending["sleep"] is false && (int)pending["next_heartbeat_minutes"] == 0,
+        var pending = new AgentTurnStateLogic();
+        pending.Update(new AgentOutputData { sleep = true, next_heartbeat_minutes = 30 }, new[] { "sleep", "next_heartbeat_minutes" });
+        pending.Update(new AgentOutputData { sleep = false, next_heartbeat_minutes = 0 }, new[] { "sleep", "next_heartbeat_minutes" });
+        Require(pending.Values["sleep"] is false && (int)pending.Values["next_heartbeat_minutes"] == 0,
             "后续状态提案可撤回睡眠或时间，不能只累加 true 和非零值");
+        var statePrelude = "{\"step\":\"continue\",\"sleep\":true,\"mood_changed\":true,\"mood\":\"轻松\",\"inner\":\"想分享这一刻\",\"next_heartbeat_minutes\":90,\"actions\":[{\"call_id\":\"state-1\",\"capability_id\":\"test.read\",\"arguments\":[{\"name\":\"query\",\"value\":\"一次\"}]}]}";
+        var middle = "{\"step\":\"continue\",\"actions\":[{\"call_id\":\"state-2\",\"capability_id\":\"test.read\",\"arguments\":[{\"name\":\"query\",\"value\":\"二次\"}]}]}";
+        foreach (var mode in new[] { "inherit", "wake", "clear" })
+        {
+            var clear = mode == "clear";
+            var sequence = new AgentSequenceLlm(statePrelude, middle, clear
+                ? "{\"step\":\"finish\",\"reply\":\"好了\",\"sleep\":false,\"next_heartbeat_minutes\":0,\"inner\":\"\",\"attention_links\":[]}"
+                : mode == "wake" ? "{\"step\":\"finish\",\"reply\":\"好了\",\"sleep\":false}"
+                : "{\"step\":\"finish\",\"reply\":\"好了\"}");
+            var resolved = await new AgentLoopLogic(sequence).RunAsync(turn, "", () => new() { tool },
+                (_, _) => Task.FromResult(new TraceCapabilityResultData { Status = "success" }), default);
+            Require(resolved.sleep == (mode == "inherit") && resolved.next_heartbeat_minutes == (mode == "wake" ? 90 : 0) &&
+                    resolved.inner == (clear ? "" : "想分享这一刻") && resolved.mood_changed && resolved.mood == "轻松" &&
+                    resolved.actions.Count == 0 && sequence.Requests.Count == 3,
+                "跨两轮行动区分字段省略与显式false/0/空字符串；只继承状态，不继承 actions");
+        }
         Console.WriteLine("Agent prompt checks passed: context ownership, empty sections, active executions, current receipts, concise tools and result-only continuation.");
     }
 

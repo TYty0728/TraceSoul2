@@ -2,6 +2,7 @@ using System;
 using System.Collections.Generic;
 using System.Linq;
 using TraceSoul2.Data;
+using TraceSoul2.Logic;
 
 namespace TraceSoul2.Manager
 {
@@ -79,6 +80,20 @@ namespace TraceSoul2.Manager
             if ((write.domains ?? new List<string>()).Any(x => !LifeRouteValues.IsDomain(x)))
                 throw new InvalidOperationException("认知领域只能是 user/world/ass/relation。");
             var evidence = ResolveCognitionEvidence(write, trigger);
+            var originals = evidence.Select(x => connection.Find<MomentRecord>(x.MomentId)).ToList();
+            var contexts = originals.Select(x => x.ConversationId ?? "").Distinct().ToList();
+            var visibilities = originals.Select(x => x.MemoryVisibility == "public" ? "public" : "private").Distinct().ToList();
+            if (contexts.Count != 1 || visibilities.Count != 1)
+                throw new InvalidOperationException("一次认知变更的证据必须来自同一环境，不能混合受众。");
+            var contextId = contexts[0];
+            var visibility = visibilities[0];
+            if (target != null && ((!string.IsNullOrEmpty(target.ContextConversationId) && target.ContextConversationId != contextId) ||
+                (target.MemoryVisibility == "public" ? "public" : "private") != visibility))
+                throw new InvalidOperationException("认知变更不能跨越来源环境。");
+            if (!PuzzleViewLogic.IdentitySlot(write.identity_slot)) throw new InvalidOperationException("未知的身份摘要用途。");
+            if (!string.IsNullOrEmpty(write.identity_slot) && write.identity_slot is "self" or "personality" or "expression_habit" &&
+                !(write.domains ?? new List<string>()).Contains("ass"))
+                throw new InvalidOperationException("自我摘要必须有 ass 领域依据。");
             var relation = op == "weaken" || op == "retire" ? "challenges" : "supports";
             if (op == "link")
             {
@@ -86,6 +101,9 @@ namespace TraceSoul2.Manager
                 if (other == null || !PuzzleDomains.Live(other.Status) || other.Id == target.Id ||
                     !new[] { "related_to", "abstracts", "exemplifies", "contradicts" }.Contains(write.relation))
                     throw new InvalidOperationException("认知关联目标或关系无效。");
+                if ((other.ContextConversationId ?? contextId) != contextId ||
+                    (other.MemoryVisibility == "public" ? "public" : "private") != visibility)
+                    throw new InvalidOperationException("关联不能引入另一环境的认知。");
                 SaveCognitionEdge(target.Id, other.Id, write.relation, now);
                 // 关联的依据不等于节点内容再次被证明。
                 AddGraphEvidence(target.Id, evidence, "link:" + write.relation + ":" + other.Id);
@@ -100,6 +118,11 @@ namespace TraceSoul2.Manager
                     AddGraphEvidence(target.Id, evidence, relation);
                     return target;
                 }
+                if (op == "reinforce" && originals.All(x => LoadPairIdentity().IsCompanionMoment(x.Role)))
+                {
+                    AddGraphEvidence(target.Id, evidence, "self_reflection");
+                    return target;
+                }
                 var confidence = Clamp01(write.confidence);
                 target.Confidence = op == "reinforce" ? Math.Max(target.Confidence, confidence) : Math.Min(target.Confidence, confidence);
                 target.Strength = Clamp01(target.Strength + (op == "reinforce" ? 0.08f : -0.08f));
@@ -109,7 +132,7 @@ namespace TraceSoul2.Manager
                 connection.Update(target); AddGraphEvidence(target.Id, evidence, relation);
                 return target;
             }
-            var summary = LoadPairIdentity().RewriteRecordedText((write.summary ?? "").Trim());
+            var summary = visibility == "public" ? (write.summary ?? "").Trim() : LoadPairIdentity().RewriteRecordedText((write.summary ?? "").Trim());
             if (summary.Length == 0 || summary.Length > 600) throw new InvalidOperationException("认知正文须为 1～600 字。");
             var domains = PuzzleDomains.Pack(write.domains);
             if (domains.Length == 0 && target != null) domains = target.Domains;
@@ -120,13 +143,18 @@ namespace TraceSoul2.Manager
             var about = Limit((write.about ?? "").Trim(), 160);
             var scope = Limit((write.scope ?? "").Trim(), 300);
             var exceptions = Limit((write.exceptions ?? "").Trim(), 300);
+            var identitySlot = write.identity_slot ?? "";
             var existing = op == "create" ? connection.Table<CognitionSliceRecord>()
                 .Where(x => x.Summary == summary && x.Domains == domains && (x.Status == "active" || x.Status == "weakened") &&
-                    x.About == about && x.Scope == scope && x.Exceptions == exceptions).FirstOrDefault() : null;
+                    x.About == about && x.Scope == scope && x.Exceptions == exceptions &&
+                    x.ContextConversationId == contextId && x.IdentitySlot == identitySlot).FirstOrDefault() : null;
             if (existing != null) { AddGraphEvidence(existing.Id, evidence, "supports"); return existing; }
             var node = new CognitionSliceRecord
             {
                 Id = Guid.NewGuid().ToString("N"), OwnerId = "ass", Domains = domains,
+                ContextConversationId = contextId, MemoryVisibility = visibility,
+                SubjectKey = string.Join("|", originals.Select(PuzzleViewLogic.SubjectKey).Distinct().OrderBy(x => x)),
+                IdentitySlot = write.identity_slot ?? "",
                 About = about, Scope = scope, Exceptions = exceptions, Summary = summary,
                 Subtype = string.IsNullOrWhiteSpace(write.subtype) ? "standard" : Limit(write.subtype, 40),
                 Confidence = Clamp01(write.confidence), Strength = Clamp01(write.strength > 0 ? write.strength : write.confidence),

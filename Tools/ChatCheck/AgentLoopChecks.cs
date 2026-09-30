@@ -16,6 +16,10 @@ internal static partial class Program
     {
         using var store = new SqliteMemoryManager(":memory:");
         store.SavePairIdentity("小雨", "小光", "雨雨");
+        EnvironmentLogic.SaveSettings(store, new EnvironmentSettings { OwnerAccounts = new()
+            { new OwnerAccountBindingData { PlatformId = "check.agent", UserId = "owner" } } });
+        var observed = new EnvironmentObservationData { PlatformId = "check.agent", SessionId = "owner", SessionType = "private",
+            SpeakerId = "owner", ExclusivePair = true, DirectAddress = true };
         var services = new TracePluginServices(store, new HierarchicalVectorRouterLogic(new FakeEncoder()));
         using var manager = new TracePluginManager(store, services);
         manager.RegisterExternal(new DialogueTracePlugin());
@@ -40,12 +44,12 @@ internal static partial class Program
             var llm = new AgentSequenceLlm(responses);
             var kernel = new KernelLogic(store, llm, manager);
             var result = conversation == "agent-silent"
-                ? await kernel.ProcessPluginEventAsync(conversation, new PluginEventData { PluginId = "check.agent", Role = "system_event",
+                ? await kernel.ProcessPluginEventAsync(conversation, new PluginEventData { PluginId = "check.agent", Environment = observed, Role = "system_event",
                     Content = "后台观察", IsOperational = true, Wake = KernelWakeValues.Mind, OccurredUnixMs = DateTimeOffset.UtcNow.ToUnixTimeMilliseconds() })
                 : conversation == "agent-voice" || conversation.StartsWith("agent-media", StringComparison.Ordinal)
                 ? await kernel.ProcessPluginEventAsync(conversation, new PluginEventData
                 {
-                    PluginId = "check.agent", Role = "小雨", Content = "请用声音回应", Organ = "voice",
+                    PluginId = "check.agent", Environment = observed, Role = "小雨", Content = "请用声音回应", Organ = "voice",
                     OccurredUnixMs = DateTimeOffset.UtcNow.ToUnixTimeMilliseconds()
                 }, historyWindowMax: 8)
                 : await kernel.ChatAsync(conversation, "帮我看看资料", historyWindowMax: 8);
@@ -61,6 +65,40 @@ internal static partial class Program
         Require(store.LoadOrCreateInnerRuntime("agent-direct").Narrative == direct.inner, "同次生成的内心变化仍须落库");
         Require(!normal.llm.Requests[0].Contains("话留到开口") && normal.llm.Requests[0].Contains("【Agent 当下】"),
             "新循环不应被旧的禁说话提示覆盖");
+
+        services.HeartbeatMinMinutes = services.HeartbeatMaxMinutes = 10;
+        var staged = Continue(Action("state-before-action"));
+        staged.inner = "这一轮决定留下的心情";
+        staged.next_heartbeat_minutes = 90;
+        staged.next_heartbeat_plan = "稍后再来分享";
+        var inherited = await Chat("agent-state-carry", Step(staged),
+            "{\"step\":\"finish\",\"reply\":\"看好了。\"}");
+        Require(store.LoadOrCreateInnerRuntime("agent-state-carry").Narrative == staged.inner,
+            "行动前的内心状态必须由代码传到最终提交，收尾省略不能丢失");
+        Require(HeartbeatLogic.NextPlan(store, "agent-state-carry") == staged.next_heartbeat_plan,
+            "行动前的联系计划必须由代码传到最终提交");
+        Require(HeartbeatLogic.NextDueUnixMs(store, "agent-state-carry").HasValue &&
+                Math.Abs((HeartbeatLogic.NextDueUnixMs(store, "agent-state-carry").Value - DateTimeOffset.UtcNow.ToUnixTimeMilliseconds()) / 60000.0 - 90) < .1,
+            "行动前的90分钟安排必须由代码传到最终提交");
+        probe.FailText = true;
+        var failedSend = new AgentSequenceLlm("{\"step\":\"finish\",\"reply\":\"测试未发出的正文\",\"inner\":\"发送前已形成的状态\",\"next_heartbeat_minutes\":90,\"next_heartbeat_plan\":\"下一次重新判断\"}");
+        var sendThrew = false;
+        try
+        {
+            await new KernelLogic(store, failedSend, manager).ProcessPluginEventAsync("agent-send-failure", new PluginEventData
+            {
+                PluginId = "check.agent", Environment = observed, Role = "小雨", Content = "现在怎么样",
+                OccurredUnixMs = DateTimeOffset.UtcNow.ToUnixTimeMilliseconds()
+            });
+        }
+        catch (InvalidOperationException) { sendThrew = true; }
+        Require(sendThrew && HeartbeatLogic.NextPlan(store, "agent-send-failure") == "下一次重新判断" &&
+                store.LoadOrCreateInnerRuntime("agent-send-failure").Narrative == "发送前已形成的状态" &&
+                store.GetRecentDialogueMoments("agent-send-failure", 10).All(x => x.Content != "测试未发出的正文"),
+            "发送失败也须保留已形成的状态和后续唤醒，不能把未发出的正文记为成功");
+        probe.FailText = false;
+        services.HeartbeatMinMinutes = services.HeartbeatMaxMinutes = 0;
+        probe.Count = 0;
 
         var silentStep = new AgentStepData { step = "wait", inner = "这一刻安静听着。", next_heartbeat_minutes = 15,
             next_heartbeat_plan = "稍后看看是否有想分享的事" };
@@ -214,7 +252,7 @@ internal static partial class Program
         var quietLlm = new AgentSequenceLlm(Step(Continue(wave, look)), Step(new AgentStepData { step = "wait" }));
         await new KernelLogic(store, quietLlm, manager).ProcessPluginEventAsync("agent-gesture", new PluginEventData
         {
-            PluginId = "check.agent", Role = "system_event", Content = "有人走近，可以挥手", IsOperational = true,
+            PluginId = "check.agent", Environment = observed, Role = "system_event", Content = "有人走近，可以挥手", IsOperational = true,
             Wake = KernelWakeValues.Mind, OccurredUnixMs = DateTimeOffset.UtcNow.ToUnixTimeMilliseconds()
         }, cancellationToken: CancellationToken.None);
         Require(quietLlm.Requests.Count == 2 && probe.Gestures == 2 && store.GetRecentMoments("agent-gesture", 10).Count == 0,
@@ -246,6 +284,19 @@ internal static partial class Program
             throw new Exception("取消应向上传播");
         }
         catch (OperationCanceledException) { Require(cancelledLlm.Requests.Count == 0, "取消不能启动模型请求"); }
+        services.HeartbeatMinMinutes = services.HeartbeatMaxMinutes = 10;
+        var photoState = Continue(Action("state-photo", "check.agent.image"));
+        photoState.inner = "想把这一刻分享出去";
+        photoState.next_heartbeat_minutes = 90;
+        photoState.next_heartbeat_plan = "稍后来看看自己的心情";
+        var photoOnly = await Chat("agent-media-state-carry", Step(photoState), "{\"step\":\"wait\"}");
+        Require(photoOnly.llm.Requests.Count == 2 &&
+                store.GetRecentOperationalEvents("agent-media-state-carry", 20).Count(x => x.Kind == OperationalEventKindValues.OutboundImage) == 1 &&
+                store.GetRecentDialogueMoments("agent-media-state-carry", 20).Count == 1 &&
+                store.LoadOrCreateInnerRuntime("agent-media-state-carry").Narrative == photoState.inner &&
+                HeartbeatLogic.NextPlan(store, "agent-media-state-carry") == photoState.next_heartbeat_plan,
+            "只发照片后直接wait也须提交行动前的内心和下次联系，不补文字、不重复照片");
+        services.HeartbeatMinMinutes = services.HeartbeatMaxMinutes = 0;
         await manager.ExecuteAsync(Action("plugin-stop", "check.agent.voice"), turn, CancellationToken.None);
         var pluginToken = probe.VoiceToken;
         manager.SetEnabled("check.agent", false);
@@ -278,7 +329,7 @@ internal static partial class Program
     private sealed class AgentProbePlugin : ITracePlugin
     {
         public int Count, Gestures, Media;
-        public bool Fail;
+        public bool Fail, FailText;
         public bool TextAvailable = true;
         public CancellationToken VoiceToken;
         public TracePluginMetadataData Metadata { get; } = new TracePluginMetadataData
@@ -310,6 +361,7 @@ internal static partial class Program
             public bool IsAvailable(TraceTurnContext context) => Descriptor.Organ != "text" || owner.TextAvailable;
             public Task<TraceCapabilityResultData> ExecuteAsync(BrainCapabilityCallData call, TraceTurnContext context, CancellationToken cancellationToken)
             {
+                if (Descriptor.Organ == "text" && owner.FailText) throw new InvalidOperationException("模拟平台发送失败");
                 if (Descriptor.Organ == "voice")
                 {
                     owner.VoiceToken = cancellationToken;

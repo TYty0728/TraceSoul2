@@ -68,7 +68,7 @@ namespace TraceSoul2.ExternalPlugins
         {
             Id = PluginId,
             DisplayName = "QQ 相机与生图",
-            Version = "2.2.2",
+            Version = "2.2.3",
             Author = "TraceSoul2",
             Role = PluginRoleValues.Organ,
             PlatformId = BodyIds.Qq,
@@ -1053,6 +1053,8 @@ namespace TraceSoul2.ExternalPlugins
             {
                 Id = "qq.imagegen.generate", Kind = TraceContributionKindValues.Effector,
                 DisplayName = "QQ 相机/生图", Description = QqImageGenPrompts.EffectorDescription,
+                WhenToUse = QqImageGenPrompts.AgentUsage,
+                WhenNotToUse = QqImageGenPrompts.AgentBoundary,
                 Provides = "expression.qq.imagegen",
                 Boundary = QqImageGenPrompts.EffectorBoundary,
                 BodyId = BodyIds.Qq, BodyTier = BodyTierValues.Chat, Organ = BodyOrganValues.Image,
