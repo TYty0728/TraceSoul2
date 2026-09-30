@@ -17,6 +17,16 @@ internal static partial class Program
         var path = Path.Combine(Path.GetTempPath(), "runtime-continuity-" + Guid.NewGuid().ToString("N") + ".db");
         const string root = "continuity", day = "2026-09-20";
         var start = MemoryDayLogic.StartOf(day);
+        var boundaryMethod = typeof(MemoryNervePlugin).GetNestedType("TodayNewFacet", System.Reflection.BindingFlags.NonPublic)
+            .GetMethod("TodayBoundary", System.Reflection.BindingFlags.NonPublic | System.Reflection.BindingFlags.Static);
+        foreach (var instant in new[] { DateTimeOffset.Parse("2026-09-30T19:59:59Z"), DateTimeOffset.Parse("2026-09-30T20:00:00Z"),
+            DateTimeOffset.Parse("2026-09-30T20:31:00Z"), DateTimeOffset.Parse("2026-10-01T03:59:59Z") })
+        foreach (var offset in new[] { TimeSpan.Zero, TimeSpan.FromHours(8), TimeSpan.FromHours(-7) })
+        {
+            var boundary = (DateTimeOffset)boundaryMethod.Invoke(null, new object[] { instant.ToOffset(offset) });
+            Require(boundary == MemoryDayLogic.CurrentStart(instant) && boundary.Offset == TimeSpan.FromHours(8),
+                "今日新识分界必须保留+08:00，与输入偏移和服务器本地时区无关");
+        }
         try
         {
             using (var store = new SqliteMemoryManager(path))
