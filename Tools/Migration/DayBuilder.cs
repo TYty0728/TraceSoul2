@@ -374,8 +374,7 @@ namespace TraceSoul2.Migrate
             var identityNodes = graphNodes.Where(x => x.Status == "active" &&
                 x.MemoryVisibility != "public" && (string.IsNullOrEmpty(x.ContextConversationId) || x.ContextConversationId == MigrationContext.ConversationId) &&
                 !string.IsNullOrEmpty(x.IdentitySlot)).Take(40).ToList();
-            reviewPrompt += "\n【可用于摘要的认知与来源】\n" + TraceJson.ToJson(identityNodes) +
-                "\n【本人固定，不能覆盖的卡】\n" + string.Join(",", cardsNow.Where(x => x.Pinned).Select(x => x.Slot));
+            reviewPrompt += DayCardReviewContract.EvidenceContext(cardsNow, identityNodes);
             reviewPrompt += "\n【本日切片已形成的经历与感受拼图】\n（主观痕迹不等于外部事实；摘要仍必须引用上面的认知依据。）\n" +
                 string.Join("\n", context.Store.GetRuntimeDayReviews(MigrationContext.ConversationId, dayKey)
                     .Where(x => x.MemoryVisibility != "public" && x.ContextConversationId == MigrationContext.ConversationId)
@@ -386,15 +385,9 @@ namespace TraceSoul2.Migrate
                 new DeepSeekMessageData("user", CorePrompts.Migration.DayCardUser)
             };
             var output = await DeepSeekStructuredOutputLogic.CompleteAsync<ReplayPrompts.DayCardReviewOutputData>(
-                llm, reviewMessages,
-                x => x != null && x.cards != null && x.cards.Count <= 5 &&
-                    x.cards.Where(c => c != null).Select(c => c.slot).Distinct().Count() == x.cards.Count &&
-                    x.cards.All(c => c != null && PuzzleViewLogic.IdentitySlot(c.slot) && !string.IsNullOrEmpty(c.slot) &&
-                        !cardsNow.Any(old => old.Slot == c.slot && old.Pinned) &&
-                        !string.IsNullOrWhiteSpace(c.body) && c.body.Length <= IdentityCardSlotValues.BodyLimit(c.slot) &&
-                        c.cognition_ids != null && c.cognition_ids.Count > 0 && c.cognition_ids.Count <= 12 &&
-                        c.cognition_ids.All(id => identityNodes.Any(n => n.Id == id && n.IdentitySlot == c.slot))),
-                "身份摘要缺少有效认知依据或覆盖了本人固定内容；无变化请给 cards: []。", CancellationToken.None);
+                llm, reviewMessages, null,
+                "身份摘要输出不符合卡片更新契约。", CancellationToken.None,
+                validationError: x => DayCardReviewContract.ValidationError(x, cardsNow, identityNodes));
             output.SubjectRevision = subjectRevision;
             LogCall(context, dayKey, "card_review", 0,
                 "身份摘要复盘：" + Limit(output.summary, 60), TraceJson.ToJson(output));

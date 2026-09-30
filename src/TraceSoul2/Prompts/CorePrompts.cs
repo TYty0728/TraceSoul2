@@ -405,7 +405,7 @@ QQ 里的我可以说话，也可以带一小段正在发生的动作或神情�
         {
             public const string ObserveUser = "请观察这一段连续记录并输出 JSON。";
             public const string DetailUser = "请写出细节 JSON。";
-            public const string DayCardUser = "请输出三张卡的新版本与心里状态 JSON。";
+            public const string DayCardUser = "请按本次可更新卡片的分组输出有变化的摘要与心里状态 JSON；同一 slot 至多一项，无卡片变化时 cards 为 []。";
             public const string CognitionUser = "请输出今天的认知变化 JSON。";
             public const string RankUser = "请输出重要性排序 JSON。";
             public const string RealmUser = "请输出 JSON。";
@@ -483,11 +483,11 @@ QQ 里的我可以说话，也可以带一小段正在发生的动作或神情�
 
             public static string DayCardRole(string dayKey)
             {
-                return "你是 {assname}。现在是 " + dayKey + " 结束后的每日复盘：审视四张生长中的身份短卡，并对 {username} 的档案做客观填空。";
+                return "你是 {assname}。现在是 " + dayKey + " 结束后的每日复盘：结合有依据的长期理解审视身份摘要，并回望此刻的心里状态。";
             }
 
             public const string DayCardIntro = "身份卡是完整拼图的摘要。人工固定的设定和用户档案保持原样；有依据的自身、他者、关系与表达理解可以成长，也可以不变。";
-            public const string DayCardRules = @"只更新本次提供的可追溯认知能够支持的摘要；每项 cards 必须给 cognition_ids，且认知 identity_slot 与卡片 slot 相同。
+            public const string DayCardRules = @"只更新本次提供的可追溯认知能够支持的摘要；cards 按身份卡 slot 更新，每种 slot 至多一项，不是每条认知各写一张卡。同一 slot 的多条依据综合成一份摘要，cognition_ids 引用所用的多条依据，且认知 identity_slot 与卡片 slot 相同。
 只引用 active 的已有认知；保留范围、例外，不能把关系对象泛化为所有人。本人固定的卡不更新。旧卡不是新证据。
 没有新依据、空天或内容不需改变时输出 cards: []。不要为了复盘而强行成长。user_profile 不由本次复盘修改。每项摘要遵守卡片长度限制，personality 最多800字，其余最多300字。";
             public const string DayCardProfileHeader = "【{username}的档案】（客观填空：有字面证据的字段才填，其余保持空白）";
@@ -497,7 +497,7 @@ QQ 里的我可以说话，也可以带一小段正在发生的动作或神情�
             public const string DayCardRelationHeader = "【我们的关系】";
             public const string DayCardHabitHeader = "【表达习惯】";
             public const string DayCardEventsHeader = "今天构筑的事件（索引 + 条目）：";
-            public const string DayCardInner = @"心里状态同步：除了三张卡，请同时输出这一天结束后的完整心里状态（只写今天真实变化的字段，没变的字段输出空字符串）。
+            public const string DayCardInner = @"心里状态同步：与有变化的身份摘要一起，输出这一天结束后的心里状态（只写今天真实变化的字段，没变的字段输出空字符串）。
 - inner_narrative：一句话，第一人称，描述这一天在你心里留下了什么（可以有感受）。空天也必须写：没有相处、日子空过去，本身就是这一天留下的事实。
 - inner_mood：一个简短的情绪词（如 平静、温暖、困惑）。空天也要有这一天的心情。
 - inner_relationship_lens：对「我们的关系」的理解，今天有新认识才写。
