@@ -2042,9 +2042,16 @@
       liveField("关系视角", r.relationshipLens) +
       liveFieldHtml("浮着的碎片", liveAttention(r.attention), !(r.attention || []).length);
     $("liveDecision").innerHTML =
-      liveField("判断轨道", decision.beat) +
-      liveField("心智说明", decision.note) +
+      liveField("本轮决策", decision.step || decision.beat) +
+      (decision.step ? liveField("本轮更新", (decision.updatedFields || []).map(x => ({inner:"感受",mood:"情绪",affect:"总体情绪",attention:"关注",attention_links:"关注关联",today:"经历",new_fact:"新识",scene:"共同场景",location:"位置",activity:"活动",activity_detail:"活动详情",speak_center:"表达中心",heartbeat_intent:"联系理由",next_heartbeat_plan:"唤醒计划",next_heartbeat_minutes:"唤醒时间",sleep:"休息",state_force:"状态确认",mood_changed:"情绪标记"}[x] || x)).join("、") || "未修改状态，沿用已有状态") : liveField("心智说明", decision.note)) +
+      liveField("情绪变化", decision.moodChanged ? decision.mood : "") +
+      liveField("总体情绪", decision.affect) +
+      liveField("新增经历", decision.today) +
+      liveField("新得知", decision.newFact) +
+      liveField("关注更新", (decision.attention || []).join("；")) +
+      liveField("目标变化", (decision.goalUpdates || []).map(x => [x.operation, x.content].filter(Boolean).join(" · ")).join("；")) +
       liveField("本次内心", decision.inner) +
+      liveField("实际回执", ((d.latestTurn && d.latestTurn.results) || []).filter(x => x.capabilityId && !["inner.snapshot", "day.trajectory", "memory.today.new"].includes(x.capabilityId)).map(x => [x.capabilityId, x.status, x.summary].filter(Boolean).join(" · ")).join("；")) +
       liveField("联系理由", decision.heartbeatIntent) +
       liveField("下次检查", decision.nextHeartbeatPlan || h.nextPlan) +
       `<div class="live-field"><div class="key">状态选择</div><div class="value">${liveTags([
@@ -2052,8 +2059,8 @@
         decision.sleep ? "睡下" : "不睡",
         decision.nextHeartbeatMinutes > 0 ? "下次 " + decision.nextHeartbeatMinutes + " 分钟" : "不再自醒"
       ], decision.speak ? "green" : "gray")}</div></div>` +
-      `<div class="live-field"><div class="key">标签</div><div class="value">${liveTags(decision.tags)}</div></div>` +
-      liveField("查询 / 认知", [decision.query, decision.cognition].filter(Boolean).join("｜"));
+      (decision.step ? "" : `<div class="live-field"><div class="key">标签</div><div class="value">${liveTags(decision.tags)}</div></div>` +
+      liveField("查询 / 认知", [decision.query, decision.cognition].filter(Boolean).join("｜")));
     $("liveContext").innerHTML =
       liveField("记忆日", c.day) +
       liveField("正在做", doingText || "空闲") +

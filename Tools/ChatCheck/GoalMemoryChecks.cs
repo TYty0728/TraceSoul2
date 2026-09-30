@@ -140,13 +140,13 @@ internal static partial class Program
                     actions = new() { new() { call_id = "test", capability_id = "memory.recall",
                         arguments = new() { new() { name = "query", value = "资料" } } } } };
                 var actionLlm = new AgentSequenceLlm(JsonSerializer.Serialize(actionStep, json), "{\"step\":\"finish\",\"reply\":\"没查成，但要求记下了。\"}");
-                await new AgentLoopLogic(actionLlm).RunAsync(loopTurn, "", () => new(), (_, _) =>
+                var appliedDecision = await new AgentLoopLogic(actionLlm).RunAsync(loopTurn, "", () => new(), (_, _) =>
                 {
                     Require(GoalMemoryLogic.Read(store, "goal-before-action").Single().Content == preference,
                         "明确要求必须在后续行动前持久化");
                     return Task.FromResult(new TraceCapabilityResultData { Status = "failed", Summary = "离线失败" });
                 }, default);
-                Require(actionLlm.Requests.Count == 2 && actionLlm.Requests[1].Contains(preference),
+                Require(appliedDecision.applied_goal_updates.Single().content == preference && actionLlm.Requests.Count == 2 && actionLlm.Requests[1].Contains(preference),
                     "工具失败后偏好仍保留并进入同轮下一步，不依赖最终步骤重新填写");
                 var refineLlm = new AgentSequenceLlm("简短正文。");
                 await new ExpressorLogic(refineLlm).ExpressAsync(loopTurn, manager.GetPlugins(), manager.GetAvailableCatalog(loopTurn),

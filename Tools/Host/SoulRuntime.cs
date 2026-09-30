@@ -389,7 +389,7 @@ namespace TraceSoul2.Host
             var pair = Store.LoadPairIdentity();
             var current = Providers.Get(Providers.CurrentId);
             var home = TraceHome.Current;
-            var inner = Store.LoadOrCreateInnerRuntime(ConversationId);
+            var inner = SubjectRuntimeLogic.View(Store, ConversationId, ConversationId, false);
             return new
             {
                 alive = true,
@@ -431,7 +431,7 @@ namespace TraceSoul2.Host
         {
             var now = DateTimeOffset.Now;
             var pair = Store.LoadPairIdentity();
-            var inner = Store.LoadOrCreateInnerRuntime(ConversationId);
+            var inner = SubjectRuntimeLogic.View(Store, ConversationId, ConversationId, false);
             var body = MouthLogic.LoadState(DataDirectory);
             var life = liveServices == null || liveServices.LifeState == null
                 ? new LifeStateData { conversation_id = ConversationId, location = body.scene }
@@ -439,8 +439,7 @@ namespace TraceSoul2.Host
             var due = HeartbeatLogic.NextDueUnixMs(Store, ConversationId);
             var plan = HeartbeatLogic.NextPlan(Store, ConversationId);
             var decision = LastTurn == null ? LoadLatestMindDecision() : LastTurn.MindDecision;
-            var dayBoundary = new DateTimeOffset(now.Date.AddHours(4), now.Offset);
-            if (now < dayBoundary) dayBoundary = dayBoundary.AddDays(-1);
+            var dayBoundary = MemoryDayLogic.CurrentStart(now);
             var dayKey = dayBoundary.ToString("yyyy-MM-dd");
             var lastMoments = Store.GetRecentMoments(ConversationId, 18)
                 .Select(x => new
@@ -452,8 +451,8 @@ namespace TraceSoul2.Host
                     x.MemoryStatus,
                     x.CreatedUnixMs
                 }).ToList();
-            var trajectory = Store.LoadDayTrajectory(dayKey);
-            var today = Store.GetTodayNewItems(ConversationId, dayBoundary.ToUnixTimeMilliseconds(), 12)
+            var trajectory = DayTrajectoryLogic.Read(Store, ConversationId, dayKey);
+            var today = Store.GetTodayNewItemsByDay(ConversationId, dayKey)
                 .Select(x => new { x.Content, x.SourceMomentId, x.CreatedUnixMs }).ToList();
             var latest = LastTurnPayload();
             // 历史补构建会刷新写入时间；实时状态按事件发生时间展示最近的事件。
@@ -506,7 +505,7 @@ namespace TraceSoul2.Host
                     sharedScene = inner.OngoingActivity,
                     inner.Asleep,
                     inner.Idle,
-                    attention = (inner.Attention ?? new List<AttentionItemData>()).Take(3)
+                    attention = InnerLifeLogic.LiveAttention(inner, now.ToUnixTimeMilliseconds()).Take(3)
                         .Select(x => new { kind = x.kind ?? string.Empty, content = x.content ?? string.Empty, updatedUnixMs = x.UpdatedUnixMs }).ToList(),
                     inner.SnapshotId,
                     inner.SourceMomentId,
@@ -541,7 +540,7 @@ namespace TraceSoul2.Host
             try
             {
                 var snapshot = TraceJson.FromJson<TurnPayloadSnapshotData>(reviews[reviews.Count - 1].PayloadJson);
-                return snapshot == null ? null : snapshot.mind_decision;
+                return snapshot == null ? null : snapshot.agent_decision ?? snapshot.mind_decision;
             }
             catch { return null; }
         }
@@ -552,11 +551,15 @@ namespace TraceSoul2.Host
             decision = MindLogic.Normalize(decision);
             return new
             {
+                step = (decision as AgentStepData)?.step,
+                affect = (decision as AgentStepData)?.affect,
+                updatedFields = (decision as AgentStepData)?.state_fields,
+                goalUpdates = ((decision as AgentStepData)?.applied_goal_updates ?? (decision as AgentStepData)?.goal_updates)?.Select(x => new { x.operation, x.kind, x.content }),
                 beat = decision.beat,
                 tags = decision.ParseTags(),
                 query = decision.query ?? string.Empty,
                 mood = decision.mood ?? string.Empty,
-                moodChanged = decision.mood_changed,
+                moodChanged = decision is AgentStepData agent ? agent.HasStateField("mood") && !string.IsNullOrWhiteSpace(agent.mood) : decision.mood_changed,
                 archive = decision.archive,
                 newFact = decision.new_fact ?? string.Empty,
                 leave = decision.leave ?? string.Empty,
@@ -836,7 +839,7 @@ namespace TraceSoul2.Host
                     decisionSummary = review.DecisionSummary,
                     capabilitySummary = review.CapabilitySummary,
                     facetSummary = review.FacetSummary,
-                    mindDecision = PublicMindDecision(snapshot == null ? null : snapshot.mind_decision),
+                    mindDecision = PublicMindDecision(snapshot == null ? null : snapshot.agent_decision ?? snapshot.mind_decision),
                     blocks = snapshot == null
                         ? new List<object>()
                         : snapshot.blocks.Select(x => new { x.facet_id, x.title, x.content })
@@ -952,11 +955,11 @@ namespace TraceSoul2.Host
             return result;
         }
 
-        /// <summary>今天的轨迹（滚动摘要，04:00 边界自动清空）。</summary>
+        /// <summary>今天的轨迹（逐条保存，按北京时间 04:00 切换记忆日）。</summary>
         public object DayTrajectoryStatus()
         {
-            var dayKey = DateTimeOffset.Now.AddHours(-4).ToString("yyyy-MM-dd");
-            var record = Store.LoadDayTrajectory(dayKey);
+            var dayKey = MemoryDayLogic.CurrentDayKey(DateTimeOffset.Now);
+            var record = DayTrajectoryLogic.Read(Store, ConversationId, dayKey);
             return new
             {
                 day = dayKey,

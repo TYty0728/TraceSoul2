@@ -71,7 +71,7 @@ namespace TraceSoul2.Logic
 
         /// <summary>
         /// 决策卡 → 内心写集。inner 是一拍感受，scene 是共同场景，attention 是会代谢的浮动碎片。
-        /// 真实对话会让旧碎片沉下去；时间醒来可以让尚有温度的碎片短暂留在背景。
+        /// Agent 未修改的碎片保留原始年龄；显式清除或超过存活期才退出当前视图。
         /// </summary>
         public static InnerRuntimeWriteData ProposeFromMind(
             MindDecisionData mind,
@@ -90,19 +90,22 @@ namespace TraceSoul2.Logic
                 proposed.ongoing_activity = string.Empty;
             else if (scene.Length > 0)
                 proposed.ongoing_activity = Limit(scene, 160);
-            if (mind.mood_changed && !string.IsNullOrWhiteSpace(mind.mood))
+            if ((mind is AgentStepData moodStep ? moodStep.HasStateField("mood") : mind.mood_changed) && !string.IsNullOrWhiteSpace(mind.mood))
                 proposed.mood = Limit(mind.mood.Trim(), 80);
-            if (mind.ClearsAttention())
+            if (mind is AgentStepData omitted && !omitted.HasStateField("attention"))
+            {
+                // An omitted patch retains the existing fragments with their original age.
+            }
+            else if (mind.ClearsAttention() || (mind is AgentStepData && string.IsNullOrWhiteSpace(mind.attention)))
             {
                 proposed.attention = new List<AttentionWriteData>();
             }
             else
             {
                 var held = mind.ParseAttention();
-                // 普通对话是新的相处时刻。没有被这一刻重新碰亮的碎片，
-                // 不再因为模型省略字段而自动续命；它们可以留在记忆里，
-                // 但不继续占据当前心智。
-                if (settleOldFragments || held.Count > 0)
+                // 旧 Mind 入口保留历史结算语义；Agent 的省略已在上面分流。
+                // 不重写未变化的碎片，也不刷新其原始时间。
+                if ((mind is not AgentStepData && settleOldFragments) || held.Count > 0)
                 {
                     proposed.attention = held.Select(x => new AttentionWriteData
                     {

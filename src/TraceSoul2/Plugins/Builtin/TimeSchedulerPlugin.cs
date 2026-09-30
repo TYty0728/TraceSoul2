@@ -21,7 +21,7 @@ namespace TraceSoul2.Plugins.Builtin
         {
             Id = PluginId,
             DisplayName = "时间与调度",
-            Version = "1.1.1",
+            Version = "1.2.0",
             Author = "TraceSoul2",
             Role = PluginRoleValues.Kernel,
             Description = "提供当前时间、今天两人的轨迹、未来计划；到期只叫醒中枢该跑的那一套循环，不直接改短卡或开口。"
@@ -354,7 +354,7 @@ namespace TraceSoul2.Plugins.Builtin
         }
 
         /// <summary>
-        /// 今天我们的轨迹：当天共同经历的滚动实时样本（约500字内），
+        /// 今天我们的轨迹：逐条追加的当天共同经历（每轮新增至多500字），
         /// 实时对话中由 Brain 高频写回；只在对应日复盘成功后退出。
         /// </summary>
         private sealed class DayTrajectoryFacet : ITraceMountedFacet
@@ -369,7 +369,7 @@ namespace TraceSoul2.Plugins.Builtin
                 OutputJsonSchema = "{changed:boolean,summary:string,fields:[trajectory]}",
                 RefreshMode = TraceFacetRefreshValues.OncePerTurn,
                 Priority = 80,
-                MaxContextChars = 620,
+                MaxContextChars = 10000,
                 HasInternalMutation = true
             };
 
@@ -379,7 +379,7 @@ namespace TraceSoul2.Plugins.Builtin
                 TraceTurnContext context, CancellationToken cancellationToken)
             {
                 var dayKey = MemoryDayKey(DateTimeOffset.Now);
-                var record = context.Services.Storage.LoadDayTrajectory(dayKey);
+                var record = DayTrajectoryLogic.Read(context.Services.Storage, context.ConversationId, dayKey);
                 if (record == null || string.IsNullOrWhiteSpace(record.Text))
                     return Task.FromResult<TraceContextBlockData>(null);
                 return Task.FromResult(new TraceContextBlockData
@@ -400,7 +400,9 @@ namespace TraceSoul2.Plugins.Builtin
                 if (text.Length == 0)
                     return Task.FromResult<TraceCapabilityResultData>(null);
                 var dayKey = MemoryDayKey(DateTimeOffset.Now);
-                context.Services.Storage.SaveDayTrajectory(dayKey, text);
+                if (context.Services.Storage is SqliteMemoryManager sqlite)
+                    sqlite.AppendDayTrajectory(context.ConversationId, context.Moment.Id, text);
+                else context.Services.Storage.SaveDayTrajectory(dayKey, text);
                 return Task.FromResult(new TraceCapabilityResultData
                 {
                     Status = "success",
@@ -413,7 +415,7 @@ namespace TraceSoul2.Plugins.Builtin
             /// <summary>记忆日键：04:00 边界，04:00 前归前一天。</summary>
             internal static string MemoryDayKey(DateTimeOffset now)
             {
-                return now.AddHours(-4).ToString("yyyy-MM-dd");
+                return MemoryDayLogic.CurrentDayKey(now);
             }
 
             private static string LimitSentence(string value, int max)

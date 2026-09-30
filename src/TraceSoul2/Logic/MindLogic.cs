@@ -72,6 +72,7 @@ namespace TraceSoul2.Logic
             output.tags = string.Join("、", output.ParseTags());
             output.query = Limit((output.query ?? string.Empty).Trim(), 80);
             output.mood = OneLine(output.mood);
+            if (output is AgentStepData agent) output.mood_changed = agent.HasStateField("mood") && output.mood.Length > 0;
             output.new_fact = Limit((output.new_fact ?? string.Empty).Trim(), TodayNewItemRecord.MaxContentChars);
             output.leave = Limit((output.leave ?? string.Empty).Trim(), 80);
             output.note = (output.note ?? string.Empty).Trim();

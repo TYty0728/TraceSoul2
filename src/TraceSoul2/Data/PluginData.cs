@@ -604,7 +604,7 @@ namespace TraceSoul2.Data
                 .Select(x => x.Trim())
                 .Where(x => x.Length > 0 && x != "无")
                 .Distinct()
-                .Take(2)
+                .Take(3)
                 .ToList();
         }
 

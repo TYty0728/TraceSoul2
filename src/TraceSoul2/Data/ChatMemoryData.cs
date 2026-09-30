@@ -90,9 +90,21 @@ namespace TraceSoul2.Data
     }
 
     /// <summary>
-    /// 今天我们的轨迹：当天两人共同经历的滚动实时样本（约500字内），
-    /// 实时对话中由 Brain 高频维护；对应日复盘成功后才退出。按记忆日键一行。
+    /// 今日轨迹的来源条目；每次经历独立保存，日终退出实时视图但保留原件。
     /// </summary>
+    [Table("day_trajectory_entries")]
+    public sealed class DayTrajectoryEntryRecord
+    {
+        [PrimaryKey] public string Id { get; set; }
+        [Indexed] public string ConversationId { get; set; }
+        [Indexed] public string DayKey { get; set; }
+        public string SourceMomentId { get; set; }
+        public string Text { get; set; }
+        public long CreatedUnixMs { get; set; }
+        public bool Retired { get; set; }
+    }
+
+    // Compatibility row for older integrations. New turns append source-linked entries.
     [Table("day_trajectory")]
     public sealed class DayTrajectoryRecord
     {
@@ -476,6 +488,7 @@ namespace TraceSoul2.Data
     public sealed class TurnPayloadSnapshotData
     {
         public MindDecisionData mind_decision;
+        public AgentStepData agent_decision;
         public List<TurnBlockSnapshotData> blocks = new List<TurnBlockSnapshotData>();
         public List<TurnResultSnapshotData> results = new List<TurnResultSnapshotData>();
     }

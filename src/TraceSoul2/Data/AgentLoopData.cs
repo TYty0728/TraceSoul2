@@ -5,6 +5,12 @@ namespace TraceSoul2.Data
     /// <summary>Agent 的内部运行决策，兼容旧状态消费者；模型只读写独立的 AgentOutputData。</summary>
     public sealed class AgentStepData : MindDecisionData
     {
+        // Runtime-only patch metadata; null is a legacy snapshot, empty means no state update.
+        public List<string> state_fields;
+        public List<AgentGoalUpdateData> applied_goal_updates;
+        public bool HasStateField(string name) => state_fields != null
+            ? state_fields.Contains(name)
+            : name == "attention" ? !string.IsNullOrEmpty(attention) : name == "mood" && !string.IsNullOrEmpty(mood);
         // 缺少步骤是无效输出，不能默认解释为一次有意的安静决定。
         public string step;
         public string reply;

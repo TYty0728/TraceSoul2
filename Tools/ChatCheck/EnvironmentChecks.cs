@@ -158,7 +158,7 @@ internal static partial class Program
                 var privateGoal = GoalMemoryLogic.Read(store, root).Single();
                 Require(!GoalMemoryLogic.Valid(scoped, new() { new() { operation = "cancel", id = privateGoal.Id, source = "self" } }),
                     "公开环境不能通过目标 ID 改写私密约定");
-                Require(store.LoadDayTrajectory(MemoryDayLogic.CurrentDayKey(DateTimeOffset.Now)).Text.Contains(secret),
+                Require(DayTrajectoryLogic.Read(store, root, MemoryDayLogic.CurrentDayKey(DateTimeOffset.Now)).Text.Contains(secret),
                     "公开 today 不能覆盖全局私密轨迹");
                 var context = AgentPromptContextLogic.Context(scoped);
                 Require(context.Split("【当前状态】").Length == 2 && context.Split("环境：公开").Length == 2,

@@ -489,6 +489,8 @@ namespace TraceSoul2.Manager
         {
             connection.RunInTransaction(() =>
             {
+                RecoverDayTrajectory(conversationId, dayKey);
+                connection.Execute("UPDATE day_trajectory_entries SET Retired=1 WHERE ConversationId=? AND DayKey=?", conversationId, dayKey);
                 connection.Execute("DELETE FROM day_trajectory WHERE DayKey=?", dayKey);
                 connection.Execute(
                     "DELETE FROM today_new_items WHERE ConversationId=? AND DayKey=?",
@@ -960,6 +962,7 @@ namespace TraceSoul2.Manager
             connection.CreateTable<IdentityCardRecord>();
             connection.CreateTable<LadderItemRecord>();
             connection.CreateTable<DayTrajectoryRecord>();
+            connection.CreateTable<DayTrajectoryEntryRecord>();
             connection.CreateTable<RuntimeSliceRecord>();
             connection.CreateTable<RuntimeDayReviewRecord>();
             connection.CreateTable<TodayNewItemRecord>();

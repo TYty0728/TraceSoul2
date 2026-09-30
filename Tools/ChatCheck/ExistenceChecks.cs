@@ -15,6 +15,7 @@ internal static partial class Program
     private static async Task RunExistenceChecksAsync()
     {
         await RunRuntimeSliceChecksAsync();
+        await RunRuntimeContinuityChecksAsync();
         var path = Path.Combine(Path.GetTempPath(), "tracesoul-existence-" + Guid.NewGuid().ToString("N") + ".db");
         const string root = "existence", secret = "PRIVATE_ORIGIN_SENTINEL_813";
         string publicScope;

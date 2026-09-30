@@ -20,6 +20,7 @@ internal static partial class Program
     private static void Main(string[] args)
     {
         SQLitePCL.Batteries_V2.Init();
+        if (args.Contains("--runtime-continuity")) { RunRuntimeContinuityChecksAsync().GetAwaiter().GetResult(); return; }
         if (args.Contains("--existence")) { RunExistenceChecksAsync().GetAwaiter().GetResult(); return; }
         if (args.Contains("--environment")) { RunEnvironmentChecksAsync().GetAwaiter().GetResult(); return; }
         if (args?.Length == 2 && args[0] == "--agent-prompt-audit") { RunAgentPromptAudit(args[1]); return; }

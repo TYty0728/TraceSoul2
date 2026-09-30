@@ -142,7 +142,7 @@ namespace TraceSoul2.Logic
                 .Select(x => OneLine(x.EventSummary, 240))
                 .Where(x => x.Length > 0)
                 .ToList();
-            seed.Trajectory = OneLine(store.LoadDayTrajectory(seed.DayKey)?.Text, 1800);
+            seed.Trajectory = OneLine(DayTrajectoryLogic.Read(store, conversationId, seed.DayKey)?.Text, 1800);
             var inner = string.IsNullOrWhiteSpace(conversationId)
                 ? null
                 : store.LoadOrCreateInnerRuntime(conversationId);
