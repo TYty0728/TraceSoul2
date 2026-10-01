@@ -128,6 +128,12 @@ internal static partial class Program
                 var preview = MemoryRecallLogic.Preview(turn, 4);
                 Require(preview.Contains(first.Id) && preview.Contains(second.Id) && preview.Contains("反证") && preview.Contains("他") &&
                     preview.Contains("例外") && preview.Contains(m2.Id), "无事件、无聊天历史时仍召回认知及冲突、领域和证据");
+                var renderedEvidence = new CognitionContextRecallSource(store).Retrieve(new ContextRecallQuery { Text = "青穹杯" })
+                    .Single(x => x.Id == first.Id).RenderedText;
+                Require(renderedEvidence.Contains("依据（支持）原始记录:support-19") &&
+                    renderedEvidence.Contains("依据（反证）原始记录:" + m2.Id) && renderedEvidence.Contains("外部生活/对方自述") &&
+                    !renderedEvidence.Contains("supports") && !renderedEvidence.Contains("challenges") && !renderedEvidence.Contains("user_reported"),
+                    "召回用中文说明依据，仍分别保留支持、反证与可追溯的原始ID");
                 var explicitRecall = MemoryRecallLogic.Assemble(turn, new MindDecisionData { query = "青穹杯" }, 4, out var found);
                 Require(found && explicitRecall.Contains(first.Id), "显式 memory.recall 与预激活共享独立认知召回");
                 var replacement = Create("喝水先确认温度，青穹杯本身不是限制。", m3.Id);

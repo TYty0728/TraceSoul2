@@ -130,16 +130,16 @@ namespace TraceSoul2.Logic
                     if (c.Status == "weakened") text += "；已有反证，理解已削弱";
                     if (conflicts.Contains(c.Id)) text += "；与相关理解有冲突，需对照判断";
                     var connected = edges.Where(e => e.FromCognitionId == c.Id || e.ToCognitionId == c.Id).Take(4).ToList();
-                    foreach (var e in connected) text += "；关联 " + e.Relation + ":" + (e.FromCognitionId == c.Id ? e.ToCognitionId : e.FromCognitionId);
+                    foreach (var e in connected) text += "；关联 " + RelationLabel(e.Relation) + ":" + (e.FromCognitionId == c.Id ? e.ToCognitionId : e.FromCognitionId);
                     // 两条摘要优先分别保留反证和支持，关联依据不能冒充内容被证明。
                     var shownEvidence = refs.Where(e => e.Relation == "challenges").Take(1)
                         .Concat(refs.Where(e => e.Relation == "supports").Take(1)).ToList();
                     if (shownEvidence.Count == 0) shownEvidence.AddRange(refs.Take(2));
                     foreach (var e in shownEvidence)
                     {
-                        text += "；依据 " + e.Relation + " moment:" + e.MomentId;
+                        text += "；依据（" + RelationLabel(e.Relation) + "）原始记录:" + e.MomentId;
                         if (moments.TryGetValue(e.MomentId ?? "", out var m))
-                            text += " [" + m.Realm + "/" + m.EvidenceType + "] " + Clip(m.Content, 100);
+                            text += " [" + RealmLabel(m.Realm) + "/" + EvidenceLabel(m.EvidenceType) + "] " + Clip(m.Content, 100);
                         else text += "（原始来源当前不可读取，不能当作已核实）";
                     }
                     if (refs.Count == 0) text += "；本轮未提供可读取的原始证据，不据此推测原文";
@@ -149,6 +149,34 @@ namespace TraceSoul2.Logic
                         RelatedIds = connected.Select(e => e.FromCognitionId == c.Id ? e.ToCognitionId : e.FromCognitionId).ToList() };
                 }).ToList();
         }
+        // 只翻译供模型阅读的标签；存储与证据引用仍使用原始协议值和 ID。
+        private static string RelationLabel(string value)
+        {
+            if ((value ?? "").StartsWith("link:", StringComparison.Ordinal))
+            {
+                var parts = value.Split(new[] { ':' }, 3);
+                if (parts.Length == 3) return "关联依据：" + RelationLabel(parts[1]) + "至" + parts[2];
+            }
+            return value switch
+            {
+                "supports" => "支持", "challenges" => "反证", "related_to" => "相关",
+                "abstracts" => "概括", "exemplifies" => "例证", "contradicts" => "冲突",
+                "revises" => "修订", _ => "其他关系（" + value + "）"
+            };
+        }
+        private static string RealmLabel(string value) => value switch
+        {
+            TraceRealmValues.ExternalWorld => "外部生活", TraceRealmValues.SharedScene => "共同文字场景",
+            TraceRealmValues.Meta => "系统讨论", TraceRealmValues.ExplicitFiction => "明确虚构",
+            _ => "场景未分类"
+        };
+        private static string EvidenceLabel(string value) => value switch
+        {
+            EvidenceTypeValues.UserReported => "对方自述", EvidenceTypeValues.PluginObserved => "插件观察",
+            EvidenceTypeValues.SharedSceneDeclared => "文字场景描述", EvidenceTypeValues.AssPerformed => "同伴已表达或执行",
+            EvidenceTypeValues.ExplicitFiction => "明确虚构", EvidenceTypeValues.DialogueExplicit => "对话明确提及",
+            _ => "证据类型未分类"
+        };
         // 本地双字片段匹配兜底；语义入口仍由既有 Tag 路由负责，避免32维字符哈希碰撞召回无关认知。
         internal static HashSet<string> Terms(string value)
         {
