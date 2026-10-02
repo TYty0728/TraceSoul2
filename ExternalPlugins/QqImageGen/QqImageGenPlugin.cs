@@ -42,6 +42,8 @@ namespace TraceSoul2.ExternalPlugins
         private string characterDetails = string.Empty;
         private readonly List<string> characterCategories = new List<string>();
         private readonly List<string> characterRefUrls = new List<string>();
+        private int sharingMinReplies = CameraSharingContext.DefaultMinReplies;
+        private int sharingMaxReplies = CameraSharingContext.DefaultMaxReplies;
         private int timeoutSeconds = 600;
         private int maxRetries = 3;
         private int pollIntervalSeconds = 5;
@@ -70,7 +72,7 @@ namespace TraceSoul2.ExternalPlugins
         {
             Id = PluginId,
             DisplayName = "QQ 相机与生图",
-            Version = "2.3.0",
+            Version = "2.3.1",
             Author = "TraceSoul2",
             Role = PluginRoleValues.Organ,
             PlatformId = BodyIds.Qq,
@@ -98,7 +100,7 @@ namespace TraceSoul2.ExternalPlugins
             automaticImage = (turn, reply, snapshot) =>
             {
                 if (!IsReady(turn.Services) || turn.Services.AvailableActionCatalogProvider?.Invoke(turn)
-                        .Any(x => x.Id == "qq.imagegen.generate") != true || !CameraSharingContext.TryReserve(turn)) return null;
+                        .Any(x => x.Id == "qq.imagegen.generate") != true || !CameraSharingContext.TryReserve(turn, sharingMinReplies, sharingMaxReplies)) return null;
                 turn.Services.LogTiming(turn.TraceId, "TA的相机 配图判断机会已建立");
                 return new BrainCapabilityCallData { capability_id = "qq.imagegen.generate", purpose = "结合已确定的表达判断配图",
                     arguments = new() {
@@ -173,7 +175,7 @@ namespace TraceSoul2.ExternalPlugins
             {
                 mindTurnAppend = turn => turn != null && IsReady(turn.Services) &&
                     current.AvailableCatalogProvider?.Invoke(turn).Any(x => x.Id == "qq.imagegen.generate") == true
-                    ? CameraSharingContext.Build(turn) : null;
+                    ? CameraSharingContext.Build(turn, sharingMinReplies, sharingMaxReplies) : null;
                 current.MindTurnPromptAppends.Add(mindTurnAppend);
             }
             catch (MissingMethodException) { }
@@ -217,6 +219,8 @@ namespace TraceSoul2.ExternalPlugins
                 standardSize = ReadString(root, "standard_size") ?? ReadString(root, "size") ?? standardSize;
                 safetySettings = ReadString(root, "safety_settings") ?? safetySettings;
                 proxy = ReadString(root, "proxy") ?? proxy;
+                sharingMinReplies = ReadInt(root, "sharing_min_replies", sharingMinReplies, 1, 1000);
+                sharingMaxReplies = ReadInt(root, "sharing_max_replies", sharingMaxReplies, 1, 1000);
                 timeoutSeconds = ReadInt(root, "timeout", timeoutSeconds, 30, 1800);
                 maxRetries = ReadInt(root, "max_retry_attempts", maxRetries, 1, 10);
                 pollIntervalSeconds = ReadInt(root, "poll_interval", pollIntervalSeconds, 2, 30);

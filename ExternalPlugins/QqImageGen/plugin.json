@@ -3,6 +3,8 @@
   "provider_id": "",
   "planner_provider_id": "",
   "planner_model": "",
+  "sharing_min_replies": 4,
+  "sharing_max_replies": 8,
   "api_key": "",
   "api_keys": [],
   "base_url": "",

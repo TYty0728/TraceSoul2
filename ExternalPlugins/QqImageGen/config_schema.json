@@ -5,6 +5,8 @@
     { "key": "model", "label": "生图模型", "type": "provider_model", "provider_key": "provider_id", "role": "image" },
     { "key": "planner_provider_id", "label": "画面描述 LLM", "type": "provider", "role": "chat", "description": "专门把这一拍写成画面描述的对话模型，不要选 gpt-image。留空则用当前开口模型。" },
     { "key": "planner_model", "label": "画面描述模型", "type": "provider_model", "provider_key": "planner_provider_id", "role": "chat" },
+    { "key": "sharing_min_replies", "label": "配图机会：最少间隔回复数", "type": "number", "min": 1, "max": 1000, "default": 4, "description": "与最多次数组成随机范围，每段间隔只抽取一次并保存。累计的是角色发出的有效文字回复；达到后判断是否适合配图。" },
+    { "key": "sharing_max_replies", "label": "配图机会：最多间隔回复数", "type": "number", "min": 1, "max": 1000, "default": 8, "description": "范围包含两端；填相同值为固定间隔，填反时自动按从小到大解释。保存后重新抽取门槛，保留已累计回复；实际发图仍取决于当下语义。" },
     { "key": "api_key", "label": "API Key（备用）", "type": "password" },
     { "key": "base_url", "label": "API Base URL（备用）", "type": "string", "placeholder": "https://example.com/v1" },
     { "key": "image_api_format", "label": "接口格式", "type": "select", "options": ["auto", "openai", "gemini"] },
