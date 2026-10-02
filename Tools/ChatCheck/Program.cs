@@ -20,6 +20,7 @@ internal static partial class Program
     private static void Main(string[] args)
     {
         SQLitePCL.Batteries_V2.Init();
+        if (args.Contains("--automatic-photo")) { RunAutomaticPhotoChecksAsync().GetAwaiter().GetResult(); return; }
         if (args.Length == 3 && args[0] == "--day-card-length-dump") { RunDayCardLengthDumpCheck(args[1], args[2]); return; }
         if (args.Contains("--runtime-presentation")) { RunRuntimePresentationChecksAsync().GetAwaiter().GetResult(); return; }
         if (args.Length == 3 && args[0] == "--day-card-dump") { RunDayCardDumpCheck(args[1], args[2]); return; }
@@ -96,6 +97,7 @@ internal static partial class Program
         RunQqTypingChecksAsync().GetAwaiter().GetResult();
         RunQqDeliveryAndCameraContextCheck();
         RunExpressorImageRoutingCheck();
+        RunAutomaticPhotoChecksAsync().GetAwaiter().GetResult();
         RunMindAtmosphereCheck();
         RunRecentDialogueContextCheck();
         RunGameSessionPluginCheck();

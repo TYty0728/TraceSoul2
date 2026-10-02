@@ -63,12 +63,14 @@ namespace TraceSoul2.ExternalPlugins
         private Func<TraceTurnContext, string> mindUsageAppend;
         private Func<TraceTurnContext, string> mindJsonField;
         private Func<TraceTurnContext, string> mindTurnAppend;
+        private Func<TraceTurnContext, string, string, BrainCapabilityCallData> automaticImage;
+        private int stopped;
 
         public TracePluginMetadataData Metadata { get; } = new TracePluginMetadataData
         {
             Id = PluginId,
             DisplayName = "QQ 相机与生图",
-            Version = "2.2.5",
+            Version = "2.3.0",
             Author = "TraceSoul2",
             Role = PluginRoleValues.Organ,
             PlatformId = BodyIds.Qq,
@@ -93,10 +95,24 @@ namespace TraceSoul2.ExternalPlugins
                 "｜图库=" + references.Describe());
             context.AddCallable(new ImageEffector(this));
             AttachMindHooks(context.Services);
+            automaticImage = (turn, reply, snapshot) =>
+            {
+                if (!IsReady(turn.Services) || turn.Services.AvailableActionCatalogProvider?.Invoke(turn)
+                        .Any(x => x.Id == "qq.imagegen.generate") != true || !CameraSharingContext.TryReserve(turn)) return null;
+                turn.Services.LogTiming(turn.TraceId, "TA的相机 配图判断机会已建立");
+                return new BrainCapabilityCallData { capability_id = "qq.imagegen.generate", purpose = "结合已确定的表达判断配图",
+                    arguments = new() {
+                        new() { name = "prompt", value = reply },
+                        new() { name = "atmosphere_context", value = snapshot + "\n【本轮对方发言或事件】\n" + turn.Moment.Content }
+                    } };
+            };
+            context.Services.AutomaticImageProviders.Add(automaticImage);
         }
 
         public void Shutdown()
         {
+            if (Interlocked.Exchange(ref stopped, 1) != 0) return;
+            if (automaticImage != null) services?.AutomaticImageProviders.Remove(automaticImage);
             DetachMindHooks();
             shutdown.Cancel();
             List<string> files;
@@ -298,7 +314,12 @@ namespace TraceSoul2.ExternalPlugins
             var plannedReferences = new List<string>();
             if (mode != "url" && mode != "edit")
             {
-                var planned = await PlanSceneAsync(prompt, context, cancellationToken);
+                var atmosphere = call.GetArgument("atmosphere_context");
+                var planned = string.IsNullOrWhiteSpace(atmosphere)
+                    ? await PlanSceneAsync(prompt, context, cancellationToken)
+                    : await PlanAtmosphereAsync(prompt, atmosphere, context, cancellationToken);
+                if (planned == null)
+                    return new TraceCapabilityResultData { Status = "skipped", Summary = "这一刻保留文字表达，相机未生成或发送图片。" };
                 prompt = planned.Scene;
                 mode = planned.Mode;
                 plannedReferences.AddRange(planned.ReferenceCategories);
@@ -484,6 +505,38 @@ namespace TraceSoul2.ExternalPlugins
             public string Mode;
             public string Scene;
             public List<string> ReferenceCategories = new List<string>();
+        }
+
+        private async Task<ScenePlanResult> PlanAtmosphereAsync(string reply, string snapshot,
+            TraceTurnContext context, CancellationToken cancellationToken)
+        {
+            var llm = ResolvePlannerLlm(context);
+            if (llm == null) return null;
+            var messages = new List<DeepSeekMessageData> {
+                new("system", QqImageGenPrompts.AtmospherePlanSystem),
+                new("user", snapshot + "\n【已经确定并发出的文字】\n" + reply +
+                    "\n【角色外观】\n" + characterDetails + "\n【参考图库】\n" + references.Describe())
+            };
+            try
+            {
+                var raw = await llm.CompleteTextAsync(messages, cancellationToken);
+                var text = CleanPlan(raw);
+                if (ReadLabeledLine(text, "分享").Trim() != "是")
+                {
+                    context.Services.LogTiming(context.TraceId, "TA的相机 配图判断：保留文字");
+                    return null;
+                }
+                var plan = ParseScenePlan(text, string.Empty);
+                if (plan.Scene.Length < 12) return null;
+                context.Services.LogTiming(context.TraceId, "TA的相机 配图判断：分享", detail: "mode=" + plan.Mode);
+                return plan;
+            }
+            catch (OperationCanceledException) when (cancellationToken.IsCancellationRequested) { throw; }
+            catch (Exception error)
+            {
+                context.Services.LogTiming(context.TraceId, "TA的相机 配图判断失败，本次略过", detail: error.GetType().Name);
+                return null;
+            }
         }
 
         private async Task<ScenePlanResult> PlanSceneAsync(

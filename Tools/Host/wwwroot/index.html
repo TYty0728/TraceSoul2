@@ -2140,6 +2140,15 @@
           row.appendChild(button);
         }
         box.appendChild(row);
+        if (stop.diagnostic) {
+          const details = document.createElement("details");
+          const summary = document.createElement("summary");
+          summary.textContent = "诊断信息 · " + new Date(stop.createdUnixMs).toLocaleString();
+          const trace = document.createElement("pre");
+          trace.textContent = stop.diagnostic;
+          details.append(summary, trace);
+          box.appendChild(details);
+        }
       }
     } catch (e) { box.textContent = "读取错误保护失败：" + e.message; }
   }

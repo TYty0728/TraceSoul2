@@ -129,7 +129,8 @@ internal static partial class Program
                     services.Platforms.Register(new PlatformHandle { Id = BodyIds.Qq, IsConnected = () => true });
                     services.Providers = new FakeVisionDirectory { Endpoint = new LlmEndpointData
                         { ApiKey = "offline-test", BaseUrl = "https://camera.invalid", Model = "offline-image" } };
-                    manager.RegisterExternal(new QqImageGenPlugin(), pluginDataDirectory: path + ".data");
+                    var camera = new QqImageGenPlugin();
+                    manager.RegisterExternal(camera, pluginDataDirectory: path + ".data");
                     moment.Content = "今天过得怎么样";
                     var agent = new AgentSequenceLlm("{\"step\":\"finish\",\"reply\":\"在听呢。\"}");
                     new AgentLoopLogic(agent).RunAsync(turn, "", () => manager.GetAvailableActionCatalog(turn),
@@ -140,6 +141,25 @@ internal static partial class Program
                         "真实相机目录须保留分享边界");
                     Require(agent.Requests.Single().Contains("【相机此刻】"), "真实相机动态回执须进入 Agent");
                     Require(!agent.Requests.Single().Contains("旧心智流程"), "不能带入旧 image 根协议");
+                    var semantic = new AgentSequenceLlm("分享：否");
+                    services.Llm = semantic;
+                    var candidate = services.AutomaticImageProviders.Single()(turn, "在听呢。", "当前有效约定：不收图片。");
+                    Require(candidate?.capability_id == "qq.imagegen.generate" &&
+                        candidate.GetArgument("atmosphere_context").Contains("不收图片"),
+                        "主模型纯文字时，达到门槛可由真实插件建立含当前约定的配图候选");
+                    var skipped = manager.ExecuteAsync(candidate, turn, default).GetAwaiter().GetResult();
+                    Require(skipped.Status == "skipped" && semantic.Requests.Count == 1 &&
+                        semantic.Requests.Single().Contains("在听呢。") && semantic.Requests.Single().Contains("不收图片"),
+                        "真实相机的语义判断选择略过时不调用生图接口、不发送图片");
+                    Require(services.AutomaticImageProviders.Single()(turn, "下一句话", "") == null &&
+                        !CameraSharingContext.TryReserve(turn), "一次判断消耗程序门槛，略过或失败后不逐轮重试");
+                    var planMethod = typeof(QqImageGenPlugin).GetMethod("PlanAtmosphereAsync",
+                        System.Reflection.BindingFlags.NonPublic | System.Reflection.BindingFlags.Instance);
+                    services.Llm = new AgentSequenceLlm("分享：是\n种类：自拍\n参考：无\n画面：角色在窗边带着温和笑意的自然近景，午后的光落在脸侧。");
+                    var planning = (Task)planMethod.Invoke(camera, new object[] { "在听呢。", "日常分享", turn, System.Threading.CancellationToken.None });
+                    planning.GetAwaiter().GetResult();
+                    Require(planning.GetType().GetProperty("Result").GetValue(planning) != null,
+                        "一次语义判断同时产生可用镜头规划，不需要主模型重新选择actions");
                     services.Providers = null;
                     var unavailable = new AgentSequenceLlm("{\"step\":\"finish\",\"reply\":\"在听呢。\"}");
                     new AgentLoopLogic(unavailable).RunAsync(turn, "", () => manager.GetAvailableActionCatalog(turn),
@@ -149,6 +169,8 @@ internal static partial class Program
                         "相机未配置时不得提示主动调用不可用能力");
                     Receipt("new-photo", OperationalEventKindValues.OutboundImage, moment.PayloadJson, now + 100);
                     Require(CameraSharingContext.Build(turn).Length == 0, "本会话成功发图后自动重新累计门槛");
+                    camera.Shutdown(); camera.Shutdown();
+                    Require(services.AutomaticImageProviders.Count == 0, "重复卸载相机安全，自动配图钩子不残留");
                 }
             }
         }

@@ -108,6 +108,10 @@ namespace TraceSoul2.Plugins
         public List<Func<TraceTurnContext, Task>> ExpressionCompletedHooks { get; } =
             new List<Func<TraceTurnContext, Task>>();
 
+        /// <summary>正文发送后，由图片器官提出一次配图候选；返回调用进入宿主的延迟生成/发送链。</summary>
+        public List<Func<TraceTurnContext, string, string, BrainCapabilityCallData>> AutomaticImageProviders { get; } =
+            new List<Func<TraceTurnContext, string, string, BrainCapabilityCallData>>();
+
         /// <summary>
         /// 器官插件可把心智补充说明挂到这里。未加载或未就绪时不要挂；
         /// 心智核心提示词里不应出现相机/出图字段。
