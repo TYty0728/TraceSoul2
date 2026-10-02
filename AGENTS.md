@@ -10,7 +10,7 @@
 ## 实现约束
 
 - 当前是 .NET 8 项目；核心源码在 `src/TraceSoul2`，ASP.NET Core 宿主在 `Tools/Host`。
-- 保持心智决策、外显表达、平台收发、器官能力的边界；相机决定镜头，心智决定是否分享。
+- 保持心智决策、外显表达、平台收发、器官能力的边界；心智确定表达与明确行动，相机规划镜头。按用户确认，最终文字后的氛围配图由程序建立机会，再结合当下语义决定是否分享；见 `docs/ARCHITECTURE_ALIGNMENT.md` 第39节。
 - 不重写潜意识/身份复盘内部来解决普通对话问题。修改设计语义时对照 `docs/ARCHITECTURE_ALIGNMENT.md` 的历史与修订。
 - `Tools/KernelSources.props` 和 `Tools/PluginApi/PluginApiSources.props` 是显式源清单；新增相关核心源文件要加入对应清单。外部插件通常使用 SDK 默认源文件收集。
 - 插件共享类型只能来自 `TraceSoul2.PluginApi`。改共享契约时同时构建 Host 与受影响插件；仅构建 Host 不会更新已安装外部 DLL。
