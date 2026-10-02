@@ -22,6 +22,13 @@ internal static partial class Program
         try
         {
             var guard = new FailureProtection(directory);
+            try { ThrowDiagnosticProbe(); }
+            catch (Exception error) { guard.Report("diagnostic-check", "离线诊断", error); }
+            var diagnostic = new FailureProtection(directory).List().Single().Diagnostic;
+            Require(diagnostic.Contains(nameof(ThrowDiagnosticProbe)) && diagnostic.Contains("InvalidOperationException") &&
+                diagnostic.Contains("IOException") && !diagnostic.Contains("secret-key") && !diagnostic.Contains("private-chat") &&
+                !diagnostic.Contains("https://"), "持久诊断保留异常类型及调用位置，排除原始异常正文");
+            guard.Resume("diagnostic-check");
             await RunStickerFailureProtectionCheckAsync(guard, directory);
             var inner = new FailureTestClient();
             var client = new ProtectedLlmClient(inner, guard);
@@ -139,6 +146,10 @@ internal static partial class Program
         }
         finally { Directory.Delete(directory, true); }
     }
+
+    [System.Runtime.CompilerServices.MethodImpl(System.Runtime.CompilerServices.MethodImplOptions.NoInlining)]
+    private static void ThrowDiagnosticProbe()
+        => throw new InvalidOperationException("private-chat https://example.invalid secret-key", new IOException("private-chat"));
 
     private static string AssertNotificationWirePayload(string action, Dictionary<string, object> args)
     {

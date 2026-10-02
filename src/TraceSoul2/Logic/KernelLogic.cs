@@ -656,6 +656,37 @@ namespace TraceSoul2.Logic
             }
 
             await RunTurnCompleteHooksAsync(turn);
+            if (images.Count == 0 && !string.IsNullOrWhiteSpace(final.reply) &&
+                final.expression_capability_id == "qq.text.send" &&
+                !turn.Workspace.Results.Any(x => x?.CapabilityId == "turn.complete" && x.Status == "failed") &&
+                !turn.Workspace.Results.Any(x => x?.CapabilityId == "qq.imagegen.generate"))
+            {
+                var available = plugins.GetAvailableActionCatalog(turn);
+                var imageAlreadyAttempted = turn.Workspace.Results.Any(result => result != null && available.Any(
+                    descriptor => descriptor.Id == result.CapabilityId && MouthLogic.OrganOf(descriptor) == BodyOrganValues.Image));
+                foreach (var provider in plugins.Services.AutomaticImageProviders)
+                {
+                    if (imageAlreadyAttempted) break;
+                    try
+                    {
+                        // 在对话锁内取得当时状态/约定，异步生成沿用快照。
+                        var candidate = provider(turn, final.reply,
+                            RuntimeContextLogic.State(turn) + GoalMemoryLogic.BuildContext(turn));
+                        if (candidate == null) continue;
+                        var descriptor = available.FirstOrDefault(x => x.Id == candidate.capability_id &&
+                            MouthLogic.OrganOf(x) == BodyOrganValues.Image && MouthLogic.BodyOf(x) == BodyIds.Qq);
+                        if (descriptor == null) continue;
+                        candidate.call_id = "auto-image-" + Guid.NewGuid().ToString("N");
+                        candidate.body_id = descriptor.BodyId;
+                        images.Add(candidate);
+                        break;
+                    }
+                    catch (Exception error)
+                    {
+                        plugins.Services.LogTiming(turn.TraceId, "相机配图机会未建立", detail: error.GetType().Name);
+                    }
+                }
+            }
             if (images.Count > 0) EnqueueImageWork(images, turn, conversationId);
             return expression;
         }
@@ -758,7 +789,8 @@ namespace TraceSoul2.Logic
                     !string.Equals(item.GenerateResult.Status, "success", StringComparison.Ordinal) ||
                     string.IsNullOrWhiteSpace(item.GenerateResult.Payload))
                 {
-                    plugins.Services.LogTiming(turn.TraceId, "TA的相机 生图未成功，不发图", 0,
+                    plugins.Services.LogTiming(turn.TraceId, item.GenerateResult?.Status == "skipped"
+                        ? "TA的相机 本次配图略过" : "TA的相机 生图未成功，不发图", 0,
                         item.GenerateResult == null ? "empty" : item.GenerateResult.Summary);
                     return;
                 }

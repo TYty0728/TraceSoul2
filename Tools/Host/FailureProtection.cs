@@ -66,14 +66,14 @@ namespace TraceSoul2.Host
         }
 
         public void Report(string key, string label, Exception error)
-            => Report(key, label, SafeReason(error), "error");
+            => Report(key, label, SafeReason(error), "error", Diagnostic(error));
 
-        private void Report(string key, string label, string reason, string severity)
+        private void Report(string key, string label, string reason, string severity, string diagnostic = null)
         {
             using var db = Open();
             // 同一未处理报告只通知一次；后续新消息照常处理，失败轮不自动重放。
-            db.Execute("INSERT OR IGNORE INTO failure_stops (Key,Label,Reason,CreatedUnixMs,NotificationState,NonBlocking,Severity) VALUES (?,?,?,?,0,1,?)",
-                key, label, reason, DateTimeOffset.UtcNow.ToUnixTimeMilliseconds(), severity);
+            db.Execute("INSERT OR IGNORE INTO failure_stops (Key,Label,Reason,CreatedUnixMs,NotificationState,NonBlocking,Severity,Diagnostic) VALUES (?,?,?,?,0,1,?,?)",
+                key, label, reason, DateTimeOffset.UtcNow.ToUnixTimeMilliseconds(), severity, diagnostic);
         }
 
         public void Pause(string key, string label, Exception error)
@@ -81,8 +81,8 @@ namespace TraceSoul2.Host
             if (error is FailurePausedException) return;
             using var db = Open();
             // INSERT OR IGNORE 保留第一次故障和通知状态，避免轮询重复通知。
-            db.Execute("INSERT OR IGNORE INTO failure_stops (Key,Label,Reason,CreatedUnixMs,NotificationState) VALUES (?,?,?,?,0)",
-                key, label, SafeReason(error), DateTimeOffset.UtcNow.ToUnixTimeMilliseconds());
+            db.Execute("INSERT OR IGNORE INTO failure_stops (Key,Label,Reason,CreatedUnixMs,NotificationState,Diagnostic) VALUES (?,?,?,?,0,?)",
+                key, label, SafeReason(error), DateTimeOffset.UtcNow.ToUnixTimeMilliseconds(), Diagnostic(error));
         }
 
         public void Resume(string key)
@@ -108,8 +108,8 @@ namespace TraceSoul2.Host
         public void FailAttempt(string key, Exception error)
         {
             using var db = Open();
-            db.Execute("UPDATE failure_stops SET Reason=?, NotificationState=0 WHERE Key=? AND NotificationState=-1",
-                SafeReason(error), key);
+            db.Execute("UPDATE failure_stops SET Reason=?, Diagnostic=?, NotificationState=0 WHERE Key=? AND NotificationState=-1",
+                SafeReason(error), Diagnostic(error), key);
         }
 
         public void RecoverInterruptedAttempts()
@@ -125,6 +125,23 @@ namespace TraceSoul2.Host
             using var db = Open();
             return db.Execute("UPDATE failure_stops SET NotificationState=1 WHERE Key=? AND CreatedUnixMs=? AND NotificationState=0",
                 key, createdUnixMs) == 1;
+        }
+
+        // 只记录程序类型、调用位置与安全分类；不持久化异常原文中的供应商正文、密钥或私聊。
+        public static string Diagnostic(Exception error)
+        {
+            var rows = new List<string>();
+            for (var depth = 0; error != null && depth < 4; depth++, error = error.InnerException)
+            {
+                rows.Add(error.GetType().FullName + "：" + SafeReason(error));
+                foreach (var frame in (new System.Diagnostics.StackTrace(error, false).GetFrames() ??
+                    Array.Empty<System.Diagnostics.StackFrame>()).Take(6))
+                {
+                    var method = frame.GetMethod();
+                    if (method != null) rows.Add("  " + method.DeclaringType?.FullName + "." + method.Name);
+                }
+            }
+            return string.Join("\n", rows);
         }
 
         public static string SafeReason(Exception error)
@@ -156,6 +173,7 @@ namespace TraceSoul2.Host
         [PrimaryKey] public string Key { get; set; }
         public string Label { get; set; }
         public string Reason { get; set; }
+        public string Diagnostic { get; set; }
         public long CreatedUnixMs { get; set; }
         public int NotificationState { get; set; }
         public bool NonBlocking { get; set; }
