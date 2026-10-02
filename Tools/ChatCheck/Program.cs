@@ -20,6 +20,8 @@ internal static partial class Program
     private static void Main(string[] args)
     {
         SQLitePCL.Batteries_V2.Init();
+        if (args.Length == 3 && args[0] == "--day-card-length-dump") { RunDayCardLengthDumpCheck(args[1], args[2]); return; }
+        if (args.Contains("--runtime-presentation")) { RunRuntimePresentationChecksAsync().GetAwaiter().GetResult(); return; }
         if (args.Length == 3 && args[0] == "--day-card-dump") { RunDayCardDumpCheck(args[1], args[2]); return; }
         if (args.Contains("--runtime-continuity")) { RunRuntimeContinuityChecksAsync().GetAwaiter().GetResult(); return; }
         if (args.Contains("--existence")) { RunExistenceChecksAsync().GetAwaiter().GetResult(); return; }
@@ -54,6 +56,7 @@ internal static partial class Program
             return;
         }
         RunExistenceChecksAsync().GetAwaiter().GetResult();
+        RunRuntimePresentationChecksAsync().GetAwaiter().GetResult();
         RunEnvironmentChecksAsync().GetAwaiter().GetResult();
         RunCognitionGraphChecks();
         RunAgentPromptChecksAsync().GetAwaiter().GetResult();
@@ -874,7 +877,7 @@ internal static partial class Program
                         !mindSystem.Contains("当场做完"),
                     "情境模版不得写入心智 system");
                 Require(mindSystem.Contains("【可选生命标签】") && mindSystem.Contains("【此刻】") &&
-                        mindSystem.Contains("上一刻感受：") &&
+                        mindSystem.Contains("留下的感受（内心记录；") &&
                         mindSystem.Contains("状态：") &&
                         mindSystem.Contains("【此刻自然浮起的过去】"),
                     "自然浮起的过去、标签候选、上一拍心里状态与浮动碎片应在心智请求尾部");
@@ -1124,8 +1127,8 @@ internal static partial class Program
                 var closeMessages = fake.Requests[fake.Requests.Count - 1];
                 RequireAstrBotChatShape(closeMessages, closeCurrent, "带历史的心智");
                 Require(closeMessages.Count == 6 &&
-                        closeMessages[1].role == "user" && closeMessages[1].content == "昨天那句" &&
-                        closeMessages[2].role == "assistant" && closeMessages[2].content == "嗯" &&
+                        closeMessages[1].role == "user" && closeMessages[1].content == "【小雨 · 时间未记录】\n昨天那句" &&
+                        closeMessages[2].role == "assistant" && closeMessages[2].content == "【我 · 时间未记录】\n嗯" &&
                         closeMessages[3].content.StartsWith(CommonContextPackLogic.MindRoleHeader, StringComparison.Ordinal) &&
                         closeMessages[4].role == "user" &&
                         !closeMessages[4].content.StartsWith(CommonContextPackLogic.MindRoleHeader, StringComparison.Ordinal) &&
@@ -1926,6 +1929,7 @@ internal static partial class Program
 
     private static void RunCommonContextPackCheck()
     {
+        RunHistoryPresentationChecks();
         var path = Path.Combine(Path.GetTempPath(), "tracesoul2-common-pack-" + Guid.NewGuid().ToString("N") + ".sqlite3");
         try
         {
@@ -2885,8 +2889,8 @@ internal static partial class Program
                     recent, 6, true, services);
                 var history = MindLogic.BuildRecentChatHistory(turn);
                 Require(history.Count == 2 &&
-                        history[0].role == "user" && history[0].content == "刚才那张照片很好看" &&
-                        history[1].role == "assistant" && history[1].content == "……你喜欢就好。",
+                        history[0].role == "user" && history[0].content.EndsWith("\n刚才那张照片很好看", StringComparison.Ordinal) &&
+                        history[1].role == "assistant" && history[1].content.EndsWith("\n……你喜欢就好。", StringComparison.Ordinal),
                     "对话历史应是 user/assistant 轮次，排除后台时间事件和出站系统占位");
                 var assembled = MindLogic.AssembleTurnMessages("身份与规则", turn, "再发一张");
                 Require(assembled.Count == 4 &&
@@ -2948,10 +2952,23 @@ internal static partial class Program
                     CreatedUnixMs = now
                 });
                 var preview = MemoryRecallLogic.Preview(turn, 1);
-                Require(preview.Contains("【此刻自然浮起的过去】") &&
+                Require(preview.Contains("【复盘整理的相关经历】") &&
                         preview.Contains("被她认真地放进眼里") &&
-                        preview.Contains("不是必须引用的资料"),
-                    "最近对话应参与心智前记忆预激活，返回真实过去而不是任务摘要");
+                        preview.Contains("她反复想看我的照片") && preview.Contains("共同文字场景中的经历") &&
+                        preview.Contains(DateTimeOffset.FromUnixTimeMilliseconds(now - 1000).ToLocalTime().ToString("yyyy年M月d日")),
+                    "预召回复用日终事件总述、完整细节、情境与固定日期");
+                var fullDetail = "她后来提起照片里的窗边。\n" + new string('景', 205) + "完整结尾。";
+                store.AppendEventEntry(new EventEntryRecord
+                {
+                    Id = "entry.photo.followup", IndexId = "event.photo", Summary = "关于同一事件的后续细节",
+                    Detail = fullDetail, SourceMomentId = "photo-moment", Realm = TraceRealmValues.SharedScene, CreatedUnixMs = now + 1
+                });
+                preview = MemoryRecallLogic.Preview(turn, 2);
+                var searched = MemoryRecallLogic.Assemble(turn, new MindDecisionData { query = "照片" }, 2);
+                Require(preview.Contains(fullDetail) && searched.Contains(fullDetail) &&
+                        preview.Split("事件：她反复想看我的照片").Length == 2 &&
+                        searched.Split("事件：她反复想看我的照片").Length == 2 && !searched.Contains("相似度"),
+                    "同一事件的选中条目归拢呈现，总述只出现一次，保存正文的换行和结尾不再被展示层截断");
 
                 var generator = BodyEffector("qq.imagegen.generate", "qq.imagegen",
                     BodyIds.Qq, BodyTierValues.Chat, BodyOrganValues.Image);

@@ -127,15 +127,21 @@ internal static partial class Program
                 var turn = new TraceTurnContext("puzzle", m1, new List<MomentRecord>(), 0, false, services);
                 var preview = MemoryRecallLogic.Preview(turn, 4);
                 Require(preview.Contains(first.Id) && preview.Contains(second.Id) && preview.Contains("反证") && preview.Contains("他") &&
-                    preview.Contains("例外") && preview.Contains(m2.Id), "无事件、无聊天历史时仍召回认知及冲突、领域和证据");
+                    preview.Contains("例外") && preview.Contains(first.Summary) && preview.Contains(second.Summary) &&
+                    preview.Contains("外部生活/对方自述") && !preview.Contains(m2.Id) && !preview.Contains(m2.Content) &&
+                    !preview.Contains("重复场景里的支持性观察") && !preview.Contains("置信="),
+                    "预召回完整的已整理认知及范围、例外、冲突和来源性质，原句与评分留在查证层");
                 var renderedEvidence = new CognitionContextRecallSource(store).Retrieve(new ContextRecallQuery { Text = "青穹杯" })
                     .Single(x => x.Id == first.Id).RenderedText;
-                Require(renderedEvidence.Contains("依据（支持）原始记录:support-19") &&
+                // 毫秒内落库的支持证据可能同序；检验来源有效及反证保留，不依赖并列项顺序。
+                Require(Enumerable.Range(0, 20).Any(i => renderedEvidence.Contains("依据（支持）原始记录:support-" + i + " ")) &&
                     renderedEvidence.Contains("依据（反证）原始记录:" + m2.Id) && renderedEvidence.Contains("外部生活/对方自述") &&
                     !renderedEvidence.Contains("supports") && !renderedEvidence.Contains("challenges") && !renderedEvidence.Contains("user_reported"),
                     "召回用中文说明依据，仍分别保留支持、反证与可追溯的原始ID");
                 var explicitRecall = MemoryRecallLogic.Assemble(turn, new MindDecisionData { query = "青穹杯" }, 4, out var found);
-                Require(found && explicitRecall.Contains(first.Id), "显式 memory.recall 与预激活共享独立认知召回");
+                Require(found && explicitRecall.Contains(first.Id) && explicitRecall.Contains(m2.Id) &&
+                    explicitRecall.Contains(m2.Content) && explicitRecall.Contains("重复场景里的支持性观察"),
+                    "主动 memory.recall 保留支持和反证原文的追溯入口");
                 var replacement = Create("喝水先确认温度，青穹杯本身不是限制。", m3.Id);
                 replacement.operation = "revise"; replacement.target_id = first.Id;
                 carriedId = store.CommitCognitions(m3.Id, new[] { replacement }).Single().Id;

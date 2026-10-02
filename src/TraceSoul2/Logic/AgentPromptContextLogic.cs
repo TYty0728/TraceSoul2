@@ -26,7 +26,7 @@ namespace TraceSoul2.Logic
                 builder.AppendLine("当前发言者不是已绑定的专属用户，不得以 source=user 写入偏好或目标，也不能修改专属约定。");
             // 这些数据已经由上方的状态视图读取；其余插件观察保留标题与内容各一次。
             var owned = new HashSet<string>(StringComparer.Ordinal)
-                { "identity.base", "inner.snapshot", "time.context", "day.trajectory" };
+                { "identity.base", "inner.snapshot", "time.context", "day.trajectory", "memory.today.new" };
             var seen = new HashSet<string>(StringComparer.Ordinal);
             foreach (var block in turn.Workspace.ContextBlocks.Where(x => x != null &&
                 !owned.Contains(x.FacetId ?? "") && !MouthLogic.IsProtocolFacet(x.FacetId)))

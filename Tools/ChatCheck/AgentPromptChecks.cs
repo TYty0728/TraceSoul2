@@ -74,11 +74,17 @@ internal static partial class Program
             "插件参数原样展示，不重复 JSON 转义或注入空元数据");
         var continuation = new AgentSequenceLlm("{\"step\":\"continue\",\"inner\":\"新产生的关注需要延续\",\"reply\":\"不应回放的中间草稿\",\"actions\":[{\"call_id\":\"read-1\",\"capability_id\":\"test.read\",\"arguments\":[{\"name\":\"query\",\"value\":\"具体资料\"}]}]}",
             "{\"step\":\"finish\",\"reply\":\"看到了。\"}");
-        await new AgentLoopLogic(continuation).RunAsync(turn, "", () => new() { tool }, (_, _) => Task.FromResult(
-            new TraceCapabilityResultData { Status = "success", Payload = "唯一实际检索结果" }), default);
+        string executedCallId = null;
+        await new AgentLoopLogic(continuation).RunAsync(turn, "", () => new() { tool }, (call, _) =>
+        {
+            executedCallId = call.call_id;
+            return Task.FromResult(new TraceCapabilityResultData { Status = "success", Payload = "唯一实际检索结果" });
+        }, default);
         Require(!continuation.Requests[1].Contains("不应回放的中间草稿") &&
             continuation.Requests[1].Contains("新产生的关注需要延续") &&
-            continuation.Requests[1].Split("唯一实际检索结果").Length == 2 && continuation.Requests[1].Contains("read-1"),
+            continuation.Requests[1].Split("唯一实际检索结果").Length == 2 &&
+            !string.IsNullOrEmpty(executedCallId) && continuation.Requests[1].Contains(executedCallId) &&
+            !continuation.Requests[1].Contains("read-1"),
             "续推仅回放一次可关联的真实调用与结果，不复制整份输出或草稿");
         var pending = new AgentTurnStateLogic();
         pending.Update(new AgentOutputData { sleep = true, next_heartbeat_minutes = 30 }, new[] { "sleep", "next_heartbeat_minutes" });

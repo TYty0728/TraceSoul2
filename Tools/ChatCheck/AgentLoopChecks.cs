@@ -197,14 +197,14 @@ internal static partial class Program
         before = probe.Count;
         var collision = await Chat("agent-collision", Step(Continue(Action("id"))),
             Step(Continue(Action("id", value: "另一份资料"))), Step(Finish()));
-        Require(probe.Count == before + 1 && collision.llm.Requests.Last().Contains("同一 call_id"),
-            "不能用同一 call_id 偷换请求");
+        Require(probe.Count == before + 2 && !collision.llm.Requests.Last().Contains("同一 call_id 不可改成"),
+            "旧响应的相同编号被忽略，不同参数各自获得程序调用身份");
 
         var mismatch = Action("wrong-body"); mismatch.body_id = "other-robot";
         before = probe.Count;
         var denied = await Chat("agent-denied", Step(Continue(Action("unknown", "does.not.exist"), mismatch)), Step(Finish()));
-        Require(probe.Count == before && denied.llm.Requests.Last().Contains("目标身体") &&
-            denied.llm.Requests.Last().Contains("不在当前可用目录"), "未知能力与错误目标不能执行，失败必须返回 Agent");
+        Require(probe.Count == before + 1 && denied.llm.Requests.Last().Contains("不在当前可用目录") &&
+            !denied.llm.Requests.Last().Contains("other-robot"), "未知能力不执行；旧身体字段被忽略，已知能力使用目录绑定");
 
         var recall = await Chat("agent-recall", Step(Continue(Action("recall", "memory.recall", "约定日期"))), Step(Finish("没有找到日期。")));
         Require(recall.llm.Requests.Count == 2 && recall.llm.Requests.Last().Contains("未找到相关记忆"),

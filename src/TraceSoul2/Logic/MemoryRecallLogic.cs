@@ -24,11 +24,12 @@ namespace TraceSoul2.Logic
         {
             if (turn == null || turn.Services == null || turn.Services.Storage == null)
                 return string.Empty;
-            if (EnvironmentLogic.IsPublic(turn)) return RecallPublic(turn, turn.Moment?.Content, topK) + RecallPuzzle(turn, turn.Moment?.Content, topK);
+            if (EnvironmentLogic.IsPublic(turn))
+                return RecallPuzzle(turn, turn.Moment?.Content, topK, includeOriginalEvidence: false);
             var storage = turn.Services.Storage;
             var indexes = storage.GetActiveEventIndexes() ?? new List<EventIndexRecord>();
             var query = BuildPreludeQuery(turn);
-            var cognitionText = RecallPuzzle(turn, query, topK);
+            var cognitionText = RecallPuzzle(turn, query, topK, includeOriginalEvidence: false);
             if (indexes.Count == 0) return cognitionText;
             var entries = storage.GetEventEntriesByIndexIds(indexes.Select(x => x.Id))
                           ?? new List<EventEntryRecord>();
@@ -43,7 +44,7 @@ namespace TraceSoul2.Logic
                 .Where(x => x != null && !string.IsNullOrWhiteSpace(x.Id))
                 .GroupBy(x => x.Id, StringComparer.Ordinal)
                 .ToDictionary(x => x.Key, x => x.First(), StringComparer.Ordinal);
-            return FormatPreview(picked, indexById, new List<CognitionSliceRecord>()) + "\n" + cognitionText;
+            return (FormatEvents(picked, indexById) + "\n" + cognitionText).Trim();
         }
 
         private static string RecallPublic(TraceTurnContext turn, string query, int topK)
@@ -130,10 +131,10 @@ namespace TraceSoul2.Logic
                 return string.Empty;
             if (EnvironmentLogic.IsPublic(turn))
             {
-                var recalled = RecallPublic(turn, mind?.query ?? turn.Moment?.Content, topK) +
+                var recalled = RecallPublic(turn, mind?.query ?? turn.Moment?.Content, topK) + "\n" +
                     RecallPuzzle(turn, mind?.query ?? turn.Moment?.Content, topK);
-                hasEvidence = recalled.Length > 0;
-                return recalled;
+                hasEvidence = !string.IsNullOrWhiteSpace(recalled);
+                return recalled.Trim();
             }
             var storage = turn.Services.Storage;
             var query = mind == null || string.IsNullOrWhiteSpace(mind.query)
@@ -203,7 +204,7 @@ namespace TraceSoul2.Logic
 
             var indexById = filtered.ToDictionary(x => x.Id, StringComparer.Ordinal);
             hasEvidence = picked.Count > 0 || cognitionText.Length > 0;
-            return Format(picked, indexById, scores, new List<CognitionSliceRecord>()) + "\n" + cognitionText;
+            return (FormatEvents(picked, indexById) + "\n" + cognitionText).Trim();
         }
 
         private static List<EventEntryRecord> PickByMeaning(
@@ -296,107 +297,75 @@ namespace TraceSoul2.Logic
             return string.Join("\n", parts.Where(x => !string.IsNullOrWhiteSpace(x)));
         }
 
-        private static string FormatPreview(
+        private static string FormatEvents(
             List<EventEntryRecord> entries,
-            Dictionary<string, EventIndexRecord> indexById,
-            List<CognitionSliceRecord> cognitions)
+            Dictionary<string, EventIndexRecord> indexById)
         {
+            if (entries == null || entries.Count == 0) return string.Empty;
             var builder = new StringBuilder();
             builder.AppendLine(CorePrompts.MemoryRecall.PreviewHeader);
             builder.AppendLine(CorePrompts.MemoryRecall.PreviewHint);
-            foreach (var entry in entries ?? new List<EventEntryRecord>())
+            // 复盘已经保存总述与第一人称细节；按事件归拢选中条目，原样呈现整理正文。
+            foreach (var group in entries.Where(x => x != null).GroupBy(x => x.IndexId ?? string.Empty))
             {
-                EventIndexRecord index;
-                indexById.TryGetValue(entry.IndexId ?? string.Empty, out index);
-                var heading = index == null
-                    ? string.Empty
-                    : FormatDate(index.TimeUnixMs) +
-                      (string.IsNullOrWhiteSpace(index.MoodLabel) ? string.Empty : " · " + index.MoodLabel);
-                builder.Append("- ");
-                if (heading.Length > 0) builder.Append("[").Append(heading).Append("] ");
-                if (!string.IsNullOrWhiteSpace(entry.Summary))
-                    builder.Append(entry.Summary.Trim()).Append("｜");
-                builder.AppendLine((entry.Detail ?? string.Empty).Trim());
-            }
-            if (cognitions != null && cognitions.Count > 0)
-            {
-                builder.AppendLine(CorePrompts.MemoryRecall.PreviewCognitionHeader);
-                foreach (var cognition in cognitions)
-                    if (cognition != null && !string.IsNullOrWhiteSpace(cognition.Summary))
-                        builder.AppendLine("- " + cognition.Summary.Trim());
+                indexById.TryGetValue(group.Key, out var index);
+                builder.Append("\n【事件起点 · ").Append(FormatDate(index?.TimeUnixMs ?? 0));
+                if (!string.IsNullOrWhiteSpace(index?.TimeLabel)) builder.Append(" · ").Append(index.TimeLabel);
+                builder.AppendLine("】");
+                if (!string.IsNullOrWhiteSpace(index?.EventSummary)) builder.AppendLine("事件：" + index.EventSummary.Trim());
+                var context = new[] { index?.PlaceLabel, index?.PersonLabel }
+                    .Where(x => !string.IsNullOrWhiteSpace(x));
+                if (context.Any()) builder.AppendLine("情境：" + string.Join(" · ", context));
+                if (!string.IsNullOrWhiteSpace(index?.MoodLabel)) builder.AppendLine("当时的感受：" + index.MoodLabel);
+                foreach (var entry in group.GroupBy(x => x.Id).Select(x => x.First()))
+                {
+                    builder.AppendLine("- " + RealmLabel(entry.Realm));
+                    if (!string.IsNullOrWhiteSpace(entry.Summary) && entry.Summary.Trim() != index?.EventSummary?.Trim())
+                        builder.AppendLine(entry.Summary.Trim());
+                    if (!string.IsNullOrWhiteSpace(entry.Detail)) builder.AppendLine(entry.Detail.Trim());
+                }
             }
             return builder.ToString().TrimEnd();
         }
 
-        internal static string RecallPuzzle(TraceTurnContext turn, string query, int topK)
+        internal static string RecallPuzzle(TraceTurnContext turn, string query, int topK, bool includeOriginalEvidence = true)
         {
             var storage = turn.Services.Storage;
             var tags = EnvironmentLogic.IsPublic(turn) ? new List<LifeTagRecord>() : RankByMoment(turn.Services.Router, query, storage.GetActiveLifeTags(), 8);
             var adapter = new ContextRecallAdapter();
-            const string heading = "【此刻唤起的长期拼图：理解可修订，依据不等于已完成行动】";
+            const string cognitionHeading = "【复盘形成的理解】";
+            const string reviewHeading = "【复盘留下的经历与感受】";
             var runtime = SubjectRuntimeLogic.View(turn);
             var related = InnerLifeLogic.LiveAttention(runtime, DateTimeOffset.UtcNow.ToUnixTimeMilliseconds())
                 .SelectMany(x => x.source_refs ?? new List<string>()).Where(x => x != null && x.StartsWith("cognition:", StringComparison.Ordinal))
                 .Select(x => x.Substring(10)).Distinct().Take(6).ToList();
             var selected = adapter.Recall(new ContextRecallQuery { Text = query, RelatedIds = related,
                 Cues = tags.Select(x => x.Id).ToList(), MaxItems = Math.Max(0, Math.Min(10, topK)),
-                MaxChars = 3200 - heading.Length - Environment.NewLine.Length },
+                IncludeOriginalEvidence = includeOriginalEvidence,
+                MaxChars = 3200 - cognitionHeading.Length - reviewHeading.Length - 3 * Environment.NewLine.Length },
                 new IContextRecallSource[] { new CognitionContextRecallSource(storage, n => PuzzleViewLogic.CanRead(turn, n), m => PuzzleViewLogic.CanReadEvidence(turn, m)),
                     new DelegateContextRecallSource("runtime_day", q => RuntimeSliceLogic.Recall(turn, q)) });
             foreach (var item in selected.Where(x => x.SourceId == "cognition")) turn.Workspace.RecalledCognitionIds.Add(item.Id);
-            return adapter.RenderNatural(heading, selected);
+            return string.Join("\n", new[] {
+                adapter.RenderNatural(cognitionHeading, selected.Where(x => x.SourceId == "cognition").ToList()),
+                adapter.RenderNatural(reviewHeading, selected.Where(x => x.SourceId == "runtime_day").ToList())
+            }.Where(x => !string.IsNullOrWhiteSpace(x)));
         }
 
-        private static string Format(
-            List<EventEntryRecord> entries,
-            Dictionary<string, EventIndexRecord> indexById,
-            Dictionary<string, float> scores,
-            List<CognitionSliceRecord> cognitions)
+        private static string RealmLabel(string realm) => realm switch
         {
-            var builder = new StringBuilder();
-            builder.AppendLine(CorePrompts.MemoryRecall.LitHeader);
-            if (entries == null || entries.Count == 0)
-                builder.AppendLine(CorePrompts.MemoryRecall.EmptyRange);
-            else
-            {
-                foreach (var entry in entries)
-                {
-                    EventIndexRecord index;
-                    indexById.TryGetValue(entry.IndexId, out index);
-                    var score = scores != null && scores.ContainsKey(entry.Id)
-                        ? "（相似度 " + scores[entry.Id].ToString("0.00") + "）"
-                        : string.Empty;
-                    builder.AppendLine("◆ " + (index == null ? "索引未知" :
-                        FormatDate(index.TimeUnixMs) +
-                        (string.IsNullOrWhiteSpace(index.DayKindLabel) ? string.Empty : "（" + index.DayKindLabel + "）") +
-                        (string.IsNullOrWhiteSpace(index.PersonLabel) ? string.Empty : " · " + index.PersonLabel) +
-                        (string.IsNullOrWhiteSpace(index.MoodLabel) ? string.Empty : " · 心情：" + index.MoodLabel)) +
-                        score);
-                    if (index != null) builder.AppendLine("  事件：" + Limit(index.EventSummary, 80));
-                    builder.AppendLine("  - " + Limit(entry.Summary, 60) + "｜" + Limit(entry.Detail, 200));
-                }
-            }
-            if (cognitions != null && cognitions.Count > 0)
-            {
-                builder.AppendLine();
-                builder.AppendLine(CorePrompts.MemoryRecall.CognitionHeader);
-                foreach (var c in cognitions)
-                    builder.AppendLine("- " + c.Summary);
-            }
-            builder.AppendLine(CorePrompts.MemoryRecall.UseOnlyFacts);
-            builder.AppendLine(CorePrompts.MemoryRecall.NotTheTask);
-            return builder.ToString().TrimEnd();
-        }
+            TraceRealmValues.ExternalWorld => "外部生活中的经历",
+            TraceRealmValues.SharedScene => "共同文字场景中的经历",
+            TraceRealmValues.Meta => "关于系统的交流",
+            TraceRealmValues.ExplicitFiction => "共同创作的虚构情节",
+            _ => "已整理的经历（情境未分类）"
+        };
 
         private static string FormatDate(long unixMs)
         {
-            return TimeLanguageUtil.RelativeWhen(unixMs);
-        }
-
-        private static string Limit(string value, int max)
-        {
-            value = value ?? string.Empty;
-            return value.Length <= max ? value : value.Substring(0, max);
+            if (unixMs <= 0) return "时间未记录";
+            try { return DateTimeOffset.FromUnixTimeMilliseconds(unixMs).ToLocalTime().ToString("yyyy年M月d日"); }
+            catch (ArgumentOutOfRangeException) { return "时间未记录"; }
         }
     }
 }
