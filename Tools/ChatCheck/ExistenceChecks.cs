@@ -63,7 +63,10 @@ internal static partial class Program
                     summary = text, subtype = "self_model", identity_slot = "self", about = "主体自身", scope = "有人尚未说完时",
                     exceptions = "紧急事项需要及时提醒", confidence = .8f, strength = .6f, evidence_moment_ids = new() { evidence } };
                 var node = store.CommitCognitions(source.Id, new[] { Write(source.Id, "我倾向先听完，再决定是否给建议。") }).Single();
-                var card = store.SaveDerivedIdentityCard(root, "self", "我正学会耐心听完。", new[] { node.Id }, source.Id);
+                var fullBody = "我正学会耐心听完。" + new string('长', 350) + "紧急时仍会及时提醒。";
+                var card = store.SaveDerivedIdentityCard(root, "self", fullBody, new[] { node.Id }, source.Id);
+                Require(card.Body == fullBody && store.LoadIdentityCards(root).Single(x => x.Slot == "self").Body == fullBody &&
+                    IdentityProjectionLogic.Build(owner).Contains(fullBody), "有依据的成长摘要从保存到身份注入都保留完整末尾");
                 Require(IdentityProjectionLogic.Current(card, store.GetCognitionNodes(50)) && card.Origin == "derived", "身份摘要绑定精确认知版本");
                 PuzzleViewLogic.SetShared(store, node.Id, PuzzleViewLogic.Stamp(node), true);
                 Require(IdentityProjectionLogic.Build(guest).Contains(node.Summary) && !IdentityProjectionLogic.Build(guest).Contains(secret),

@@ -135,9 +135,7 @@ namespace TraceSoul2.Logic
                 if (item == null || !IdentityCardSlotValues.IsKnown(item.slot)) continue;
                 item.slot = item.slot.Trim();
                 item.reason = Limit(pair.RewriteRecordedText((item.reason ?? string.Empty).Trim()), 120);
-                item.body = Limit(
-                    pair.RewriteRecordedText((item.body ?? string.Empty).Trim()),
-                    IdentityCardSlotValues.BodyLimit(item.slot));
+                item.body = pair.RewriteRecordedText((item.body ?? string.Empty).Trim());
                 string previous;
                 if (!existing.TryGetValue(item.slot, out previous)) previous = string.Empty;
                 if (!item.changed || item.body.Length == 0 || item.body == previous)
@@ -146,6 +144,7 @@ namespace TraceSoul2.Logic
                     item.body = previous;
                 }
                 if (result.Any(x => x.slot == item.slot)) continue;
+                if (item.changed) item.body = PrepareBody(item.slot, item.body);
                 result.Add(item);
             }
             output.cards = result;
@@ -178,10 +177,23 @@ namespace TraceSoul2.Logic
             foreach (var item in file.cards)
             {
                 if (item == null || item.slot != slot || string.IsNullOrWhiteSpace(item.body)) continue;
-                body = Limit(pair.RewriteRecordedText(item.body.Trim()), IdentityCardSlotValues.BodyLimit(slot));
+                var rewritten = pair.RewriteRecordedText(item.body.Trim());
+                // 读取本人提供的种子不是生成新摘要，保持成长正文原文。
+                body = IdentityCardSlotValues.IsGrowth(slot) ? rewritten : PrepareBody(slot, rewritten);
                 return body.Length > 0;
             }
             return false;
+        }
+
+        /// <summary>成长摘要保持完整；异常长输出交回整理环节，不用截断制造一份摘要。</summary>
+        public static string PrepareBody(string slot, string body)
+        {
+            body = (body ?? string.Empty).Trim();
+            var limit = IdentityCardSlotValues.BodyLimit(slot);
+            if (!IdentityCardSlotValues.IsGrowth(slot)) return Limit(body, limit);
+            if (body.Length > limit)
+                throw new InvalidOperationException("成长摘要超过" + limit + "字的异常长度边界，需先精炼；原文未截断。");
+            return body;
         }
 
         private static string GenericBody(string slot, PairIdentity pair)

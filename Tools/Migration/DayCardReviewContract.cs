@@ -39,14 +39,14 @@ namespace TraceSoul2.Migrate
                 if (!Slots.Contains(card.slot)) return path + ".slot 必须是 personality/self/other/relation/expression_habit 之一。";
                 if (seen.TryGetValue(card.slot, out var first))
                     return path + ".slot 与 $.cards[" + first + "].slot 重复（" + card.slot + "）。同一卡只输出一项；"
-                        + "将相关理解综合成一个不超过" + IdentityCardSlotValues.BodyLimit(card.slot)
-                        + "字的 body，合并所用 cognition_ids，其他卡保持不变；不要丢掉有效依据来凑空数组。";
+                        + "将相关理解综合成一个约" + IdentityCardSlotValues.BodyTarget(card.slot)
+                        + "字的完整 body，合并所用 cognition_ids，其他卡保持不变；不要丢掉有效依据来凑空数组。";
                 seen.Add(card.slot, i);
                 if (current.Any(x => x.Slot == card.slot && x.Pinned))
                     return path + ".slot 是本人固定的卡，请移除此更新；其他可更新卡仍按依据处理。";
                 if (string.IsNullOrWhiteSpace(card.body)) return path + ".body 不能为空。";
                 if (checkLength && card.body.Length > IdentityCardSlotValues.BodyLimit(card.slot))
-                    return path + ".body 超过" + IdentityCardSlotValues.BodyLimit(card.slot) + "字（当前" + card.body.Length + "字），须综合精简后完整输出。";
+                    return path + ".body 超过" + IdentityCardSlotValues.BodyLimit(card.slot) + "字的异常长度边界（当前" + card.body.Length + "字），请围绕核心理解凝练成完整摘要。";
                 if (card.cognition_ids == null || card.cognition_ids.Count == 0 || card.cognition_ids.Count > 12)
                     return path + ".cognition_ids 必须引用本次提供的1～12条同 slot 有效认知。";
                 for (var j = 0; j < card.cognition_ids.Count; j++)
@@ -73,7 +73,7 @@ namespace TraceSoul2.Migrate
                     "这里只整理给出的正文，既有认知依据由程序保留。每张摘要以目标长度为宜，完整表达后收尾。" +
                     "输出 JSON：{\"cards\":[{\"slot\":\"原 slot\",\"body\":\"凝练后的完整正文\"}]}；每个给出的 slot 对应一项。"),
                 new("user", TraceJson.ToJson(pending.Select(c => new { c.slot, c.body, current_chars = c.body.Length,
-                    target_chars = IdentityCardSlotValues.BodyLimit(c.slot) * 4 / 5, max_chars = IdentityCardSlotValues.BodyLimit(c.slot) }).ToList()))
+                    target_chars = IdentityCardSlotValues.BodyTarget(c.slot), max_chars = IdentityCardSlotValues.BodyLimit(c.slot) }).ToList()))
             };
             string Error(CondensedBodies result)
             {
@@ -89,7 +89,7 @@ namespace TraceSoul2.Migrate
                     var max = IdentityCardSlotValues.BodyLimit(card.slot);
                     if (string.IsNullOrWhiteSpace(card.body)) return path + ".body 应为完整的摘要正文。";
                     if (card.body.Length > max) return path + ".body 当前" + card.body.Length + "字，上限" + max +
-                        "字；请凝练到约" + max * 4 / 5 + "字，保留重要含义和完整结尾。";
+                        "字；请凝练到约" + IdentityCardSlotValues.BodyTarget(card.slot) + "字，保留重要含义和完整结尾。";
                 }
                 return null;
             }
@@ -105,7 +105,7 @@ namespace TraceSoul2.Migrate
             pinned.Add(IdentityCardSlotValues.Personality);
             var targets = evidence.Where(x => x.Status == "active" && Slots.Contains(x.IdentitySlot) && !pinned.Contains(x.IdentitySlot))
                 .GroupBy(x => x.IdentitySlot).Select(group => new { slot = group.Key,
-                    max_body_chars = IdentityCardSlotValues.BodyLimit(group.Key), cognitions = group.ToList() });
+                    target_body_chars = IdentityCardSlotValues.BodyTarget(group.Key), cognitions = group.ToList() });
             return "\n【成长摘要与可参考的认识，按 slot 分组】\n"
                 + "一个分组对应一张卡；同组的多条认知供综合理解。对照已有摘要，选择值得沉淀的变化；仍然贴切的认识继续保留。\n"
                 + TraceJson.ToJson(targets.ToList()) + "\n【保留原文的本人设定】\n" + string.Join(",", pinned);

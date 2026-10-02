@@ -36,11 +36,17 @@ namespace TraceSoul2.Data
             return slot ?? string.Empty;
         }
 
+        public static bool IsGrowth(string slot) => slot == Self || slot == Other ||
+            slot == Relation || slot == ExpressionHabit;
+
+        // 表达目标与异常输出边界分开；正常摘要可以为完整含义留出余量。
+        public static int BodyTarget(string slot) => IsGrowth(slot) ? 300 : BodyLimit(slot);
+
         public static int BodyLimit(string slot)
         {
             if (slot == Personality) return 800;
             if (slot == UserProfile) return 400;
-            return 300;
+            return IsGrowth(slot) ? 600 : 300;
         }
     }
 
