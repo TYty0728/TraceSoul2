@@ -22,9 +22,11 @@
     <Compile Include="ExistenceChecks.cs" />
     <Compile Include="RuntimeSliceChecks.cs" />
     <Compile Include="RuntimeContinuityChecks.cs" />
+    <Compile Include="RuntimePresentationChecks.cs" />
     <Compile Include="DayCardReviewChecks.cs" />
     <Compile Include="AgentContractChecks.cs" />
     <Compile Include="AgentPromptChecks.cs" />
+    <Compile Include="HistoryPresentationChecks.cs" />
     <Compile Include="GoalMemoryChecks.cs" />
     <Compile Include="WebSearchChecks.cs" />
     <Compile Include="CognitionGraphChecks.cs" />

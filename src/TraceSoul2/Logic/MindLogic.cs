@@ -263,38 +263,10 @@ namespace TraceSoul2.Logic
             return messages;
         }
 
-        /// <summary>只把两个人的真实 Moment 做成对话轮次，不把时间事件混进去。连续同一角色会并成一条。</summary>
+        /// <summary>兼容入口复用公共历史视图，保留每条发言的时间与边界。</summary>
         internal static List<DeepSeekMessageData> BuildRecentChatHistory(TraceTurnContext turn)
         {
-            var result = new List<DeepSeekMessageData>();
-            if (turn == null || turn.RawHistoryLimit <= 0 || turn.RecentMoments == null ||
-                turn.RecentMoments.Count == 0 || turn.Services == null || turn.Services.Storage == null)
-                return result;
-            var pair = turn.Services.Storage.LoadPairIdentity();
-            var align = turn.HistoryWindowAlign > 0
-                ? turn.HistoryWindowAlign
-                : CommonContextPackLogic.HistoryWindowAlign;
-            var filtered = turn.RecentMoments
-                .Where(x => x != null &&
-                            (pair.IsHumanMoment(x.Role) || pair.IsCompanionMoment(x.Role)) &&
-                            !string.IsNullOrWhiteSpace(x.Content) &&
-                            !IsOutboundProtocolMoment(x.Content))
-                .ToList();
-            var lines = filtered
-                .Skip(CommonContextPackLogic.AlignedWindowStart(
-                    filtered.Count, turn.RawHistoryLimit, align))
-                .ToList();
-            foreach (var item in lines)
-            {
-                var role = pair.IsHumanMoment(item.Role) ? "user" : "assistant";
-                var text = item.Content.Trim();
-                if (result.Count > 0 &&
-                    string.Equals(result[result.Count - 1].role, role, StringComparison.Ordinal))
-                    result[result.Count - 1].content += "\n" + text;
-                else
-                    result.Add(new DeepSeekMessageData(role, text));
-            }
-            return result;
+            return CommonContextPackLogic.BuildRecentChatHistory(turn);
         }
 
         /// <summary>出站入库的系统占位，不是对她说的话，不能进对话历史。</summary>

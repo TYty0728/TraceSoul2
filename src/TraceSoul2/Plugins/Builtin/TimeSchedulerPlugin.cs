@@ -21,7 +21,7 @@ namespace TraceSoul2.Plugins.Builtin
         {
             Id = PluginId,
             DisplayName = "时间与调度",
-            Version = "1.2.0",
+            Version = "1.2.1",
             Author = "TraceSoul2",
             Role = PluginRoleValues.Kernel,
             Description = "提供当前时间、今天两人的轨迹、未来计划；到期只叫醒中枢该跑的那一套循环，不直接改短卡或开口。"
@@ -331,7 +331,7 @@ namespace TraceSoul2.Plugins.Builtin
             {
                 var now = DateTimeOffset.Now;
                 var builder = new StringBuilder();
-                builder.Append(TimeSchedulerPrompts.NowPrefix).Append(TimeLanguageUtil.NaturalNow(now)).Append("。");
+                builder.Append(RuntimeContextLogic.CurrentTime(now));
                 if (state != null && context != null)
                 {
                     var upcoming = state.UpcomingDescriptions(

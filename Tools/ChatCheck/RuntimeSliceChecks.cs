@@ -128,6 +128,16 @@ internal static partial class Program
                     !MemoryRecallLogic.Assemble(guest, new MindDecisionData { query = "桂花感受" }, 5).Contains("走向平静") &&
                     owner.Workspace.RecalledCognitionIds.Count == 0,
                     "日拼图接入长期召回且遵守受众范围，日回望ID不能冒充认知ID");
+                var ownerPreview = MemoryRecallLogic.Preview(owner, 5);
+                var publicRecallTurn = new TraceTurnContext(pub.ContextConversationId,
+                    Moment(pub.ContextConversationId, "公开交流中的雨声"), new(), 0, true, services, environment: environment);
+                var publicPreview = MemoryRecallLogic.Preview(publicRecallTurn, 5);
+                Require(ownerPreview.Contains("桂花感受从急切走向平静，还有未想明白的部分。") && ownerPreview.Contains(day) &&
+                    ownerPreview.Contains("主观回望") && publicPreview.Contains("公开交流中的雨声让我留意到环境变化。") &&
+                    !publicPreview.Contains("走向平静") && !publicPreview.Contains("触发原话") && night.Requests.Count == 2,
+                    "私密与公开预召回直接使用对应环境已保存的完整日终回望，不注入零散原句或增加总结调用");
+                Require(MemoryRecallLogic.Assemble(publicRecallTurn, new MindDecisionData { query = "触发原话" }, 5)
+                    .Contains("触发原话slice-public"), "公开原始消息仍可在主动查证时读取");
                 var many = Enumerable.Range(0, 430).Select(i => new MomentRecord { Id = "batch-" + i, ConversationId = root,
                     Content = "完整证据" + i, CreatedUnixMs = i }).ToList();
                 var batches = RuntimeSliceLogic.EvidenceBatches(store, many).ToList();

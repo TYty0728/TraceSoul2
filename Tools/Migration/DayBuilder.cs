@@ -387,7 +387,9 @@ namespace TraceSoul2.Migrate
             var output = await DeepSeekStructuredOutputLogic.CompleteAsync<ReplayPrompts.DayCardReviewOutputData>(
                 llm, reviewMessages, null,
                 "身份摘要输出不符合卡片更新契约。", CancellationToken.None,
-                validationError: x => DayCardReviewContract.ValidationError(x, cardsNow, identityNodes));
+                validationError: x => DayCardReviewContract.StructuralError(x, cardsNow, identityNodes));
+            foreach (var card in output.cards) card.body = pair.RewriteRecordedText(card.body.Trim());
+            await DayCardReviewContract.FitBodiesAsync(llm, output, cardsNow, identityNodes, CancellationToken.None);
             output.SubjectRevision = subjectRevision;
             LogCall(context, dayKey, "card_review", 0,
                 "身份摘要复盘：" + Limit(output.summary, 60), TraceJson.ToJson(output));
@@ -417,10 +419,10 @@ namespace TraceSoul2.Migrate
             {
                 if (emptyDay || card == null || !PuzzleViewLogic.IdentitySlot(card.slot) || string.IsNullOrEmpty(card.slot) ||
                     cardsNow.Any(x => x.Slot == card.slot && x.Pinned)) continue;
-                var body = pair.RewriteRecordedText((card.body ?? string.Empty).Trim());
+                var body = (card.body ?? string.Empty).Trim();
                 if (body.Length == 0) continue;
                 if (body.Length > IdentityCardSlotValues.BodyLimit(card.slot))
-                    body = SmartTrim(body, IdentityCardSlotValues.BodyLimit(card.slot));
+                    throw new InvalidOperationException("身份摘要尚未完成长度精炼，原卡保留。");
                 context.Store.SaveDerivedIdentityCard(MigrationContext.ConversationId, card.slot, body, card.cognition_ids, lastMomentId);
                 changed.Add(IdentityCardSlotValues.Title(card.slot, pair) + "：" + Limit(card.reason, 40));
             }

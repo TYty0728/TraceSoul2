@@ -36,7 +36,7 @@ namespace TraceSoul2.ExternalPlugins
             "照片也是日常表达：想让对方看看自己或眼前时，可以主动分享普通神情、日常穿着或熟悉场景，不必等索图或新事件。" +
             "想用画面表达时，把这份意图交给相机；只在 reply 或 scene 里描写神情、动作、照片，不会生成或发送图片。" +
             "prompt 用自己的话写想让对方看见什么，共同文字场景可作为角色照片的创作依据，不冒充现实实拍。具体镜头交给相机。" +
-            "调用示例：{\"step\":\"continue\",\"actions\":[{\"call_id\":\"photo-1\",\"capability_id\":\"qq.imagegen.generate\",\"arguments\":[{\"name\":\"prompt\",\"value\":\"想让你看看我此刻的样子\"}]}]}。" +
+            "调用示例：{\"step\":\"continue\",\"actions\":[{\"capability_id\":\"qq.imagegen.generate\",\"arguments\":[{\"name\":\"prompt\",\"value\":\"想让你看看我此刻的样子\"}]}]}。" +
             "结果确认照片已发送后，可以结束，或用最终 reply 配一句话；失败时照实回应。";
         public const string AgentBoundary =
             "尊重对方不收图和安静时段的约定；不按固定配额拍照，不机械重复上一张，不编造未发生的经历。";

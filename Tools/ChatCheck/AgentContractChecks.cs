@@ -22,13 +22,14 @@ internal static partial class Program
         var properties = schema.RootElement.GetProperty("properties");
         foreach (var field in typeof(AgentOutputData).GetFields())
             Require(AgentOutputContractLogic.Prompt.Contains(field.Name), "类型提示必须覆盖真实 DTO 字段：" + field.Name);
-        Require(AgentOutputContractLogic.Prompt.Contains("mood_changed, state_force, sleep: boolean") &&
+        Require(AgentOutputContractLogic.Prompt.Contains("state_force, sleep: boolean") &&
             AgentOutputContractLogic.Prompt.Contains("next_heartbeat_minutes: integer"), "简明类型表不能丢失布尔和整数约束");
-        foreach (var retired in new[] { "speak", "beat", "note", "archive", "review", "cognition", "image", "sticker", "voice", "voices", "tool_call", "tool_input", "tags", "query" })
+        foreach (var retired in new[] { "mood_changed", "speak", "beat", "note", "archive", "review", "cognition", "image", "sticker", "voice", "voices", "tool_call", "tool_input", "tags", "query" })
             Require(!properties.TryGetProperty(retired, out _), "旧字段不能进入唯一输出结构：" + retired);
+        var actionProperties = properties.GetProperty("actions").GetProperty("items").GetProperty("properties");
         Require(properties.EnumerateObject().Count() == typeof(AgentOutputData).GetFields().Length &&
-            !properties.GetProperty("actions").GetProperty("items").GetProperty("properties").TryGetProperty("execution_id", out _),
-            "schema 与模型 DTO 同源，设备执行 ID 不由模型填写");
+            new[] { "call_id", "body_id", "execution_id" }.All(x => !actionProperties.TryGetProperty(x, out _)),
+            "schema 与模型 DTO 同源，调用身份、身体与设备执行 ID 不由模型填写");
         var legacy = TraceJson.FromJson<AgentOutputData>("{\"step\":\"finish\",\"reply\":\"我在。\",\"speak\":\"直接回应并安抚\",\"archive\":\"归档\",\"tool_call\":{},\"beat\":\"出门\",\"image\":\"有\"}");
         var runtime = legacy.ToRuntime();
         Require(AgentLoopLogic.Valid(runtime, true, false) && !runtime.speak && !runtime.archive &&
@@ -36,7 +37,6 @@ internal static partial class Program
 
         var samples = new[]
         {
-            ("mood_changed", "\"情绪变了\"", "true", "mood_changed", "布尔"),
             ("state_force", "1", "false", "state_force", "布尔"),
             ("sleep", "\"睡一会儿\"", "false", "sleep", "布尔"),
             ("refine", "null", "false", "refine", "布尔"),
@@ -73,7 +73,45 @@ internal static partial class Program
         Require(reply.Requests.Count == 1 && answered.speak && ((MindDecisionData)answered).speak,
             "遗留 speak 字符串不再导致纠正，开口值由正文推导并供旧消费者读取");
         await CheckAgentSemanticRepairAsync(inbound);
+        await CheckProgramOwnedFieldsAsync(services);
         Console.WriteLine("Agent contract checks passed: independent DTO/schema, retired fields, typed repairs, nested arguments, heartbeat and legacy protocol isolation.");
+    }
+
+    private static async Task CheckProgramOwnedFieldsAsync(TracePluginServices services)
+    {
+        var tool = new TraceContributionDescriptorData { Id = "test.owned", Kind = TraceContributionKindValues.CallableNerve,
+            BodyId = "bound-body", ParametersJsonSchema = "{\"required\":[\"query\"]}" };
+        const string first = "{\"step\":\"continue\",\"mood\":\"轻松\",\"mood_changed\":\"旧标记\",\"actions\":[{\"capability_id\":\"test.owned\",\"arguments\":[{\"name\":\"query\",\"value\":\"一\"}]}]}";
+        const string duplicate = "{\"step\":\"continue\",\"actions\":[{\"call_id\":{\"legacy\":true},\"body_id\":42,\"capability_id\":\"test.owned\",\"arguments\":[{\"name\":\"QUERY\",\"value\":\"一\"}]}]}";
+        const string changed = "{\"step\":\"continue\",\"actions\":[{\"call_id\":\"same-old-id\",\"body_id\":\"wrong-body\",\"capability_id\":\"test.owned\",\"arguments\":[{\"name\":\"query\",\"value\":\"二\"}]}]}";
+        var ids = new List<string>();
+        var turn = new TraceTurnContext("program-owned", Moment("program-owned", "测试"), new(), 0, true, services);
+        var llm = new AgentSequenceLlm(first, duplicate, changed, "{\"step\":\"finish\",\"reply\":\"完成\"}");
+        var result = await new AgentLoopLogic(llm).RunAsync(turn, "", () => new() { tool }, (call, _) =>
+        {
+            Require(call.body_id == "bound-body" && !string.IsNullOrWhiteSpace(call.call_id), "无编号/身体参数也由程序绑定后执行");
+            ids.Add(call.call_id);
+            return Task.FromResult(new TraceCapabilityResultData { Status = "success", Summary = "已处理" });
+        }, default);
+        Require(ids.Count == 2 && ids.Distinct().Count() == 2 && llm.Requests.Count == 4,
+            "同一行动参数忽略大小写后只执行一次，新参数获得新的程序编号，旧控制字段类型不触发修复");
+        var receipts = turn.Workspace.Results;
+        Require(receipts.Count == 3 && receipts[0].CallId == receipts[1].CallId && receipts[2].CallId != receipts[0].CallId &&
+            receipts.All(x => x.CapabilityId == tool.Id), "重复提案回执复用原调用身份，回执元数据由程序补齐");
+        Require(result.mood_changed && result.mood == "轻松" && !result.state_fields.Contains("mood_changed") &&
+            !llm.Requests.Last().Contains("mood_changed"), "情绪变化从实际 mood 推导，续推状态不携带旧开关");
+        var next = new TraceTurnContext("program-owned", Moment("program-owned", "另一轮"), new(), 0, true, services);
+        await new AgentLoopLogic(new AgentSequenceLlm(first, "{\"step\":\"finish\",\"reply\":\"完成\"}"))
+            .RunAsync(next, "", () => new() { tool }, (call, _) =>
+            {
+                Require(!ids.Contains(call.call_id), "下一轮相同动作使用新身份，不被上一轮误去重");
+                return Task.FromResult(new TraceCapabilityResultData { Status = "success" });
+            }, default);
+        var ignored = TraceJson.FromJson<AgentOutputData>("{\"step\":\"finish\",\"reply\":\"好\",\"mood_changed\":true}");
+        var state = new AgentTurnStateLogic();
+        state.Update(ignored, new[] { "step", "reply", "mood_changed" });
+        var runtime = ignored.ToRuntime(); runtime.state_fields = state.Values.Keys.ToList(); MindLogic.Normalize(runtime);
+        Require(!runtime.mood_changed, "单独旧变化开关不能制造情绪更新");
     }
 
     private static async Task CheckAgentSemanticRepairAsync(TraceTurnContext turn, string suppliedJson = null)
@@ -87,7 +125,7 @@ internal static partial class Program
         var fixedJson = JsonSerializer.Serialize(output, new JsonSerializerOptions { IncludeFields = true });
         var descriptors = output.actions.Select(x => new TraceContributionDescriptorData
             { Id = x.capability_id, Kind = TraceContributionKindValues.Effector, Organ = BodyOrganValues.Image,
-                BodyId = string.IsNullOrEmpty(x.body_id) ? "qq" : x.body_id, Description = "离线测试能力" }).ToList();
+                BodyId = "qq", Description = "离线测试能力" }).ToList();
         var calls = 0;
         var repaired = new AgentSequenceLlm(bad, fixedJson, "{\"step\":\"finish\",\"reply\":\"已收到模拟结果。\"}");
         await new AgentLoopLogic(repaired).RunAsync(turn, "", () => descriptors, (call, _) =>

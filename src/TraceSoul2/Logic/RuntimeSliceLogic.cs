@@ -26,7 +26,7 @@ namespace TraceSoul2.Logic
                     var other = CognitionContextRecallSource.Terms(x.Summary);
                     var relevance = other.Count == 0 ? 0 : (float)terms.Count(other.Contains) / Math.Min(terms.Count, other.Count);
                     return new ContextRecallCandidate { Id = x.Id, SourceId = "runtime_day", Text = x.Summary,
-                        Relevance = relevance, RenderedText = "【" + x.DayKey + " 当天经历与感受；主观回望，不是外部核实】" + x.Summary };
+                        Relevance = relevance, RenderedText = "【" + x.DayKey + " · 当天经历与感受的主观回望】\n" + x.Summary };
                 }).Where(x => x.Relevance >= .18f).OrderByDescending(x => x.Relevance).Take(10).ToList();
         }
         public static void Capture(TraceTurnContext turn, AgentStepData step)

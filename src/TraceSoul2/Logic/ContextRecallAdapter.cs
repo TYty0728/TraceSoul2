@@ -18,6 +18,8 @@ namespace TraceSoul2.Logic
         public IReadOnlyList<string> RelatedIds { get; set; } = Array.Empty<string>();
         public int MaxItems { get; set; } = 8;
         public int MaxChars { get; set; } = 2400;
+        /// <summary>日常预召回阅读整理结果；主动查证时才展开原始证据。</summary>
+        public bool IncludeOriginalEvidence { get; set; } = true;
     }
 
     /// <summary>来源返回的领域无关候选；RenderedText 是给模型看的自然语言。</summary>
@@ -126,23 +128,26 @@ namespace TraceSoul2.Logic
                     var text = "[认知:" + c.Id + "｜" + PuzzleDomains.Label(c.Domains) + "] 我目前理解：" + c.Summary;
                     if (!string.IsNullOrWhiteSpace(c.Scope)) text += "；适用范围：" + c.Scope;
                     if (!string.IsNullOrWhiteSpace(c.Exceptions)) text += "；例外：" + c.Exceptions;
-                    text += "；置信=" + c.Confidence.ToString("0.00", System.Globalization.CultureInfo.InvariantCulture);
                     if (c.Status == "weakened") text += "；已有反证，理解已削弱";
                     if (conflicts.Contains(c.Id)) text += "；与相关理解有冲突，需对照判断";
                     var connected = edges.Where(e => e.FromCognitionId == c.Id || e.ToCognitionId == c.Id).Take(4).ToList();
-                    foreach (var e in connected) text += "；关联 " + RelationLabel(e.Relation) + ":" + (e.FromCognitionId == c.Id ? e.ToCognitionId : e.FromCognitionId);
+                    if (query.IncludeOriginalEvidence)
+                        foreach (var e in connected) text += "；关联 " + RelationLabel(e.Relation) + ":" + (e.FromCognitionId == c.Id ? e.ToCognitionId : e.FromCognitionId);
                     // 两条摘要优先分别保留反证和支持，关联依据不能冒充内容被证明。
                     var shownEvidence = refs.Where(e => e.Relation == "challenges").Take(1)
                         .Concat(refs.Where(e => e.Relation == "supports").Take(1)).ToList();
                     if (shownEvidence.Count == 0) shownEvidence.AddRange(refs.Take(2));
-                    foreach (var e in shownEvidence)
+                    foreach (var e in query.IncludeOriginalEvidence ? shownEvidence : new List<CognitionEvidenceRecord>())
                     {
                         text += "；依据（" + RelationLabel(e.Relation) + "）原始记录:" + e.MomentId;
                         if (moments.TryGetValue(e.MomentId ?? "", out var m))
                             text += " [" + RealmLabel(m.Realm) + "/" + EvidenceLabel(m.EvidenceType) + "] " + Clip(m.Content, 100);
                         else text += "（原始来源当前不可读取，不能当作已核实）";
                     }
-                    if (refs.Count == 0) text += "；本轮未提供可读取的原始证据，不据此推测原文";
+                    if (!query.IncludeOriginalEvidence && refs.Count > 0)
+                        text += "；依据来源：" + string.Join("、", refs.Select(e => moments[e.MomentId])
+                            .Select(m => RealmLabel(m.Realm) + "/" + EvidenceLabel(m.EvidenceType)).Distinct());
+                    if (refs.Count == 0) text += "；本次仅提供已保存的理解，原始依据尚待核对";
                     return new ContextRecallCandidate { Id = c.Id, SourceId = "cognition", Kind = c.Subtype,
                         Text = c.Summary, RenderedText = text, Relevance = x.Value, Strength = c.Strength,
                         Confidence = c.Confidence, Freshness = 0, ContradictsCurrent = conflicts.Contains(c.Id) || c.Status == "weakened",

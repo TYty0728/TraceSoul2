@@ -1,8 +1,10 @@
 using System;
+using System.Globalization;
 using System.Collections.Generic;
 using System.Linq;
 using TraceSoul2.Data;
 using TraceSoul2.Plugins;
+using TraceSoul2.Prompts;
 
 namespace TraceSoul2.Logic
 {
@@ -231,18 +233,48 @@ namespace TraceSoul2.Logic
             foreach (var item in lines)
             {
                 var role = pair.IsHumanMoment(item.Role) ? "user" : "assistant";
-                var text = EnvironmentLogic.IsPublic(turn) ? EnvironmentLogic.PublicDialogue(item) : item.Content.Trim();
-                var reasoning = includeAssistantReasoning ? ExtractReasoningContent(item) : null;
-                if (result.Count > 0 &&
-                    string.Equals(result[result.Count - 1].role, role, StringComparison.Ordinal) &&
-                    string.IsNullOrWhiteSpace(result[result.Count - 1].reasoning_content))
-                {
-                    result[result.Count - 1].content += "\n" + text;
-                    continue;
-                }
+                var text = FormatHistoryMoment(item, pair, EnvironmentLogic.IsPublic(turn));
+                var reasoning = includeAssistantReasoning && role == "assistant" ? ExtractReasoningContent(item) : null;
                 result.Add(new DeepSeekMessageData(role, text) { reasoning_content = reasoning });
             }
             return result;
+        }
+
+        // 每条记录保留独立边界。时间只由发生时刻决定，不随新一轮的“现在”改写。
+        private static string FormatHistoryMoment(MomentRecord moment, PairIdentity pair, bool isPublic)
+        {
+            var speaker = pair.IsCompanionMoment(moment.Role) ? "我" : pair.Username;
+            if (isPublic && !pair.IsCompanionMoment(moment.Role))
+            {
+                var environment = EnvironmentLogic.FromMoment(moment);
+                speaker = string.IsNullOrWhiteSpace(environment?.SpeakerName) ? "参与者" : environment.SpeakerName;
+                if (!string.IsNullOrWhiteSpace(environment?.SpeakerId)) speaker += " · " + environment.SpeakerId;
+            }
+            if (string.IsNullOrWhiteSpace(speaker)) speaker = "对方";
+            var time = "时间未记录";
+            if (moment.CreatedUnixMs > 0)
+            {
+                try
+                {
+                    // 与当前状态使用同一宿主时区；显式偏移使远端部署和跨年记录也有明确归属。
+                    time = DateTimeOffset.FromUnixTimeMilliseconds(moment.CreatedUnixMs).ToLocalTime()
+                        .ToString("yyyy年M月d日 HH:mm zzz", CultureInfo.InvariantCulture);
+                }
+                catch (ArgumentOutOfRangeException) { }
+            }
+            var body = moment.Content ?? string.Empty;
+            if (pair.IsHumanMoment(moment.Role) && VisionLogic.HasInboundImages(moment.PayloadJson))
+            {
+                var prefix = CorePrompts.Vision.SeenPrefix;
+                var index = body.StartsWith(prefix, StringComparison.Ordinal) ? 0 :
+                    body.IndexOf("\n" + prefix, StringComparison.Ordinal);
+                if (index >= 0)
+                {
+                    if (body[index] == '\n') index++;
+                    body = body.Substring(0, index) + "【当时的图片观察】\n" + body.Substring(index + prefix.Length);
+                }
+            }
+            return "【" + speaker + " · " + time + "】\n" + body;
         }
 
         private static void AppendNamed(List<DeepSeekMessageData> messages, string header, string body)

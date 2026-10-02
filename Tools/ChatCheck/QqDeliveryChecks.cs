@@ -62,7 +62,7 @@ internal static partial class Program
                         "新会话入站不能改变旧轮次文字、输入状态和延迟图片的收件人");
 
                     var empty = CameraSharingContext.Build(turn);
-                    Require(empty.Contains("最近可查") && empty.Contains("不必等索图"), "没有近期回执时提示自然分享，不能虚构已发照片");
+                    Require(empty.Length == 0, "没有积累到门槛时不注入相机节奏说明");
                     var now = DateTimeOffset.UtcNow.ToUnixTimeMilliseconds();
                     void Receipt(string receiptId, string kind, string payload, long? timestamp = null) => store.SaveOperationalEvent(new OperationalEventRecord
                     {
@@ -71,21 +71,30 @@ internal static partial class Program
                     });
                     Receipt("sticker", OperationalEventKindValues.OutboundSticker, moment.PayloadJson);
                     Receipt("other-session", OperationalEventKindValues.OutboundImage, "{\"session_type\":\"private\",\"session_id\":\"456\"}");
-                    Require(CameraSharingContext.Build(turn).Contains("没有给她发过照片"), "表情与其他会话照片不能当成本会话已分享");
+                    Require(CameraSharingContext.Build(turn).Length == 0, "表情与其他会话回执不产生节奏提示");
                     Receipt("old-photo", OperationalEventKindValues.OutboundImage, moment.PayloadJson, now - 86400000);
-                    Require(CameraSharingContext.Build(turn).Contains("距今约1440分钟") &&
-                            CameraSharingContext.Build(turn).Contains("不代表照片刚发过"),
-                        "即使没有后续文字，一天前的照片也不能被描述成刚分享过");
+                    Require(CameraSharingContext.Build(turn).Length == 0, "旧照片的间隔不直接注入模型");
                     Receipt("photo", OperationalEventKindValues.OutboundImage, moment.PayloadJson);
-                    Require(CameraSharingContext.Build(turn).Contains("已成功发出"), "成功发图应呈现实际回执");
-                    for (var i = 0; i < 6; i++) store.SaveMoment(new MomentRecord
+                    Require(CameraSharingContext.Build(turn).Length == 0, "成功发图后从新的文字相处重新累计");
+                    for (var i = 0; i < CameraSharingContext.ReplyThreshold; i++)
                     {
-                        Id = "reply-" + i, ConversationId = turn.ConversationId, Role = "小光", Content = "在听呢",
-                        SourcePluginId = "builtin.onebot", PayloadJson = moment.PayloadJson, CreatedUnixMs = now + i
-                    });
-                    Require(CameraSharingContext.Build(turn).Contains("之后已有6次文字回应") &&
-                            CameraSharingContext.Build(turn).Contains("现在主动想一想"),
-                        "持续文字相处后应重新考虑分享，不能直接强制生成图片");
+                        Require(CameraSharingContext.Build(turn).Length == 0, "门槛前不提前给出照片邀请");
+                        store.SaveMoment(new MomentRecord
+                        {
+                            Id = "reply-" + i, ConversationId = turn.ConversationId, Role = "小光", Content = "在听呢",
+                            SourcePluginId = "builtin.onebot", PayloadJson = moment.PayloadJson, CreatedUnixMs = now + i
+                        });
+                    }
+                    var invitation = CameraSharingContext.Build(turn);
+                    Require(invitation.Contains("结合当下的表达和场景") && !invitation.Any(char.IsDigit) &&
+                        !invitation.Contains("计数") && !invitation.Contains("分钟") && !invitation.Contains("次文字回应"),
+                        "程序计算门槛，模型只收到贴合当下的照片邀请");
+                    Receipt("other-session-new", OperationalEventKindValues.OutboundImage,
+                        "{\"session_type\":\"private\",\"session_id\":\"456\"}", now + 50);
+                    Require(CameraSharingContext.Build(turn) == invitation, "其他会话成功发图不清除本会话邀请");
+                    turn.Workspace.Results.Add(new TraceCapabilityResultData { CapabilityId = "qq.imagegen.generate", Status = "failed" });
+                    Require(CameraSharingContext.Build(turn).Length == 0, "本轮相机已尝试后由反馈续推，不重复节奏邀请");
+                    turn.Workspace.Results.Clear();
 
                     var fake = new CapturingLlm();
                     services.MindTurnPromptAppends.Add(CameraSharingContext.Build);
@@ -138,6 +147,8 @@ internal static partial class Program
                     Require(!unavailable.Requests.Single().Contains(QqImageGenPrompts.AgentUsage) &&
                             !unavailable.Requests.Single().Contains("【相机此刻】"),
                         "相机未配置时不得提示主动调用不可用能力");
+                    Receipt("new-photo", OperationalEventKindValues.OutboundImage, moment.PayloadJson, now + 100);
+                    Require(CameraSharingContext.Build(turn).Length == 0, "本会话成功发图后自动重新累计门槛");
                 }
             }
         }

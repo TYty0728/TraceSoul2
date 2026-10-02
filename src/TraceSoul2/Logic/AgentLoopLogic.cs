@@ -86,19 +86,19 @@ namespace TraceSoul2.Logic
                 {
                     token.ThrowIfCancellationRequested();
                     var descriptor = catalog.FirstOrDefault(x => x.Id == call.capability_id);
-                    if (descriptor != null && string.IsNullOrWhiteSpace(call.body_id)) call.body_id = MouthLogic.BodyOf(descriptor);
+                    call.body_id = descriptor == null ? null : MouthLogic.BodyOf(descriptor);
                     var signature = Signature(call);
+                    // 同轮相同能力/身体/参数复用调用身份；不同轮使用新的身份。
+                    if (!callIds.TryGetValue(signature, out var callId))
+                        callIds[signature] = callId = "call-" + Guid.NewGuid().ToString("N");
+                    call.call_id = callId;
                     TraceCapabilityResultData result;
-                    if (callIds.TryGetValue(call.call_id, out var oldSignature) && oldSignature != signature)
-                        result = Failure(call, "同一 call_id 不可改成另一项行动。");
-                    else if (executed.TryGetValue(signature, out var previous))
+                    if (executed.TryGetValue(signature, out var previous))
                         result = new TraceCapabilityResultData { CallId = call.call_id, CapabilityId = call.capability_id,
                             Status = previous.Status, Summary = "本轮已执行，不重复产生副作用。" + previous.Summary,
                             Payload = previous.Payload, ExecutionId = previous.ExecutionId };
                     else if (descriptor == null)
                         result = Failure(call, "能力不在当前可用目录。");
-                    else if (!string.IsNullOrWhiteSpace(call.body_id) && call.body_id != MouthLogic.BodyOf(descriptor))
-                        result = Failure(call, "目标身体与能力绑定不符。");
                     else if (!string.IsNullOrWhiteSpace(call.group_id) && groups.TryGetValue(call.group_id, out var groupBody) &&
                              groupBody != call.body_id)
                         result = Failure(call, "同一动作组不能混用不同身体。");
@@ -114,7 +114,8 @@ namespace TraceSoul2.Logic
                             IsConversationalExpression(descriptor) &&
                             IsReplyBody(turn, descriptor)) responded = true;
                     }
-                    if (!callIds.ContainsKey(call.call_id)) callIds[call.call_id] = signature;
+                    result.CallId = call.call_id;
+                    result.CapabilityId = call.capability_id;
                     if (!turn.Workspace.Results.Contains(result)) turn.Workspace.Results.Add(result);
                     results.Add(AgentPromptContextLogic.Result(call, result));
                 }
@@ -180,9 +181,8 @@ namespace TraceSoul2.Logic
                 {
                     var x = actions[i]; var path = "$.actions[" + i + "]";
                     if (x == null) return path + " 必须是行动对象，不能为 null。";
-                    if (string.IsNullOrWhiteSpace(x.call_id) || x.call_id.Length > 80) return path + ".call_id 须为1～80字符的唯一标识。";
                     if (string.IsNullOrWhiteSpace(x.capability_id) || x.capability_id.Length > 160) return path + ".capability_id 须为目录中的能力ID，长度1～160。";
-                    if ((x.body_id?.Length ?? 0) > 160 || (x.group_id?.Length ?? 0) > 80) return path + " 的 body_id/group_id 过长；分别最多160/80字符。";
+                    if ((x.group_id?.Length ?? 0) > 80) return path + ".group_id 最多80字符。";
                     if (x.arguments == null) continue;
                     if (x.arguments.Count > 16) return path + ".arguments 最多16项。";
                     for (var j = 0; j < x.arguments.Count; j++)
@@ -226,11 +226,10 @@ namespace TraceSoul2.Logic
 
         internal static string BuildStable(TraceTurnContext turn)
         {
-            var builder = new StringBuilder(AgentLoopPrompts.Rules);
+            var builder = new StringBuilder(AgentLoopPrompts.Behavior);
+            builder.AppendLine().AppendLine(AgentLoopPrompts.Rules);
             builder.AppendLine().AppendLine(AgentLoopPrompts.SubjectContinuity);
-            builder.AppendLine().AppendLine(CorePrompts.Expressor.ExpressionPosture);
             // 旧 Mind/Expressor 的协议扩展不进入 Agent 根契约；插件通过能力目录声明调用格式。
-            builder.AppendLine().AppendLine(AgentLoopPrompts.ExpressionChoice);
             builder.AppendLine().AppendLine(AgentOutputContractLogic.Prompt);
             return builder.ToString();
         }

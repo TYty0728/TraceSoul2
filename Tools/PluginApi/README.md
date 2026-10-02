@@ -1,6 +1,10 @@
 # TraceSoul2.PluginApi
 
-TraceSoul2 运行时插件的契约（源码 **1.11.0**，产品 **0.1.22**）。正式资产状态见 [版本说明](../../docs/RELEASES.md)。
+TraceSoul2 运行时插件的契约（源码 **1.12.0**，产品 **0.1.25**）。正式资产状态见 [版本说明](../../docs/RELEASES.md)。
+
+## 1.12 起
+
+模型 DTO 不再声明 `AgentOutputData.mood_changed`、`AgentActionData.call_id/body_id`；情绪更新标记、调用身份与身体绑定由程序产生。内部 `AgentStepData` 与 `BrainCapabilityCallData` 的相应字段保留，插件执行和回执协议不变。直接访问上述模型 DTO 旧字段的自定义插件需要调整并重编译；官方插件随宿主一起重建，外部 DLL 使用宿主提供的共享程序集。
 
 ## 1.11 起
 
