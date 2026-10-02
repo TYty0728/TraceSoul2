@@ -730,7 +730,7 @@ namespace TraceSoul2.Manager
             if (!IdentityCardSlotValues.IsKnown(slot))
                 throw new InvalidOperationException("未知的身份短卡：" + slot);
             var pair = LoadPairIdentity();
-            body = Limit(pair.RewriteRecordedText((body ?? string.Empty).Trim()), IdentityCardSlotValues.BodyLimit(slot));
+            body = IdentityCardLogic.PrepareBody(slot, pair.RewriteRecordedText((body ?? string.Empty).Trim()));
             if (body.Length == 0) throw new ArgumentException("短卡内容不能为空。", "body");
             var now = DateTimeOffset.UtcNow.ToUnixTimeMilliseconds();
             var id = conversationId + "|" + slot;
@@ -1275,7 +1275,10 @@ namespace TraceSoul2.Manager
 
             foreach (var card in connection.Table<IdentityCardRecord>().ToList())
             {
-                var body = Limit(next.RewriteRecordedText(card.Body, previous), IdentityCardSlotValues.BodyLimit(card.Slot));
+                var rewritten = next.RewriteRecordedText(card.Body, previous);
+                // 称呼迁移不重新摘要；成长正文的完整含义与来源继续保留。
+                var body = IdentityCardSlotValues.IsGrowth(card.Slot) ? rewritten :
+                    Limit(rewritten, IdentityCardSlotValues.BodyLimit(card.Slot));
                 if (body == card.Body) continue;
                 card.Body = body;
                 connection.Update(card);

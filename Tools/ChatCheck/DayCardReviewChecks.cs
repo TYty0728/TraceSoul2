@@ -40,7 +40,10 @@ internal static partial class Program
         Require(Error("{}")?.Contains("$.cards") == true && Error("{\"cards\":null}") != null,
             "省略 cards 不能冒充无变化");
         Require(Error(Output(Card("personality", "不应覆盖", "p1"))).Contains("本人固定"), "仍拒绝覆盖固定内容");
-        Require(Error(Output(Card("relation", new string('字', 301), "r1"))).Contains(".body 超过300"), "超长摘要准确定位");
+        Require(Error(Output(Card("relation", new string('字', 445), "r1"))) == null &&
+            Error(Output(Card("relation", new string('字', 600), "r1"))) == null &&
+            Error(Output(Card("relation", new string('字', 601), "r1"))).Contains(".body 超过600"),
+            "300是目标，完整摘要允许余量，异常长度仍准确定位");
         Require(Error(Output(Card("relation", "测试", "h1"))).Contains(".cognition_ids[0]"), "跨 slot 依据拒绝");
         Require(Error(Output(Card("relation", "测试", "unknown-private-id"))).Contains(".cognition_ids[0]"), "未知依据拒绝且不回显值");
         var contextText = (string)contract.GetMethod("EvidenceContext").Invoke(null, new object[] { cards, nodes });
@@ -84,8 +87,42 @@ internal static partial class Program
             catch (InvalidOperationException ex) { rejected = ex.Message.Contains("首次错误") && ex.Message.Contains("纠正后错误") && ex.Message.Contains("重复"); }
             Require(rejected && failing.Requests.Count == 2, "连续重复仍保留准确错误并停止，不放宽约束、不无限重试");
 
-            var longOutput = Output(Card("relation", new string('长', 362), "r1", "r2"), Card("expression_habit", "保持这张原文", "h1"));
-            var tooLong = JsonSerializer.Serialize(new { cards = new[] { new { slot = "relation", body = new string('长', 305) } } });
+            foreach (var length in new[] { 300, 363, 365, 445, 600 })
+            {
+                var body = new string('长', length - 7) + "重要条件在末尾";
+                var validOutput = Output(Card("relation", body, "r1", "r2"));
+                var accepted = new AgentSequenceLlm(validOutput);
+                args[2] = accepted;
+                var acceptedTask = (Task)run.Invoke(null, args);
+                acceptedTask.GetAwaiter().GetResult();
+                using var acceptedJson = JsonDocument.Parse(JsonSerializer.Serialize(acceptedTask.GetType().GetProperty("Result").GetValue(acceptedTask), outputType, json));
+                Require(accepted.Requests.Count == 1 && acceptedJson.RootElement.GetProperty("cards")[0].GetProperty("body").GetString() == body,
+                    "完整摘要在目标余量内通过真实日复盘入口，无额外精炼调用或尾部损失");
+                var saved = store.SaveIdentityCard("length-check", "relation", body, "");
+                Require(saved.Body == body && store.LoadIdentityCards("length-check").Single(x => x.Slot == "relation").Body == body,
+                    "底层保存和重新读取保留完整摘要");
+            }
+            var previous = store.LoadIdentityCards("length-check").Single(x => x.Slot == "relation");
+            rejected = false;
+            try { store.SaveIdentityCard("length-check", "relation", new string('长', 601), ""); }
+            catch (InvalidOperationException) { rejected = true; }
+            Require(rejected && store.LoadIdentityCards("length-check").Single(x => x.Slot == "relation").Body == previous.Body,
+                "异常长度保存失败时原卡不变，不能截断后落库");
+            var normalized = IdentityCardLogic.Normalize(new IdentityReviewOutputData { cards = new() {
+                new() { slot = "relation", changed = true, body = new string('长', 440) + "完整末尾。" }
+            } }, Array.Empty<IdentityCardRecord>(), store.LoadPairIdentity());
+            Require(normalized.cards[0].body.Length == 445 && normalized.cards[0].body.EndsWith("完整末尾。"),
+                "旧身份规范化同样保留略超目标的完整正文");
+            var renameBody = "本人" + new string('长', 591) + "重要条件在末尾";
+            store.LoadIdentityCards("rename-length");
+            store.SaveIdentityCard("rename-length", "self", renameBody, "");
+            store.SavePairIdentity("新的完整本人称呼", "同伴", "称呼");
+            Require(store.LoadIdentityCards("rename-length").Single(x => x.Slot == "self").Body ==
+                "新的完整本人称呼" + new string('长', 591) + "重要条件在末尾",
+                "更换为更长称呼不截断已保存摘要或末尾条件");
+            store.SavePairIdentity("本人", "同伴", "称呼");
+            var longOutput = Output(Card("relation", new string('长', 745), "r1", "r2"), Card("expression_habit", "保持这张原文", "h1"));
+            var tooLong = JsonSerializer.Serialize(new { cards = new[] { new { slot = "relation", body = new string('长', 665) } } });
             var shortBody = "凝练后仍然完整的关系理解。";
             var fitted = JsonSerializer.Serialize(new { cards = new[] { new { slot = "relation", body = shortBody } } });
             var fitting = new AgentSequenceLlm(longOutput, tooLong, fitted);
@@ -95,10 +132,10 @@ internal static partial class Program
             using var fitJson = JsonDocument.Parse(JsonSerializer.Serialize(fitTask.GetType().GetProperty("Result").GetValue(fitTask), outputType, json));
             var fitCards = fitJson.RootElement.GetProperty("cards");
             Require(fitting.Requests.Count == 3 && fitting.Requests[1].Length < fitting.Requests[0].Length &&
-                !fitting.Requests[1].Contains("保持这张原文") && fitting.Messages[2].Last().content.Contains("当前305字") &&
+                !fitting.Requests[1].Contains("保持这张原文") && fitting.Messages[2].Last().content.Contains("当前665字") &&
                 fitCards[0].GetProperty("body").GetString() == shortBody && fitCards[0].GetProperty("cognition_ids").GetArrayLength() == 2 &&
                 fitCards[1].GetProperty("body").GetString() == "保持这张原文",
-                "362字摘要独立精炼，305字重试给准确长度，其他卡和依据原样保留");
+                "异常长摘要独立精炼，重试给准确长度，其他卡和依据原样保留");
             var unchanged = Parse(longOutput);
             var fitMethod = contract.GetMethod("FitBodiesAsync");
             var failure = new AgentSequenceLlm(tooLong, tooLong);
@@ -127,33 +164,31 @@ internal static partial class Program
             if (!original.RootElement.TryGetProperty("cards", out var outputCards)) continue;
             using var request = JsonDocument.Parse(File.ReadAllText(file.Replace("-response.txt", "-request.json")));
             var prompt = request.RootElement.GetProperty("messages")[0].GetProperty("content").GetString();
-            var groupStart = prompt.IndexOf("【本次可更新的身份卡与依据，按 slot 分组】", StringComparison.Ordinal);
-            Require(groupStart >= 0, "真实样本提供分组认知依据");
+            var marker = prompt.Contains("【成长摘要与可参考的认识，按 slot 分组】")
+                ? "【成长摘要与可参考的认识，按 slot 分组】" : "【本次可更新的身份卡与依据，按 slot 分组】";
+            var groupStart = prompt.IndexOf(marker, StringComparison.Ordinal);
+            if (groupStart < 0) continue; // 独立精炼响应没有认知依据，不冒充完整日终输出。
             var jsonStart = prompt.IndexOf("\n[", groupStart, StringComparison.Ordinal);
-            var groupEnd = prompt.IndexOf("【本人固定，不能覆盖的卡】", jsonStart, StringComparison.Ordinal);
+            var pinnedMarker = marker.StartsWith("【成长") ? "【保留原文的本人设定】" : "【本人固定，不能覆盖的卡】";
+            var groupEnd = prompt.IndexOf(pinnedMarker, jsonStart, StringComparison.Ordinal);
             using var groups = JsonDocument.Parse(prompt.Substring(jsonStart, groupEnd - jsonStart).Trim());
             var evidence = groups.RootElement.EnumerateArray().SelectMany(g =>
                 JsonSerializer.Deserialize<List<CognitionSliceRecord>>(g.GetProperty("cognitions").GetRawText(), options)).ToList();
-            var slots = prompt.Substring(groupEnd + "【本人固定，不能覆盖的卡】".Length).TrimStart().Split('\n')[0]
+            var slots = prompt.Substring(groupEnd + pinnedMarker.Length).TrimStart().Split('\n')[0]
                 .Split(',').Select(x => new IdentityCardRecord { Slot = x.Trim(), Pinned = true }).ToList();
             var output = JsonSerializer.Deserialize(raw, outputType, options);
-            var error = (string)contract.GetMethod("ValidationError").Invoke(null, new object[] { output, slots, evidence });
-            Require(error?.Contains("$.cards[0].body 超过300") == true &&
-                contract.GetMethod("StructuralError").Invoke(null, new object[] { output, slots, evidence }) == null,
-                "真实失败只有长度超限，结构、固定卡保护及认知依据有效");
-            var llm = new AgentSequenceLlm("{\"cards\":[{\"slot\":\"relation\",\"body\":\"离线模拟精炼结果，仅验证管线。\"}]}");
+            Require(contract.GetMethod("ValidationError").Invoke(null, new object[] { output, slots, evidence }) == null,
+                "真实完整摘要通过长度、结构、固定卡及依据校验");
+            var before = JsonSerializer.Serialize(output, outputType, options);
+            var llm = new AgentSequenceLlm();
             ((Task)contract.GetMethod("FitBodiesAsync").Invoke(null,
                 new object[] { llm, output, slots, evidence, System.Threading.CancellationToken.None })).GetAwaiter().GetResult();
-            using var result = JsonDocument.Parse(JsonSerializer.Serialize(output, outputType, options));
-            var resultCards = result.RootElement.GetProperty("cards");
-            Require(resultCards[1].GetProperty("body").GetString() == outputCards[1].GetProperty("body").GetString() &&
-                resultCards[0].GetProperty("cognition_ids").EnumerateArray().Select(x => x.GetString()).SequenceEqual(
-                    outputCards[0].GetProperty("cognition_ids").EnumerateArray().Select(x => x.GetString())) && llm.Requests.Count == 1,
-                "真实样本只替换超长正文，八条认知引用与其他卡原文保留");
+            Require(JsonSerializer.Serialize(output, outputType, options) == before && llm.Requests.Count == 0,
+                "真实略超目标的摘要完整保留，无额外调用，其他卡、引用和内心原样保留");
             count++;
         }
-        Require(count == 2, "只读核对362字和305字的两份真实失败响应");
-        Console.WriteLine("Day card length dump checks passed: two original outputs diagnosed, bounded mock fitting preserved other cards and evidence; no private text printed or runtime database modified.");
+        Require(count > 0, "至少核对一份带完整认知依据的真实日终响应");
+        Console.WriteLine("Day card length dump checks passed: actual review outputs accepted intact without fitting calls; no private text printed or runtime database modified.");
     }
 
     private static void RunDayCardDumpCheck(string assemblyPath, string directory)

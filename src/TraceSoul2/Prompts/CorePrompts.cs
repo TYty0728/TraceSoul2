@@ -504,7 +504,7 @@ QQ 里的我可以说话，也可以带一小段正在发生的动作或神情�
 
             public const string DayCardIntro = IdentityReflection.Origins + "\n\n" + IdentityReflection.Growth + "\n\n" + IdentityReflection.Aspects;
             public const string DayCardRules = @"【输出填写】
-成长摘要对应 self、other、relation、expression_habit。每张有变化的卡输出一项，body 为融合后的完整摘要，至多300字；reason 简述这份变化的意义。仍然贴切的卡保留原文，整轮保持原样时输出 cards: []。
+成长摘要对应 self、other、relation、expression_habit。每张有变化的卡输出一项，body 为融合后的完整摘要，以约300字为精炼目标；为了保留重要条件与完整含义，可以适度展开。reason 简述这份变化的意义。仍然贴切的卡保留原文，整轮保持原样时输出 cards: []。
 每张卡的 cognition_ids 从该分组所列的有效认知中选择，同组多条依据可以共同支持一份摘要。认识保留具体对象、适用处境、例外与尚不确定的部分；旧摘要用于承接已有认识，新增理解的依据来自提供的认知及其经历来源。
 正文、原因和心里状态用自然中文表达，必要的专有名词保留原文。字段名、ID 与枚举值按所列结构填写。";
             public const string DayCardProfileHeader = "【{username}的档案】（本人提供的资料，供理解相处背景）";
