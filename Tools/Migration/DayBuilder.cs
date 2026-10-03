@@ -852,7 +852,7 @@ namespace TraceSoul2.Migrate
             {
                 var text = (value ?? string.Empty).Trim();
                 if (text.Length <= 80) return null;
-                return path + " 当前" + text.Length + "字，最多80字。按原篇幅重新写下，不要截断。";
+                return path + " 当前" + text.Length + "字，最多80字。按原篇幅重新写下。上一份太长，不要交回上一份。";
             }
             var writes = output.event_writes ?? new List<ReplayPrompts.EventWriteItemData>();
             for (var i = 0; i < writes.Count; i++)

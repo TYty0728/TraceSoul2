@@ -41,14 +41,17 @@ namespace TraceSoul2.Logic
                 firstError = exception;
             }
 
-            var repair = new List<DeepSeekMessageData>(messages)
-            {
-                new DeepSeekMessageData("assistant", Limit(raw, 16000)),
-                new DeepSeekMessageData(
-                    "user",
-                    CorePrompts.Retry.JsonRepairUser(DescribeFailure(firstError, typeof(T))) +
-                    " 请重新输出完整 JSON，不要只输出修改片段；字符串中的双引号必须转义，属性和值之间用冒号，属性之间用逗号。")
-            };
+            var runaway = IsRunawayDraft(raw, firstError);
+            var failure = runaway && !IsLengthOverrun(firstError)
+                ? "上一份写得太长，没有写完。按原篇幅筛掉不重要的，重新输出更短的完整 JSON。不要继续上一份，不要逐条复述输入。"
+                : DescribeFailure(firstError, typeof(T));
+            var repair = new List<DeepSeekMessageData>(messages);
+            if (!runaway)
+                repair.Add(new DeepSeekMessageData("assistant", Limit(raw, 16000)));
+            repair.Add(new DeepSeekMessageData(
+                "user",
+                CorePrompts.Retry.JsonRepairUser(failure) +
+                " 请重新输出完整 JSON，不要只输出修改片段；字符串中的双引号必须转义，属性和值之间用冒号，属性之间用逗号。"));
             var repairedRaw = await client.CompleteJsonAsync(repair, cancellationToken, promptCacheKey);
             try
             {
@@ -67,6 +70,17 @@ namespace TraceSoul2.Logic
         }
 
         // 路径必须能逐段对应实际 DTO，回显代码中的字段名和类型，不回显未知字段或异常正文。
+        /// <summary>超长或写到一半被截断的草稿不能交回模型，否则它会照抄或接着写。</summary>
+        private static bool IsRunawayDraft(string raw, Exception error)
+            => IsLengthOverrun(error) || (LooksIncompleteJson(raw) && (raw?.Length ?? 0) > 2000);
+
+        private static bool IsLengthOverrun(Exception error)
+        {
+            var message = error?.Message ?? "";
+            if (!message.Contains("字")) return false;
+            return (message.Contains("当前") && message.Contains("最多")) || message.Contains("超过");
+        }
+
         private static string DescribeFailure(Exception error, Type contract)
         {
             if (error is JsonException json)

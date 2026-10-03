@@ -151,7 +151,7 @@ namespace TraceSoul2.Logic
                             foreach (var item in parsed.events)
                                 if ((item?.text?.Length ?? 0) > longest) longest = item.text.Length;
                         var lengthError = longest > 60
-                            ? "有事件短句超过60字（最长" + longest + "字）。按原指令每句不超过60字，重新写下完整 JSON，不要截断。"
+                            ? "有事件短句超过60字（最长" + longest + "字）。按原指令每句不超过60字，重新写下完整 JSON。不要交回超长的那几句。"
                             : null;
                         var invalid = parsed?.events?.Count is not > 0 || parsed.events.Any(x => string.IsNullOrWhiteSpace(x?.text) ||
                             x.text.Length > 60 || x.sources?.Count is not > 0) ||
