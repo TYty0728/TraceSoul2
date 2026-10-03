@@ -24,6 +24,22 @@ namespace TraceSoul2.Migrate
             IReadOnlyList<IdentityCardRecord> current, IReadOnlyList<CognitionSliceRecord> evidence)
             => Validate(output, current, evidence, false);
 
+        /// <summary>程序确定可写目标；没有有效依据的卡继续保留原文，其他卡仍严格验证。</summary>
+        public static List<string> PreserveUnavailableCards(ReplayPrompts.DayCardReviewOutputData output,
+            IReadOnlyList<IdentityCardRecord> current, IReadOnlyList<CognitionSliceRecord> evidence)
+        {
+            if (output?.cards == null) return new();
+            var pinned = current.Where(x => x.Pinned).Select(x => x.Slot).ToHashSet(StringComparer.Ordinal);
+            pinned.Add(IdentityCardSlotValues.Personality);
+            var eligible = evidence.Where(x => x.Status == "active" && Slots.Contains(x.IdentitySlot) && !pinned.Contains(x.IdentitySlot))
+                .Select(x => x.IdentitySlot).ToHashSet(StringComparer.Ordinal);
+            var preserved = output.cards.Where(x => x != null && Slots.Contains(x.slot) && !eligible.Contains(x.slot))
+                .Select(x => x.slot).Distinct(StringComparer.Ordinal).ToList();
+            // 未知slot、空对象、可写卡中的跨组/未知引用仍交给原校验，不猜测替换依据。
+            output.cards.RemoveAll(x => x != null && preserved.Contains(x.slot));
+            return preserved;
+        }
+
         private static string Validate(ReplayPrompts.DayCardReviewOutputData output,
             IReadOnlyList<IdentityCardRecord> current, IReadOnlyList<CognitionSliceRecord> evidence, bool checkLength)
         {
@@ -107,7 +123,7 @@ namespace TraceSoul2.Migrate
                 .GroupBy(x => x.IdentitySlot).Select(group => new { slot = group.Key,
                     target_body_chars = IdentityCardSlotValues.BodyTarget(group.Key), cognitions = group.ToList() });
             return "\n【成长摘要与可参考的认识，按 slot 分组】\n"
-                + "一个分组对应一张卡；同组的多条认知供综合理解。对照已有摘要，选择值得沉淀的变化；仍然贴切的认识继续保留。\n"
+                + "本次可更新范围由下面实际列出的分组确定，其余卡由程序保留原文。一个分组对应一张卡；同组的多条认知供综合理解。对照已有摘要，选择值得沉淀的变化；仍然贴切的认识继续保留。\n"
                 + TraceJson.ToJson(targets.ToList()) + "\n【保留原文的本人设定】\n" + string.Join(",", pinned);
         }
     }

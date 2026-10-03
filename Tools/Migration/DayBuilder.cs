@@ -384,10 +384,17 @@ namespace TraceSoul2.Migrate
                 new DeepSeekMessageData("system", reviewPrompt),
                 new DeepSeekMessageData("user", CorePrompts.Migration.DayCardUser)
             };
+            var preservedSlots = new HashSet<string>(StringComparer.Ordinal);
             var output = await DeepSeekStructuredOutputLogic.CompleteAsync<ReplayPrompts.DayCardReviewOutputData>(
                 llm, reviewMessages, null,
                 "身份摘要输出不符合卡片更新契约。", CancellationToken.None,
-                validationError: x => DayCardReviewContract.StructuralError(x, cardsNow, identityNodes));
+                validationError: x =>
+                {
+                    preservedSlots.UnionWith(DayCardReviewContract.PreserveUnavailableCards(x, cardsNow, identityNodes));
+                    return DayCardReviewContract.StructuralError(x, cardsNow, identityNodes);
+                });
+            if (preservedSlots.Count > 0)
+                Console.WriteLine("  程序保留本次范围外的身份卡原文：" + string.Join("、", preservedSlots.OrderBy(x => x)));
             foreach (var card in output.cards) card.body = pair.RewriteRecordedText(card.body.Trim());
             await DayCardReviewContract.FitBodiesAsync(llm, output, cardsNow, identityNodes, CancellationToken.None);
             output.SubjectRevision = subjectRevision;

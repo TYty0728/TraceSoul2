@@ -23,6 +23,7 @@
     <Compile Include="RuntimeSliceChecks.cs" />
     <Compile Include="RuntimeContinuityChecks.cs" />
     <Compile Include="RuntimePresentationChecks.cs" />
+    <Compile Include="DayOverviewChecks.cs" />
     <Compile Include="DayCardReviewChecks.cs" />
     <Compile Include="AgentContractChecks.cs" />
     <Compile Include="AgentPromptChecks.cs" />

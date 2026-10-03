@@ -31,6 +31,9 @@ namespace TraceSoul2.Host
             });
         private readonly CancellationTokenSource deferredCts = new CancellationTokenSource();
         private readonly Task deferredWorker;
+        private readonly Channel<KernelLogic.DeferredTurnWork> maintenanceTurns =
+            Channel.CreateUnbounded<KernelLogic.DeferredTurnWork>(new UnboundedChannelOptions { SingleReader = true, SingleWriter = false });
+        private readonly Task maintenanceWorker;
         private readonly RecentEventLog eventLog = new RecentEventLog();
         private readonly Queue<PluginEventData> pendingBackground = new Queue<PluginEventData>();
         private readonly SqliteVectorManager vectorStore;
@@ -114,7 +117,8 @@ namespace TraceSoul2.Host
             NerveSettings = MemoryNerveSettings.Load(Path.Combine(DataDirectory, "memory-nerve.json"));
             TryWireMemoryEngine(services);
             RebuildOntology();
-            deferredWorker = Task.Run(() => RunDeferredTurnLoopAsync(deferredCts.Token));
+            deferredWorker = Task.Run(() => RunDeferredTurnLoopAsync(deferredTurns.Reader, deferredCts.Token));
+            maintenanceWorker = Task.Run(() => RunDeferredTurnLoopAsync(maintenanceTurns.Reader, deferredCts.Token));
             Emit("host 已启动");
         }
 
@@ -451,7 +455,7 @@ namespace TraceSoul2.Host
                     x.MemoryStatus,
                     x.CreatedUnixMs
                 }).ToList();
-            var trajectory = DayTrajectoryLogic.Read(Store, ConversationId, dayKey);
+            var trajectory = DayTrajectoryLogic.ReadOverview(Store, ConversationId, dayKey);
             var today = Store.GetTodayNewItemsByDay(ConversationId, dayKey)
                 .Select(x => new { x.Content, x.SourceMomentId, x.CreatedUnixMs }).ToList();
             var latest = LastTurnPayload();
@@ -732,7 +736,7 @@ namespace TraceSoul2.Host
         private void QueueDeferredTurn(KernelLogic.DeferredTurnWork work)
         {
             if (work == null || disposed) return;
-            if (deferredTurns.Writer.TryWrite(work))
+            if ((work.Maintenance ? maintenanceTurns : deferredTurns).Writer.TryWrite(work))
                 EmitTiming(work.TraceId, "轮后任务入队", 0);
             else
                 EmitTiming(work.TraceId, "轮后任务入队失败", 0);
@@ -742,14 +746,14 @@ namespace TraceSoul2.Host
         /// 轮后慢任务（生图等）完全不持有对话 gate；只有发图入库时重新取锁。
         /// 单读者按入队顺序提交，避免和下一轮对话抢 SQLite。
         /// </summary>
-        private async Task RunDeferredTurnLoopAsync(CancellationToken cancellationToken)
+        private async Task RunDeferredTurnLoopAsync(ChannelReader<KernelLogic.DeferredTurnWork> reader, CancellationToken cancellationToken)
         {
             try
             {
-                while (await deferredTurns.Reader.WaitToReadAsync(cancellationToken))
+                while (await reader.WaitToReadAsync(cancellationToken))
                 {
                     KernelLogic.DeferredTurnWork work;
-                    while (deferredTurns.Reader.TryRead(out work))
+                    while (reader.TryRead(out work))
                     {
                         Func<CancellationToken, Task> commit;
                         try
@@ -1084,8 +1088,10 @@ namespace TraceSoul2.Host
             if (disposed) return;
             disposed = true;
             try { deferredTurns.Writer.TryComplete(); } catch { /* ignored */ }
+            try { maintenanceTurns.Writer.TryComplete(); } catch { /* ignored */ }
             try { deferredCts.Cancel(); } catch { /* ignored */ }
             try { deferredWorker?.Wait(TimeSpan.FromSeconds(2)); } catch { /* ignored */ }
+            try { maintenanceWorker?.Wait(TimeSpan.FromSeconds(2)); } catch { /* ignored */ }
             deferredCts.Dispose();
             try { externalPlugins?.Dispose(); } catch { /* ignored */ }
             Plugins.Dispose();

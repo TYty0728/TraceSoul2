@@ -21,6 +21,6 @@ namespace TraceSoul2.Plugins.Builtin
         public const string ClearDescription = "明确睡下或关闭心跳时，取消已排的下一次叫醒；清醒的空闲保留下次计划。";
         public const string TimeContextDescription = "每次开始思考时刷新的北京时间、周几与近期计划。";
         public const string TrajectoryDescription =
-            "当前记忆日按时间追加的经历；只提供本轮新增片段，旧经历由程序保留。北京时间04:00切换日期，旧日待复盘后退出实时视图。";
+            "当前记忆日的大事记；本轮有新进展时用一句完整的话留下关键变化，时间与原始来源由程序保留。北京时间04:00切换日期，旧日待复盘后退出实时视图。";
     }
 }

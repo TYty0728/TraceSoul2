@@ -21,7 +21,7 @@ namespace TraceSoul2.Plugins.Builtin
         {
             Id = PluginId,
             DisplayName = "时间与调度",
-            Version = "1.2.1",
+            Version = "1.2.2",
             Author = "TraceSoul2",
             Role = PluginRoleValues.Kernel,
             Description = "提供当前时间、今天两人的轨迹、未来计划；到期只叫醒中枢该跑的那一套循环，不直接改短卡或开口。"
@@ -354,7 +354,7 @@ namespace TraceSoul2.Plugins.Builtin
         }
 
         /// <summary>
-        /// 今天我们的轨迹：逐条追加的当天共同经历（每轮新增至多500字），
+        /// 今天我们的轨迹：逐条保留重要进展（一句话为宜，500字仅为旧执行边界），
         /// 实时对话中由 Brain 高频写回；只在对应日复盘成功后退出。
         /// </summary>
         private sealed class DayTrajectoryFacet : ITraceMountedFacet

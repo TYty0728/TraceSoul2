@@ -88,12 +88,12 @@ namespace TraceSoul2.Logic
                     : storage.GetTodayNewItems(turn.ConversationId, MemoryDayLogic.CurrentStart(now).ToUnixTimeMilliseconds(), 20);
                 if (storage is TraceSoul2.Manager.SqliteMemoryManager timeline)
                 {
-                    var entries = timeline.GetDayTrajectoryEntries(turn.ConversationId, day);
-                    if (entries.Count > 0) daily.AppendLine("经历记录：");
+                    var entries = DayTrajectoryOverviewLogic.Read(timeline, turn.ConversationId, day);
+                    if (entries.Count > 0) daily.AppendLine("今日事件与新进展：");
                     foreach (var entry in entries)
-                        daily.Append('[').Append(Timestamp(entry.CreatedUnixMs))
-                            .Append(string.IsNullOrWhiteSpace(entry.SourceMomentId) || entry.SourceMomentId.StartsWith("legacy:", StringComparison.Ordinal)
-                                ? " · 旧摘要保存时间" : "")
+                        daily.Append('[').Append(Timestamp(entry.Start))
+                            .Append(entry.End > entry.Start ? "～" + Timestamp(entry.End) : "")
+                            .Append(entry.Legacy ? " · 旧摘要保存时间" : "")
                             .Append("] ").AppendLine(entry.Text);
                 }
                 else

@@ -21,6 +21,7 @@ internal static partial class Program
     {
         SQLitePCL.Batteries_V2.Init();
         if (args.Contains("--automatic-photo")) { RunAutomaticPhotoChecksAsync().GetAwaiter().GetResult(); return; }
+        if (args.Length == 3 && args[0] == "--day-card-scope-dump") { RunDayCardScopeDumpCheck(args[1], args[2]); return; }
         if (args.Length == 3 && args[0] == "--day-card-length-dump") { RunDayCardLengthDumpCheck(args[1], args[2]); return; }
         if (args.Contains("--runtime-presentation")) { RunRuntimePresentationChecksAsync().GetAwaiter().GetResult(); return; }
         if (args.Length == 3 && args[0] == "--day-card-dump") { RunDayCardDumpCheck(args[1], args[2]); return; }
@@ -30,6 +31,7 @@ internal static partial class Program
         if (args?.Length == 2 && args[0] == "--agent-prompt-audit") { RunAgentPromptAudit(args[1]); return; }
         if ((args ?? Array.Empty<string>()).Contains("--agent-prompt")) { RunAgentPromptChecksAsync().GetAwaiter().GetResult(); return; }
         if ((args ?? Array.Empty<string>()).Contains("--qq-typing")) { RunQqTypingChecksAsync().GetAwaiter().GetResult(); return; }
+        if (args.Contains("--day-overview")) { RunDayOverviewChecksAsync().GetAwaiter().GetResult(); return; }
         if ((args ?? Array.Empty<string>()).Contains("--camera-sharing")) { RunQqDeliveryAndCameraContextCheck(); Console.WriteLine("Camera sharing checks passed."); return; }
         if ((args ?? Array.Empty<string>()).Contains("--heartbeat")) { RunHeartbeatContinuityChecksAsync().GetAwaiter().GetResult(); Console.WriteLine("Heartbeat continuity checks passed."); return; }
         if (args?.Length == 2 && args[0] == "--agent-contract-dump") { RunAgentDumpReplay(args[1]); return; }
@@ -58,6 +60,7 @@ internal static partial class Program
         }
         RunExistenceChecksAsync().GetAwaiter().GetResult();
         RunRuntimePresentationChecksAsync().GetAwaiter().GetResult();
+        RunDayOverviewChecksAsync().GetAwaiter().GetResult();
         RunEnvironmentChecksAsync().GetAwaiter().GetResult();
         RunCognitionGraphChecks();
         RunAgentPromptChecksAsync().GetAwaiter().GetResult();
