@@ -1,6 +1,6 @@
 # TraceSoul2.PluginApi
 
-TraceSoul2 运行时插件的契约（源码 **1.13.0**，产品 **0.1.31**）。正式资产状态见 [版本说明](../../docs/RELEASES.md)。
+TraceSoul2 运行时插件的契约（源码 **1.13.0**，产品 **0.1.32**）。正式资产状态见 [版本说明](../../docs/RELEASES.md)。
 
 ## 1.13 起
 

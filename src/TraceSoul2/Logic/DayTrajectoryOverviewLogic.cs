@@ -64,12 +64,19 @@ namespace TraceSoul2.Logic
 
         // 对话锁内只取得快照及占位；模型在轮后队列执行，提交时重新取得宿主对话锁。
         public static KernelLogic.DeferredTurnWork Prepare(TraceTurnContext turn)
+            => EnvironmentLogic.IsPublic(turn) ? null : PrepareCore(turn.Services, turn.ConversationId, turn.TraceId, false);
+
+        // 由宿主对私密主会话调用，不创建聊天记录或唤醒主体。
+        public static KernelLogic.DeferredTurnWork PrepareStartup(TracePluginServices services, string context)
+            => PrepareCore(services, context, "startup-overview:" + context, true);
+
+        private static KernelLogic.DeferredTurnWork PrepareCore(TracePluginServices services, string context, string traceId, bool startup)
         {
-            if (EnvironmentLogic.IsPublic(turn) || turn.Services.Storage is not SqliteMemoryManager store || turn.Services.Llm == null)
+            if (services.Storage is not SqliteMemoryManager store || (services.ReviewLlm ?? services.Llm) == null)
                 return null;
             var day = MemoryDayLogic.CurrentDayKey(DateTimeOffset.Now);
-            var key = Key(turn.ConversationId, day);
-            var entries = store.GetDayTrajectoryEntries(turn.ConversationId, day);
+            var key = Key(context, day);
+            var entries = store.GetDayTrajectoryEntries(context, day);
             var saved = Load(store, key);
             var groups = ValidEvents(saved, entries);
             var refreshStyle = groups.Count > 0 && saved.format_version < 3;
@@ -78,13 +85,13 @@ namespace TraceSoul2.Logic
             bool NeedsCompact(List<DayTrajectoryEntryRecord> records) => records.Count >= 3 ||
                 records.Sum(x => x.Text?.Length ?? 0) >= 240 || records.Any(x => (x.Text?.Length ?? 0) > 40 ||
                     DayTrajectoryLogic.OverviewText(x.Text, x.CreatedUnixMs) != DayTrajectoryLogic.CleanLeadingTime(x.Text));
-            var attemptedKey = key + ":attempt:v3";
-            if (!refreshStyle && !NeedsCompact(pending)) return null;
+            var attemptedKey = key + (startup ? ":startup:v1" : ":attempt:v3");
+            if (!refreshStyle && !(startup ? pending.Count > 0 : NeedsCompact(pending))) return null;
             var attemptedRaw = store.LoadPluginDocument(StoreId, attemptedKey);
             var attempted = string.IsNullOrEmpty(attemptedRaw) ? new HashSet<string>() :
                 JsonSerializer.Deserialize<List<string>>(attemptedRaw).ToHashSet(StringComparer.Ordinal);
             var unseen = pending.Where(x => !attempted.Contains(x.Id)).ToList();
-            if (!NeedsCompact(unseen) && !(refreshStyle && string.IsNullOrEmpty(attemptedRaw))) return null;
+            if (!(startup ? unseen.Count > 0 : NeedsCompact(unseen)) && !(refreshStyle && string.IsNullOrEmpty(attemptedRaw))) return null;
             var batch = new List<DayTrajectoryEntryRecord>();
             var chars = 0;
             foreach (var entry in pending)
@@ -111,8 +118,9 @@ namespace TraceSoul2.Logic
             }
             var sourceIds = refs.Values.SelectMany(x => x).ToHashSet(StringComparer.Ordinal);
             var marker = JsonSerializer.Serialize(entries.Select(x => x.Id).OrderBy(x => x).ToList());
-            store.SavePluginDocument(StoreId, attemptedKey, marker);
-            var llm = turn.Services.ReviewLlm ?? turn.Services.Llm;
+            if (!startup) store.SavePluginDocument(StoreId, attemptedKey, marker);
+            else store.SavePluginDocument(StoreId, key + ":attempt:v3", marker);
+            var llm = services.ReviewLlm ?? services.Llm;
             var messages = new List<DeepSeekMessageData> {
                 new("system", "按给出的时段，把今天的经历重新梳理成事件短句。同一时段里围绕同一件事的记录合成一句，重复提及的事情只留下关键变化。每句直接写谁做了什么、事情有什么变化，通常15～25字。" +
                     "例如：她醒来叫我，我应声陪她赖床。又如：原定去公园，因下雨改到周末。" +
@@ -123,7 +131,7 @@ namespace TraceSoul2.Logic
                     "sources使用下文提供的编号，覆盖全部输入。一条记录包含不同事件时，各事件可以引用同一编号。"),
                 new("user", day + " 的本环境记录：\n" + string.Join("\n", lines))
             };
-            return new KernelLogic.DeferredTurnWork(turn.TraceId, async token =>
+            return new KernelLogic.DeferredTurnWork(traceId, async token =>
             {
                 Overview result;
                 try
@@ -149,22 +157,32 @@ namespace TraceSoul2.Logic
                 catch (OperationCanceledException) when (token.IsCancellationRequested) { throw; }
                 catch (Exception error)
                 {
-                    turn.Services.LogTiming(turn.TraceId, "今日事件概览未更新，保留已有视图与原始记录", detail: error.GetType().Name);
-                    return null;
+                    services.LogTiming(traceId, "今日事件概览未更新，保留已有视图与原始记录", detail: error.GetType().Name);
+                    if (!startup) return null;
+                    // 模型完成后的失败记录也在宿主锁内提交；中断或进程退出仍可在下次启动恢复。
+                    return failedToken =>
+                    {
+                        failedToken.ThrowIfCancellationRequested();
+                        if (store.LoadPluginDocument(StoreId, attemptedKey) == attemptedRaw)
+                            store.SavePluginDocument(StoreId, attemptedKey, marker);
+                        return Task.CompletedTask;
+                    };
                 }
                 return commitToken =>
                 {
                     commitToken.ThrowIfCancellationRequested();
-                    var current = store.GetDayTrajectoryEntries(turn.ConversationId, day);
+                    var current = store.GetDayTrajectoryEntries(context, day);
                     var currentIds = current.Select(x => x.Id).ToHashSet(StringComparer.Ordinal);
                     var existingIds = ValidEvents(Load(store, key), current).SelectMany(x => x.sources).ToHashSet(StringComparer.Ordinal);
                     // 新条目可保留在概览旁；过期结果不得覆盖已整理得更完整的版本。
                     if (sourceIds.IsSubsetOf(currentIds) && existingIds.IsSubsetOf(sourceIds))
                     {
                         store.SavePluginDocument(StoreId, key, JsonSerializer.Serialize(result));
-                        if (store.LoadPluginDocument(StoreId, attemptedKey) == marker)
+                        if (store.LoadPluginDocument(StoreId, attemptedKey) == (startup ? attemptedRaw : marker))
                             store.SavePluginDocument(StoreId, attemptedKey, JsonSerializer.Serialize(sourceIds.OrderBy(x => x).ToList()));
-                        turn.Services.LogTiming(turn.TraceId, "今日事件概览已更新", detail: "events=" + result.events.Count);
+                        if (startup && store.LoadPluginDocument(StoreId, key + ":attempt:v3") == marker)
+                            store.SavePluginDocument(StoreId, key + ":attempt:v3", JsonSerializer.Serialize(sourceIds.OrderBy(x => x).ToList()));
+                        services.LogTiming(traceId, "今日事件概览已更新", detail: "events=" + result.events.Count);
                     }
                     return Task.CompletedTask;
                 };
