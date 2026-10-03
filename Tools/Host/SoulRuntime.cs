@@ -117,6 +117,7 @@ namespace TraceSoul2.Host
             NerveSettings = MemoryNerveSettings.Load(Path.Combine(DataDirectory, "memory-nerve.json"));
             TryWireMemoryEngine(services);
             RebuildOntology();
+            QueueStartupOverview();
             deferredWorker = Task.Run(() => RunDeferredTurnLoopAsync(deferredTurns.Reader, deferredCts.Token));
             maintenanceWorker = Task.Run(() => RunDeferredTurnLoopAsync(maintenanceTurns.Reader, deferredCts.Token));
             Emit("host 已启动");
@@ -733,6 +734,27 @@ namespace TraceSoul2.Host
                 Emit("夜间余温失败：" + exception.Message);
             }
             finally { gate.Release(); }
+        }
+
+        // 构造时或维护任务提交锁内调用；只整理已有记录，不通过聊天/心跳入口。
+        private void QueueStartupOverview()
+        {
+            try
+            {
+                var work = DayTrajectoryOverviewLogic.PrepareStartup(liveServices, ConversationId);
+                if (work == null) return;
+                QueueDeferredTurn(new KernelLogic.DeferredTurnWork(work.TraceId, async token =>
+                {
+                    var commit = await work.AnalyzeAsync(token);
+                    if (commit == null) return null;
+                    return async commitToken =>
+                    {
+                        await commit(commitToken);
+                        QueueStartupOverview();
+                    };
+                }, maintenance: true));
+            }
+            catch (Exception error) { EmitTiming("startup-overview", "启动时概览整理未安排", 0, error.GetType().Name); }
         }
 
         private void QueueDeferredTurn(KernelLogic.DeferredTurnWork work)

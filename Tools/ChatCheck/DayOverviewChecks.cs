@@ -11,8 +11,50 @@ using TraceSoul2.Plugins.Builtin;
 
 internal static partial class Program
 {
+    private static async Task RunStartupOverviewHostCheckAsync(string assemblyPath)
+    {
+        var root = Path.Combine(Path.GetTempPath(), "overview-host-" + Guid.NewGuid().ToString("N"));
+        Directory.CreateDirectory(root);
+        var database = Path.Combine(root, "tracesoul2-brainframe.sqlite3");
+        var day = MemoryDayLogic.CurrentDayKey(DateTimeOffset.Now);
+        using var server = new FailureHttpServer(200, System.Text.Json.JsonSerializer.Serialize(new { choices = new[] {
+            new { message = new { content = "{\"events\":[{\"text\":\"买了书，约好周末一起读。\",\"sources\":[\"n0\"]}]}" }, finish_reason = "stop" } } }));
+        try
+        {
+            using (var seed = new SqliteMemoryManager(database))
+            {
+                seed.SaveMoment(new MomentRecord { Id = "existing-source", ConversationId = "tracesoul2", Role = "user", Content = "已有的合成记录", CreatedUnixMs = DateTimeOffset.Now.ToUnixTimeMilliseconds() });
+                seed.AppendDayTrajectory("tracesoul2", "existing-source", "买了书，约好周末一起读。");
+            }
+            var providers = new TraceSoul2.Host.LlmProviderStore(Path.Combine(root, "llm-providers.json"));
+            providers.Upsert(new TraceSoul2.Host.LlmProviderRecord { id = "default", model = "test", apiKey = "test", baseUrl = server.Url });
+            var assembly = System.Reflection.Assembly.LoadFrom(Path.GetFullPath(assemblyPath));
+            var type = assembly.GetType("TraceSoul2.Host.SoulRuntime", true);
+            using (var runtime = (IDisposable)Activator.CreateInstance(type, new object[] { root, Path.Combine(root, "empty-plugins"), Path.Combine(root, "plugin-data") }))
+            using (var check = new SqliteMemoryManager(database))
+            {
+                var deadline = DateTime.UtcNow.AddSeconds(10);
+                while (string.IsNullOrWhiteSpace(check.LoadPluginDocument("runtime.trajectory-overview", "tracesoul2:" + day)) && DateTime.UtcNow < deadline)
+                    await Task.Delay(50);
+                Require(server.Requests.Count == 1 && !string.IsNullOrWhiteSpace(check.LoadPluginDocument("runtime.trajectory-overview", "tracesoul2:" + day)),
+                    "真实宿主启动后自动调用回环复盘模型并提交概览，未输入聊天；calls=" + server.Requests.Count +
+                    ";cached=" + (!string.IsNullOrWhiteSpace(check.LoadPluginDocument("runtime.trajectory-overview", "tracesoul2:" + day))));
+                Require(check.GetRecentMoments("tracesoul2", 10).Count == 1 && check.GetRecentTurnReviews("tracesoul2", 10).Count == 0,
+                    "启动整理不伪造聊天或轮次记录");
+            }
+            using (var restarted = (IDisposable)Activator.CreateInstance(type, new object[] { root, Path.Combine(root, "empty-plugins"), Path.Combine(root, "plugin-data") }))
+            {
+                await Task.Delay(200);
+                Require(server.Requests.Count == 1, "真实宿主重启读取已有概览，不再发送整理请求");
+            }
+            Console.WriteLine("Host startup overview passed: existing runtime updated without chat, loopback only, persisted result and restart without repeat.");
+        }
+        finally { Directory.Delete(root, true); }
+    }
+
     private static async Task RunDayOverviewChecksAsync()
     {
+        await RunStartupDayOverviewChecksAsync();
         await RunCompactDayOverviewChecksAsync();
         await RunDayOverviewKernelCheckAsync();
         var path = Path.Combine(Path.GetTempPath(), "tracesoul-overview-" + Guid.NewGuid().ToString("N") + ".sqlite3");
@@ -81,6 +123,56 @@ internal static partial class Program
             Console.WriteLine("Day overview checks passed: grouped view, full sources, new entries, restart, time prefixes, privacy and bounded failure.");
         }
         finally { Delete(path); Delete(path + "-wal"); Delete(path + "-shm"); }
+    }
+
+    private static async Task RunStartupDayOverviewChecksAsync()
+    {
+        using var store = new SqliteMemoryManager(":memory:");
+        var start = MemoryDayLogic.CurrentStart(DateTimeOffset.Now);
+        var day = start.ToString("yyyy-MM-dd");
+        void Seed(string context, int count)
+        {
+            for (var i = 0; i < count; i++)
+            {
+                var id = context + i;
+                store.SaveMoment(new MomentRecord { Id = id, ConversationId = context, Role = "user", Content = "合成来源", CreatedUnixMs = start.AddHours(7).AddMinutes(i).ToUnixTimeMilliseconds() });
+                store.AppendDayTrajectory(context, id, "读完一页书。");
+            }
+        }
+        string Answer(IEnumerable<string> refs) => System.Text.Json.JsonSerializer.Serialize(new { events = new[] {
+            new { text = "读书并整理笔记。", sources = refs.ToArray() } } });
+        var model = new AgentSequenceLlm(Answer(Enumerable.Range(0, 16).Select(i => "n" + i)), Answer(new[] { "g0", "n0" }));
+        var services = new TracePluginServices(store, new HierarchicalVectorRouterLogic(new FakeEncoder())) { ReviewLlm = model };
+        Seed("startup", 17);
+        var work = DayTrajectoryOverviewLogic.PrepareStartup(services, "startup");
+        var turn = new TraceTurnContext("startup", new MomentRecord { ConversationId = "startup" }, new(), 0, true, services,
+            environment: new EnvironmentSnapshotData { ContextConversationId = "startup", Visibility = "private" });
+        Require(work != null && work.Maintenance && model.Requests.Count == 0 && DayTrajectoryOverviewLogic.Prepare(turn) == null,
+            "没有聊天模型或新对话也可安排启动整理，同时占用普通轮次的重复机会");
+        await (await work.AnalyzeAsync(default))(default);
+        work = DayTrajectoryOverviewLogic.PrepareStartup(services, "startup");
+        Require(work != null, "启动批次继续处理不足三条的末尾记录");
+        await (await work.AnalyzeAsync(default))(default);
+        Require(model.Requests.Count == 2 && DayTrajectoryOverviewLogic.PrepareStartup(services, "startup") == null &&
+            DayTrajectoryOverviewLogic.Read(store, "startup", day).Count == 1 && store.GetDayTrajectoryEntries("startup", day).Count == 17,
+            "所有原件整理完成，结果保持且重复启动不增加调用");
+        Seed("startup-failed", 1);
+        services.ReviewLlm = new AgentSequenceLlm("{\"events\":[{\"text\":\"未知来源\",\"sources\":[\"missing\"]}]}");
+        work = DayTrajectoryOverviewLogic.PrepareStartup(services, "startup-failed");
+        await (await work.AnalyzeAsync(default))(default);
+        Require(DayTrajectoryOverviewLogic.PrepareStartup(services, "startup-failed") == null &&
+            DayTrajectoryLogic.ReadOverview(store, "startup-failed", day).Text.Contains("读完一页书"),
+            "失败留原文并持久记住同一快照，不因重启反复调用");
+        Seed("startup-interrupted", 1);
+        services.ReviewLlm = new AgentSequenceLlm(Answer(new[] { "n0" }));
+        work = DayTrajectoryOverviewLogic.PrepareStartup(services, "startup-interrupted");
+        // 模拟排队后进程退出，没有完成分析或提交；下一次启动应恢复。
+        Require(DayTrajectoryOverviewLogic.PrepareStartup(services, "startup-interrupted") != null,
+            "排队后未完成的任务不伪装成已处理，后续启动可恢复");
+        services.ReviewLlm = null;
+        Require(DayTrajectoryOverviewLogic.PrepareStartup(services, "startup-interrupted") == null &&
+            DayTrajectoryOverviewLogic.PrepareStartup(services, "empty") == null, "没有可用模型或记录时启动不发请求");
+        Console.WriteLine("Startup overview checks passed: no chat needed, review-only client, tail batch, persistent completion/failure and interrupted recovery.");
     }
 
     private static async Task RunCompactDayOverviewChecksAsync()

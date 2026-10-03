@@ -56,6 +56,7 @@ jobs:
           $PSNativeCommandUseErrorActionPreference = $true
           dotnet restore TraceSoul2.sln
           dotnet build TraceSoul2.sln -c Release --no-restore
+          dotnet exec --runtimeconfig Tools/Host/bin/Release/net8.0/TraceSoul2.Host.runtimeconfig.json Tools/ChatCheck/bin/Release/net8.0/ChatCheck.dll --startup-overview-host Tools/Host/bin/Release/net8.0/TraceSoul2.Host.dll
           dotnet Tools/CoreCheck/bin/Release/net8.0/CoreCheck.dll
           dotnet Tools/Updater/bin/Release/net8.0/TraceSoul2.Updater.dll --self-test
           dotnet Tools/UpdateCheck/bin/Release/net8.0/UpdateCheck.dll
