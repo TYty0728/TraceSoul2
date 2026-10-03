@@ -47,3 +47,37 @@ assert.match(nodes.liveDecision.innerHTML, /旧判断/);
 sandbox.renderLive({});
 assert.match(nodes.liveDecision.innerHTML, /本轮决策/);
 console.log('Runtime UI checks passed: Agent decisions, receipts, day history, restart, legacy and empty state.');
+
+// The day page displays one final text; intermediate material remains collapsed.
+function element(tag) {
+  return { tag, children: [], textContent: '',
+    append(...items) { this.children.push(...items); },
+    appendChild(item) { this.children.push(item); },
+    replaceChildren(...items) { this.children = items; } };
+}
+sandbox.document.createElement = element;
+nodes.runtimeSliceHistory = element('div');
+nodes.runtimeSliceDay = { value: '2020-08-21' };
+const sliceStart = html.indexOf('  async function loadRuntimeSlices()');
+const sliceEnd = html.indexOf('  async function saveEnvironment()', sliceStart);
+assert.ok(sliceStart >= 0 && sliceEnd > sliceStart);
+vm.runInContext(html.slice(sliceStart, sliceEnd), sandbox);
+(async () => {
+  const data = { day: '2020-08-21', total: 2, pending: 0, slices: [],
+    reviews: [{ summary: '整天的一篇回望', memoryVisibility: 'private' }],
+    reviewSegments: [{ summary: '<script>分段一</script>' }, { summary: '分段二' }] };
+  sandbox.api = async () => data;
+  await sandbox.loadRuntimeSlices();
+  let rows = nodes.runtimeSliceHistory.children;
+  assert.equal(rows.filter(x => x.tag === 'p' && x.textContent.includes('当天回望 ·')).length, 1);
+  assert.ok(rows.filter(x => x.tag === 'p').every(x => !x.textContent.includes('分段一')));
+  const material = rows.find(x => x.tag === 'details');
+  assert.equal(material.open, undefined);
+  assert.equal(material.children[1].textContent, '<script>分段一</script>\n\n分段二');
+  assert.equal(material.children[1].innerHTML, undefined);
+  data.reviews = [];
+  await sandbox.loadRuntimeSlices();
+  rows = nodes.runtimeSliceHistory.children;
+  assert.ok(rows.some(x => x.textContent.includes('当天回望尚未完成')));
+  console.log('Day summary UI checks passed: one final, collapsed material, text safety and pending finalization.');
+})().catch(error => { console.error(error); process.exitCode = 1; });
