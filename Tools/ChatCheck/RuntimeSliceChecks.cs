@@ -155,10 +155,78 @@ internal static partial class Program
                 Require(store.GetUnreviewedRuntimeDayKeysBefore(begin + 86400000).Contains(day), "迟到切片可由日构建补偿发现");
             }
             using (var store = new SqliteMemoryManager(path))
+            {
                 Require(store.GetRuntimeDayReviews(root, day).Count == 2 && store.GetRuntimeSlices(root, day, true).Count == 1,
                     "重启保留已落地日拼图和未完成切片，分别继续处理");
+                await RunRuntimeReviewBatchChecksAsync(store, day, begin);
+            }
         }
         finally { foreach (var suffix in new[] { "", "-wal", "-shm" }) if (File.Exists(path + suffix)) File.Delete(path + suffix); }
         Console.WriteLine("Runtime slice checks passed: lightweight capture, full-day batches, night review, provenance, privacy, recall, failure and restart.");
+    }
+
+    private static async Task RunRuntimeReviewBatchChecksAsync(SqliteMemoryManager store, string day, long begin)
+    {
+        string Summary(string text) => TraceJson.ToJson(new { summary = text });
+        void Seed(string root, int count, int size = 10)
+        {
+            for (var i = 0; i < count; i++)
+            {
+                var id = root + "-" + i;
+                store.SaveMoment(new MomentRecord { Id = id, ConversationId = root, Role = "user", Content = id,
+                    CreatedUnixMs = begin + i });
+                store.AppendRuntimeSlice(new RuntimeSliceRecord { RootConversationId = root, ContextConversationId = root,
+                    MomentId = id, SnapshotJson = TraceJson.ToJson(new { inner = id + new string('材', size) }) });
+            }
+        }
+        Seed("independent", 3, 8000);
+        var independent = new AgentSequenceLlm(Summary("第一段独有回望"), Summary("第二段独有回望"), Summary("第三段独有回望"));
+        Require(await RuntimeSliceLogic.ReviewDayAsync(store, independent, "independent", day) == 3 &&
+            independent.Requests.Count == 3 && !independent.Requests[1].Contains("第一段独有回望") &&
+            !independent.Requests[2].Contains("第二段独有回望") && !independent.Requests[2].Contains("independent-0") &&
+            independent.Requests[2].Contains("independent-2"), "各批只收到自己的完整切片，已完成回望不会滚入后批重写");
+
+        var oversized = Summary(new string('长', 3532));
+        Seed("split", 4);
+        var split = new AgentSequenceLlm(oversized, oversized, Summary("前半批"), Summary("后半批"));
+        Require(await RuntimeSliceLogic.ReviewDayAsync(store, split, "split", day) == 4 && split.Requests.Count == 4 &&
+            split.Requests[1].Contains("3532 字") && split.Requests[1].Contains("3000 字") &&
+            split.Requests[2].Contains("split-0") && split.Requests[2].Contains("split-1") && !split.Requests[2].Contains("split-2") &&
+            split.Requests[3].Contains("split-2") && !split.Requests[3].Contains("split-1") &&
+            store.GetRuntimeDayReviews("split", day).Count == 2 && store.GetRuntimeSlices("split", day, true).Count == 0,
+            "持续超长按完整来源拆批并各自提交，纠正准确报告字数，覆盖全部来源且不截断正文");
+
+        Seed("partial", 4);
+        var partial = new AgentSequenceLlm(oversized, oversized, Summary("先完成的半批"), "{}", "{}");
+        try { await RuntimeSliceLogic.ReviewDayAsync(store, partial, "partial", day); }
+        catch (InvalidOperationException) { }
+        Require(partial.Requests.Count == 5 && store.GetRuntimeSlices("partial", day, true).Count == 2 &&
+            store.GetRuntimeDayReviews("partial", day).Count == 1, "后半批失败保留待处理原件和前半批成功结果，空字段不触发继续拆批");
+        var resume = new AgentSequenceLlm(Summary("恢复完成的半批"));
+        Require(await RuntimeSliceLogic.ReviewDayAsync(store, resume, "partial", day) == 2 &&
+            !resume.Requests[0].Contains("partial-0") && !resume.Requests[0].Contains("先完成的半批"),
+            "恢复仅处理未完成来源，已有回望不重写");
+
+        Seed("malformed", 4);
+        var malformed = new AgentSequenceLlm(oversized, "{\"summary\":42}");
+        try { await RuntimeSliceLogic.ReviewDayAsync(store, malformed, "malformed", day); }
+        catch (InvalidOperationException) { }
+        Require(malformed.Requests.Count == 2 && store.GetRuntimeSlices("malformed", day, true).Count == 4,
+            "纠正后变为类型错误时保留原失败路径，不把上次超长误当本次错误");
+
+        Seed("bounded", 8);
+        var bounded = new AgentSequenceLlm(Enumerable.Repeat(oversized, 8).ToArray());
+        var error = "";
+        try { await RuntimeSliceLogic.ReviewDayAsync(store, bounded, "bounded", day); }
+        catch (InvalidOperationException exception) { error = exception.Message; }
+        Require(bounded.Requests.Count == 6 && error.Contains("3532 字") &&
+            store.GetRuntimeSlices("bounded", day, true).Count == 8, "拆批最多两层，持续异常保留原件并报告真实原因");
+
+        Seed("single", 1);
+        var single = new AgentSequenceLlm(oversized, oversized);
+        try { await RuntimeSliceLogic.ReviewDayAsync(store, single, "single", day); }
+        catch (InvalidOperationException) { }
+        Require(single.Requests.Count == 2 && store.GetRuntimeSlices("single", day, true).Count == 1,
+            "单条切片保持完整，不为满足长度切碎原件或虚报完成");
     }
 }

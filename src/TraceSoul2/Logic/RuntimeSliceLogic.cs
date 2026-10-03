@@ -90,23 +90,55 @@ namespace TraceSoul2.Logic
                     batch.Add(slice); content.Append(line);
                 }
                 if (batch.Count == 0) throw new InvalidOperationException("当下切片超过夜间单批预算，保留原件等待处理。");
-                var previous = store.GetRuntimeDayReviews(root, day).Where(x => x.ContextConversationId == first.ContextConversationId)
-                    .TakeLast(2).Select(x => x.Summary);
-                var prompt = "夜间整理 " + day + " 的当下切片，按时间接起经历、感受、关注与未解之处。"
+                await ReviewBatchAsync(store, llm, day, batch, token);
+                count += batch.Count;
+            }
+        }
+
+        private sealed class SummaryTooLongException : InvalidOperationException
+        {
+            public SummaryTooLongException(int length) : base("summary 当前 " + length +
+                " 字，超过单段 3000 字上限。请围绕本批材料合并重复叙述，保留经历转折、感受变化与未解之处，整理为约 600～1200 字的片段。") { }
+        }
+
+        private static async Task ReviewBatchAsync(SqliteMemoryManager store, ILlmClient llm, string day,
+            List<RuntimeSliceRecord> batch, CancellationToken token, int splitDepth = 0)
+        {
+            token.ThrowIfCancellationRequested();
+            var first = batch[0];
+            var content = string.Concat(batch.Select(slice => slice.Id + "｜来源:" + slice.MomentId + "｜" +
+                slice.CreatedUnixMs + "｜" + slice.SnapshotJson + "\n"));
+            var prompt = "整理 " + day + " 中这一批当下切片，形成一段可独立阅读的经历与感受回望。"
+                    + "这一天由程序按来源时间保存为多段回望；本次正文对应下方这一批材料。"
+                    + "沿着本批发生的变化组织语言，同一件事的反复描述合成一次，保留重要转折、条件、矛盾与未解之处。"
                     + "围绕主体自身、专属用户、世界、具体关系理解这一天；没有依据的方向留空，不强凑四类或性格结论。"
                     + "这是当时的主观记录，new_fact/today/活动描述都不等于外部核实，想做或说过不等于做成。"
                     + "专属用户只能由来源 speaker.owner 确认，其他人不能默认继承两人的关系。"
                     + "保留变化、矛盾、条件与未知，不把一时感受直接定成人格。不生成身份卡或认知写入。"
                     + "当前可见范围：" + first.MemoryVisibility + "，只处理这一环境。"
-                    + "只输出 JSON {\"summary\":\"1～3000字的当天经历与感受拼图片段\"}。\n"
-                    + "本环境已整理的前文（只供衔接，不当作新证据）：\n" + string.Join("\n", previous)
+                    + "正文通常约600～1200字，材料少时可以更短，单段最多3000字。"
+                    + "只输出 JSON {\"summary\":\"这一批经历与感受的回望\"}。\n"
                     + "\n本批完整切片：\n" + content;
+            try
+            {
                 var output = await DeepSeekStructuredOutputLogic.CompleteAsync<ReviewOutput>(llm,
-                    new List<DeepSeekMessageData> { new("system", prompt), new("user", "将这些切片接回这一天，保留它们原本的性质。") },
-                    x => !string.IsNullOrWhiteSpace(x?.summary) && x.summary.Length <= 3000,
-                    "缺少有效 summary；只整理已提供切片。", token);
+                    new List<DeepSeekMessageData> { new("system", prompt), new("user", "整理本批切片，保留经历与感受原本的性质。") },
+                    x =>
+                    {
+                        if (string.IsNullOrWhiteSpace(x?.summary)) return false;
+                        if (x.summary.Length > 3000) throw new SummaryTooLongException(x.summary.Length);
+                        return true;
+                    },
+                    "summary 缺失或为空，请在该字段填写本批经历与感受的回望。", token);
                 store.CommitRuntimeSliceReview(batch.Select(x => x.Id), output.summary);
-                count += batch.Count;
+            }
+            // 仅正文持续超长时缩小原始材料；语法、类型、网络或取消错误保持原失败路径。
+            catch (InvalidOperationException exception) when (exception.InnerException is SummaryTooLongException &&
+                batch.Count > 1 && splitDepth < 2)
+            {
+                var middle = batch.Count / 2;
+                await ReviewBatchAsync(store, llm, day, batch.Take(middle).ToList(), token, splitDepth + 1);
+                await ReviewBatchAsync(store, llm, day, batch.Skip(middle).ToList(), token, splitDepth + 1);
             }
         }
     }
