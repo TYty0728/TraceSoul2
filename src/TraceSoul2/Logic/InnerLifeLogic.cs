@@ -53,7 +53,7 @@ namespace TraceSoul2.Logic
                 Environment = current.Environment,
                 SnapshotId = Guid.NewGuid().ToString("N"),
                 Revision = checked(current.Revision + 1),
-                Narrative = KeepOrLimit(proposed == null ? null : proposed.narrative, current.Narrative, 300),
+                Narrative = KeepWithin(proposed == null ? null : proposed.narrative, current.Narrative, 120),
                 RelationshipLens = KeepOrLimit(proposed == null ? null : proposed.relationship_update, current.RelationshipLens, 200),
                 Mood = KeepOrLimit(proposed == null ? null : proposed.mood, current.Mood, 80),
                 OngoingActivity = KeepOrLimit(proposed == null ? null : proposed.ongoing_activity, current.OngoingActivity, 120, true),
@@ -411,6 +411,17 @@ namespace TraceSoul2.Logic
             if (current != null && !string.IsNullOrWhiteSpace(current.SourceMomentId))
                 return current.SourceMomentId;
             return fallback;
+        }
+
+        /// <summary>篇幅由生成时守住。这里不截断；超限说明调用方没有按原篇幅重写。</summary>
+        private static string KeepWithin(string proposed, string current, int max)
+        {
+            if (proposed == null) return current ?? string.Empty;
+            var value = proposed.Trim();
+            if (value.Length == 0) return current ?? string.Empty;
+            if (value.Length > max)
+                throw new InvalidOperationException("内心当前" + value.Length + "字，最多" + max + "字。按原篇幅重新生成，不能截断或丢弃。");
+            return value;
         }
 
         private static string KeepOrLimit(string proposed, string current, int max, bool allowExplicitEmpty = false)

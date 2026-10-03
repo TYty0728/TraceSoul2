@@ -232,10 +232,16 @@ namespace TraceSoul2.Plugins.Builtin
                         };
                         var output = await DeepSeekStructuredOutputLogic.CompleteAsync<ArchiveSummaryOutputData>(
                             llm, messages,
-                            x => x != null && !string.IsNullOrWhiteSpace(x.summary),
-                            MemoryNervePrompts.MissingArchiveSummary, cancellationToken);
+                            x => x != null && !string.IsNullOrWhiteSpace(x.summary) && (x.summary ?? string.Empty).Trim().Length <= 80,
+                            MemoryNervePrompts.MissingArchiveSummary, cancellationToken,
+                            validationError: x =>
+                            {
+                                var text = (x?.summary ?? string.Empty).Trim();
+                                if (text.Length <= 80) return null;
+                                return "summary 当前" + text.Length + "字，最多80字。按原篇幅重新写下，不要截断。";
+                            });
                         summary = (output.summary ?? string.Empty).Trim();
-                        detail = LimitSentence(output.detail ?? string.Empty, 200);
+                        detail = (output.detail ?? string.Empty).Trim();
                         if (!string.IsNullOrWhiteSpace(output.mood)) mood = output.mood.Trim();
                     }
                     catch
@@ -256,7 +262,7 @@ namespace TraceSoul2.Plugins.Builtin
                     TimeUnixMs = now.ToUnixTimeMilliseconds(),
                     PlaceLabel = Limit(call.GetArgument("place", string.Empty).Trim(), 20),
                     PersonLabel = pair.IsComplete ? pair.Username : "她",
-                    EventSummary = Limit(summary, 80),
+                    EventSummary = summary,
                     MoodLabel = Limit(mood, 12),
                     FirstMomentId = window[0].Id,
                     Status = "active",
@@ -267,7 +273,7 @@ namespace TraceSoul2.Plugins.Builtin
                 {
                     Id = Guid.NewGuid().ToString("N"),
                     IndexId = index.Id,
-                    Summary = Limit(summary, 80),
+                    Summary = summary,
                     Detail = detail,
                     SourceMomentId = window[window.Count - 1].Id,
                     Realm = "shared_scene",

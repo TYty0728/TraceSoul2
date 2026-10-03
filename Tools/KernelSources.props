@@ -14,6 +14,7 @@
     <Compile Include="$(MSBuildThisFileDirectory)../src/TraceSoul2/Manager/SqliteDayTrajectory.cs" />
     <Compile Include="$(MSBuildThisFileDirectory)../src/TraceSoul2/Logic/DayTrajectoryLogic.cs" />
     <Compile Include="$(MSBuildThisFileDirectory)../src/TraceSoul2/Logic/DayTrajectoryOverviewLogic.cs" />
+    <Compile Include="$(MSBuildThisFileDirectory)../src/TraceSoul2/Logic/LifeReadingBudgetLogic.cs" />
     <Compile Include="$(MSBuildThisFileDirectory)../src/TraceSoul2/Logic/RuntimeSliceLogic.cs" />
     <Compile Include="$(MSBuildThisFileDirectory)../src/TraceSoul2/Logic/EnvironmentLogic.cs" />
     <Compile Include="$(MSBuildThisFileDirectory)../src/TraceSoul2/Logic/RuntimeContextLogic.cs" />

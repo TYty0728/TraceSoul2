@@ -59,21 +59,22 @@ internal static partial class Program
                 RootConversationId = root, ContextConversationId = root, MomentId = sources[1].Id,
                 SnapshotJson = "{\"inner\":\"迟到的新材料\"}" } });
             var tooLong = TraceJson.ToJson(new { summary = new string('长', 1201) });
-            var failedFinal = new AgentSequenceLlm("{\"summary\":\"迟到材料整理\"}", tooLong, tooLong);
+            var failedFinal = new AgentSequenceLlm(tooLong, tooLong);
             contextType.GetProperty("Llm").SetValue(context, failedFinal);
             try { ((Task)run.Invoke(null, new object[] { context, new[] { "--day", day } })).GetAwaiter().GetResult(); }
             catch (InvalidOperationException) { }
-            Require(failedFinal.Requests.Count == 3 &&
-                ((List<RuntimeSliceRecord>)storeType.GetMethod("GetRuntimeSlices").Invoke(actualStore, new object[] { root, day, true })).Count == 0 &&
+            Require(failedFinal.Requests.Count == 2 && failedFinal.Requests[1].Contains("按原篇幅重新写下") &&
+                !failedFinal.Requests[0].Contains("请合并重复叙述") &&
+                ((List<RuntimeSliceRecord>)storeType.GetMethod("GetRuntimeSlices").Invoke(actualStore, new object[] { root, day, true })).Count == 1 &&
                 (bool)storeType.GetMethod("HasPendingRuntimeDaySummary").Invoke(actualStore, new object[] { root, day }),
-                "实际已完成日的迟到补偿可留下仅成稿待完成，切片已处理仍不能跳过");
-            var resumedFinal = new AgentSequenceLlm("{\"summary\":\"全部材料重新提炼的整天回望\"}");
+                "迟到段落超出自己的篇幅时不保存、不回收缩写，旧成稿保持待重写");
+            var resumedFinal = new AgentSequenceLlm("{\"summary\":\"迟到的这一段\"}");
             contextType.GetProperty("Llm").SetValue(context, resumedFinal);
             ((Task)run.Invoke(null, new object[] { context, new[] { "--day", day } })).GetAwaiter().GetResult();
             ((Task)run.Invoke(null, new object[] { context, new[] { "--day", day } })).GetAwaiter().GetResult();
             Require(resumedFinal.Requests.Count == 1 &&
                 !(bool)storeType.GetMethod("HasPendingRuntimeDaySummary").Invoke(actualStore, new object[] { root, day }),
-                "实际Migration在无待处理切片时也恢复成稿，并在完成后保持幂等");
+                "补上符合篇幅的迟到段落后直接形成整天正文，再次运行不再调用模型");
         }
         finally { context?.Dispose(); Directory.Delete(dir, true); }
         Console.WriteLine("Runtime slice Migration checks passed: actual day entry, all evidence batches, late slices and replay.");
@@ -200,105 +201,114 @@ internal static partial class Program
             }
         }
         Seed("independent", 3, 8000);
-        var independent = new AgentSequenceLlm(Summary("第一段独有回望"), Summary("第二段独有回望"), Summary("第三段独有回望"), Summary("整天统一回望"));
+        var independent = new AgentSequenceLlm(Summary("第一段独有回望"), Summary("第二段独有回望"), Summary("第三段独有回望"));
         Require(await RuntimeSliceLogic.ReviewDayAsync(store, independent, "independent", day) == 3 &&
-            independent.Requests.Count == 4 && !independent.Requests[1].Contains("第一段独有回望") &&
+            independent.Requests.Count == 3 && independent.Requests[0].Contains("最多332字") && independent.Requests[0].Contains("写完即是最终正文") &&
+            !independent.Requests[0].Contains("请合并重复叙述") && !independent.Requests[1].Contains("第一段独有回望") &&
             !independent.Requests[2].Contains("第二段独有回望") && !independent.Requests[2].Contains("independent-0") &&
-            independent.Requests[2].Contains("independent-2"), "各批只收到自己的完整切片，已完成回望不会滚入后批重写");
+            independent.Requests[2].Contains("independent-2") &&
+            store.GetRuntimeDaySummaries("independent", day).Single().Summary == "第一段独有回望\n\n第二段独有回望\n\n第三段独有回望",
+            "各段只根据自己的切片写成最终正文，已写段落不滚入后段，整天由这些正文按时间接成");
 
         var oversized = Summary(new string('长', 3532));
         Seed("split", 4);
-        var split = new AgentSequenceLlm(oversized, oversized, Summary("前半批"), Summary("后半批"), Summary("两半的整天回望"));
-        Require(await RuntimeSliceLogic.ReviewDayAsync(store, split, "split", day) == 4 && split.Requests.Count == 5 &&
-            split.Requests[1].Contains("3532 字") && split.Requests[1].Contains("1200字") &&
-            split.Requests[2].Contains("split-0") && split.Requests[2].Contains("split-1") && !split.Requests[2].Contains("split-2") &&
-            split.Requests[3].Contains("split-2") && !split.Requests[3].Contains("split-1") &&
-            store.GetRuntimeDayReviews("split", day).Count == 2 && store.GetRuntimeSlices("split", day, true).Count == 0,
-            "持续超长按完整来源拆批并各自提交，纠正准确报告字数，覆盖全部来源且不截断正文");
+        var split = new AgentSequenceLlm(oversized, Summary("按原篇幅重写"));
+        Require(await RuntimeSliceLogic.ReviewDayAsync(store, split, "split", day) == 4 && split.Requests.Count == 2 &&
+            split.Requests[0].Contains("最多1000字") && split.Requests[1].Contains("当前3532字") &&
+            split.Requests[1].Contains("按原篇幅重新写下") && !split.Requests[1].Contains("凝练") &&
+            split.Requests[1].Contains("split-0") && split.Requests[1].Contains("split-3") &&
+            store.GetRuntimeDayReviews("split", day).Count == 1 && store.GetRuntimeSlices("split", day, true).Count == 0 &&
+            store.GetRuntimeDaySummaries("split", day).Single().Summary == "按原篇幅重写",
+            "超出篇幅时按同一段和原篇幅重写，不减半材料，也不把长文交给另一道缩短任务");
 
         Seed("partial", 4);
-        var partial = new AgentSequenceLlm(oversized, oversized, Summary("先完成的半批"), "{}", "{}");
-        try { await RuntimeSliceLogic.ReviewDayAsync(store, partial, "partial", day); }
-        catch (InvalidOperationException) { }
-        Require(partial.Requests.Count == 5 && store.GetRuntimeSlices("partial", day, true).Count == 2 &&
-            store.GetRuntimeDayReviews("partial", day).Count == 1, "后半批失败保留待处理原件和前半批成功结果，空字段不触发继续拆批");
-        var resume = new AgentSequenceLlm(Summary("恢复完成的半批"), Summary("恢复后的当天成稿"));
-        Require(await RuntimeSliceLogic.ReviewDayAsync(store, resume, "partial", day) == 2 &&
-            !resume.Requests[0].Contains("partial-0") && !resume.Requests[0].Contains("先完成的半批"),
-            "恢复仅处理未完成来源，已有回望不重写");
+        var partial = new AgentSequenceLlm(oversized, Summary("先完成的整段"));
+        Require(await RuntimeSliceLogic.ReviewDayAsync(store, partial, "partial", day) == 4 && partial.Requests.Count == 2 &&
+            store.GetRuntimeSlices("partial", day, true).Count == 0 &&
+            store.GetRuntimeDaySummaries("partial", day).Single().Summary == "先完成的整段",
+            "超限后的重写通过就保存这一整段，不拆开已写材料");
 
         Seed("malformed", 4);
         var malformed = new AgentSequenceLlm(oversized, "{\"summary\":42}");
+        var malformedError = "";
         try { await RuntimeSliceLogic.ReviewDayAsync(store, malformed, "malformed", day); }
-        catch (InvalidOperationException) { }
-        Require(malformed.Requests.Count == 2 && store.GetRuntimeSlices("malformed", day, true).Count == 4,
-            "纠正后变为类型错误时保留原失败路径，不把上次超长误当本次错误");
+        catch (InvalidOperationException exception) { malformedError = exception.Message; }
+        Require(malformed.Requests.Count == 2 && malformed.Requests[1].Contains("malformed-0") &&
+            malformedError.Contains("summary") && store.GetRuntimeSlices("malformed", day, true).Count == 4,
+            "重写若是类型错误，按类型错误失败并保留全部原件");
 
         Seed("bounded", 8);
-        var bounded = new AgentSequenceLlm(Enumerable.Repeat(oversized, 8).ToArray());
+        var bounded = new AgentSequenceLlm(oversized, oversized);
         var error = "";
         try { await RuntimeSliceLogic.ReviewDayAsync(store, bounded, "bounded", day); }
         catch (InvalidOperationException exception) { error = exception.Message; }
-        Require(bounded.Requests.Count == 6 && error.Contains("3532 字") &&
-            store.GetRuntimeSlices("bounded", day, true).Count == 8, "拆批最多两层，持续异常保留原件并报告真实原因");
+        Require(bounded.Requests.Count == 2 && error.Contains("3532") && error.Contains("1000") &&
+            store.GetRuntimeSlices("bounded", day, true).Count == 8, "同一段重写仍然超限就停下，原件保留");
 
         Seed("single", 1);
         var single = new AgentSequenceLlm(oversized, oversized);
         try { await RuntimeSliceLogic.ReviewDayAsync(store, single, "single", day); }
         catch (InvalidOperationException) { }
-        Require(single.Requests.Count == 2 && store.GetRuntimeSlices("single", day, true).Count == 1,
-            "单条切片保持完整，不为满足长度切碎原件或虚报完成");
+        Require(single.Requests.Count == 2 && single.Requests[1].Contains("按原篇幅重新写下") &&
+            !single.Requests[0].Contains("上一条不满足要求") &&
+            store.GetRuntimeSlices("single", day, true).Count == 1,
+            "单条切片保持完整，超限后按原篇幅重写一次，仍超限则不虚报完成");
 
         const string finalDay = "2020-08-21";
-        Seed("final-length", 2, 8000, begin + 86400000);
-        var longFinal = Summary(new string('长', 1201));
-        var finalFailure = new AgentSequenceLlm(Summary("首批材料"), Summary("末批材料"), longFinal, longFinal);
-        try { await RuntimeSliceLogic.ReviewDayAsync(store, finalFailure, "final-length", finalDay); }
-        catch (InvalidOperationException) { }
-        Require(finalFailure.Requests.Count == 4 && finalFailure.Requests[3].Contains("1201 字") &&
-            store.GetRuntimeSlices("final-length", finalDay, true).Count == 0 &&
-            store.GetRuntimeDayReviews("final-length", finalDay).Count == 2 && store.GetRuntimeDaySummaries("final-length", finalDay).Count == 0 &&
-            store.GetUnreviewedRuntimeDayKeysBefore(begin + 172800000).Contains(finalDay) && store.GetRuntimeReviewCandidates("final-length").Count == 0,
-            "成稿超1200字不保存、不冒充完成或降级召回分段；原材料保留，未完成成稿继续进入补偿队列");
+        Seed("source-limit", 1, 10, begin + 86400000);
+        var sourceError = "";
+        var sourceFailure = new AgentSequenceLlm(Summary(new string('长', 1201)), Summary(new string('长', 1201)));
+        try { await RuntimeSliceLogic.ReviewDayAsync(store, sourceFailure, "source-limit", finalDay); }
+        catch (InvalidOperationException exception) { sourceError = exception.Message; }
+        Require(sourceFailure.Requests.Count == 2 && sourceFailure.Requests[0].Contains("最多1000字") &&
+            sourceError.Contains("1201") && sourceError.Contains("1000") &&
+            store.GetRuntimeSlices("source-limit", finalDay, true).Count == 1 &&
+            store.GetRuntimeDayReviews("source-limit", finalDay).Count == 0 &&
+            store.GetRuntimeDaySummaries("source-limit", finalDay).Count == 0 &&
+            store.GetUnreviewedRuntimeDayKeysBefore(begin + 172800000).Contains(finalDay),
+            "整天只有一段时，写作指令本身就是一千字；超出后不保存、不回收缩写");
         using (var reopened = new SqliteMemoryManager(path))
-            Require(reopened.GetRuntimeDaySummaries("final-length", finalDay).Count == 0 &&
-                reopened.GetRuntimeDayReviews("final-length", finalDay).Count == 2 &&
+            Require(reopened.GetRuntimeDaySummaries("source-limit", finalDay).Count == 0 &&
+                reopened.GetRuntimeSlices("source-limit", finalDay, true).Count == 1 &&
                 reopened.GetUnreviewedRuntimeDayKeysBefore(begin + 172800000).Contains(finalDay),
-                "重新打开数据库仍知道成稿未完成，分段完成不掩盖整天尚未完成");
-        var finalized = new AgentSequenceLlm(Summary(new string('稿', 1000)));
-        Require(await RuntimeSliceLogic.ReviewDayAsync(store, finalized, "final-length", finalDay) == 0 && finalized.Requests.Count == 1,
-            "恢复只重做整天成稿，不重调已完成的分段整理");
-        var wholeDay = store.GetRuntimeDaySummaries("final-length", finalDay).Single();
-        Require(wholeDay.Summary.Length == 1000 && TraceJson.FromJson<List<string>>(wholeDay.SliceIdsJson).Count == 2 &&
-            store.GetRuntimeReviewCandidates("final-length").Single().Summary == wholeDay.Summary,
-            "一整天只形成一篇千字成稿，保留全部来源，普通召回不叠加分段材料");
-        var noCall = new AgentSequenceLlm();
-        await RuntimeSliceLogic.ReviewDayAsync(store, noCall, "final-length", finalDay);
-        Require(noCall.Requests.Count == 0, "完整成稿再次运行不重复生成");
+                "重新打开数据库仍知道这一段没写完");
+        var sourceDone = new AgentSequenceLlm(Summary(new string('稿', 1000)));
+        Require(await RuntimeSliceLogic.ReviewDayAsync(store, sourceDone, "source-limit", finalDay) == 1 &&
+            sourceDone.Requests.Count == 1 && store.GetRuntimeDaySummaries("source-limit", finalDay).Single().Summary.Length == 1000,
+            "符合篇幅的正文直接成为当天回望");
+        var sourceAgain = new AgentSequenceLlm();
+        await RuntimeSliceLogic.ReviewDayAsync(store, sourceAgain, "source-limit", finalDay);
+        Require(sourceAgain.Requests.Count == 0, "已完成的当天回望不再生成");
 
-        Seed("final-length", 3, 8000, begin + 86400000); // 前两条重放保持原件，第三条为迟到新来源。
+        Seed("final-length", 2, 8000, begin + 86400000);
+        var finalized = new AgentSequenceLlm(Summary("首批材料"), Summary("末批材料"));
+        Require(await RuntimeSliceLogic.ReviewDayAsync(store, finalized, "final-length", finalDay) == 2 && finalized.Requests.Count == 2 &&
+            store.GetRuntimeDaySummaries("final-length", finalDay).Single().Summary == "首批材料\n\n末批材料" &&
+            TraceJson.FromJson<List<string>>(store.GetRuntimeDaySummaries("final-length", finalDay).Single().SliceIdsJson).Count == 2,
+            "同一天的多段正文按时间接成一篇，来源全部保留");
+        Seed("final-length", 3, 8000, begin + 86400000);
         Require(store.GetRuntimeDaySummaries("final-length", finalDay).Count == 0 && store.GetRuntimeReviewCandidates("final-length").Count == 0,
             "迟到来源使旧成稿失效，避免把不完整成稿作为整天回望召回");
-        var lateFinal = new AgentSequenceLlm(Summary("迟到材料"), Summary("重新综合全天的千字目标成稿"));
-        Require(await RuntimeSliceLogic.ReviewDayAsync(store, lateFinal, "final-length", finalDay) == 1 &&
-            lateFinal.Requests.Count == 2 && !lateFinal.Requests[1].Contains(new string('稿', 50)) &&
-            lateFinal.Requests[1].Contains("首批材料") && lateFinal.Requests[1].Contains("末批材料") &&
-            lateFinal.Requests[1].Contains("迟到材料"), "迟到补全从全部材料重新提炼，旧成稿不滚入新成稿反复膨胀");
+        var lateFinal = new AgentSequenceLlm(Summary("迟到材料"));
+        Require(await RuntimeSliceLogic.ReviewDayAsync(store, lateFinal, "final-length", finalDay) == 1 && lateFinal.Requests.Count == 1 &&
+            !lateFinal.Requests[0].Contains("首批材料") && !lateFinal.Requests[0].Contains("末批材料") &&
+            store.GetRuntimeDaySummaries("final-length", finalDay).Single().Summary == "首批材料\n\n末批材料\n\n迟到材料",
+            "迟到切片只写自己的一段，不把已有正文交回去重写");
         var original = store.GetRuntimeDaySummaries("final-length", finalDay).Single().Summary;
         var rejected = false;
         try { store.CommitRuntimeDaySummary(store.GetRuntimeDayReviews("final-length", finalDay).Select(x => x.Id), new string('长', 1201)); }
         catch (InvalidOperationException) { rejected = true; }
         Require(rejected && store.GetRuntimeDaySummaries("final-length", finalDay).Single().Summary == original,
-            "存储层也强制整天1200字边界，失败不改动已有成稿");
+            "存储层也拒绝超过1200字的整天正文，失败不改动已有成稿");
 
         Seed("hierarchy", 12, 8000);
-        var manyParts = Enumerable.Range(0, 12).Select(i => Summary("材料" + i + new string('材', 1100))).ToList();
-        manyParts.AddRange(new[] { Summary("前部合并"), Summary("后部合并"), Summary("整天最终稿") });
-        var hierarchy = new AgentSequenceLlm(manyParts.ToArray());
-        Require(await RuntimeSliceLogic.ReviewDayAsync(store, hierarchy, "hierarchy", day) == 12 && hierarchy.Requests.Count == 15 &&
-            hierarchy.Requests[12].Contains("材料0") && hierarchy.Requests[13].Contains("材料11") &&
-            hierarchy.Requests[14].Contains("前部合并") && hierarchy.Requests[14].Contains("后部合并") && store.GetRuntimeDaySummaries("hierarchy", day).Count == 1,
-            "长日全部材料按预算逐层合并，尾部来源仍覆盖，最终只保留一篇成稿供阅读");
+        var hierarchy = new AgentSequenceLlm(Enumerable.Range(0, 12).Select(i => Summary("材料" + i)).ToArray());
+        var hierarchySummary = "";
+        Require(await RuntimeSliceLogic.ReviewDayAsync(store, hierarchy, "hierarchy", day) == 12 && hierarchy.Requests.Count == 12 &&
+            hierarchy.Requests[0].Contains("最多81字") && hierarchy.Requests[11].Contains("hierarchy-11") && !hierarchy.Requests[11].Contains("hierarchy-0") &&
+            (hierarchySummary = store.GetRuntimeDaySummaries("hierarchy", day).Single().Summary).Contains("材料0") && hierarchySummary.Contains("材料11") &&
+            hierarchySummary.Length <= 1200,
+            "长日每一段在写下时就占好自己的篇幅，尾段仍覆盖，不再另做合并或压缩");
 
         Seed("legacy-long", 2);
         var legacySlices = store.GetRuntimeSlices("legacy-long", day);
@@ -314,10 +324,11 @@ internal static partial class Program
             }
         }
         var oldDay = new AgentSequenceLlm(Summary(new string('新', 1000)));
-        Require(await RuntimeSliceLogic.ReviewDayAsync(store, oldDay, "legacy-long", day) == 0 && oldDay.Requests.Count == 1 &&
+        Require(await RuntimeSliceLogic.ReviewDayAsync(store, oldDay, "legacy-long", day) == 2 && oldDay.Requests.Count == 1 &&
+            oldDay.Requests[0].Contains("最多1000字") && !oldDay.Requests[0].Contains("请提炼") && !oldDay.Requests[0].Contains("旧旧") &&
             store.GetRuntimeDaySummaries("legacy-long", day).Single().Summary.Length == 1000 &&
-            store.GetRuntimeDayReviews("legacy-long", day).Sum(x => x.Summary.Length) == 3165 &&
+            store.GetRuntimeDayReviews("legacy-long", day).Sum(x => x.Summary.Length) == 1000 &&
             store.GetRuntimeReviewCandidates("legacy-long").Single().Summary.Length == 1000,
-            "升级后旧版长分段可合为整天千字成稿，完整旧材料仍保留且不混入成稿召回");
+            "旧的长文不拿去压缩；退回原始切片后按一千字篇幅重写");
     }
 }

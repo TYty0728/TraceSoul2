@@ -129,8 +129,9 @@ namespace TraceSoul2.Migrate
                 };
                 var output = await DeepSeekStructuredOutputLogic.CompleteAsync<ReplayPrompts.DayEventOutputData>(
                     llm, messages,
-                    x => x != null && !string.IsNullOrWhiteSpace(x.perception_summary),
-                    "事件观察输出缺少 perception_summary。", CancellationToken.None);
+                    x => x != null && !string.IsNullOrWhiteSpace(x.perception_summary) && EventProseError(x) == null,
+                    "事件观察输出缺少 perception_summary。", CancellationToken.None,
+                    validationError: EventProseError);
                 observationCalls += 1;
                 Console.WriteLine("  块" + observationCalls + " 观察：" + Limit(output.perception_summary, 80));
                 LogCall(context, dayKey, "event_observation", observationCalls,
@@ -176,7 +177,7 @@ namespace TraceSoul2.Migrate
                         TimeUnixMs = anchor.ToUnixTimeMilliseconds(),
                         PlaceLabel = Limit(write.place, 20),
                         PersonLabel = Limit(write.person, 20),
-                        EventSummary = Limit(write.event_summary, 80),
+                        EventSummary = (write.event_summary ?? string.Empty).Trim(),
                         MoodLabel = Limit(write.mood, 12),
                         FirstMomentId = chunk[0].Id,
                         Status = "active",
@@ -189,7 +190,7 @@ namespace TraceSoul2.Migrate
                     {
                         Id = Guid.NewGuid().ToString("N"),
                         IndexId = index.Id,
-                        Summary = Limit(write.entry_summary, 80),
+                        Summary = (write.entry_summary ?? string.Empty).Trim(),
                         Detail = string.Empty,
                         SourceMomentId = chunk[chunk.Count - 1].Id,
                         Realm = NormalizeRealm(write.realm),
@@ -213,7 +214,7 @@ namespace TraceSoul2.Migrate
                     {
                         Id = Guid.NewGuid().ToString("N"),
                         IndexId = target.Id,
-                        Summary = Limit(append.entry_summary, 80),
+                        Summary = (append.entry_summary ?? string.Empty).Trim(),
                         Detail = string.Empty,
                         SourceMomentId = chunk[chunk.Count - 1].Id,
                         Realm = NormalizeRealm(null),
@@ -254,7 +255,7 @@ namespace TraceSoul2.Migrate
                 var detailOutput = await DeepSeekStructuredOutputLogic.CompleteAsync<ReplayPrompts.DetailOutputData>(
                     llm, messages, x => x != null && !string.IsNullOrWhiteSpace(x.detail),
                     "细节输出缺少 detail。", detailToken);
-                entry.Detail = SmartTrim(detailOutput.detail ?? string.Empty, 200);
+                entry.Detail = (detailOutput.detail ?? string.Empty).Trim();
                 context.Migration.UpdateEventEntryDetail(entry.Id, entry.Detail);
                 var n = Interlocked.Increment(ref detailCalls);
                 Console.WriteLine("  细节「" + Limit(entry.Summary, 20) + "」：" + Limit(entry.Detail, 60));
@@ -392,20 +393,11 @@ namespace TraceSoul2.Migrate
                 validationError: x =>
                 {
                     preservedSlots.UnionWith(DayCardReviewContract.PreserveUnavailableCards(x, cardsNow, identityNodes));
-                    return DayCardReviewContract.StructuralError(x, cardsNow, identityNodes);
+                    return DayCardReviewContract.ValidationError(x, cardsNow, identityNodes);
                 });
             if (preservedSlots.Count > 0)
                 Console.WriteLine("  程序保留本次范围外的身份卡原文：" + string.Join("、", preservedSlots.OrderBy(x => x)));
             foreach (var card in output.cards) card.body = pair.RewriteRecordedText(card.body.Trim());
-            if (output.cards.Any(x => x.body.Length > IdentityCardSlotValues.BodyLimit(x.slot)))
-                LogCall(context, dayKey, "card_review_draft", 0, "身份摘要精炼前候选", TraceJson.ToJson(output));
-            var deferredCards = await DayCardReviewContract.FitBodiesAsync(llm, output, cardsNow, identityNodes, CancellationToken.None);
-            if (deferredCards.Count > 0)
-            {
-                var note = "摘要精炼未完成，保留原卡：" + string.Join("、", deferredCards.Select(slot => IdentityCardSlotValues.Title(slot, pair)));
-                Console.WriteLine("  " + note);
-                output.summary = (output.summary ?? "") + "\n" + note;
-            }
             output.SubjectRevision = subjectRevision;
             LogCall(context, dayKey, "card_review", 0,
                 "身份摘要复盘：" + Limit(output.summary, 60), TraceJson.ToJson(output));
@@ -438,7 +430,7 @@ namespace TraceSoul2.Migrate
                 var body = (card.body ?? string.Empty).Trim();
                 if (body.Length == 0) continue;
                 if (body.Length > IdentityCardSlotValues.BodyLimit(card.slot))
-                    throw new InvalidOperationException("身份摘要尚未完成长度精炼，原卡保留。");
+                    throw new InvalidOperationException("身份摘要超出篇幅，原卡保留。");
                 context.Store.SaveDerivedIdentityCard(MigrationContext.ConversationId, card.slot, body, card.cognition_ids, lastMomentId);
                 changed.Add(IdentityCardSlotValues.Title(card.slot, pair) + "：" + Limit(card.reason, 40));
             }
@@ -853,6 +845,31 @@ namespace TraceSoul2.Migrate
             return time + " " + pair.LabelForRole(moment.Role) + "：" + (moment.Content ?? string.Empty);
         }
 
+        private static string EventProseError(ReplayPrompts.DayEventOutputData output)
+        {
+            if (output == null) return null;
+            string Over(string path, string value)
+            {
+                var text = (value ?? string.Empty).Trim();
+                if (text.Length <= 80) return null;
+                return path + " 当前" + text.Length + "字，最多80字。按原篇幅重新写下，不要截断。";
+            }
+            var writes = output.event_writes ?? new List<ReplayPrompts.EventWriteItemData>();
+            for (var i = 0; i < writes.Count; i++)
+            {
+                var error = Over("$.event_writes[" + i + "].event_summary", writes[i]?.event_summary)
+                    ?? Over("$.event_writes[" + i + "].entry_summary", writes[i]?.entry_summary);
+                if (error != null) return error;
+            }
+            var appends = output.event_appends ?? new List<ReplayPrompts.EventAppendItemData>();
+            for (var i = 0; i < appends.Count; i++)
+            {
+                var error = Over("$.event_appends[" + i + "].entry_summary", appends[i]?.entry_summary);
+                if (error != null) return error;
+            }
+            return null;
+        }
+
         /// <summary>把一次 LLM 调用写入留痕表并广播到实时监视控制台。</summary>
         internal static void LogCall(
             MigrationContext context, string dayKey, string kind, int chunkIndex, string digest, string outputJson)
@@ -866,22 +883,6 @@ namespace TraceSoul2.Migrate
                 OutputJson = Limit(outputJson, 60000)
             });
             MigrationLive.Instance?.Notify(kind, digest, Limit(outputJson, 4000));
-        }
-
-        /// <summary>在 max 字内按句界收尾：找最后一个句号/问号/叹号/省略号收口，绝不切半句。</summary>
-        private static string SmartTrim(string value, int max)
-        {
-            value = (value ?? string.Empty).Trim();
-            if (value.Length < max) return value;
-            var window = value.Substring(0, Math.Min(value.Length, max));
-            var lastEnd = -1;
-            foreach (var marker in new[] { '。', '！', '？', '…' })
-            {
-                var index = window.LastIndexOf(marker);
-                if (index > lastEnd) lastEnd = index;
-            }
-            if (lastEnd >= 80) return value.Substring(0, lastEnd + 1).Trim();
-            return window.Trim();
         }
 
         private static string Limit(string value, int max)

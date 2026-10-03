@@ -56,7 +56,8 @@ namespace TraceSoul2.Logic
                 x => x != null && !string.IsNullOrWhiteSpace(Normalize(x).beat),
                 CorePrompts.Mind.MissingBeat,
                 cancellationToken,
-                promptCacheKey);
+                promptCacheKey,
+                validationError: ProseLengthError);
             return Normalize(decided, alreadyLeft);
         }
 
@@ -73,10 +74,10 @@ namespace TraceSoul2.Logic
             output.query = Limit((output.query ?? string.Empty).Trim(), 80);
             output.mood = OneLine(output.mood);
             if (output is AgentStepData agent) output.mood_changed = agent.HasStateField("mood") && output.mood.Length > 0;
-            output.new_fact = Limit((output.new_fact ?? string.Empty).Trim(), TodayNewItemRecord.MaxContentChars);
+            output.new_fact = (output.new_fact ?? string.Empty).Trim();
             output.leave = Limit((output.leave ?? string.Empty).Trim(), 80);
             output.note = (output.note ?? string.Empty).Trim();
-            output.today = Limit((output.today ?? string.Empty).Trim(), 500);
+            output.today = (output.today ?? string.Empty).Trim();
             output.inner = OneLine(output.inner);
             output.scene = Limit(OneLine(output.scene), 160);
             output.speak_center = Limit(OneLine(output.speak_center), 100);
@@ -107,8 +108,8 @@ namespace TraceSoul2.Logic
             output.sticker = output.StickerValue();
             output.image = output.ImageValue();
             output.location = output.LocationValue();
-            output.activity = Limit(OneLine(output.activity), 80);
-            output.activity_detail = Limit(OneLine(output.activity_detail), 160);
+            output.activity = OneLine(output.activity);
+            output.activity_detail = OneLine(output.activity_detail);
             // 表情是否发送不再由心智卡决定；这里保留旧字段兼容，但统一归零。
             output.sticker = MindAtmosphereValues.None;
             if (output.sleep || output.BeatValue() == MindBeatValues.Leave)
@@ -294,6 +295,23 @@ namespace TraceSoul2.Logic
                    value.IndexOf("月", StringComparison.Ordinal) >= 0 &&
                    value.IndexOf("日", StringComparison.Ordinal) >= 0 &&
                    value.Length <= 14;
+        }
+
+        /// <summary>原指令已经写明篇幅。超出时让同一次生成重写，不在这里截断或清空。</summary>
+        public static string ProseLengthError(MindDecisionData output)
+        {
+            if (output == null) return null;
+            string Over(string path, string value, int max)
+            {
+                var text = (value ?? string.Empty).Trim();
+                if (text.Length <= max) return null;
+                return path + " 当前" + text.Length + "字，最多" + max + "字。按原篇幅重新写下，不要截断已写的内容。";
+            }
+            return Over("$.today", output.today, 60)
+                ?? Over("$.new_fact", output.new_fact, TodayNewItemRecord.MaxContentChars)
+                ?? Over("$.inner", output.inner, 120)
+                ?? Over("$.activity", output.activity, 80)
+                ?? Over("$.activity_detail", output.activity_detail, 160);
         }
 
         private static string Limit(string value, int max)

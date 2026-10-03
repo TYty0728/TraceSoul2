@@ -1784,8 +1784,14 @@ internal static partial class Program
                 Require(store.AddTodayNewItems(conversationId, new[] { exact + "乙" },
                     "len-over", newDay, DateTimeOffset.UtcNow.ToUnixTimeMilliseconds()) == 0,
                     "超过 80 字整条丢弃");
-                Require(MindLogic.Normalize(new MindDecisionData { new_fact = exact + "乙" }).new_fact == exact,
-                    "心智 new_fact 按 80 字截断");
+                Require(MindLogic.Normalize(new MindDecisionData { new_fact = exact + "乙" }).new_fact == exact + "乙",
+                    "心智不截断超长新识");
+                Require(AgentLoopLogic.ValidationError(new AgentStepData { step = "wait", new_fact = exact + "乙" }, false, false).Contains("$.new_fact") &&
+                    AgentLoopLogic.ValidationError(new AgentStepData { step = "wait", today = new string('今', 61) }, false, false).Contains("$.today") &&
+                    AgentLoopLogic.ValidationError(new AgentStepData { step = "wait", activity = new string('做', 81) }, false, false).Contains("$.activity") &&
+                    AgentLoopLogic.ValidationError(new AgentStepData { step = "wait", activity_detail = new string('补', 161) }, false, false).Contains("$.activity_detail") &&
+                    AgentLoopLogic.ValidationError(new AgentStepData { step = "wait", inner = new string('心', 121) }, false, false).Contains("$.inner"),
+                    "超限的经历、新识、正在做和内心按原篇幅重新生成，不截断也不清空");
                 Require(store.LoadDayTrajectory(newDay) != null && store.LoadDayTrajectory(oldDay) != null,
                     "跨日读取不能在复盘成功前抢先删除旧日本日样本");
 

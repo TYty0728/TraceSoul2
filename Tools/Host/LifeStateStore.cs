@@ -73,7 +73,7 @@ namespace TraceSoul2.Host
                     state.activity = activity;
                     state.activity_detail = activity.Length == 0
                         ? string.Empty
-                        : Limit(patch.activity_detail, 160);
+                        : (patch.activity_detail ?? string.Empty).Trim();
                     state.activity_source = source;
                     state.activity_source_id = patch.source_id ?? string.Empty;
                     state.activity_updated_unix_ms = now;
@@ -163,7 +163,7 @@ namespace TraceSoul2.Host
         {
             var text = (value ?? string.Empty).Trim();
             if (text == "无" || text == "空闲" || text == "没有") return string.Empty;
-            return Limit(text, 80);
+            return text;
         }
 
         private static string NormalizeConversationId(string value)
@@ -171,10 +171,5 @@ namespace TraceSoul2.Host
             return string.IsNullOrWhiteSpace(value) ? "tracesoul2" : value.Trim();
         }
 
-        private static string Limit(string value, int max)
-        {
-            value = value ?? string.Empty;
-            return value.Length <= max ? value : value.Substring(0, max);
-        }
     }
 }

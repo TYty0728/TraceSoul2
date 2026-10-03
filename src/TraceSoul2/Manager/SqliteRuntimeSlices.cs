@@ -164,5 +164,23 @@ namespace TraceSoul2.Manager
             });
             return result;
         }
+
+        public void ReleaseRuntimeDayReviews(IEnumerable<string> reviewIds)
+        {
+            connection.RunInTransaction(() =>
+            {
+                foreach (var id in reviewIds.Distinct().Where(x => !string.IsNullOrWhiteSpace(x)))
+                {
+                    var review = connection.Find<RuntimeDayReviewRecord>(id);
+                    if (review == null) continue;
+                    foreach (var slice in connection.Table<RuntimeSliceRecord>().Where(x => x.ReviewId == id).ToList())
+                    {
+                        slice.ReviewId = null;
+                        connection.Update(slice);
+                    }
+                    connection.Delete(review);
+                }
+            });
+        }
     }
 }

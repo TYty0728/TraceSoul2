@@ -7,6 +7,7 @@ using System.Threading.Tasks;
 using TraceSoul2.Data;
 using TraceSoul2.Manager;
 using TraceSoul2.Plugins;
+using TraceSoul2.Prompts;
 
 namespace TraceSoul2.Logic
 {
@@ -122,7 +123,7 @@ namespace TraceSoul2.Logic
             else store.SavePluginDocument(StoreId, key + ":attempt:v3", marker);
             var llm = services.ReviewLlm ?? services.Llm;
             var messages = new List<DeepSeekMessageData> {
-                new("system", "按给出的时段，把今天的经历重新梳理成事件短句。同一时段里围绕同一件事的记录合成一句，重复提及的事情只留下关键变化。每句直接写谁做了什么、事情有什么变化，通常15～25字。" +
+                new("system", "按给出的时段，把今天的经历重新梳理成事件短句。同一时段里围绕同一件事的记录合成一句，重复提及的事情只留下关键变化。每句直接写谁做了什么、事情有什么变化，15～25字，不超过60字。" +
                     "例如：她醒来叫我，我应声陪她赖床。又如：原定去公园，因下雨改到周末。" +
                     "同一件事接上重要转折和结果，独立事件各留一句。叙述聚焦事情，语气、动作铺陈和抒情留在原始对话里。" +
                     "记录保留原本性质：对方说的情况、共同文字场景、聊过的建议和未来约定各自写清；讨论过的解释仍是讨论。" +
@@ -133,19 +134,42 @@ namespace TraceSoul2.Logic
             };
             return new KernelLogic.DeferredTurnWork(traceId, async token =>
             {
-                Overview result;
+                Overview result = null;
                 try
                 {
-                    var raw = await llm.CompleteJsonAsync(messages, token);
-                    var start = raw?.IndexOf('{') ?? -1;
-                    var end = raw?.LastIndexOf('}') ?? -1;
-                    if (start < 0 || end < start) throw new InvalidOperationException("概览缺少JSON");
-                    result = JsonSerializer.Deserialize<Overview>(raw.Substring(start, end - start + 1));
-                    var outputRefs = result?.events?.SelectMany(x => x?.sources ?? new()).ToList();
-                    if (result?.events?.Count is not > 0 || result.events.Any(x => string.IsNullOrWhiteSpace(x?.text) ||
-                        x.text.Length > 60 || x.sources?.Count is not > 0) ||
-                        outputRefs.Distinct(StringComparer.Ordinal).Count() != refs.Count || outputRefs.Any(x => x == null || !refs.ContainsKey(x)))
-                        throw new InvalidOperationException("概览来源或正文校验失败");
+                    var prompt = messages;
+                    for (var attempt = 0; attempt < 2 && result == null; attempt++)
+                    {
+                        var raw = await llm.CompleteJsonAsync(prompt, token);
+                        var start = raw?.IndexOf('{') ?? -1;
+                        var end = raw?.LastIndexOf('}') ?? -1;
+                        if (start < 0 || end < start) throw new InvalidOperationException("概览缺少JSON");
+                        var parsed = JsonSerializer.Deserialize<Overview>(raw.Substring(start, end - start + 1));
+                        var outputRefs = parsed?.events?.SelectMany(x => x?.sources ?? new()).ToList();
+                        var longest = 0;
+                        if (parsed?.events != null)
+                            foreach (var item in parsed.events)
+                                if ((item?.text?.Length ?? 0) > longest) longest = item.text.Length;
+                        var lengthError = longest > 60
+                            ? "有事件短句超过60字（最长" + longest + "字）。按原指令每句不超过60字，重新写下完整 JSON，不要截断。"
+                            : null;
+                        var invalid = parsed?.events?.Count is not > 0 || parsed.events.Any(x => string.IsNullOrWhiteSpace(x?.text) ||
+                            x.text.Length > 60 || x.sources?.Count is not > 0) ||
+                            outputRefs.Distinct(StringComparer.Ordinal).Count() != refs.Count || outputRefs.Any(x => x == null || !refs.ContainsKey(x));
+                        if (!invalid)
+                        {
+                            result = parsed;
+                            break;
+                        }
+                        if (attempt == 1 || lengthError == null)
+                            throw new InvalidOperationException(lengthError ?? "概览来源或正文校验失败");
+                        var prior = raw.Length <= 16000 ? raw : raw.Substring(0, 16000);
+                        prompt = new List<DeepSeekMessageData>(messages)
+                        {
+                            new("assistant", prior),
+                            new("user", "上一条不满足要求：" + lengthError + CorePrompts.Retry.JsonRepairSuffix)
+                        };
+                    }
                     result.format_version = 3;
                     foreach (var item in result.events)
                     {
