@@ -91,10 +91,7 @@ namespace TraceSoul2.Logic
                     var entries = DayTrajectoryOverviewLogic.Read(timeline, turn.ConversationId, day);
                     if (entries.Count > 0) daily.AppendLine("今日事件与新进展：");
                     foreach (var entry in entries)
-                        daily.Append('[').Append(Timestamp(entry.Start))
-                            .Append(entry.End > entry.Start ? "～" + Timestamp(entry.End) : "")
-                            .Append(entry.Legacy ? " · 旧摘要保存时间" : "")
-                            .Append("] ").AppendLine(entry.Text);
+                        daily.AppendLine(DayTrajectoryLogic.OverviewLine(entry, now));
                 }
                 else
                 {

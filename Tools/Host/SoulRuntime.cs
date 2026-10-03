@@ -455,7 +455,7 @@ namespace TraceSoul2.Host
                     x.MemoryStatus,
                     x.CreatedUnixMs
                 }).ToList();
-            var trajectory = DayTrajectoryLogic.ReadOverview(Store, ConversationId, dayKey);
+            var trajectory = DayTrajectoryLogic.ReadOverview(Store, ConversationId, dayKey, now);
             var today = Store.GetTodayNewItemsByDay(ConversationId, dayKey)
                 .Select(x => new { x.Content, x.SourceMomentId, x.CreatedUnixMs }).ToList();
             var latest = LastTurnPayload();

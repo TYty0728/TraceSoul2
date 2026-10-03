@@ -13,6 +13,7 @@ internal static partial class Program
 {
     private static async Task RunDayOverviewChecksAsync()
     {
+        await RunCompactDayOverviewChecksAsync();
         await RunDayOverviewKernelCheckAsync();
         var path = Path.Combine(Path.GetTempPath(), "tracesoul-overview-" + Guid.NewGuid().ToString("N") + ".sqlite3");
         try
@@ -80,6 +81,51 @@ internal static partial class Program
             Console.WriteLine("Day overview checks passed: grouped view, full sources, new entries, restart, time prefixes, privacy and bounded failure.");
         }
         finally { Delete(path); Delete(path + "-wal"); Delete(path + "-shm"); }
+    }
+
+    private static async Task RunCompactDayOverviewChecksAsync()
+    {
+        using var store = new SqliteMemoryManager(":memory:");
+        const string context = "compact-overview";
+        var start = MemoryDayLogic.CurrentStart(DateTimeOffset.Now);
+        var at = start.AddHours(7).AddMinutes(18);
+        var now = start.AddHours(11);
+        var day = start.ToString("yyyy-MM-dd");
+        const string original = "早上小雨买来了一本新书，笑着递给我看，我接过来翻了翻封面，想着终于又有新的故事可以一起读，约好周末慢慢看。";
+        store.SaveMoment(new MomentRecord { Id = "compact-source", ConversationId = context, Role = "user", Content = "合成记录", CreatedUnixMs = at.ToUnixTimeMilliseconds() });
+        store.AppendDayTrajectory(context, "compact-source", original);
+        var llm = new AgentSequenceLlm("{\"events\":[{\"text\":\"小雨买了新书，约好周末一起读。\",\"sources\":[\"n0\"]}]}");
+        var services = new TracePluginServices(store, new HierarchicalVectorRouterLogic(new FakeEncoder())) { Llm = llm };
+        var turn = new TraceTurnContext(context, new MomentRecord { ConversationId = context }, new(), 0, true, services,
+            environment: new EnvironmentSnapshotData { ContextConversationId = context, Visibility = "private" });
+        var work = DayTrajectoryOverviewLogic.Prepare(turn);
+        Require(work != null && work.Maintenance && llm.Requests.Count == 0, "单条长记录立即安排后台精简，不等待三条");
+        await (await work.AnalyzeAsync(default))(default);
+        var expected = "上午 · 小雨买了新书，约好周末一起读。";
+        Require(DayTrajectoryLogic.ReadOverview(store, context, day, now).Text == expected &&
+            RuntimeContextLogic.State(turn, now).Contains(expected), "页面与注入复用时段加短句，约定条件保留");
+        Require(DayTrajectoryLogic.ReadOverview(store, context, day, now.ToOffset(TimeSpan.Zero)).Text == expected &&
+            store.GetDayTrajectoryEntries(context, day).Single().Text == original && DayTrajectoryOverviewLogic.Prepare(turn) == null,
+            "阅读统一北京时间，原件完整保留，精简后不重复调用");
+        var sourceId = store.GetDayTrajectoryEntries(context, day).Single().Id;
+        store.SavePluginDocument("runtime.trajectory-overview", context + ":" + day,
+            System.Text.Json.JsonSerializer.Serialize(new DayTrajectoryOverviewLogic.Overview { events = new() {
+                new() { text = "小雨买来新书，笑着翻给我看，两个人约好周末再读。", sources = new() { sourceId } } } }));
+        // 模拟升级前的尝试记录；新样式只安排一次刷新。
+        store.SavePluginDocument("runtime.trajectory-overview", context + ":" + day + ":attempt:v2", "");
+        store.SavePluginDocument("runtime.trajectory-overview", context + ":" + day + ":attempt", "[\"" + sourceId + "\"]");
+        services.Llm = new AgentSequenceLlm("{\"events\":[{\"text\":\"小雨买了新书，约好周末一起读。\",\"sources\":[\"g0\"]}]}");
+        work = DayTrajectoryOverviewLogic.Prepare(turn);
+        Require(work != null && DayTrajectoryOverviewLogic.Prepare(turn) == null, "已有旧概览也精简一次，旧版本尝试记录不阻挡升级");
+        await (await work.AnalyzeAsync(default))(default);
+        Require(DayTrajectoryLogic.ReadOverview(store, context, day, now).Text == expected && DayTrajectoryOverviewLogic.Prepare(turn) == null,
+            "旧概览刷新后保存新样式版本并停止重复整理");
+        var item = new DayTrajectoryOverviewLogic.Item { Text = "计划有了变化。", Start = at.ToUnixTimeMilliseconds(), End = at.AddMinutes(10).ToUnixTimeMilliseconds() };
+        Require(DayTrajectoryLogic.OverviewLine(item, now) == "上午 · 计划有了变化。", "同一时段合并标签");
+        item.End = now.ToUnixTimeMilliseconds();
+        Require(DayTrajectoryLogic.OverviewLine(item, now) == "上午至下午 · 计划有了变化。", "跨时段保留范围");
+        Require(DayTrajectoryLogic.OverviewLine(item, now.AddDays(1)) == "昨天上午至昨天下午 · 计划有了变化。", "跨日沿用活跃事件的相对日期语义");
+        Console.WriteLine("Compact day overview checks passed: single long entry, shared natural time, preserved source and legacy view refresh.");
     }
 
     private static async Task RunDayOverviewKernelCheckAsync()
