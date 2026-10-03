@@ -31,7 +31,8 @@ namespace TraceSoul2.Migrate
                 throw new InvalidOperationException("需要 --day yyyy-MM-dd。");
             if (context.Migration.IsDayCompleted(dayKey))
             {
-                if (context.Store.GetRuntimeSlices(MigrationContext.ConversationId, dayKey, true).Count > 0)
+                if (context.Store.GetRuntimeSlices(MigrationContext.ConversationId, dayKey, true).Count > 0 ||
+                    context.Store.HasPendingRuntimeDaySummary(MigrationContext.ConversationId, dayKey))
                     await RuntimeSliceLogic.ReviewDayAsync(context.Store, context.RequireLlm(), MigrationContext.ConversationId, dayKey);
                 var finishedDay = DateTime.ParseExact(dayKey, "yyyy-MM-dd", CultureInfo.InvariantCulture);
                 var finishedRange = DateRange.Parse(new[] { "--from", dayKey, "--to", dayKey });
@@ -376,7 +377,7 @@ namespace TraceSoul2.Migrate
                 !string.IsNullOrEmpty(x.IdentitySlot)).Take(40).ToList();
             reviewPrompt += DayCardReviewContract.EvidenceContext(cardsNow, identityNodes);
             reviewPrompt += "\n【本日切片已形成的经历与感受拼图】\n（主观痕迹不等于外部事实；摘要仍必须引用上面的认知依据。）\n" +
-                string.Join("\n", context.Store.GetRuntimeDayReviews(MigrationContext.ConversationId, dayKey)
+                string.Join("\n", context.Store.GetRuntimeDaySummaries(MigrationContext.ConversationId, dayKey)
                     .Where(x => x.MemoryVisibility != "public" && x.ContextConversationId == MigrationContext.ConversationId)
                     .Select(x => x.Summary));
             var reviewMessages = new List<DeepSeekMessageData>

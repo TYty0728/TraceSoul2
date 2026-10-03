@@ -4,6 +4,7 @@ using System.Linq;
 using TraceSoul2.Data;
 using TraceSoul2.Logic;
 using TraceSoul2.Util;
+using SQLite;
 
 namespace TraceSoul2.Manager
 {
@@ -25,7 +26,12 @@ namespace TraceSoul2.Manager
             slice.MemoryVisibility = moment?.MemoryVisibility ??
                 PuzzleViewLogic.Read<EnvironmentSnapshotData>(operational?.EnvironmentJson)?.Visibility ?? "private";
             slice.ReviewId = null;
-            connection.Insert(slice, "OR IGNORE"); // 同轮重放保留最初切片，不覆盖已复盘依据。
+            connection.RunInTransaction(() =>
+            {
+                if (connection.Insert(slice, "OR IGNORE") > 0)
+                    connection.Execute("UPDATE runtime_day_summaries SET IsCurrent=0 WHERE RootConversationId=? AND ContextConversationId=? AND DayKey=? AND MemoryVisibility=?",
+                        slice.RootConversationId, slice.ContextConversationId, slice.DayKey, slice.MemoryVisibility);
+            }); // 同轮重放保留最初切片；新来源使旧成稿失效。
         }
 
         public List<RuntimeSliceRecord> GetRuntimeSlices(string root, string day, bool pendingOnly = false) =>
@@ -37,24 +43,103 @@ namespace TraceSoul2.Manager
             ids.Distinct().Select(x => connection.Find<RuntimeSliceRecord>("runtime:" + x)).Where(x => x != null).ToList();
 
         public List<string> GetUnreviewedRuntimeDayKeysBefore(long endMs) => connection.QueryScalars<string>(
-            "SELECT DISTINCT DayKey FROM runtime_slices WHERE CreatedUnixMs<? AND (ReviewId IS NULL OR ReviewId='') ORDER BY DayKey", endMs);
+            "SELECT DISTINCT DayKey FROM runtime_slices WHERE CreatedUnixMs<? AND (ReviewId IS NULL OR ReviewId='') " +
+            "UNION SELECT DayKey FROM runtime_day_summaries WHERE FirstUnixMs<? AND IsCurrent=0 ORDER BY DayKey", endMs, endMs);
 
         public List<RuntimeDayReviewRecord> GetRuntimeDayReviews(string root, string day) =>
             connection.Table<RuntimeDayReviewRecord>().Where(x => x.RootConversationId == root && x.DayKey == day)
                 .OrderBy(x => x.FirstUnixMs).ThenBy(x => x.Id).ToList();
 
-        public List<RuntimeDayReviewRecord> GetRuntimeReviewCandidates(string root, string publicContext = null) =>
-            publicContext == null
-                ? connection.Table<RuntimeDayReviewRecord>().Where(x => x.RootConversationId == root)
-                    .OrderByDescending(x => x.FirstUnixMs).Take(1000).ToList()
-                : connection.Table<RuntimeDayReviewRecord>().Where(x => x.RootConversationId == root &&
-                    x.ContextConversationId == publicContext && x.MemoryVisibility == "public")
-                    .OrderByDescending(x => x.FirstUnixMs).Take(1000).ToList();
+        public List<RuntimeDayReviewRecord> GetRuntimeReviewCandidates(string root, string publicContext = null)
+        {
+            var summaryQuery = connection.Table<RuntimeDaySummaryRow>().Where(x => x.RootConversationId == root);
+            var reviewQuery = connection.Table<RuntimeDayReviewRecord>().Where(x => x.RootConversationId == root);
+            if (publicContext != null)
+            {
+                summaryQuery = summaryQuery.Where(x => x.ContextConversationId == publicContext && x.MemoryVisibility == "public");
+                reviewQuery = reviewQuery.Where(x => x.ContextConversationId == publicContext && x.MemoryVisibility == "public");
+            }
+            var summaries = summaryQuery.ToList();
+            var managed = summaries.Select(x => (x.DayKey, x.ContextConversationId, x.MemoryVisibility)).ToHashSet();
+            // 旧版历史仍可查证和召回；一个环境开始成稿流程后，只提供其有效成稿。
+            var legacy = reviewQuery.OrderByDescending(x => x.FirstUnixMs).Take(1000).ToList()
+                .Where(x => !managed.Contains((x.DayKey, x.ContextConversationId, x.MemoryVisibility)));
+            return summaries.Where(x => x.IsCurrent).Select(ToReview).Concat(legacy)
+                .Where(x => publicContext == null || (x.ContextConversationId == publicContext && x.MemoryVisibility == "public"))
+                .OrderByDescending(x => x.FirstUnixMs).Take(1000).ToList();
+        }
+
+        public List<RuntimeDayReviewRecord> GetRuntimeDaySummaries(string root, string day) =>
+            connection.Table<RuntimeDaySummaryRow>().Where(x => x.RootConversationId == root && x.DayKey == day && x.IsCurrent)
+                .OrderBy(x => x.FirstUnixMs).ToList().Select(ToReview).ToList();
+
+        public bool HasPendingRuntimeDaySummary(string root, string day) =>
+            connection.Table<RuntimeDaySummaryRow>().Any(x => x.RootConversationId == root && x.DayKey == day && !x.IsCurrent);
+
+        public void BeginRuntimeDaySummary(RuntimeDayReviewRecord review)
+        {
+            if (connection.Table<RuntimeDaySummaryRow>().Any(x => x.RootConversationId == review.RootConversationId &&
+                x.ContextConversationId == review.ContextConversationId && x.DayKey == review.DayKey && x.MemoryVisibility == review.MemoryVisibility)) return;
+            connection.Insert(new RuntimeDaySummaryRow { Id = Guid.NewGuid().ToString("N"), RootConversationId = review.RootConversationId,
+                ContextConversationId = review.ContextConversationId, DayKey = review.DayKey, MemoryVisibility = review.MemoryVisibility,
+                FirstUnixMs = review.FirstUnixMs });
+        }
+
+        public void CommitRuntimeDaySummary(IEnumerable<string> reviewIds, string summary)
+        {
+            if (string.IsNullOrWhiteSpace(summary) || summary.Length > RuntimeSliceLogic.DaySummaryLimit)
+                throw new InvalidOperationException("整天回望须为1～1200字。");
+            connection.RunInTransaction(() =>
+            {
+                var ids = reviewIds.Distinct().ToList();
+                var reviews = ids.Select(id => connection.Find<RuntimeDayReviewRecord>(id)).ToList();
+                if (reviews.Count == 0 || reviews.Any(x => x == null) ||
+                    reviews.Select(x => (x.RootConversationId, x.ContextConversationId, x.DayKey, x.MemoryVisibility)).Distinct().Count() != 1)
+                    throw new InvalidOperationException("整天回望的来源须属于同一天、同一环境。");
+                var first = reviews[0];
+                var current = GetRuntimeDayReviews(first.RootConversationId, first.DayKey)
+                    .Where(x => x.ContextConversationId == first.ContextConversationId && x.MemoryVisibility == first.MemoryVisibility).ToList();
+                if (!current.Select(x => x.Id).ToHashSet().SetEquals(ids) || GetRuntimeSlices(first.RootConversationId, first.DayKey, true)
+                    .Any(x => x.ContextConversationId == first.ContextConversationId && x.MemoryVisibility == first.MemoryVisibility))
+                    throw new InvalidOperationException("整天回望期间出现新材料，保留分段整理等待再次汇总。");
+                BeginRuntimeDaySummary(first);
+                var row = connection.Table<RuntimeDaySummaryRow>().First(x => x.RootConversationId == first.RootConversationId &&
+                    x.ContextConversationId == first.ContextConversationId && x.DayKey == first.DayKey && x.MemoryVisibility == first.MemoryVisibility);
+                row.Summary = summary.Trim(); row.SourceReviewIdsJson = TraceJson.ToJson(ids);
+                row.SliceIdsJson = TraceJson.ToJson(reviews.SelectMany(x => TraceJson.FromJson<List<string>>(x.SliceIdsJson)).Distinct().ToList());
+                row.MomentIdsJson = TraceJson.ToJson(reviews.SelectMany(x => TraceJson.FromJson<List<string>>(x.MomentIdsJson)).Distinct().ToList());
+                row.FirstUnixMs = reviews.Min(x => x.FirstUnixMs); row.CreatedUnixMs = DateTimeOffset.UtcNow.ToUnixTimeMilliseconds();
+                row.IsCurrent = true; connection.Update(row);
+            });
+        }
+
+        [Table("runtime_day_summaries")]
+        private sealed class RuntimeDaySummaryRow
+        {
+            public RuntimeDaySummaryRow() { }
+            [PrimaryKey] public string Id { get; set; }
+            public string RootConversationId { get; set; }
+            public string ContextConversationId { get; set; }
+            public string DayKey { get; set; }
+            public string MemoryVisibility { get; set; }
+            public string Summary { get; set; }
+            public string SourceReviewIdsJson { get; set; }
+            public string SliceIdsJson { get; set; }
+            public string MomentIdsJson { get; set; }
+            public long FirstUnixMs { get; set; }
+            public long CreatedUnixMs { get; set; }
+            public bool IsCurrent { get; set; }
+        }
+
+        private static RuntimeDayReviewRecord ToReview(RuntimeDaySummaryRow row) => new RuntimeDayReviewRecord {
+            Id = row.Id, RootConversationId = row.RootConversationId, ContextConversationId = row.ContextConversationId,
+            DayKey = row.DayKey, MemoryVisibility = row.MemoryVisibility, Summary = row.Summary,
+            SliceIdsJson = row.SliceIdsJson, MomentIdsJson = row.MomentIdsJson, FirstUnixMs = row.FirstUnixMs, CreatedUnixMs = row.CreatedUnixMs };
 
         public RuntimeDayReviewRecord CommitRuntimeSliceReview(IEnumerable<string> sourceIds, string summary)
         {
-            if (string.IsNullOrWhiteSpace(summary) || summary.Length > 3000)
-                throw new InvalidOperationException("切片复盘须为 1～3000 字。");
+            if (string.IsNullOrWhiteSpace(summary) || summary.Length > RuntimeSliceLogic.DaySummaryLimit)
+                throw new InvalidOperationException("切片整理须为1～1200字。");
             RuntimeDayReviewRecord result = null;
             connection.RunInTransaction(() =>
             {
@@ -73,6 +158,9 @@ namespace TraceSoul2.Manager
                     FirstUnixMs = slices.Min(x => x.CreatedUnixMs), CreatedUnixMs = DateTimeOffset.UtcNow.ToUnixTimeMilliseconds() };
                 connection.Insert(result);
                 foreach (var slice in slices) { slice.ReviewId = result.Id; connection.Update(slice); }
+                BeginRuntimeDaySummary(result);
+                connection.Execute("UPDATE runtime_day_summaries SET IsCurrent=0 WHERE RootConversationId=? AND ContextConversationId=? AND DayKey=? AND MemoryVisibility=?",
+                    result.RootConversationId, result.ContextConversationId, result.DayKey, result.MemoryVisibility);
             });
             return result;
         }

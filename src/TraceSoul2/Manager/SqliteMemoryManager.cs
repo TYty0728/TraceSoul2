@@ -965,6 +965,7 @@ namespace TraceSoul2.Manager
             connection.CreateTable<DayTrajectoryEntryRecord>();
             connection.CreateTable<RuntimeSliceRecord>();
             connection.CreateTable<RuntimeDayReviewRecord>();
+            connection.CreateTable<RuntimeDaySummaryRow>();
             connection.CreateTable<TodayNewItemRecord>();
             connection.CreateTable<EventIndexRecord>();
             connection.CreateTable<EventEntryRecord>();

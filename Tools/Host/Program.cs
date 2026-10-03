@@ -366,7 +366,8 @@ app.MapGet("/runtime/slices", (HttpRequest request, SoulRuntime runtime) =>
     if (!DailyBuildPreflight.ValidDay(day)) return Results.BadRequest(new { error = "日期格式须为 yyyy-MM-dd。" });
     var slices = runtime.Store.GetRuntimeSlices(runtime.ConversationId, day);
     return Results.Json(new { day, total = slices.Count, pending = slices.Count(x => string.IsNullOrEmpty(x.ReviewId)),
-        slices = slices.TakeLast(100), reviews = runtime.Store.GetRuntimeDayReviews(runtime.ConversationId, day) });
+        slices = slices.TakeLast(100), reviews = runtime.Store.GetRuntimeDaySummaries(runtime.ConversationId, day),
+        reviewSegments = runtime.Store.GetRuntimeDayReviews(runtime.ConversationId, day) });
 });
 
 app.MapGet("/inner", (SoulRuntime runtime) =>

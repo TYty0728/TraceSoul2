@@ -1548,8 +1548,17 @@
       box.appendChild(status);
       for (const item of data.reviews || []) {
         const p = document.createElement("p");
-        p.textContent = "夜间拼图 · " + (item.memoryVisibility === "public" ? "公开环境" : "两人私密") + "：" + item.summary;
+        p.textContent = "当天回望 · " + (item.memoryVisibility === "public" ? "公开环境" : "两人私密") + "：" + item.summary;
         box.appendChild(p);
+      }
+      if ((data.reviewSegments || []).length) {
+        const detail = document.createElement("details"), title = document.createElement("summary"), body = document.createElement("pre");
+        title.textContent = "查看分段整理材料";
+        body.textContent = data.reviewSegments.map(x => x.summary).join("\n\n");
+        detail.append(title, body); box.appendChild(detail);
+        if (!(data.reviews || []).length) {
+          const pending = document.createElement("p"); pending.textContent = "分段材料已保存，当天回望尚未完成。"; box.appendChild(pending);
+        }
       }
       for (const item of data.slices || []) {
         const detail = document.createElement("details"), title = document.createElement("summary"), body = document.createElement("pre");
