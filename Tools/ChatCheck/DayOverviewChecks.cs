@@ -304,7 +304,8 @@ internal static partial class Program
             Require(work != null, "超过一千字安排一次筛选");
             await (await work.AnalyzeAsync(default))(default);
             Require(llm.Requests.Count == 2 && llm.Requests[0].Contains("筛掉不重要的") && llm.Requests[0].Contains("最多1000字") &&
-                llm.Requests[1].Contains("重新写下") && llm.Requests[1].Contains("不要截断") &&
+                llm.Requests[1].Contains("重新写成") && llm.Requests[1].Contains("不要交回上一份") &&
+                !llm.Requests[1].Contains(new string('长', 1001)) &&
                 LifeReadingBudgetLogic.TrajectoryReading(store, context, day) == kept &&
                 store.GetDayTrajectoryEntries(context, day).Select(x => x.Text).SequenceEqual(originals),
                 "超长阅读筛掉不重要的并精简留下的，原件不截断不删除");

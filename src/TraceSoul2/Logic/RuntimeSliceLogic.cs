@@ -157,7 +157,7 @@ namespace TraceSoul2.Logic
                 {
                     var text = (x?.summary ?? string.Empty).Trim();
                     if (text.Length <= limit) return null;
-                    return "summary 当前" + text.Length + "字，这一段最多" + limit + "字。按原篇幅重新写下完整 JSON，不要截断已写正文。";
+                    return "summary 当前" + text.Length + "字，这一段最多" + limit + "字。按原篇幅重新写下。上一份太长，删掉次要变化，不要交回上一份。";
                 });
             store.CommitRuntimeSliceReview(batch.Select(x => x.Id), output.summary);
             return batch.Count;

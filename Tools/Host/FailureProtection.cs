@@ -160,6 +160,9 @@ namespace TraceSoul2.Host
                 return "请求超时或任务被中断";
             if (error is System.Net.Http.HttpRequestException) return "模型服务网络连接失败";
             if (message.Contains("API Key", StringComparison.OrdinalIgnoreCase)) return "模型 API Key 未配置或不可用";
+            if (message.Contains("字") &&
+                ((message.Contains("当前") && message.Contains("最多")) || message.Contains("超过")))
+                return "模型输出超出已写明的篇幅";
             if (message.Contains("JSON", StringComparison.OrdinalIgnoreCase) || message.Contains("结构化输出", StringComparison.Ordinal) || message.Contains("缺少", StringComparison.Ordinal))
                 return "模型输出格式或必填字段校验失败";
             // 不把上游正文、Key、URL、提示词或私聊内容转发给 QQ。

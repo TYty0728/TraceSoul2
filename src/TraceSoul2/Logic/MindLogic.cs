@@ -305,7 +305,7 @@ namespace TraceSoul2.Logic
             {
                 var text = (value ?? string.Empty).Trim();
                 if (text.Length <= max) return null;
-                return path + " 当前" + text.Length + "字，最多" + max + "字。按原篇幅重新写下，不要截断已写的内容。";
+                return path + " 当前" + text.Length + "字，最多" + max + "字。按原篇幅重新写下。上一份太长，不要交回上一份。";
             }
             return Over("$.today", output.today, 60)
                 ?? Over("$.new_fact", output.new_fact, TodayNewItemRecord.MaxContentChars)

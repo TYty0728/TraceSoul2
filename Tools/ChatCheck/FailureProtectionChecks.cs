@@ -28,6 +28,11 @@ internal static partial class Program
             Require(diagnostic.Contains(nameof(ThrowDiagnosticProbe)) && diagnostic.Contains("InvalidOperationException") &&
                 diagnostic.Contains("IOException") && !diagnostic.Contains("secret-key") && !diagnostic.Contains("private-chat") &&
                 !diagnostic.Contains("https://"), "持久诊断保留异常类型及调用位置，排除原始异常正文");
+            Require(FailureProtection.SafeReason(new InvalidOperationException(
+                "语言模型连续两次返回不可用的结构化输出。首次错误：summary 当前453字，这一段最多332字。"))
+                == "模型输出超出已写明的篇幅", "篇幅失败不能被说成格式错误");
+            Require(FailureProtection.SafeReason(new InvalidOperationException("语言模型连续两次返回不可用的结构化输出。首次错误：JSON 语法或字段类型错误"))
+                == "模型输出格式或必填字段校验失败", "JSON 语法失败仍报告格式问题");
             guard.Resume("diagnostic-check");
             await RunStickerFailureProtectionCheckAsync(guard, directory);
             var inner = new FailureTestClient();

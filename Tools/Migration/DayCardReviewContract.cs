@@ -63,7 +63,7 @@ namespace TraceSoul2.Migrate
                     return path + ".slot 是本人固定的卡，请移除此更新；其他可更新卡仍按依据处理。";
                 if (string.IsNullOrWhiteSpace(card.body)) return path + ".body 不能为空。";
                 if (checkLength && card.body.Length > IdentityCardSlotValues.BodyLimit(card.slot))
-                    return path + ".body 超过" + IdentityCardSlotValues.BodyLimit(card.slot) + "字（当前" + card.body.Length + "字）。按原篇幅重新写下这一份摘要，不要截断。";
+                    return path + ".body 超过" + IdentityCardSlotValues.BodyLimit(card.slot) + "字（当前" + card.body.Length + "字）。按原篇幅重新写下这一份摘要。上一份太长，不要交回上一份。";
                 if (card.cognition_ids == null || card.cognition_ids.Count == 0 || card.cognition_ids.Count > 12)
                     return path + ".cognition_ids 必须引用本次提供的1～12条同 slot 有效认知。";
                 for (var j = 0; j < card.cognition_ids.Count; j++)
@@ -72,7 +72,7 @@ namespace TraceSoul2.Migrate
             }
             var narrative = (output.inner_narrative ?? string.Empty).Trim();
             if (checkLength && narrative.Length > 120)
-                return "$.inner_narrative 当前" + narrative.Length + "字，最多120字。按原篇幅重新写下，不要截断。";
+                return "$.inner_narrative 当前" + narrative.Length + "字，最多120字。按原篇幅重新写下。上一份太长，不要交回上一份。";
             return null;
         }
 
