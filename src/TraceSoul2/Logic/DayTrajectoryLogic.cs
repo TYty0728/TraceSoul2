@@ -3,6 +3,7 @@ using System.Linq;
 using System.Text.RegularExpressions;
 using TraceSoul2.Data;
 using TraceSoul2.Manager;
+using TraceSoul2.Util;
 
 namespace TraceSoul2.Logic
 {
@@ -13,13 +14,22 @@ namespace TraceSoul2.Logic
         public static string EntryText(DayTrajectoryEntryRecord entry)
             => entry.SourceMomentId?.StartsWith("legacy:", StringComparison.Ordinal) == true ? entry.Text : CleanLeadingTime(entry.Text);
 
-        public static DayTrajectoryRecord ReadOverview(IMemoryStore store, string context, string day)
+        public static string OverviewLine(DayTrajectoryOverviewLogic.Item item, DateTimeOffset now)
+        {
+            now = now.ToOffset(MemoryDayLogic.ChinaOffset);
+            var start = TimeLanguageUtil.RelativeWhen(item.Start, now);
+            var end = TimeLanguageUtil.RelativeWhen(item.End, now);
+            string Label(string value) => value.StartsWith("今天", StringComparison.Ordinal) ? value.Substring(2) : value;
+            var when = Label(start) + (end != start ? "至" + Label(end) : "");
+            return when + (item.Legacy ? "（旧摘要保存时段）" : "") + " · " + item.Text;
+        }
+
+        public static DayTrajectoryRecord ReadOverview(IMemoryStore store, string context, string day, DateTimeOffset? now = null)
         {
             if (store is not SqliteMemoryManager sqlite) return Read(store, context, day);
             var items = DayTrajectoryOverviewLogic.Read(sqlite, context, day);
-            string Time(long value) => DateTimeOffset.FromUnixTimeMilliseconds(value).ToOffset(MemoryDayLogic.ChinaOffset).ToString("MM-dd HH:mm");
             return items.Count == 0 ? null : new DayTrajectoryRecord { DayKey = day, UpdatedUnixMs = items.Max(x => x.End),
-                Text = string.Join("\n", items.Select(x => "[" + Time(x.Start) + (x.End > x.Start ? "～" + Time(x.End) : "") + "] " + x.Text)) };
+                Text = string.Join("\n", items.Select(x => OverviewLine(x, now ?? DateTimeOffset.Now))) };
         }
         public static DayTrajectoryRecord Read(IMemoryStore store, string context, string day)
         {

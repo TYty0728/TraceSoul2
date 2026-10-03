@@ -19,7 +19,7 @@ const state = {
   runtime: { narrative: '准备休息', mood: '好奇', attention: [{ content: '青苔' }] },
   decision: { step: 'finish', updatedFields: ['today', 'mood'], moodChanged: true, mood: '好奇',
     today: '晚上回家', newFact: '青苔喜欢潮湿', goalUpdates: [{ operation: 'create', content: '学习青苔' }] },
-  context: { trajectory: '[12:00] 看青苔\n[22:00] 回家', todayNewItems: [{ content: '青苔喜欢潮湿' }] },
+  context: { trajectory: '中午 · 看青苔\n晚上 · 回家', todayNewItems: [{ content: '青苔喜欢潮湿' }] },
   latestTurn: { results: [{ capabilityId: 'memory.recall', status: 'success', summary: '找到了资料' }] }
 };
 sandbox.renderLive(state);
@@ -27,7 +27,7 @@ assert.match(nodes.liveDecision.innerHTML, /finish.*经历、情绪/s);
 assert.match(nodes.liveDecision.innerHTML, /好奇.*青苔喜欢潮湿.*学习青苔.*找到了资料/s);
 assert.doesNotMatch(nodes.liveDecision.innerHTML, /心智说明|查询 \/ 认知/);
 assert.match(nodes.liveRuntime.innerHTML, /青苔/);
-assert.match(nodes.liveContext.innerHTML, /12:00.*22:00.*青苔喜欢潮湿/s);
+assert.match(nodes.liveContext.innerHTML, /中午 · 看青苔.*晚上 · 回家.*青苔喜欢潮湿/s);
 // Restart uses the persisted latestTurn decision; older snapshots remain renderable.
 state.latestTurn.mindDecision = state.decision;
 delete state.decision;
