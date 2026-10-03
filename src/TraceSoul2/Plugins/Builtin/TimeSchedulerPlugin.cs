@@ -21,7 +21,7 @@ namespace TraceSoul2.Plugins.Builtin
         {
             Id = PluginId,
             DisplayName = "时间与调度",
-            Version = "1.2.3",
+            Version = "1.2.4",
             Author = "TraceSoul2",
             Role = PluginRoleValues.Kernel,
             Description = "提供当前时间、今天两人的轨迹、未来计划；到期只叫醒中枢该跑的那一套循环，不直接改短卡或开口。"

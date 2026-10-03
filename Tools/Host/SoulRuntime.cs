@@ -530,6 +530,8 @@ namespace TraceSoul2.Host
                 {
                     day = dayKey,
                     trajectory = trajectory == null ? string.Empty : trajectory.Text ?? string.Empty,
+                    trajectoryGroups = DayTrajectoryLogic.OverviewGroups(DayTrajectoryOverviewLogic.Read(Store, ConversationId, dayKey), now)
+                        .Select(x => new { time = x.Time, events = x.Events }).ToList(),
                     todayNewItems = today,
                     activeEvents,
                     recentMoments = lastMoments

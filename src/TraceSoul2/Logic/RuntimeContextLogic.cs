@@ -90,8 +90,7 @@ namespace TraceSoul2.Logic
                 {
                     var entries = DayTrajectoryOverviewLogic.Read(timeline, turn.ConversationId, day);
                     if (entries.Count > 0) daily.AppendLine("今日事件与新进展：");
-                    foreach (var entry in entries)
-                        daily.AppendLine(DayTrajectoryLogic.OverviewLine(entry, now));
+                    if (entries.Count > 0) daily.AppendLine(DayTrajectoryLogic.FormatGroups(DayTrajectoryLogic.OverviewGroups(entries, now)));
                 }
                 else
                 {

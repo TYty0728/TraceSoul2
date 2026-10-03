@@ -273,6 +273,10 @@
     .live-field .key { color: var(--muted); font-size: 12px; padding-top: 2px; }
     .live-field .value { line-height: 1.55; word-break: break-word; white-space: pre-wrap; }
     .live-field .value.empty { color: #b4bac8; }
+    .live-period-group + .live-period-group { margin-top: 10px; }
+    .live-period-title { color: var(--muted); font-size: 12px; font-weight: 600; }
+    .live-period-group ul { margin: 3px 0 0; padding-left: 18px; }
+    .live-period-group li + li { margin-top: 3px; }
     .live-tags { display: flex; flex-wrap: wrap; gap: 6px; }
     .live-tag { display: inline-flex; align-items: center; border-radius: 999px; padding: 3px 9px;
       background: var(--accent-soft); color: #4454c7; font-size: 11px; }
@@ -1988,6 +1992,17 @@
   function liveFieldHtml(key, html, isEmpty) {
     return `<div class="live-field"><div class="key">${esc(key)}</div><div class="value${isEmpty ? " empty" : ""}">${html}</div></div>`;
   }
+  function liveEventGroups(key, groups) {
+    const byTime = new Map();
+    for (const group of groups || []) {
+      const time = group.time || "时间未记录";
+      if (!byTime.has(time)) byTime.set(time, new Set());
+      for (const event of group.events || []) if (event) byTime.get(time).add(event);
+    }
+    const html = [...byTime].filter(([, events]) => events.size).map(([time, events]) =>
+      `<div class="live-period-group"><div class="live-period-title">${esc(time)}</div><ul>${[...events].map(event => `<li>${esc(event)}</li>`).join("")}</ul></div>`).join("");
+    return liveFieldHtml(key, html || "—", !html);
+  }
   function liveTags(values, cls) {
     const list = (values || []).filter(x => x !== null && x !== undefined && String(x).trim());
     return list.length
@@ -2064,9 +2079,9 @@
     $("liveContext").innerHTML =
       liveField("记忆日", c.day) +
       liveField("正在做", doingText || "空闲") +
-      liveField("今日轨迹", c.trajectory) +
+      (c.trajectoryGroups ? liveEventGroups("今日轨迹", c.trajectoryGroups) : liveField("今日轨迹", c.trajectory)) +
       `<div class="live-field"><div class="key">今日新识</div><div class="value">${c.todayNewItems && c.todayNewItems.length ? c.todayNewItems.map(x => esc(x.content)).join("；") : "—"}</div></div>` +
-      `<div class="live-field"><div class="key">活跃事件</div><div class="value">${c.activeEvents && c.activeEvents.length ? c.activeEvents.map(x => esc((x.time ? x.time + " · " : "") + (x.eventSummary || x.id))).join("；") : "—"}</div></div>`;
+      liveEventGroups("活跃事件", (c.activeEvents || []).map(x => ({ time: x.time, events: [x.eventSummary || x.id] })));
     $("liveHeartbeatBox").innerHTML =
       liveField("当前状态", asleep ? "睡着后停止自醒" : (idle ? (h.enabled ? "空闲生活中，保留下一次醒来" : "空闲，当前没有心跳任务") : (h.enabled ? "等待下一次醒来" : "当前没有心跳任务"))) +
       liveField("时间范围", (h.minMinutes || 0) + "–" + (h.maxMinutes || 0) + " 分钟") +
