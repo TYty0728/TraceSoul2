@@ -80,6 +80,23 @@ internal static partial class Program
                 llm.Requests.Count == 2 && llm.Messages[1].Last().content.Contains("$.cards[1].slot") &&
                 llm.Messages[1].Last().content.Contains("合并所用 cognition_ids"),
                 "真实日复盘入口按具体错误纠正一次，两张同名卡综合后正常完成");
+            var outside = new AgentSequenceLlm(Output(Card("self", "范围外的自我改写", "r1"),
+                Card("other", "范围外的他者改写", "r2"), Card("personality", "范围外的种子改写", "p1"),
+                Card("relation", "有依据的关系变化", "r1"), Card("expression_habit", "有依据的表达变化", "h1")));
+            args[2] = outside;
+            var restrictedTask = (Task)run.Invoke(null, args);
+            restrictedTask.GetAwaiter().GetResult();
+            var restricted = restrictedTask.GetType().GetProperty("Result").GetValue(restrictedTask);
+            using (var resultJson = JsonDocument.Parse(JsonSerializer.Serialize(restricted, outputType, json)))
+                Require(resultJson.RootElement.GetProperty("cards").GetArrayLength() == 2 && outside.Requests.Count == 1 &&
+                    resultJson.RootElement.GetProperty("cards")[0].GetProperty("slot").GetString() == "relation" &&
+                    resultJson.RootElement.GetProperty("cards")[0].GetProperty("cognition_ids")[0].GetString() == "r1",
+                    "实际入口由程序保留范围外与固定卡，仅校验可写目标；有效正文及依据不变且不额外纠正");
+            var wrongGroup = new AgentSequenceLlm(Output(Card("relation", "错误跨组引用", "h1")), merged);
+            args[2] = wrongGroup;
+            ((Task)run.Invoke(null, args)).GetAwaiter().GetResult();
+            Require(wrongGroup.Requests.Count == 2 && wrongGroup.Messages[1].Last().content.Contains("cognition_ids[0]"),
+                "可写卡跨组引用仍进入精确纠正，程序不改写引用或强行通过");
             var failing = new AgentSequenceLlm(duplicate, duplicate);
             args[2] = failing;
             var rejected = false;
@@ -147,6 +164,57 @@ internal static partial class Program
         }
         finally { context?.Dispose(); Directory.Delete(dir, true); }
         Console.WriteLine("Day card review checks passed: slot grouping, precise repair, multiple evidence, explicit empty, pinned/length/source guards and actual Migration entry.");
+    }
+
+    private static void RunDayCardScopeDumpCheck(string assemblyPath, string directory)
+    {
+        var assembly = Assembly.LoadFrom(Path.GetFullPath(assemblyPath));
+        var contract = assembly.GetType("TraceSoul2.Migrate.DayCardReviewContract", true);
+        var outputType = assembly.GetType("TraceSoul2.Migrate.ReplayPrompts+DayCardReviewOutputData", true);
+        var options = new JsonSerializerOptions { IncludeFields = true, PropertyNameCaseInsensitive = true };
+        var count = 0;
+        foreach (var file in Directory.GetFiles(directory, "20261003-04*-response.txt").OrderBy(x => x))
+        {
+            var raw = File.ReadAllText(file);
+            raw = raw.Substring(raw.IndexOf('{'), raw.LastIndexOf('}') - raw.IndexOf('{') + 1);
+            using var original = JsonDocument.Parse(raw);
+            if (!original.RootElement.TryGetProperty("cards", out var originalCards)) continue;
+            using var request = JsonDocument.Parse(File.ReadAllText(file.Replace("-response.txt", "-request.json")));
+            var prompt = request.RootElement.GetProperty("messages")[0].GetProperty("content").GetString();
+            const string marker = "【成长摘要与可参考的认识，按 slot 分组】";
+            var start = prompt.IndexOf(marker, StringComparison.Ordinal);
+            if (start < 0) continue;
+            start = prompt.IndexOf("\n[", start, StringComparison.Ordinal);
+            const string endMarker = "【保留原文的本人设定】";
+            var end = prompt.IndexOf(endMarker, start, StringComparison.Ordinal);
+            using var groups = JsonDocument.Parse(prompt.Substring(start, end - start).Trim());
+            var evidence = groups.RootElement.EnumerateArray().SelectMany(g =>
+                JsonSerializer.Deserialize<List<CognitionSliceRecord>>(g.GetProperty("cognitions").GetRawText(), options)).ToList();
+            var pinned = prompt.Substring(end + endMarker.Length).TrimStart().Split('\n')[0].Split(',')
+                .Select(x => new IdentityCardRecord { Slot = x.Trim(), Pinned = true }).ToList();
+            var output = JsonSerializer.Deserialize(raw, outputType, options);
+            var error = (string)contract.GetMethod("ValidationError").Invoke(null, new object[] { output, pinned, evidence });
+            Require(error?.Contains("cards[0].cognition_ids[0]") == true, "真实响应复现范围外卡使用关系依据的原始错误");
+            using var beforeProjection = JsonDocument.Parse(JsonSerializer.Serialize(output, outputType, options));
+            var preserved = (List<string>)contract.GetMethod("PreserveUnavailableCards").Invoke(null, new object[] { output, pinned, evidence });
+            Require(preserved.OrderBy(x => x).SequenceEqual(new[] { "other", "self" }) &&
+                contract.GetMethod("ValidationError").Invoke(null, new object[] { output, pinned, evidence }) == null,
+                "程序保留self/other后，真实relation和expression_habit通过原引用及长度校验");
+            using var projected = JsonDocument.Parse(JsonSerializer.Serialize(output, outputType, options));
+            foreach (var card in projected.RootElement.GetProperty("cards").EnumerateArray())
+            {
+                var source = originalCards.EnumerateArray().Single(x => x.GetProperty("slot").GetString() == card.GetProperty("slot").GetString());
+                Require(source.GetProperty("body").GetString() == card.GetProperty("body").GetString() &&
+                    source.GetProperty("cognition_ids").EnumerateArray().Select(x => x.GetString()).SequenceEqual(
+                        card.GetProperty("cognition_ids").EnumerateArray().Select(x => x.GetString())), "有效摘要正文与引用完整不变");
+            }
+            foreach (var field in original.RootElement.EnumerateObject().Where(x => x.Name.StartsWith("inner_")))
+                Require(JsonSerializer.Serialize(beforeProjection.RootElement.GetProperty(field.Name)) == JsonSerializer.Serialize(projected.RootElement.GetProperty(field.Name)),
+                    "本次真实内心输出保持不变");
+            count++;
+        }
+        Require(count == 2, "读取两份最新真实失败日终响应");
+        Console.WriteLine("Day card scope dump checks passed: both real failures reproduced; only eligible targets retained with intact bodies/references/inner state, no model calls or production writes.");
     }
 
     private static void RunDayCardLengthDumpCheck(string assemblyPath, string directory)

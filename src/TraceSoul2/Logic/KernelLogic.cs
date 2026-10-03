@@ -30,13 +30,15 @@ namespace TraceSoul2.Logic
             private readonly Func<CancellationToken, Task<Func<CancellationToken, Task>>> analyze;
 
             public string TraceId { get; private set; }
+            public bool Maintenance { get; }
 
             internal DeferredTurnWork(
                 string traceId,
-                Func<CancellationToken, Task<Func<CancellationToken, Task>>> analyze)
+                Func<CancellationToken, Task<Func<CancellationToken, Task>>> analyze, bool maintenance = false)
             {
                 TraceId = traceId ?? string.Empty;
                 this.analyze = analyze ?? throw new ArgumentNullException("analyze");
+                Maintenance = maintenance;
             }
 
             public Task<Func<CancellationToken, Task>> AnalyzeAsync(CancellationToken cancellationToken)
@@ -315,6 +317,12 @@ namespace TraceSoul2.Logic
                 CreatedUnixMs = DateTimeOffset.UtcNow.ToUnixTimeMilliseconds()
             });
             plugins.Services.LogTiming(turn.TraceId, "轮次审查落库完成", reviewTimer.ElapsedMilliseconds);
+            // 图片优先；整理概览留给没有其他轮后工作的轮次，避免拖延已准备的图片发送。
+            if (deferredWork == null)
+            {
+                try { EnqueueDeferred(DayTrajectoryOverviewLogic.Prepare(turn)); }
+                catch (Exception error) { plugins.Services.LogTiming(turn.TraceId, "今日概览未安排", detail: error.GetType().Name); }
+            }
             plugins.Services.LogTiming(turn.TraceId, "Brain 整轮完成", totalTimer.ElapsedMilliseconds,
                 "mode=" + final.mode + "｜results=" + turn.Workspace.Results.Count);
 
