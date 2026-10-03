@@ -221,7 +221,7 @@ namespace TraceSoul2.Logic
             }
             if (!string.IsNullOrWhiteSpace(value.tool_call) || value.WantsLeave() || value.WantsMemory())
                 return "旧心智工具字段不能驱动 Agent；请仅通过 actions 请求能力。";
-            return null;
+            return MindLogic.ProseLengthError(value);
         }
 
         internal static string BuildStable(TraceTurnContext turn)

@@ -57,6 +57,7 @@ internal static partial class Program
         await RunStartupDayOverviewChecksAsync();
         await RunCompactDayOverviewChecksAsync();
         await RunDayOverviewKernelCheckAsync();
+        await RunLifeReadingBudgetChecksAsync();
         var path = Path.Combine(Path.GetTempPath(), "tracesoul-overview-" + Guid.NewGuid().ToString("N") + ".sqlite3");
         try
         {
@@ -269,5 +270,57 @@ internal static partial class Program
         await commit(default);
         Require(review.Requests.Count == 1 && DayTrajectoryLogic.ReadOverview(store, "kernel-overview", MemoryDayLogic.CurrentDayKey(DateTimeOffset.Now))
             .Text.Contains("读完第一章，写下阅读感受"), "真实内核到复盘模型再到阅读视图的完整链路");
+    }
+
+    private static async Task RunLifeReadingBudgetChecksAsync()
+    {
+        var path = Path.Combine(Path.GetTempPath(), "tracesoul-reading-" + Guid.NewGuid().ToString("N") + ".sqlite3");
+        try
+        {
+            using var store = new SqliteMemoryManager(path);
+            const string context = "reading-budget";
+            var now = MemoryDayLogic.CurrentStart(DateTimeOffset.Now).AddHours(8);
+            var day = MemoryDayLogic.CurrentDayKey(now);
+            var services = new TracePluginServices(store, new HierarchicalVectorRouterLogic(new FakeEncoder()));
+            var turn = new TraceTurnContext(context, new MomentRecord { Id = "reading-trigger", ConversationId = context }, new(), 0, true, services,
+                environment: new EnvironmentSnapshotData { ContextConversationId = context, RootConversationId = context, Visibility = "private" });
+            void AddTrajectory(int from, int count)
+            {
+                for (var i = from; i < from + count; i++)
+                {
+                    var id = "reading-" + i;
+                    store.SaveMoment(new MomentRecord { Id = id, ConversationId = context, Role = "user", Content = "原件", CreatedUnixMs = now.AddMinutes(i).ToUnixTimeMilliseconds() });
+                    store.AppendDayTrajectory(context, id, "第" + i + "件仍在发生的事。" + new string('记', 70));
+                }
+            }
+            AddTrajectory(0, 3);
+            Require(LifeReadingBudgetLogic.Prepare(turn) == null, "不到一千字不筛选");
+            AddTrajectory(3, 17);
+            var originals = store.GetDayTrajectoryEntries(context, day).Select(x => x.Text).ToList();
+            var kept = "留下远足改期和书店这两件。";
+            var llm = new AgentSequenceLlm("{\"text\":\"" + new string('长', 1001) + "\"}", "{\"text\":\"" + kept + "\"}");
+            services.Llm = llm;
+            var work = LifeReadingBudgetLogic.Prepare(turn);
+            Require(work != null, "超过一千字安排一次筛选");
+            await (await work.AnalyzeAsync(default))(default);
+            Require(llm.Requests.Count == 2 && llm.Requests[0].Contains("筛掉不重要的") && llm.Requests[0].Contains("最多1000字") &&
+                llm.Requests[1].Contains("重新写下") && llm.Requests[1].Contains("不要截断") &&
+                LifeReadingBudgetLogic.TrajectoryReading(store, context, day) == kept &&
+                store.GetDayTrajectoryEntries(context, day).Select(x => x.Text).SequenceEqual(originals),
+                "超长阅读筛掉不重要的并精简留下的，原件不截断不删除");
+            Require(LifeReadingBudgetLogic.Prepare(turn) == null, "同一批内容只筛选一次");
+            for (var i = 0; i < 16; i++)
+                store.AddTodayNewItems(context, new[] { "新识" + i + new string('知', 70) }, "reading-" + i, day, now.AddMinutes(i).ToUnixTimeMilliseconds());
+            var facts = store.GetTodayNewItemsByDay(context, day).Select(x => x.Content).ToList();
+            services.Llm = new AgentSequenceLlm("{\"text\":\"" + new string('超', 1200) + "\"}", "{\"text\":\"" + new string('超', 1200) + "\"}");
+            work = LifeReadingBudgetLogic.Prepare(turn);
+            await (await work.AnalyzeAsync(default))(default);
+            Require(LifeReadingBudgetLogic.TodayNewReading(store, context, day) == null &&
+                store.GetTodayNewItemsByDay(context, day).Select(x => x.Content).SequenceEqual(facts) &&
+                LifeReadingBudgetLogic.Prepare(turn) == null,
+                "筛选两次仍超限就不保存精简文，原件还在，也不反复调用");
+        }
+        finally { foreach (var suffix in new[] { "", "-wal", "-shm" }) if (File.Exists(path + suffix)) File.Delete(path + suffix); }
+        Console.WriteLine("Life reading budget checks passed: one selection under 1000, originals kept, no repeat.");
     }
 }

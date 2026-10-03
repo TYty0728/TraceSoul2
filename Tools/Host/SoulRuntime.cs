@@ -118,6 +118,7 @@ namespace TraceSoul2.Host
             TryWireMemoryEngine(services);
             RebuildOntology();
             QueueStartupOverview();
+            QueueStartupReading();
             deferredWorker = Task.Run(() => RunDeferredTurnLoopAsync(deferredTurns.Reader, deferredCts.Token));
             maintenanceWorker = Task.Run(() => RunDeferredTurnLoopAsync(maintenanceTurns.Reader, deferredCts.Token));
             Emit("host 已启动");
@@ -533,8 +534,11 @@ namespace TraceSoul2.Host
                     trajectory = trajectory == null ? string.Empty : trajectory.Text ?? string.Empty,
                     trajectoryGroups = DayTrajectoryLogic.OverviewGroups(DayTrajectoryOverviewLogic.Read(Store, ConversationId, dayKey), now)
                         .Select(x => new { time = x.Time, events = x.Events }).ToList(),
+                    trajectoryReading = LifeReadingBudgetLogic.TrajectoryReading(Store, ConversationId, dayKey),
                     todayNewItems = today,
+                    todayNewReading = LifeReadingBudgetLogic.TodayNewReading(Store, ConversationId, dayKey),
                     activeEvents,
+                    activeEventsReading = LifeReadingBudgetLogic.EventsReading(Store, ConversationId),
                     recentMoments = lastMoments
                 }
             };
@@ -755,6 +759,17 @@ namespace TraceSoul2.Host
                 }, maintenance: true));
             }
             catch (Exception error) { EmitTiming("startup-overview", "启动时概览整理未安排", 0, error.GetType().Name); }
+        }
+
+        private void QueueStartupReading()
+        {
+            try
+            {
+                var work = LifeReadingBudgetLogic.PrepareStartup(liveServices, ConversationId);
+                if (work == null) return;
+                QueueDeferredTurn(work);
+            }
+            catch (Exception error) { EmitTiming("startup-reading", "启动时阅读篇幅未安排", 0, error.GetType().Name); }
         }
 
         private void QueueDeferredTurn(KernelLogic.DeferredTurnWork work)

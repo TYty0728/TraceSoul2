@@ -2088,9 +2088,9 @@
     $("liveContext").innerHTML =
       liveField("记忆日", c.day) +
       liveField("正在做", doingText || "空闲") +
-      (c.trajectoryGroups ? liveEventGroups("今日轨迹", c.trajectoryGroups) : liveField("今日轨迹", c.trajectory)) +
-      `<div class="live-field"><div class="key">今日新识</div><div class="value">${c.todayNewItems && c.todayNewItems.length ? c.todayNewItems.map(x => esc(x.content)).join("；") : "—"}</div></div>` +
-      liveEventGroups("活跃事件", (c.activeEvents || []).map(x => ({ time: x.time, events: [x.eventSummary || x.id] })));
+      (c.trajectoryReading ? liveField("今日轨迹", c.trajectoryReading) : (c.trajectoryGroups ? liveEventGroups("今日轨迹", c.trajectoryGroups) : liveField("今日轨迹", c.trajectory))) +
+      (c.todayNewReading ? liveField("今日新识", c.todayNewReading) : `<div class="live-field"><div class="key">今日新识</div><div class="value">${c.todayNewItems && c.todayNewItems.length ? c.todayNewItems.map(x => esc(x.content)).join("；") : "—"}</div></div>`) +
+      (c.activeEventsReading ? liveField("活跃事件", c.activeEventsReading) : liveEventGroups("活跃事件", (c.activeEvents || []).map(x => ({ time: x.time, events: [x.eventSummary || x.id] }))));
     $("liveHeartbeatBox").innerHTML =
       liveField("当前状态", asleep ? "睡着后停止自醒" : (idle ? (h.enabled ? "空闲生活中，保留下一次醒来" : "空闲，当前没有心跳任务") : (h.enabled ? "等待下一次醒来" : "当前没有心跳任务"))) +
       liveField("时间范围", (h.minMinutes || 0) + "–" + (h.maxMinutes || 0) + " 分钟") +

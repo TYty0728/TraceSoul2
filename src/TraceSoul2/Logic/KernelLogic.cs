@@ -322,6 +322,8 @@ namespace TraceSoul2.Logic
             {
                 try { EnqueueDeferred(DayTrajectoryOverviewLogic.Prepare(turn)); }
                 catch (Exception error) { plugins.Services.LogTiming(turn.TraceId, "今日概览未安排", detail: error.GetType().Name); }
+                try { EnqueueDeferred(LifeReadingBudgetLogic.Prepare(turn)); }
+                catch (Exception error) { plugins.Services.LogTiming(turn.TraceId, "阅读篇幅未安排", detail: error.GetType().Name); }
             }
             plugins.Services.LogTiming(turn.TraceId, "Brain 整轮完成", totalTimer.ElapsedMilliseconds,
                 "mode=" + final.mode + "｜results=" + turn.Workspace.Results.Count);
@@ -1031,8 +1033,7 @@ namespace TraceSoul2.Logic
                 .FirstOrDefault(x => x.Length > 0) ?? string.Empty;
             var text = ("空闲时" + note +
                         (firstLine.Length == 0 ? string.Empty : "：" + firstLine)).Trim();
-            if (text.Length > TodayNewItemRecord.MaxContentChars)
-                text = text.Substring(0, TodayNewItemRecord.MaxContentChars).TrimEnd();
+            if (text.Length > TodayNewItemRecord.MaxContentChars) return;
 
             var now = DateTimeOffset.Now;
             var added = turn.Services.Storage.AddTodayNewItems(

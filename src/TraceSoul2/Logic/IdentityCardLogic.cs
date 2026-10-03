@@ -192,7 +192,7 @@ namespace TraceSoul2.Logic
             var limit = IdentityCardSlotValues.BodyLimit(slot);
             if (!IdentityCardSlotValues.IsGrowth(slot)) return Limit(body, limit);
             if (body.Length > limit)
-                throw new InvalidOperationException("成长摘要超过" + limit + "字的异常长度边界，需先精炼；原文未截断。");
+                throw new InvalidOperationException("成长摘要超过" + limit + "字，本次不写入；原文未截断。");
             return body;
         }
 

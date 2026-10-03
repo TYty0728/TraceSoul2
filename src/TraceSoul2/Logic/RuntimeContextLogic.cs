@@ -88,9 +88,11 @@ namespace TraceSoul2.Logic
                     : storage.GetTodayNewItems(turn.ConversationId, MemoryDayLogic.CurrentStart(now).ToUnixTimeMilliseconds(), 20);
                 if (storage is TraceSoul2.Manager.SqliteMemoryManager timeline)
                 {
+                    var trajectoryReading = LifeReadingBudgetLogic.TrajectoryReading(timeline, turn.ConversationId, day);
                     var entries = DayTrajectoryOverviewLogic.Read(timeline, turn.ConversationId, day);
-                    if (entries.Count > 0) daily.AppendLine("今日事件与新进展：");
-                    if (entries.Count > 0) daily.AppendLine(DayTrajectoryLogic.FormatGroups(DayTrajectoryLogic.OverviewGroups(entries, now)));
+                    if (trajectoryReading != null) daily.AppendLine("今日事件与新进展：").AppendLine(trajectoryReading);
+                    else if (entries.Count > 0) daily.AppendLine("今日事件与新进展：")
+                        .AppendLine(DayTrajectoryLogic.FormatGroups(DayTrajectoryLogic.OverviewGroups(entries, now)));
                 }
                 else
                 {
@@ -98,7 +100,10 @@ namespace TraceSoul2.Logic
                     if (!string.IsNullOrWhiteSpace(trajectory?.Text))
                         daily.AppendLine("经历记录（原有摘要）：").AppendLine(trajectory.Text.Trim());
                 }
-                if (items?.Count > 0)
+                var todayReading = storage is TraceSoul2.Manager.SqliteMemoryManager todayStore
+                    ? LifeReadingBudgetLogic.TodayNewReading(todayStore, turn.ConversationId, day) : null;
+                if (todayReading != null) daily.AppendLine("新得知的事：").AppendLine(todayReading);
+                else if (items?.Count > 0)
                 {
                     daily.AppendLine("新得知的事：");
                     foreach (var item in items) daily.Append('[').Append(Timestamp(item.CreatedUnixMs)).Append("] ").AppendLine(item.Content);
