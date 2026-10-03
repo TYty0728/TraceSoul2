@@ -396,7 +396,15 @@ namespace TraceSoul2.Migrate
             if (preservedSlots.Count > 0)
                 Console.WriteLine("  程序保留本次范围外的身份卡原文：" + string.Join("、", preservedSlots.OrderBy(x => x)));
             foreach (var card in output.cards) card.body = pair.RewriteRecordedText(card.body.Trim());
-            await DayCardReviewContract.FitBodiesAsync(llm, output, cardsNow, identityNodes, CancellationToken.None);
+            if (output.cards.Any(x => x.body.Length > IdentityCardSlotValues.BodyLimit(x.slot)))
+                LogCall(context, dayKey, "card_review_draft", 0, "身份摘要精炼前候选", TraceJson.ToJson(output));
+            var deferredCards = await DayCardReviewContract.FitBodiesAsync(llm, output, cardsNow, identityNodes, CancellationToken.None);
+            if (deferredCards.Count > 0)
+            {
+                var note = "摘要精炼未完成，保留原卡：" + string.Join("、", deferredCards.Select(slot => IdentityCardSlotValues.Title(slot, pair)));
+                Console.WriteLine("  " + note);
+                output.summary = (output.summary ?? "") + "\n" + note;
+            }
             output.SubjectRevision = subjectRevision;
             LogCall(context, dayKey, "card_review", 0,
                 "身份摘要复盘：" + Limit(output.summary, 60), TraceJson.ToJson(output));

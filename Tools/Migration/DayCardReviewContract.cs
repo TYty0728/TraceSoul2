@@ -76,14 +76,15 @@ namespace TraceSoul2.Migrate
         public sealed class CondensedBodies { public List<CondensedBody> cards; }
 
         /// <summary>结构及来源先校验；长度是独立的文字整理步骤，只有超长正文进入小上下文。</summary>
-        public static async Task FitBodiesAsync(ILlmClient llm, ReplayPrompts.DayCardReviewOutputData output,
+        public static async Task<List<string>> FitBodiesAsync(ILlmClient llm, ReplayPrompts.DayCardReviewOutputData output,
             IReadOnlyList<IdentityCardRecord> current, IReadOnlyList<CognitionSliceRecord> evidence,
             CancellationToken token)
         {
             var structuralError = StructuralError(output, current, evidence);
             if (structuralError != null) throw new InvalidOperationException(structuralError);
             var pending = output.cards.Where(c => c.body.Length > IdentityCardSlotValues.BodyLimit(c.slot)).ToList();
-            if (pending.Count == 0) return;
+            if (pending.Count == 0) return new();
+            var accepted = new Dictionary<string, string>(StringComparer.Ordinal);
             var messages = new List<DeepSeekMessageData> {
                 new("system", "把已有的身份成长摘要凝练得更简洁。保持原文的含义、关系中的条件和重要差别，合并重复表达，保留连贯的第一人称。" +
                     "这里只整理给出的正文，既有认知依据由程序保留。每张摘要以目标长度为宜，完整表达后收尾。" +
@@ -102,17 +103,34 @@ namespace TraceSoul2.Migrate
                     var path = "$.cards[" + i + "]";
                     if (card == null || !pending.Any(x => x.slot == card.slot) || !seen.Add(card.slot))
                         return path + ".slot 应使用给出的 slot，每项一次。";
-                    var max = IdentityCardSlotValues.BodyLimit(card.slot);
                     if (string.IsNullOrWhiteSpace(card.body)) return path + ".body 应为完整的摘要正文。";
+                }
+                foreach (var card in result.cards)
+                    if (card.body.Length <= IdentityCardSlotValues.BodyLimit(card.slot)) accepted[card.slot] = card.body;
+                for (var i = 0; i < result.cards.Count; i++)
+                {
+                    var card = result.cards[i];
+                    var path = "$.cards[" + i + "]";
+                    var max = IdentityCardSlotValues.BodyLimit(card.slot);
                     if (card.body.Length > max) return path + ".body 当前" + card.body.Length + "字，上限" + max +
                         "字；请凝练到约" + IdentityCardSlotValues.BodyTarget(card.slot) + "字，保留重要含义和完整结尾。";
                 }
                 return null;
             }
-            var fitted = await DeepSeekStructuredOutputLogic.CompleteAsync<CondensedBodies>(llm, messages, null,
-                "摘要精炼结果不符合长度要求。", token, validationError: Error);
-            // 全部通过后才替换正文；slot、reason、cognition_ids 和内心输出都沿用原结果。
-            foreach (var card in fitted.cards) pending.Single(x => x.slot == card.slot).body = card.body;
+            try
+            {
+                await DeepSeekStructuredOutputLogic.CompleteAsync<CondensedBodies>(llm, messages, null,
+                    "摘要精炼结果不符合长度要求。", token, validationError: Error);
+            }
+            catch (InvalidOperationException error) when (error.Message.StartsWith(
+                "语言模型连续两次返回不可用的结构化输出。", StringComparison.Ordinal))
+            {
+                // 摘要是认知的派生视图；有界精炼失败只保留该卡原文，不中断整日整理。
+            }
+            var deferred = pending.Where(x => !accepted.ContainsKey(x.slot)).Select(x => x.slot).ToList();
+            output.cards.RemoveAll(x => deferred.Contains(x.slot));
+            foreach (var card in pending.Where(x => accepted.ContainsKey(x.slot))) card.body = accepted[card.slot];
+            return deferred;
         }
 
         public static string EvidenceContext(IReadOnlyList<IdentityCardRecord> current, IReadOnlyList<CognitionSliceRecord> evidence)

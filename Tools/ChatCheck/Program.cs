@@ -20,6 +20,7 @@ internal static partial class Program
     private static void Main(string[] args)
     {
         SQLitePCL.Batteries_V2.Init();
+        if (args.Length == 3 && args[0] == "--oct3-review-replay") { RunOct3ReviewReplay(args[1], args[2]); return; }
         if (args.Contains("--automatic-photo")) { RunAutomaticPhotoChecksAsync().GetAwaiter().GetResult(); return; }
         if (args.Length == 3 && args[0] == "--day-card-scope-dump") { RunDayCardScopeDumpCheck(args[1], args[2]); return; }
         if (args.Length == 3 && args[0] == "--day-card-length-dump") { RunDayCardLengthDumpCheck(args[1], args[2]); return; }

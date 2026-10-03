@@ -9,6 +9,7 @@ using TraceSoul2.Data;
 using TraceSoul2.Manager;
 using TraceSoul2.Logic;
 using TraceSoul2.Util;
+using TraceSoul2.Plugins;
 
 internal static partial class Program
 {
@@ -156,14 +157,83 @@ internal static partial class Program
             var unchanged = Parse(longOutput);
             var fitMethod = contract.GetMethod("FitBodiesAsync");
             var failure = new AgentSequenceLlm(tooLong, tooLong);
+            var preservedTask = (Task)fitMethod.Invoke(null, new object[] { failure, unchanged, cards, nodes, System.Threading.CancellationToken.None });
+            preservedTask.GetAwaiter().GetResult();
+            var preserved = (List<string>)preservedTask.GetType().GetProperty("Result").GetValue(preservedTask);
+            using var remaining = JsonDocument.Parse(JsonSerializer.Serialize(unchanged, outputType, json));
+            Require(failure.Requests.Count == 2 && preserved.SequenceEqual(new[] { "relation" }) &&
+                remaining.RootElement.GetProperty("cards").GetArrayLength() == 1 &&
+                remaining.RootElement.GetProperty("cards")[0].GetProperty("body").GetString() == "保持这张原文",
+                "精炼失败只延后超长卡，其他有效卡继续，原卡和正文不被截断");
+            var fittingFailure = new AgentSequenceLlm(Output(Card("relation", new string('长', 1201), "r1", "r2"), Card("expression_habit", "保持这张原文", "h1")),
+                JsonSerializer.Serialize(new { cards = new[] { new { slot = "relation", body = new string('长', 724) } } }),
+                JsonSerializer.Serialize(new { cards = new[] { new { slot = "relation", body = new string('长', 722) } } }));
+            args[2] = fittingFailure;
+            var continued = (Task)run.Invoke(null, args);
+            continued.GetAwaiter().GetResult();
+            using var continuedJson = JsonDocument.Parse(JsonSerializer.Serialize(continued.GetType().GetProperty("Result").GetValue(continued), outputType, json));
+            Require(fittingFailure.Requests.Count == 3 && continuedJson.RootElement.GetProperty("cards").GetArrayLength() == 1 &&
+                continuedJson.RootElement.GetProperty("summary").GetString().Contains("保留原卡："),
+                "真实Migration入口在1201→724→722字持续超长时继续返回有效结果并记录延后原因");
+            var unavailable = Parse(longOutput);
             rejected = false;
-            try { ((Task)fitMethod.Invoke(null, new object[] { failure, unchanged, cards, nodes, System.Threading.CancellationToken.None })).GetAwaiter().GetResult(); }
+            try { ((Task)fitMethod.Invoke(null, new object[] { new AgentSequenceLlm(), unavailable, cards, nodes, System.Threading.CancellationToken.None })).GetAwaiter().GetResult(); }
             catch (InvalidOperationException) { rejected = true; }
-            Require(rejected && failure.Requests.Count == 2 && JsonSerializer.Serialize(unchanged, outputType, json) == JsonSerializer.Serialize(Parse(longOutput), outputType, json),
-                "精炼仍失败时有界停止，原输出不被截断或部分替换");
+            Require(rejected && JsonSerializer.Serialize(unavailable, outputType, json) == JsonSerializer.Serialize(Parse(longOutput), outputType, json),
+                "模型调用本身失败仍传播错误，不能冒充摘要精炼的局部失败");
         }
         finally { context?.Dispose(); Directory.Delete(dir, true); }
         Console.WriteLine("Day card review checks passed: slot grouping, precise repair, multiple evidence, explicit empty, pinned/length/source guards and actual Migration entry.");
+    }
+
+    private static void RunOct3ReviewReplay(string assemblyPath, string directory)
+    {
+        string Response(string pattern)
+        {
+            var text = File.ReadAllText(Directory.GetFiles(directory, pattern).Single());
+            return text.Substring(text.IndexOf('{'), text.LastIndexOf('}') - text.IndexOf('{') + 1);
+        }
+        var assembly = Assembly.LoadFrom(Path.GetFullPath(assemblyPath));
+        var contract = assembly.GetType("TraceSoul2.Migrate.DayCardReviewContract", true);
+        var outputType = assembly.GetType("TraceSoul2.Migrate.ReplayPrompts+DayCardReviewOutputData", true);
+        var options = new JsonSerializerOptions { IncludeFields = true, PropertyNameCaseInsensitive = true };
+        using var request = JsonDocument.Parse(File.ReadAllText(Directory.GetFiles(directory, "20261003-122623*-request.json").Single()));
+        var prompt = request.RootElement.GetProperty("messages")[0].GetProperty("content").GetString();
+        var start = prompt.IndexOf("\n[", prompt.IndexOf("【成长摘要与可参考的认识，按 slot 分组】", StringComparison.Ordinal), StringComparison.Ordinal);
+        var end = prompt.IndexOf("【保留原文的本人设定】", start, StringComparison.Ordinal);
+        using var groups = JsonDocument.Parse(prompt.Substring(start, end - start).Trim());
+        var evidence = groups.RootElement.EnumerateArray().SelectMany(g => JsonSerializer.Deserialize<List<CognitionSliceRecord>>(g.GetProperty("cognitions").GetRawText(), options)).ToList();
+        var current = new List<IdentityCardRecord> { new() { Slot = "personality", Pinned = true } };
+        var output = JsonSerializer.Deserialize(Response("20261003-122623*-response.txt"), outputType, options);
+        using var before = JsonDocument.Parse(JsonSerializer.Serialize(output, outputType, options));
+        var fitting = new AgentSequenceLlm(Response("20261003-*-076-response.txt"), Response("20261003-*-077-response.txt"));
+        var task = (Task)contract.GetMethod("FitBodiesAsync").Invoke(null, new object[] { fitting, output, current, evidence, System.Threading.CancellationToken.None });
+        task.GetAwaiter().GetResult();
+        Require(((List<string>)task.GetType().GetProperty("Result").GetValue(task)).SequenceEqual(new[] { "relation" }) && fitting.Requests.Count == 2,
+            "真实1201字候选及724、722字精炼响应只延后关系卡，无真实模型调用");
+        using var after = JsonDocument.Parse(JsonSerializer.Serialize(output, outputType, options));
+        Require(after.RootElement.GetProperty("cards").GetArrayLength() == 1 &&
+            after.RootElement.GetProperty("cards")[0].GetRawText() == before.RootElement.GetProperty("cards")[0].GetRawText() &&
+            contract.GetMethod("ValidationError").Invoke(null, new object[] { output, current, evidence }) == null,
+            "真实有效表达卡的正文及引用完整通过原校验");
+        foreach (var field in before.RootElement.EnumerateObject().Where(x => x.Name != "cards"))
+            Require(after.RootElement.GetProperty(field.Name).GetRawText() == field.Value.GetRawText(), "精炼回退不修改其余真实内心与摘要字段");
+        using var store = new SqliteMemoryManager(":memory:");
+        var dayStart = MemoryDayLogic.CurrentStart(DateTimeOffset.Now);
+        for (var i = 0; i < 4; i++)
+        {
+            store.SaveMoment(new MomentRecord { Id = "replay-" + i, ConversationId = "replay", Role = "user", Content = "合成来源", CreatedUnixMs = dayStart.AddHours(7).AddMinutes(i).ToUnixTimeMilliseconds() });
+            store.AppendDayTrajectory("replay", "replay-" + i, "合成事件" + i);
+        }
+        var services = new TracePluginServices(store, new HierarchicalVectorRouterLogic(new FakeEncoder())) { Llm = new AgentSequenceLlm(Response("20261003-122220*-response.txt")) };
+        var turn = new TraceTurnContext("replay", new MomentRecord { ConversationId = "replay" }, new(), 0, true, services,
+            environment: new EnvironmentSnapshotData { ContextConversationId = "replay", Visibility = "private" });
+        var commit = DayTrajectoryOverviewLogic.Prepare(turn).AnalyzeAsync(default).GetAwaiter().GetResult();
+        Require(commit != null, "真实精简响应的共同来源通过校验");
+        commit(default).GetAwaiter().GetResult();
+        Require(DayTrajectoryOverviewLogic.Read(store, "replay", dayStart.ToString("yyyy-MM-dd")).Count == 5,
+            "真实五个短事件均保留，重复来源不退回原文");
+        Console.WriteLine("Oct 3 read-only replay passed: failed card fitting preserved valid outputs; shared-source overview accepted. No private text printed or production data written.");
     }
 
     private static void RunDayCardScopeDumpCheck(string assemblyPath, string directory)
