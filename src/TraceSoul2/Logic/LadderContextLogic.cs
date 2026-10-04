@@ -7,7 +7,7 @@ using TraceSoul2.Data;
 
 namespace TraceSoul2.Logic
 {
-    /// <summary>时间阶梯的名额，以及页面和 runtime 共用的当前榜单。</summary>
+    /// <summary>时间阶梯的名额。记忆页用完整名额，runtime 注入用更短的名额。</summary>
     public static class LadderContextLogic
     {
         public static int Capacity(string tier) => tier switch
@@ -20,26 +20,40 @@ namespace TraceSoul2.Logic
             _ => 0
         };
 
+        /// <summary>runtime 注入名额。日榜 5 条，周、月、年、永久各 2 条。页面仍按完整名额展示。</summary>
+        public static int InjectCount(string tier) => tier switch
+        {
+            "day" => 5,
+            "week" => 2,
+            "month" => 2,
+            "year" => 2,
+            "forever" => 2,
+            _ => 0
+        };
+
         /// <summary>昨天的日榜，以及不晚于当前记忆日的最新周、月、年榜和永久榜。空榜不出现。</summary>
         public static IReadOnlyList<LadderBoard> Boards(IEnumerable<LadderItemRecord> items, DateTimeOffset now)
+            => Boards(items, now, Capacity);
+
+        private static IReadOnlyList<LadderBoard> Boards(IEnumerable<LadderItemRecord> items, DateTimeOffset now, Func<string, int> capacity)
         {
             var all = (items ?? Array.Empty<LadderItemRecord>())
                 .Where(x => x != null && !string.IsNullOrWhiteSpace(x.Label)).ToList();
             var start = MemoryDayLogic.CurrentStart(now);
             var boards = new List<LadderBoard>();
-            Add(boards, "昨天", all, "day", MemoryDayLogic.ClosedDayKey(now), exact: true);
-            Add(boards, "本周", all, "week", MondayOf(start.DateTime).ToString("yyyy-MM-dd", CultureInfo.InvariantCulture), exact: false);
-            Add(boards, "本月", all, "month", start.ToString("yyyy-MM", CultureInfo.InvariantCulture), exact: false);
-            Add(boards, "本年", all, "year", start.ToString("yyyy", CultureInfo.InvariantCulture), exact: false);
-            Add(boards, "永久", all, "forever", "forever", exact: true);
+            Add(boards, "昨天", all, "day", MemoryDayLogic.ClosedDayKey(now), exact: true, capacity);
+            Add(boards, "本周", all, "week", MondayOf(start.DateTime).ToString("yyyy-MM-dd", CultureInfo.InvariantCulture), exact: false, capacity);
+            Add(boards, "本月", all, "month", start.ToString("yyyy-MM", CultureInfo.InvariantCulture), exact: false, capacity);
+            Add(boards, "本年", all, "year", start.ToString("yyyy", CultureInfo.InvariantCulture), exact: false, capacity);
+            Add(boards, "永久", all, "forever", "forever", exact: true, capacity);
             return boards;
         }
 
-        /// <summary>页面和 runtime 共用的榜单正文。只写序号和摘要，不写上榜理由。</summary>
+        /// <summary>runtime 注入的榜单正文。只写序号和摘要，不写上榜理由，并按注入名额截短。</summary>
         public static string Reading(IEnumerable<LadderItemRecord> items, DateTimeOffset now)
         {
             var builder = new StringBuilder();
-            foreach (var board in Boards(items, now))
+            foreach (var board in Boards(items, now, InjectCount))
             {
                 if (builder.Length > 0) builder.Append('\n');
                 builder.Append(board.Title).Append('\n');
@@ -49,9 +63,9 @@ namespace TraceSoul2.Logic
             return builder.ToString().TrimEnd();
         }
 
-        private static void Add(List<LadderBoard> boards, string title, List<LadderItemRecord> all, string tier, string period, bool exact)
+        private static void Add(List<LadderBoard> boards, string title, List<LadderItemRecord> all, string tier, string period, bool exact, Func<string, int> capacity)
         {
-            var cap = Capacity(tier);
+            var cap = capacity(tier);
             if (cap <= 0) return;
             var pool = all.Where(x => string.Equals(x.Tier, tier, StringComparison.Ordinal)).ToList();
             if (pool.Count == 0) return;
@@ -76,8 +90,8 @@ namespace TraceSoul2.Logic
             var rows = chosen.Where(x => Kind(x) == kind).ToList();
             if (rows.Count == 0) return;
             if (heading.Length > 0) builder.Append(heading).Append('\n');
-            foreach (var item in rows)
-                builder.Append(item.Rank).Append(". ").Append(item.Label.Trim()).Append('\n');
+            for (var i = 0; i < rows.Count; i++)
+                builder.Append(i + 1).Append(". ").Append(rows[i].Label.Trim()).Append('\n');
         }
 
         private static string Kind(LadderItemRecord item)

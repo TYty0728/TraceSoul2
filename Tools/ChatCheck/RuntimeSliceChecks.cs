@@ -63,11 +63,12 @@ internal static partial class Program
             contextType.GetProperty("Llm").SetValue(context, failedFinal);
             try { ((Task)run.Invoke(null, new object[] { context, new[] { "--day", day } })).GetAwaiter().GetResult(); }
             catch (InvalidOperationException) { }
-            Require(failedFinal.Requests.Count == 2 && failedFinal.Requests[1].Contains("按原篇幅重新写下") &&
+            Require(failedFinal.Requests.Count == 2 && failedFinal.Requests[1].Contains("把字数压到500字以内") &&
+                failedFinal.Requests[1].Contains("超过1000字") && !failedFinal.Requests[1].Contains("按原篇幅重新写下") &&
                 !failedFinal.Requests[0].Contains("请合并重复叙述") &&
-                ((List<RuntimeSliceRecord>)storeType.GetMethod("GetRuntimeSlices").Invoke(actualStore, new object[] { root, day, true })).Count == 1 &&
+                ((List<RuntimeSliceRecord>)storeType.GetMethod("GetRuntimeSlices").Invoke(actualStore, new object[] { root, day, true })).Count == 0 &&
                 (bool)storeType.GetMethod("HasPendingRuntimeDaySummary").Invoke(actualStore, new object[] { root, day }),
-                "迟到段落超出自己的篇幅时不保存、不回收缩写，旧成稿保持待重写");
+                "迟到段落写超了先收下；接成整篇后精简一次仍超限就不发表，已写各段保留");
             var resumedFinal = new AgentSequenceLlm("{\"summary\":\"迟到的这一段\"}");
             contextType.GetProperty("Llm").SetValue(context, resumedFinal);
             ((Task)run.Invoke(null, new object[] { context, new[] { "--day", day } })).GetAwaiter().GetResult();
@@ -203,23 +204,25 @@ internal static partial class Program
         Seed("independent", 3, 8000);
         var independent = new AgentSequenceLlm(Summary("第一段独有回望"), Summary("第二段独有回望"), Summary("第三段独有回望"));
         Require(await RuntimeSliceLogic.ReviewDayAsync(store, independent, "independent", day) == 3 &&
-            independent.Requests.Count == 3 && independent.Requests[0].Contains("最多332字") && independent.Requests[0].Contains("写完即是最终正文") &&
+            independent.Requests.Count == 3 && independent.Requests[0].Contains("500字") && !independent.Requests[0].Contains("332") &&
+            independent.Requests[0].Contains("按时间接成整篇") &&
             !independent.Requests[0].Contains("请合并重复叙述") && !independent.Requests[1].Contains("第一段独有回望") &&
             !independent.Requests[2].Contains("第二段独有回望") && !independent.Requests[2].Contains("independent-0") &&
             independent.Requests[2].Contains("independent-2") &&
             store.GetRuntimeDaySummaries("independent", day).Single().Summary == "第一段独有回望\n\n第二段独有回望\n\n第三段独有回望",
-            "各段只根据自己的切片写成最终正文，已写段落不滚入后段，整天由这些正文按时间接成");
+            "各段只根据自己的切片写下，已写段落不滚入后段；接起来没超过1000字就直接发表");
 
         var oversized = Summary(new string('长', 3532));
         Seed("split", 4);
         var split = new AgentSequenceLlm(oversized, Summary("按原篇幅重写"));
         Require(await RuntimeSliceLogic.ReviewDayAsync(store, split, "split", day) == 4 && split.Requests.Count == 2 &&
-            split.Requests[0].Contains("最多1000字") && split.Requests[1].Contains("当前3532字") &&
-            split.Requests[1].Contains("按原篇幅重新写下") && !split.Requests[1].Contains("凝练") &&
-            split.Requests[1].Contains("split-0") && split.Requests[1].Contains("split-3") &&
+            split.Requests[0].Contains("500字") && split.Requests[0].Contains("split-0") &&
+            split.Requests[1].Contains("把字数压到500字以内") && split.Requests[1].Contains("现在3532字") &&
+            !split.Requests[1].Contains("保持原任务语义") && !split.Requests[1].Contains("按原篇幅重新写下") &&
+            !split.Requests[1].Contains("split-0") &&
             store.GetRuntimeDayReviews("split", day).Count == 1 && store.GetRuntimeSlices("split", day, true).Count == 0 &&
             store.GetRuntimeDaySummaries("split", day).Single().Summary == "按原篇幅重写",
-            "超出篇幅时按同一段和原篇幅重写，不减半材料，也不把长文交给另一道缩短任务");
+            "一段写超了先收下；合并后超过1000字，只调用一次把字数压下来的精简");
 
         Seed("partial", 4);
         var partial = new AgentSequenceLlm(oversized, Summary("先完成的整段"));
@@ -233,9 +236,10 @@ internal static partial class Program
         var malformedError = "";
         try { await RuntimeSliceLogic.ReviewDayAsync(store, malformed, "malformed", day); }
         catch (InvalidOperationException exception) { malformedError = exception.Message; }
-        Require(malformed.Requests.Count == 2 && malformed.Requests[1].Contains("malformed-0") &&
-            malformedError.Contains("summary") && store.GetRuntimeSlices("malformed", day, true).Count == 4,
-            "重写若是类型错误，按类型错误失败并保留全部原件");
+        Require(malformed.Requests.Count == 2 && malformed.Requests[1].Contains("把字数压到500字以内") &&
+            malformedError.Contains("summary") && store.GetRuntimeSlices("malformed", day, true).Count == 0 &&
+            store.GetRuntimeDayReviews("malformed", day).Count == 1 && store.GetRuntimeDaySummaries("malformed", day).Count == 0,
+            "精简如果不是正文，不发表，已经收下的这一段保留");
 
         Seed("bounded", 8);
         var bounded = new AgentSequenceLlm(oversized, oversized);
@@ -243,16 +247,17 @@ internal static partial class Program
         try { await RuntimeSliceLogic.ReviewDayAsync(store, bounded, "bounded", day); }
         catch (InvalidOperationException exception) { error = exception.Message; }
         Require(bounded.Requests.Count == 2 && error.Contains("3532") && error.Contains("1000") &&
-            store.GetRuntimeSlices("bounded", day, true).Count == 8, "同一段重写仍然超限就停下，原件保留");
+            store.GetRuntimeSlices("bounded", day, true).Count == 0 && store.GetRuntimeDayReviews("bounded", day).Count == 1 &&
+            store.GetRuntimeDaySummaries("bounded", day).Count == 0, "精简一次后仍然超过1000字就停下，不截断，已写段落保留");
 
         Seed("single", 1);
         var single = new AgentSequenceLlm(oversized, oversized);
         try { await RuntimeSliceLogic.ReviewDayAsync(store, single, "single", day); }
         catch (InvalidOperationException) { }
-        Require(single.Requests.Count == 2 && single.Requests[1].Contains("按原篇幅重新写下") &&
-            !single.Requests[0].Contains("上一条不满足要求") &&
-            store.GetRuntimeSlices("single", day, true).Count == 1,
-            "单条切片保持完整，超限后按原篇幅重写一次，仍超限则不虚报完成");
+        Require(single.Requests.Count == 2 && single.Requests[1].Contains("把字数压到500字以内") &&
+            !single.Requests[0].Contains("上一条不满足要求") && !single.Requests[1].Contains("single-0") &&
+            store.GetRuntimeSlices("single", day, true).Count == 0 && store.GetRuntimeDaySummaries("single", day).Count == 0,
+            "单段写超了先收下，合并后精简一次仍超限则不发表");
 
         const string finalDay = "2020-08-21";
         Seed("source-limit", 1, 10, begin + 86400000);
@@ -260,22 +265,24 @@ internal static partial class Program
         var sourceFailure = new AgentSequenceLlm(Summary(new string('长', 1201)), Summary(new string('长', 1201)));
         try { await RuntimeSliceLogic.ReviewDayAsync(store, sourceFailure, "source-limit", finalDay); }
         catch (InvalidOperationException exception) { sourceError = exception.Message; }
-        Require(sourceFailure.Requests.Count == 2 && sourceFailure.Requests[0].Contains("最多1000字") &&
+        Require(sourceFailure.Requests.Count == 2 && sourceFailure.Requests[1].Contains("把字数压到500字以内") &&
             sourceError.Contains("1201") && sourceError.Contains("1000") &&
-            store.GetRuntimeSlices("source-limit", finalDay, true).Count == 1 &&
-            store.GetRuntimeDayReviews("source-limit", finalDay).Count == 0 &&
+            store.GetRuntimeSlices("source-limit", finalDay, true).Count == 0 &&
+            store.GetRuntimeDayReviews("source-limit", finalDay).Count == 1 &&
             store.GetRuntimeDaySummaries("source-limit", finalDay).Count == 0 &&
             store.GetUnreviewedRuntimeDayKeysBefore(begin + 172800000).Contains(finalDay),
-            "整天只有一段时，写作指令本身就是一千字；超出后不保存、不回收缩写");
+            "一段写超了先收下；合并后超过1000字只精简一次，仍超限则不发表");
         using (var reopened = new SqliteMemoryManager(path))
             Require(reopened.GetRuntimeDaySummaries("source-limit", finalDay).Count == 0 &&
-                reopened.GetRuntimeSlices("source-limit", finalDay, true).Count == 1 &&
+                reopened.GetRuntimeSlices("source-limit", finalDay, true).Count == 0 &&
+                reopened.GetRuntimeDayReviews("source-limit", finalDay).Count == 1 &&
                 reopened.GetUnreviewedRuntimeDayKeysBefore(begin + 172800000).Contains(finalDay),
-                "重新打开数据库仍知道这一段没写完");
+                "重新打开数据库仍知道这一天还没发表，已写段落还在");
         var sourceDone = new AgentSequenceLlm(Summary(new string('稿', 1000)));
-        Require(await RuntimeSliceLogic.ReviewDayAsync(store, sourceDone, "source-limit", finalDay) == 1 &&
-            sourceDone.Requests.Count == 1 && store.GetRuntimeDaySummaries("source-limit", finalDay).Single().Summary.Length == 1000,
-            "符合篇幅的正文直接成为当天回望");
+        Require(await RuntimeSliceLogic.ReviewDayAsync(store, sourceDone, "source-limit", finalDay) == 0 &&
+            sourceDone.Requests.Count == 1 && sourceDone.Requests[0].Contains("把字数压到500字以内") &&
+            store.GetRuntimeDaySummaries("source-limit", finalDay).Single().Summary.Length == 1000,
+            "精简到1000字以内就发表为当天回望");
         var sourceAgain = new AgentSequenceLlm();
         await RuntimeSliceLogic.ReviewDayAsync(store, sourceAgain, "source-limit", finalDay);
         Require(sourceAgain.Requests.Count == 0, "已完成的当天回望不再生成");
@@ -299,16 +306,17 @@ internal static partial class Program
         try { store.CommitRuntimeDaySummary(store.GetRuntimeDayReviews("final-length", finalDay).Select(x => x.Id), new string('长', 1201)); }
         catch (InvalidOperationException) { rejected = true; }
         Require(rejected && store.GetRuntimeDaySummaries("final-length", finalDay).Single().Summary == original,
-            "存储层也拒绝超过1200字的整天正文，失败不改动已有成稿");
+            "存储层也拒绝超过1000字的整天正文，失败不改动已有成稿");
 
         Seed("hierarchy", 12, 8000);
         var hierarchy = new AgentSequenceLlm(Enumerable.Range(0, 12).Select(i => Summary("材料" + i)).ToArray());
         var hierarchySummary = "";
         Require(await RuntimeSliceLogic.ReviewDayAsync(store, hierarchy, "hierarchy", day) == 12 && hierarchy.Requests.Count == 12 &&
-            hierarchy.Requests[0].Contains("最多81字") && hierarchy.Requests[11].Contains("hierarchy-11") && !hierarchy.Requests[11].Contains("hierarchy-0") &&
+            hierarchy.Requests[0].Contains("500字") && !hierarchy.Requests[0].Contains("81字") &&
+            hierarchy.Requests[11].Contains("hierarchy-11") && !hierarchy.Requests[11].Contains("hierarchy-0") &&
             (hierarchySummary = store.GetRuntimeDaySummaries("hierarchy", day).Single().Summary).Contains("材料0") && hierarchySummary.Contains("材料11") &&
-            hierarchySummary.Length <= 1200,
-            "长日每一段在写下时就占好自己的篇幅，尾段仍覆盖，不再另做合并或压缩");
+            hierarchySummary.Length <= 1000,
+            "长日各段先按自己的切片写下，接起来没超过1000字就直接发表");
 
         Seed("legacy-long", 2);
         var legacySlices = store.GetRuntimeSlices("legacy-long", day);
@@ -324,11 +332,12 @@ internal static partial class Program
             }
         }
         var oldDay = new AgentSequenceLlm(Summary(new string('新', 1000)));
-        Require(await RuntimeSliceLogic.ReviewDayAsync(store, oldDay, "legacy-long", day) == 2 && oldDay.Requests.Count == 1 &&
-            oldDay.Requests[0].Contains("最多1000字") && !oldDay.Requests[0].Contains("请提炼") && !oldDay.Requests[0].Contains("旧旧") &&
+        Require(await RuntimeSliceLogic.ReviewDayAsync(store, oldDay, "legacy-long", day) == 0 && oldDay.Requests.Count == 1 &&
+            oldDay.Requests[0].Contains("把字数压到500字以内") && oldDay.Requests[0].Contains("旧") &&
+            !oldDay.Requests[0].Contains("legacy-long-0") &&
             store.GetRuntimeDaySummaries("legacy-long", day).Single().Summary.Length == 1000 &&
-            store.GetRuntimeDayReviews("legacy-long", day).Sum(x => x.Summary.Length) == 1000 &&
+            store.GetRuntimeDayReviews("legacy-long", day).Sum(x => x.Summary.Length) == 1012 + 2153 &&
             store.GetRuntimeReviewCandidates("legacy-long").Single().Summary.Length == 1000,
-            "旧的长文不拿去压缩；退回原始切片后按一千字篇幅重写");
+            "已经写好的长段接起来超过1000字，只对合并稿精简一次，不退回切片重写");
     }
 }
