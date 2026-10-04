@@ -93,30 +93,42 @@ namespace TraceSoul2.ExternalPlugins
             if (string.IsNullOrWhiteSpace(settings.BaseUrl) || string.IsNullOrWhiteSpace(settings.Model))
                 return Failed("缺少 base_url 或 model。");
 
-            var errors = new List<string>();
-            var attempts = Math.Max(1, Math.Min(10, settings.MaxRetries));
             services?.LogTiming(traceId, "TA的相机 上游生成开始", detail:
                 "model=" + settings.Model + "｜format=" + (IsGemini() ? "gemini" : "openai") +
                 "｜modes=" + string.Join(",", IsGemini() ? new[] { "native" } : ResolveOpenAiModes()) +
                 "｜refs=" + (references?.Count ?? 0) + "｜aspect=" + (aspectRatio ?? string.Empty));
-            for (var attempt = 0; attempt < attempts; attempt++)
-            {
-                var key = keys[attempt % keys.Count];
-                services?.LogTiming(traceId, "TA的相机 重试生成", detail:
-                    "attempt=" + (attempt + 1) + "/" + attempts + "｜key_index=" + (attempt % keys.Count));
-                var timer = Stopwatch.StartNew();
-                var result = await GenerateOnceAsync(prompt, references ?? new List<ReferenceImageData>(),
-                    aspectRatio, key, cancellationToken);
-                services?.LogTiming(traceId, result.Success ? "生图上游完成" : "生图上游未完成",
-                    timer.ElapsedMilliseconds,
-                    "protocol=" + result.Protocol + "｜attempt=" + (attempt + 1) + "/" + attempts +
-                    (result.Success ? "｜images=" + result.Images.Count : "｜" + Truncate(result.Error, 400)));
-                if (result.Success) return result;
-                errors.Add(result.Protocol + "：" + result.Error);
-                if (attempt < attempts - 1)
-                    await Task.Delay(TimeSpan.FromSeconds(Math.Min(10, 1 << Math.Min(attempt, 3))), cancellationToken);
-            }
-            return Failed("重试失败：" + string.Join("；", errors.Distinct()));
+            var timer = Stopwatch.StartNew();
+            var result = await GenerateOnceAsync(prompt, references ?? new List<ReferenceImageData>(),
+                aspectRatio, keys[0], cancellationToken);
+            services?.LogTiming(traceId, result.Success ? "生图上游完成" : "生图上游未完成",
+                timer.ElapsedMilliseconds,
+                "protocol=" + result.Protocol +
+                (result.Success ? "｜images=" + result.Images.Count : "｜" + Truncate(result.Error, 400)));
+            if (result.Success) return result;
+            if (UpstreamUnavailable(result.Error))
+                services?.LogTiming(traceId, "TA的相机 上游未返回，已停止", detail: Truncate(result.Error, 400));
+            return Failed(string.IsNullOrWhiteSpace(result.Error) ? "上游未返回。" : result.Error);
+        }
+
+        internal static bool UpstreamUnavailable(string error)
+        {
+            if (string.IsNullOrWhiteSpace(error)) return false;
+            if (error.IndexOf("请求超时", StringComparison.Ordinal) >= 0) return true;
+            if (error.IndexOf("HttpRequestException", StringComparison.Ordinal) >= 0) return true;
+            if (error.IndexOf("SocketException", StringComparison.Ordinal) >= 0) return true;
+            if (error.IndexOf("TimeoutException", StringComparison.Ordinal) >= 0) return true;
+            if (error.IndexOf("TaskCanceledException", StringComparison.Ordinal) >= 0) return true;
+            foreach (var code in new[] { "408", "429", "500", "502", "503", "504", "524" })
+                if (error.IndexOf("HTTP " + code, StringComparison.Ordinal) >= 0) return true;
+            return false;
+        }
+
+        internal static bool WrongEndpoint(string error)
+        {
+            if (string.IsNullOrWhiteSpace(error)) return false;
+            return error.IndexOf("HTTP 404", StringComparison.Ordinal) >= 0 ||
+                error.IndexOf("HTTP 405", StringComparison.Ordinal) >= 0 ||
+                error.IndexOf("HTTP 501", StringComparison.Ordinal) >= 0;
         }
 
         private async Task<ImageGenerationResult> GenerateOnceAsync(
@@ -141,6 +153,12 @@ namespace TraceSoul2.ExternalPlugins
                     result = await GenerateOpenAiStandardAsync(prompt, references, apiKey, cancellationToken);
                 if (result.Success) return result;
                 errors.Add(result.Protocol + "：" + result.Error);
+                if (UpstreamUnavailable(result.Error))
+                {
+                    services?.LogTiming(traceId, "TA的相机 上游未返回，已停止", detail: Truncate(result.Error, 400));
+                    return result;
+                }
+                if (!WrongEndpoint(result.Error)) return result;
             }
             return new ImageGenerationResult
             {
@@ -217,18 +235,10 @@ namespace TraceSoul2.ExternalPlugins
             {
                 var response = await SendJsonAsync(HttpMethod.Get, url, apiKey, null, false, cancellationToken);
                 if (!response.Success)
-                {
-                    lastStatus = response.Error;
-                    await Task.Delay(TimeSpan.FromSeconds(interval), cancellationToken);
-                    continue;
-                }
+                    return Failed(response.Error, "openai-async");
                 var roots = ParseRoots(response.Body, response.ContentType, out var parseError);
                 if (roots.Count == 0)
-                {
-                    lastStatus = parseError;
-                    await Task.Delay(TimeSpan.FromSeconds(interval), cancellationToken);
-                    continue;
-                }
+                    return Failed(string.IsNullOrWhiteSpace(parseError) ? "轮询响应无法解析。" : parseError, "openai-async");
                 var root = roots.Last();
                 var status = GetString(root, "status");
                 var progress = GetNumberText(root, "progress");
@@ -261,7 +271,7 @@ namespace TraceSoul2.ExternalPlugins
             if (references.Count > 0)
             {
                 var edit = await GenerateOpenAiEditAsync(prompt, references, apiKey, cancellationToken);
-                if (edit.Success) return edit;
+                if (edit.Success || !WrongEndpoint(edit.Error)) return edit;
             }
             var payload = new Dictionary<string, object>
             {

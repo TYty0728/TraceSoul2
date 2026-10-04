@@ -15,6 +15,13 @@ internal static partial class Program
 {
     private static void RunQqDeliveryAndCameraContextCheck()
     {
+        Require(ImageGenerationClient.UpstreamUnavailable("请求超时（600秒）。") &&
+            ImageGenerationClient.UpstreamUnavailable("HTTP 502：bad gateway") &&
+            ImageGenerationClient.UpstreamUnavailable("HttpRequestException：连接被重置") &&
+            !ImageGenerationClient.UpstreamUnavailable("HTTP 404：not found") &&
+            ImageGenerationClient.WrongEndpoint("HTTP 405：method") &&
+            !ImageGenerationClient.WrongEndpoint("HTTP 500：upstream"),
+            "上游未返回时停止重开，只有接口不存在才换模式");
         RunRandomCameraIntervalCheck();
         var path = Path.Combine(Path.GetTempPath(), "tracesoul2-qq-delivery-" + Guid.NewGuid().ToString("N") + ".sqlite3");
         try
