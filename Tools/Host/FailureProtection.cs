@@ -58,10 +58,9 @@ namespace TraceSoul2.Host
             foreach (var failure in result?.ContributionResults ?? Array.Empty<TraceCapabilityResultData>())
             {
                 if (failure == null || failure.Status != "failed") continue;
-                if (failure.CapabilityId == "qq.sticker.send")
-                    Report("warning:qq.sticker.send", "表情包", "本次表情未发送成功，已跳过。", "warning");
-                else
-                    Report("dialogue", "对话或附加能力", new InvalidOperationException("能力执行失败"));
+                // 表情库对不上是正常结果，不记错误，也不记警告。
+                if (failure.CapabilityId == "qq.sticker.send") continue;
+                Report("dialogue", "对话或附加能力", new InvalidOperationException("能力执行失败"));
             }
         }
 

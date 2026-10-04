@@ -197,23 +197,19 @@ internal static partial class Program
         var inner = new FailureTestClient { Fail = false };
         var client = new ProtectedLlmClient(inner, restarted);
         Require(await client.CompleteTextAsync(new List<DeepSeekMessageData>()) == "ok" && inner.Calls == 1,
-            "文字成功但表情失败后，下一轮必须仍能调用模型");
+            "文字成功但表情未匹配后，下一轮必须仍能调用模型");
         var notifications = 0;
         await FailureNotifications.SendPendingAsync(restarted, true,
             "{\"session_type\":\"private\",\"session_id\":\"12345\"}",
-            (_, args, _) =>
+            (_, _, _) =>
             {
                 notifications++;
-                var payload = AssertNotificationWirePayload("send_private_msg", args);
-                Require(payload.Contains("WARNING") && !payload.Contains("ERROR") && !payload.Contains("已暂停"),
-                    "表情失败只能发送 WARNING，不能声称停聊");
                 return Task.FromResult("{}");
             }, _ => { }, default);
-        Require(restarted.List().Single().Severity == "warning" && notifications == 1 && !restarted.IsPaused("warning:qq.sticker.send"),
-            "单次表情失败应报告 WARNING，不得暂停对话");
-        guard.Resume("warning:qq.sticker.send");
+        Require(restarted.List().Count == 0 && notifications == 0 && !restarted.IsPaused("warning:qq.sticker.send"),
+            "表情不匹配不报告错误或警告，也不发系统通知");
 
-        // 表情 WARNING 不能掩盖同轮其它 ERROR，但两者都不暂停对话。
+        // 表情不匹配不能掩盖同轮其它 ERROR，但两者都不暂停对话。
         foreach (var capability in new[] { "memory.archive", "identity.review", "turn.complete", "qq.text.send" })
         {
             results.Add(new TraceCapabilityResultData { CapabilityId = capability, Status = "failed" });
@@ -233,7 +229,8 @@ internal static partial class Program
                 guard.List().Any(x => x.Key == "provider:test" && x.Severity == "error"),
             "真实模型错误应记录 ERROR，但后续新调用不被锁住");
         guard.Resume("provider:test");
-        guard.Resume("warning:qq.sticker.send");
+        Require(!guard.List().Any(x => x.Key == "warning:qq.sticker.send"),
+            "同轮其它错误仍不把表情不匹配写成警告");
 
         // 用旧结构建库，验证真实升级会新增字段并解除旧版对话/供应商停聊。
         var legacyDirectory = Path.Combine(directory, "legacy");
