@@ -26,7 +26,7 @@
   "enable_thinking": false,
   "max_refs_per_category": 4,
   "max_reference_images": 12,
-  "max_retry_attempts": 3,
+  "max_retry_attempts": 1,
   "poll_interval": 5,
   "timeout": 600,
   "cleanup_delay_seconds": 600,

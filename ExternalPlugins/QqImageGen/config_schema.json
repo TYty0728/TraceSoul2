@@ -23,7 +23,7 @@
     { "key": "strict_reference_mode", "label": "严格参考人物身份", "type": "bool", "default": false },
     { "key": "max_refs_per_category", "label": "每分类最多参考图", "type": "number", "min": 1, "max": 12, "default": 4 },
     { "key": "max_reference_images", "label": "单次最多参考图", "type": "number", "min": 1, "max": 24, "default": 12 },
-    { "key": "max_retry_attempts", "label": "失败重试次数", "type": "number", "min": 1, "max": 10, "default": 3 },
+    { "key": "max_retry_attempts", "label": "失败重试次数", "type": "number", "min": 1, "max": 10, "default": 1, "description": "上游未返回或本次生成失败后不再重开。只有接口不存在时才换下一种 OpenAI 模式试一次。" },
     { "key": "poll_interval", "label": "异步轮询间隔（秒）", "type": "number", "min": 2, "max": 30, "default": 5 },
     { "key": "timeout", "label": "总超时（秒）", "type": "number", "min": 30, "max": 1800, "default": 600 },
     { "key": "cleanup_delay_seconds", "label": "发送后清理延迟（秒）", "type": "number", "min": 30, "max": 7200, "default": 600 },
