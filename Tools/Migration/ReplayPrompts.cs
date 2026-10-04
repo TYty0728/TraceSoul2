@@ -252,7 +252,10 @@ namespace TraceSoul2.Migrate
             var cognitions = activeCognitions ?? new List<CognitionSliceRecord>();
             if (cognitions.Count == 0) builder.AppendLine(CorePrompts.Migration.Empty);
             foreach (var c in cognitions.Take(40))
-                builder.AppendLine("- " + c.Id + " | " + c.Summary + " | 领域 " + c.Domains + " | 范围 " + c.Scope + " | 例外 " + c.Exceptions + " | 状态 " + c.Status + " | 置信 " + c.Confidence.ToString("0.00") + " | " + c.Subtype + " | 摘要用途 " + c.IdentitySlot + " | 对象 " + c.About);
+            {
+                var name = string.IsNullOrWhiteSpace(c.About) ? c.Summary : c.About;
+                builder.AppendLine("- " + c.Id + " | " + name + " | 领域 " + c.Domains + " | 摘要用途 " + c.IdentitySlot);
+            }
             builder.AppendLine();
             builder.AppendLine(CorePrompts.Migration.CognitionTagsHeader);
             var tags = (activeTags ?? new List<LifeTagRecord>())
@@ -274,7 +277,7 @@ namespace TraceSoul2.Migrate
                 List<EventEntryRecord> list;
                 if (entriesByIndex.TryGetValue(index.Id, out list))
                     foreach (var entry in list)
-                        builder.AppendLine("  - " + entry.Summary + (string.IsNullOrWhiteSpace(entry.Detail) ? "" : "｜" + entry.Detail));
+                        builder.AppendLine("  - " + entry.Summary);
             }
             builder.AppendLine();
             builder.AppendLine("【本次可引用的原始经历：未展示部分不得臆测；选择确实支持或挑战理解的 ID】");
