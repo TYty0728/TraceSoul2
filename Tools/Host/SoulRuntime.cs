@@ -461,20 +461,6 @@ namespace TraceSoul2.Host
             var today = Store.GetTodayNewItemsByDay(ConversationId, dayKey)
                 .Select(x => new { x.Content, x.SourceMomentId, x.CreatedUnixMs }).ToList();
             var latest = LastTurnPayload();
-            // 历史补构建会刷新写入时间；实时状态按事件发生时间展示最近的事件。
-            var activeEvents = Store.GetActiveEventIndexes()
-                .OrderByDescending(x => x.TimeUnixMs)
-                .ThenByDescending(x => x.UpdatedUnixMs)
-                .Take(8)
-                .Select(x => new
-                {
-                    x.Id,
-                    x.EventSummary,
-                    time = TimeLanguageUtil.RelativeWhen(x.TimeUnixMs, now),
-                    x.MoodLabel,
-                    x.UpdatedUnixMs
-                })
-                .ToList();
             return new
             {
                 hostTime = now.ToString("O"),
@@ -537,8 +523,7 @@ namespace TraceSoul2.Host
                     trajectoryReading = LifeReadingBudgetLogic.TrajectoryReading(Store, ConversationId, dayKey),
                     todayNewItems = today,
                     todayNewReading = LifeReadingBudgetLogic.TodayNewReading(Store, ConversationId, dayKey),
-                    activeEvents,
-                    activeEventsReading = LifeReadingBudgetLogic.EventsReading(Store, ConversationId),
+                    ladderReading = LadderContextLogic.Reading(Store.GetAllLadderItems(), now),
                     recentMoments = lastMoments
                 }
             };
@@ -967,35 +952,23 @@ namespace TraceSoul2.Host
             };
         }
 
-        /// <summary>时间阶梯榜单（日/周/月/年/永久，各取最新周期）——控制台展示。</summary>
+        /// <summary>当前注入的榜：昨天日榜 10，周、月、年、永久各 3。空榜省略。</summary>
         public object LadderStatus()
         {
-            var items = Store.GetAllLadderItems();
-            var tiers = new[] { "day", "week", "month", "year", "forever" };
-            var names = new Dictionary<string, string>(StringComparer.Ordinal)
-            {
-                { "day", "日榜" }, { "week", "周榜" }, { "month", "月榜" },
-                { "year", "年榜" }, { "forever", "永久榜" }
-            };
-            var result = new List<object>();
-            foreach (var tier in tiers)
-            {
-                var latest = items.Where(x => x.Tier == tier)
-                    .GroupBy(x => x.PeriodKey)
-                    .OrderByDescending(x => x.Key)
-                    .FirstOrDefault();
-                result.Add(new
+            return LadderContextLogic.Boards(Store.GetAllLadderItems(), DateTimeOffset.Now)
+                .Select(board => new
                 {
-                    tier,
-                    name = names[tier],
-                    period = latest == null ? string.Empty : latest.Key,
-                    items = latest == null
-                        ? new List<object>()
-                        : latest.OrderBy(x => x.Rank).Select(x => new { x.Rank, x.Label, x.Reason })
-                            .Cast<object>().ToList()
-                });
-            }
-            return result;
+                    tier = board.Tier,
+                    name = board.Title,
+                    period = board.PeriodKey,
+                    items = board.Items.Select(x => new
+                    {
+                        rank = x.Rank,
+                        label = x.Label,
+                        reason = x.Reason ?? string.Empty,
+                        kind = string.IsNullOrWhiteSpace(x.ListKind) ? "event" : x.ListKind
+                    }).ToList()
+                }).ToList();
         }
 
         /// <summary>今天的轨迹（逐条保存，按北京时间 04:00 切换记忆日）。</summary>

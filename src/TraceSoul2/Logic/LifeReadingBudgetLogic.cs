@@ -11,7 +11,7 @@ using TraceSoul2.Prompts;
 
 namespace TraceSoul2.Logic
 {
-    /// <summary>今日轨迹、今日新识、活跃事件的阅读总长。超过一千字时筛一次，原件保留。</summary>
+    /// <summary>今日轨迹、今日新识的阅读总长。超过一千字时筛一次，原件保留。</summary>
     public static class LifeReadingBudgetLogic
     {
         public const int TotalLimit = 1000;
@@ -47,9 +47,6 @@ namespace TraceSoul2.Logic
         public static string TodayNewReading(IMemoryStore store, string context, string day)
             => Reading(store, TodayKey(context, day), TodayLines(store, context, day));
 
-        public static string EventsReading(IMemoryStore store, string context)
-            => Reading(store, EventsKey(context), EventLines(store));
-
         private static KernelLogic.DeferredTurnWork PrepareCore(TracePluginServices services, string context, string traceId)
         {
             if (services?.Storage is not SqliteMemoryManager store || (services.ReviewLlm ?? services.Llm) == null)
@@ -58,8 +55,7 @@ namespace TraceSoul2.Logic
             var pending = new[]
             {
                 PieceOf(TrajectoryKey(context, day), "今日轨迹", TrajectoryLines(store, context, day)),
-                PieceOf(TodayKey(context, day), "今日新识", TodayLines(store, context, day)),
-                PieceOf(EventsKey(context), "活跃事件", EventLines(store))
+                PieceOf(TodayKey(context, day), "今日新识", TodayLines(store, context, day))
             }.Where(x => x != null && NeedsRefine(store, x)).ToList();
             if (pending.Count == 0) return null;
             var llm = services.ReviewLlm ?? services.Llm;
@@ -156,15 +152,7 @@ namespace TraceSoul2.Logic
                 .Where(x => x.Length > 0).ToList();
         }
 
-        private static List<string> EventLines(IMemoryStore store)
-        {
-            if (store is not SqliteMemoryManager sqlite) return new();
-            return sqlite.GetActiveEventIndexes().OrderByDescending(x => x.TimeUnixMs).ThenByDescending(x => x.UpdatedUnixMs)
-                .Select(x => (x.EventSummary ?? string.Empty).Trim()).Where(x => x.Length > 0).ToList();
-        }
-
         private static string TrajectoryKey(string context, string day) => context + ":" + day + ":trajectory";
         private static string TodayKey(string context, string day) => context + ":" + day + ":today-new";
-        private static string EventsKey(string context) => context + ":events";
     }
 }

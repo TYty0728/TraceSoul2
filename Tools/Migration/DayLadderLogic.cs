@@ -14,13 +14,12 @@ namespace TraceSoul2.Migrate
 {
     /// <summary>
     /// 时间阶梯榜单（日 → 周 → 月 → 年 → 永久）：
-    /// 每层 5 条，单独维护；晋升 = 移动——事件升入上层后从下层移出，跨层不重复。
+    /// 日榜 10 条，周榜、月榜、年榜、永久榜各 3 条；事件与认知各自持榜。晋升 = 移动——事件升入上层后从下层移出，跨层不重复。
     /// 上层候选 = 本层已有条目 ∪ 下层胜者，滚动重建不会丢失已晋升条目。
     /// 全部幂等：重跑同周期整批替换。
     /// </summary>
     public static class DayLadderLogic
     {
-        private const int LadderSize = 5;
         private const int CandidateCap = 20;
 
         public static async Task<List<LadderItemRecord>> RankDayAsync(
@@ -41,11 +40,11 @@ namespace TraceSoul2.Migrate
                 return new List<LadderItemRecord>();
             }
 
-            var prompt = BuildRankPrompt(pair, dayKey, ordered, "日榜·事件", LadderSize);
+            var prompt = BuildRankPrompt(pair, dayKey, ordered, "日榜·事件", LadderContextLogic.Capacity("day"));
             var output = await AskRankAsync(context, llm, dayKey + "|event", prompt);
             var items = ResolveDayItems(output, ordered, dayKey);
             Console.WriteLine("  事件日榜 " + items.Count + " 条：" +
-                              string.Join("；", items.Select(x => x.Rank + "." + x.Label).Take(LadderSize)));
+                              string.Join("；", items.Select(x => x.Rank + "." + x.Label).Take(LadderContextLogic.Capacity("day"))));
             return items;
         }
 
@@ -72,7 +71,7 @@ namespace TraceSoul2.Migrate
             var output = await AskRankAsync(context, llm, dayKey + "|cognition", prompt);
             var items = ResolveDayCognitionItems(output, ordered, dayKey);
             Console.WriteLine("  认知日榜 " + items.Count + " 条：" +
-                              string.Join("；", items.Select(x => x.Rank + "." + x.Label).Take(LadderSize)));
+                              string.Join("；", items.Select(x => x.Rank + "." + x.Label).Take(LadderContextLogic.Capacity("day"))));
             return items;
         }
 
@@ -127,7 +126,7 @@ namespace TraceSoul2.Migrate
                 calls += await PromoteYearAsync(context, pair, llm, year);
             calls += await PromoteForeverAsync(context, pair, llm);
             var pruned = context.Migration.PruneCrossTierLadderDuplicates();
-            Console.WriteLine("  榜单晋升完成：共 " + calls + " 次调用（周/月/年/永久，每层 5 条，跨层不重复）。");
+            Console.WriteLine("  榜单晋升完成：共 " + calls + " 次调用（周/月/年/永久各 3 条，跨层不重复）。");
             if (pruned > 0)
                 Console.WriteLine("  榜单跨层归一化：移除 " + pruned + " 条低层重复记录。");
             return calls;
@@ -178,7 +177,7 @@ namespace TraceSoul2.Migrate
 
         /// <summary>
         /// 晋升一层：候选 = 本层已有条目 ∪ 下层胜者（去重）；事件与认知不可比、各持榜单，
-        /// 各自独立排名（各 ≤5 条），合并后整批替换本层，
+        /// 各自独立排名（周/月/年/永久各 ≤3 条，日榜 ≤10 条），合并后整批替换本层，
         /// 再把晋升的 RefId 从下层周期里移出（晋升=移动，跨层不重复）。
         /// </summary>
         private static async Task<int> PromoteTierAsync(
@@ -217,14 +216,14 @@ namespace TraceSoul2.Migrate
                     .ToList();
                 if (candidates.Count == 0) continue;
                 var kindName = kind == "cognition" ? "认知" : "事件";
-                var prompt = BuildRankPrompt(pair, periodKey + "·" + kindName, candidates, tierName + kindName, LadderSize);
+                var prompt = BuildRankPrompt(pair, periodKey + "·" + kindName, candidates, tierName + kindName, LadderContextLogic.Capacity(tier));
                 var output = await AskRankAsync(context, llm, periodKey + "|" + tier + "|" + kind, prompt);
                 var aliasToCandidate = new Dictionary<string, LadderItemRecord>(StringComparer.OrdinalIgnoreCase);
                 for (var i = 0; i < candidates.Count; i++) aliasToCandidate["i" + (i + 1)] = candidates[i];
                 var rank = 1;
                 foreach (var item in output.items ?? new List<LadderRankItemData>())
                 {
-                    if (item == null || rank > LadderSize) break;
+                    if (item == null || rank > LadderContextLogic.Capacity(tier)) break;
                     LadderItemRecord source;
                     if (!aliasToCandidate.TryGetValue((item.index_alias ?? string.Empty).Trim(), out source)) continue;
                     kept.Add(new LadderItemRecord
@@ -283,7 +282,7 @@ namespace TraceSoul2.Migrate
             var rank = 1;
             foreach (var item in output.items ?? new List<LadderRankItemData>())
             {
-                if (item == null || rank > LadderSize) break;
+                if (item == null || rank > LadderContextLogic.Capacity("day")) break;
                 string refId;
                 if (!aliasToId.TryGetValue((item.index_alias ?? string.Empty).Trim(), out refId)) continue;
                 var index = ordered.FirstOrDefault(x => x.Id == refId);
@@ -321,7 +320,7 @@ namespace TraceSoul2.Migrate
             var rank = 1;
             foreach (var item in output.items ?? new List<LadderRankItemData>())
             {
-                if (item == null || rank > LadderSize) break;
+                if (item == null || rank > LadderContextLogic.Capacity("day")) break;
                 string refId;
                 if (!aliasToId.TryGetValue((item.index_alias ?? string.Empty).Trim(), out refId)) continue;
                 var cognition = ordered.FirstOrDefault(x => x.Id == refId);
@@ -352,7 +351,7 @@ namespace TraceSoul2.Migrate
             for (var i = 0; i < ordered.Count; i++)
                 builder.AppendLine("i" + (i + 1) + " | " + ordered[i].Summary + " | 置信 " + ordered[i].Confidence.ToString("0.00"));
             builder.AppendLine();
-            builder.AppendLine(CorePrompts.Migration.CognitionRankAsk(LadderSize));
+            builder.AppendLine(CorePrompts.Migration.CognitionRankAsk(LadderContextLogic.Capacity("day")));
             builder.AppendLine(CorePrompts.Migration.RankJsonSchema);
             return builder.ToString();
         }

@@ -980,6 +980,19 @@ namespace TraceSoul2.Manager
             EnsureColumn("cognition_slices", "Exceptions", "TEXT");
             EnsureColumn("cognition_slices", "Strength", "REAL");
             ArchiveLegacyOperationalMoments();
+            DropRetiredActiveEventReadings();
+        }
+
+        /// <summary>0.1.35 曾把全部活跃事件收成一份阅读稿。这次升级删掉那份稿，只做一次；事件索引保留。</summary>
+        private void DropRetiredActiveEventReadings()
+        {
+            const string markerPlugin = "kernel.upgrades";
+            const string markerKey = "drop-active-event-reading";
+            if (LoadPluginDocument(markerPlugin, markerKey) == "done") return;
+            connection.Execute(
+                "DELETE FROM plugin_documents WHERE PluginId=? AND (DocumentKey LIKE '%:events' OR DocumentKey LIKE '%:events:attempt')",
+                "runtime.reading-budget");
+            SavePluginDocument(markerPlugin, markerKey, "done");
         }
 
         /// <summary>
