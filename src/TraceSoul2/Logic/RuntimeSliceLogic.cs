@@ -44,11 +44,31 @@ namespace TraceSoul2.Logic
 
         public static string EvidenceContext(SqliteMemoryManager store, IEnumerable<MomentRecord> evidence)
         {
-            var slices = store.GetRuntimeSlicesForMoments(evidence.Select(x => x.Id));
-            if (slices.Count == 0) return "";
+            var lines = store.GetRuntimeSlicesForMoments(evidence.Select(x => x.Id))
+                .Select(x => x.MomentId + "｜" + SliceFeeling(x.SnapshotJson))
+                .Where(x => !x.EndsWith("｜", StringComparison.Ordinal)).ToList();
+            if (lines.Count == 0) return "";
             return "\n【这些经历发生时的 runtime 切片】\n切片是当时的主观感受、关注与轨迹，不是外部事实确认；"
                 + "只能引用本批真实 Moment 作为认知依据，不将自己的想法当作对方反馈。\n"
-                + string.Join("\n", slices.Select(x => x.MomentId + "｜" + x.SnapshotJson));
+                + string.Join("\n", lines);
+        }
+
+        private static string SliceFeeling(string json)
+        {
+            try
+            {
+                using var document = JsonDocument.Parse(json ?? "");
+                var root = document.RootElement;
+                var parts = new List<string>();
+                foreach (var key in new[] { "inner", "today", "activity" })
+                {
+                    if (!root.TryGetProperty(key, out var value) || value.ValueKind != JsonValueKind.String) continue;
+                    var text = (value.GetString() ?? "").Trim();
+                    if (text.Length > 0) parts.Add(text);
+                }
+                return string.Join("；", parts);
+            }
+            catch (JsonException) { return ""; }
         }
 
         public static IEnumerable<List<MomentRecord>> EvidenceBatches(SqliteMemoryManager store, IEnumerable<MomentRecord> moments)

@@ -33,6 +33,22 @@ internal static partial class Program
         });
         Require(prompt.Contains("visible-evidence") && prompt.Contains(evidence[0].Content) && prompt.Contains("evidence_moment_ids") &&
             prompt.Contains("user=他") && prompt.Contains("world=世界"), "真实日构建Prompt必须提供证据原文、ID及四领域规则");
+        var indexed = (string)prompts.GetMethod("BuildCognitionFormationPrompt").Invoke(null, new object[]
+        {
+            PairIdentity.Missing, "2026-09-27",
+            new List<CognitionSliceRecord> { new CognitionSliceRecord { Id = "cog-index", Summary = "完整理解不应整段贴进请求",
+                Scope = "范围不该进提示", Exceptions = "例外不该进提示", About = "短对象", Domains = "ass,relation", IdentitySlot = "relation" } },
+            new List<LifeTagRecord>(),
+            new List<EventIndexRecord> { new EventIndexRecord { Id = "idx-1", TimeLabel = "晚上", PlaceLabel = "屋里",
+                PersonLabel = "她", EventSummary = "事件短句", FirstMomentId = "visible-evidence" } },
+            new List<EventEntryRecord> { new EventEntryRecord { IndexId = "idx-1", Summary = "条目短句", Detail = "细节不该进认知提示",
+                SourceMomentId = "visible-evidence" } },
+            "他", evidence
+        });
+        Require(indexed.Contains("cog-index") && indexed.Contains("短对象") && indexed.Contains("事件短句") && indexed.Contains("条目短句") &&
+            !indexed.Contains("完整理解不应整段贴进请求") && !indexed.Contains("范围不该进提示") && !indexed.Contains("例外不该进提示") &&
+            !indexed.Contains("细节不该进认知提示"),
+            "认知请求只用对象索引和事件短句，不重复贴完整理解和细节");
         var cardType = prompts.GetNestedType("CardUpdateData");
         Require(cardType?.GetField("cognition_ids") != null, "实际 Migration 身份摘要 DTO 必须包含认知依据");
         var migrationPrompts = assembly.GetType("TraceSoul2.Prompts.CorePrompts+Migration", true);

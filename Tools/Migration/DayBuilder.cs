@@ -494,8 +494,12 @@ namespace TraceSoul2.Migrate
                     .ThenBy(x => x.Label, StringComparer.Ordinal).Take(60).ToList();
                 var cardsNow = context.Store.LoadIdentityCards(MigrationContext.ConversationId);
                 var userPronoun = IdentityCardLogic.UserPronoun(cardsNow, pair);
+                var momentIds = new HashSet<string>(evidence.Select(x => x.Id));
+                var batchEntries = dayEntries.Where(x => momentIds.Contains(x.SourceMomentId)).ToList();
+                var batchIndexIds = new HashSet<string>(batchEntries.Select(x => x.IndexId));
+                var batchIndexes = dayIndexes.Where(x => batchIndexIds.Contains(x.Id) || momentIds.Contains(x.FirstMomentId)).ToList();
                 var prompt = ReplayPrompts.BuildCognitionFormationPrompt(
-                    pair, dayKey, activeCognitions, activeTags, dayIndexes, dayEntries, userPronoun, evidence)
+                    pair, dayKey, activeCognitions, activeTags, batchIndexes, batchEntries, userPronoun, evidence)
                     + RuntimeSliceLogic.EvidenceContext(context.Store, evidence);
                 var messages = new List<DeepSeekMessageData>
                 {
