@@ -87,8 +87,8 @@ namespace TraceSoul2.Manager
 
         public void CommitRuntimeDaySummary(IEnumerable<string> reviewIds, string summary)
         {
-            if (string.IsNullOrWhiteSpace(summary) || summary.Length > RuntimeSliceLogic.DaySummaryLimit)
-                throw new InvalidOperationException("整天回望须为1～1200字。");
+            if (string.IsNullOrWhiteSpace(summary) || summary.Length > RuntimeSliceLogic.DaySummaryAccept)
+                throw new InvalidOperationException("整天回望须为1～1000字。");
             connection.RunInTransaction(() =>
             {
                 var ids = reviewIds.Distinct().ToList();
@@ -138,8 +138,8 @@ namespace TraceSoul2.Manager
 
         public RuntimeDayReviewRecord CommitRuntimeSliceReview(IEnumerable<string> sourceIds, string summary)
         {
-            if (string.IsNullOrWhiteSpace(summary) || summary.Length > RuntimeSliceLogic.DaySummaryLimit)
-                throw new InvalidOperationException("切片整理须为1～1200字。");
+            if (string.IsNullOrWhiteSpace(summary))
+                throw new InvalidOperationException("切片整理不能为空。");
             RuntimeDayReviewRecord result = null;
             connection.RunInTransaction(() =>
             {

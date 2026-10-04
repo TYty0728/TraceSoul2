@@ -952,7 +952,27 @@ namespace TraceSoul2.Host
             };
         }
 
-        /// <summary>当前注入的榜：昨天日榜 10，周、月、年、永久各 3。空榜省略。</summary>
+        private static List<object> NumberWithinKind(IReadOnlyList<LadderItemRecord> items)
+        {
+            var result = new List<object>();
+            var seen = new Dictionary<string, int>(StringComparer.Ordinal);
+            foreach (var item in items ?? Array.Empty<LadderItemRecord>())
+            {
+                var kind = string.IsNullOrWhiteSpace(item.ListKind) ? "event" : item.ListKind;
+                var next = seen.TryGetValue(kind, out var count) ? count + 1 : 1;
+                seen[kind] = next;
+                result.Add(new
+                {
+                    rank = next,
+                    label = item.Label,
+                    reason = item.Reason ?? string.Empty,
+                    kind
+                });
+            }
+            return result;
+        }
+
+        /// <summary>记忆页上的完整榜：昨天日榜 10，周、月、年、永久各 3。runtime 另按注入名额截短。</summary>
         public object LadderStatus()
         {
             return LadderContextLogic.Boards(Store.GetAllLadderItems(), DateTimeOffset.Now)
@@ -961,13 +981,7 @@ namespace TraceSoul2.Host
                     tier = board.Tier,
                     name = board.Title,
                     period = board.PeriodKey,
-                    items = board.Items.Select(x => new
-                    {
-                        rank = x.Rank,
-                        label = x.Label,
-                        reason = x.Reason ?? string.Empty,
-                        kind = string.IsNullOrWhiteSpace(x.ListKind) ? "event" : x.ListKind
-                    }).ToList()
+                    items = NumberWithinKind(board.Items)
                 }).ToList();
         }
 

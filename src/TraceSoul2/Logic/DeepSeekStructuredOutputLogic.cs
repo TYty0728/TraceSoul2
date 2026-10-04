@@ -48,10 +48,13 @@ namespace TraceSoul2.Logic
             var repair = new List<DeepSeekMessageData>(messages);
             if (!runaway)
                 repair.Add(new DeepSeekMessageData("assistant", Limit(raw, 16000)));
+            var lengthOverrun = IsLengthOverrun(firstError);
             repair.Add(new DeepSeekMessageData(
                 "user",
-                CorePrompts.Retry.JsonRepairUser(failure) +
-                " 请重新输出完整 JSON，不要只输出修改片段；字符串中的双引号必须转义，属性和值之间用冒号，属性之间用逗号。"));
+                lengthOverrun
+                    ? "上一条不满足要求：" + failure + "。这不是新输入。新正文必须更短，删掉次要的事，只留少数转折。重新输出完整 JSON；不要解释，不要 Markdown。"
+                    : CorePrompts.Retry.JsonRepairUser(failure) +
+                      " 请重新输出完整 JSON，不要只输出修改片段；字符串中的双引号必须转义，属性和值之间用冒号，属性之间用逗号。"));
             var repairedRaw = await client.CompleteJsonAsync(repair, cancellationToken, promptCacheKey);
             try
             {
@@ -181,6 +184,8 @@ namespace TraceSoul2.Logic
             }
             return inString || depth != 0;
         }
+
+        public static T Read<T>(string raw) where T : class => Parse<T>(raw);
 
         private static T Parse<T>(string raw, Action<T, IReadOnlyCollection<string>> onParsed = null) where T : class
         {

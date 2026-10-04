@@ -333,6 +333,9 @@ internal static partial class Program
         Require(LadderContextLogic.Capacity("day") == 10 && LadderContextLogic.Capacity("week") == 3 &&
             LadderContextLogic.Capacity("month") == 3 && LadderContextLogic.Capacity("year") == 3 &&
             LadderContextLogic.Capacity("forever") == 3, "日榜 10，周月年永久各 3");
+        Require(LadderContextLogic.InjectCount("day") == 5 && LadderContextLogic.InjectCount("week") == 2 &&
+            LadderContextLogic.InjectCount("month") == 2 && LadderContextLogic.InjectCount("year") == 2 &&
+            LadderContextLogic.InjectCount("forever") == 2, "注入日榜 5，其余各 2");
         var now = new DateTimeOffset(2026, 10, 4, 12, 0, 0, TimeSpan.FromHours(8));
         var items = new List<LadderItemRecord>();
         for (var rank = 1; rank <= 11; rank++)
@@ -340,25 +343,30 @@ internal static partial class Program
         items.Add(new LadderItemRecord { Tier = "day", PeriodKey = "2026-10-02", ListKind = "event", Rank = 1, Label = "更早的一天", Reason = "不该出现" });
         items.Add(new LadderItemRecord { Tier = "day", PeriodKey = "2026-10-03", ListKind = "cognition", Rank = 1, Label = "她把怕的事说出来了", Reason = "关系往前了" });
         for (var rank = 1; rank <= 4; rank++)
-            items.Add(new LadderItemRecord { Tier = "week", PeriodKey = "2026-09-28", ListKind = "event", Rank = rank, Label = "周" + rank, Reason = "本周理由" });
+            items.Add(new LadderItemRecord { Tier = "week", PeriodKey = "2026-09-28", ListKind = "event", Rank = rank + 5, Label = "周" + rank, Reason = "本周理由" });
         items.Add(new LadderItemRecord { Tier = "week", PeriodKey = "2026-09-21", ListKind = "event", Rank = 1, Label = "更早的一周", Reason = "不该出现" });
         items.Add(new LadderItemRecord { Tier = "week", PeriodKey = "2026-10-05", ListKind = "event", Rank = 1, Label = "还没到的一周", Reason = "不该出现" });
         items.Add(new LadderItemRecord { Tier = "month", PeriodKey = "2026-09", ListKind = "event", Rank = 1, Label = "九月留下的事", Reason = "月榜理由" });
         items.Add(new LadderItemRecord { Tier = "year", PeriodKey = "2026", ListKind = "event", Rank = 1, Label = "这一年的事", Reason = "年榜理由" });
         for (var rank = 1; rank <= 4; rank++)
             items.Add(new LadderItemRecord { Tier = "forever", PeriodKey = "forever", ListKind = "event", Rank = rank, Label = "永久" + rank, Reason = "一直记得" });
+        var page = LadderContextLogic.Boards(items, now);
+        var yesterday = page.Single(x => x.Title == "昨天");
+        Require(yesterday.Items.Count(x => x.ListKind != "cognition") == 10 && yesterday.Items.Any(x => x.Label == "日10") &&
+            !yesterday.Items.Any(x => x.Label == "日11"),
+            "记忆页仍展示昨天日榜 10 条");
         var text = LadderContextLogic.Reading(items, now).Replace("\r\n", "\n");
-        Require(text.StartsWith("昨天\n1. 日1\n") && text.Contains("\n10. 日10\n") && !text.Contains("日11") &&
+        Require(text.StartsWith("昨天\n1. 日1\n") && text.Contains("\n5. 日5\n") && !text.Contains("日6") && !text.Contains("日11") &&
             !text.Contains("更早的一天") && text.Contains("认知\n1. 她把怕的事说出来了\n"),
-            "昨天只取刚结束那天的日榜，事件 10 条，认知另列");
-        Require(text.Contains("本周\n1. 周1\n") && text.Contains("\n3. 周3") && !text.Contains("周4") &&
+            "注入只取昨天日榜前 5 条，认知另列");
+        Require(text.Contains("本周\n1. 周1\n") && text.Contains("\n2. 周2") && !text.Contains("周3") && !text.Contains("6. 周") &&
             !text.Contains("更早的一周") && !text.Contains("还没到的一周"),
-            "本周用不晚于本周一的最新周榜，只取 3 条");
+            "本周用不晚于本周一的最新周榜，注入只取 2 条");
         Require(text.Contains("本月\n1. 九月留下的事\n") && text.Contains("本年\n1. 这一年的事\n") &&
-            text.Contains("永久\n1. 永久1\n") && text.Contains("\n3. 永久3") && !text.Contains("永久4") &&
+            text.Contains("永久\n1. 永久1\n") && text.Contains("\n2. 永久2") && !text.Contains("永久3") &&
             !text.Contains("这一天的终点") && !text.Contains("关系往前了") && !text.Contains("本周理由") && !text.Contains("一直记得"),
-            "本月、本年、永久取当前可见榜，永久只取 3 条，注入不带上榜理由");
-        Console.WriteLine("Ladder context checks passed: yesterday and standing boards, sized 10/3/3/3/3.");
+            "本月、本年、永久取当前可见榜，永久注入 2 条，注入不带上榜理由");
+        Console.WriteLine("Ladder context checks passed: page keeps 10/3, injection uses 5/2.");
     }
 
     private static void RunRetiredActiveEventReadingCleanupChecks()
