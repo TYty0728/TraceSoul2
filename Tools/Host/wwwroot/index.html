@@ -2001,6 +2001,11 @@
   function liveFieldHtml(key, html, isEmpty) {
     return `<div class="live-field"><div class="key">${esc(key)}</div><div class="value${isEmpty ? " empty" : ""}">${html}</div></div>`;
   }
+  function liveLadder(text) {
+    const raw = String(text || "").trim();
+    const html = raw.split(/\r?\n/).map(line => esc(line)).join("<br>");
+    return liveFieldHtml("榜单", html || "—", !raw);
+  }
   function liveEventGroups(key, groups) {
     const byTime = new Map();
     for (const group of groups || []) {
@@ -2090,7 +2095,7 @@
       liveField("正在做", doingText || "空闲") +
       (c.trajectoryReading ? liveField("今日轨迹", c.trajectoryReading) : (c.trajectoryGroups ? liveEventGroups("今日轨迹", c.trajectoryGroups) : liveField("今日轨迹", c.trajectory))) +
       (c.todayNewReading ? liveField("今日新识", c.todayNewReading) : `<div class="live-field"><div class="key">今日新识</div><div class="value">${c.todayNewItems && c.todayNewItems.length ? c.todayNewItems.map(x => esc(x.content)).join("；") : "—"}</div></div>`) +
-      (c.activeEventsReading ? liveField("活跃事件", c.activeEventsReading) : liveEventGroups("活跃事件", (c.activeEvents || []).map(x => ({ time: x.time, events: [x.eventSummary || x.id] }))));
+      liveLadder(c.ladderReading);
     $("liveHeartbeatBox").innerHTML =
       liveField("当前状态", asleep ? "睡着后停止自醒" : (idle ? (h.enabled ? "空闲生活中，保留下一次醒来" : "空闲，当前没有心跳任务") : (h.enabled ? "等待下一次醒来" : "当前没有心跳任务"))) +
       liveField("时间范围", (h.minMinutes || 0) + "–" + (h.maxMinutes || 0) + " 分钟") +
@@ -2262,10 +2267,18 @@
         head.style.cssText = "font-weight:bold;color:#8fb3e8;margin:6px 0 2px";
         head.textContent = t.name + (t.period ? "（" + t.period + "）" : "（暂无）");
         box.append(head);
+        let shownCognition = false;
         for (const item of t.items) {
+          if (item.kind === "cognition" && !shownCognition) {
+            const sub = document.createElement("div");
+            sub.style.cssText = "font-size:12px;color:#8fb3e8;padding-left:10px";
+            sub.textContent = "认知";
+            box.append(sub);
+            shownCognition = true;
+          }
           const line = document.createElement("div");
           line.style.cssText = "font-size:12px;color:#d6d8dd;padding-left:10px;white-space:pre-wrap";
-          line.textContent = item.rank + ". " + item.label + "（" + item.reason + "）";
+          line.textContent = item.rank + ". " + item.label + (item.reason ? "（" + item.reason + "）" : "");
           box.append(line);
         }
       }

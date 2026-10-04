@@ -3,6 +3,7 @@ using System.Collections.Generic;
 using System.IO;
 using System.Linq;
 using System.Threading.Tasks;
+using SQLite;
 using TraceSoul2.Data;
 using TraceSoul2.Logic;
 using TraceSoul2.Manager;
@@ -58,6 +59,8 @@ internal static partial class Program
         await RunCompactDayOverviewChecksAsync();
         await RunDayOverviewKernelCheckAsync();
         await RunLifeReadingBudgetChecksAsync();
+        RunLadderContextChecks();
+        RunRetiredActiveEventReadingCleanupChecks();
         var path = Path.Combine(Path.GetTempPath(), "tracesoul-overview-" + Guid.NewGuid().ToString("N") + ".sqlite3");
         try
         {
@@ -323,5 +326,96 @@ internal static partial class Program
         }
         finally { foreach (var suffix in new[] { "", "-wal", "-shm" }) if (File.Exists(path + suffix)) File.Delete(path + suffix); }
         Console.WriteLine("Life reading budget checks passed: one selection under 1000, originals kept, no repeat.");
+    }
+
+    private static void RunLadderContextChecks()
+    {
+        Require(LadderContextLogic.Capacity("day") == 10 && LadderContextLogic.Capacity("week") == 3 &&
+            LadderContextLogic.Capacity("month") == 3 && LadderContextLogic.Capacity("year") == 3 &&
+            LadderContextLogic.Capacity("forever") == 3, "日榜 10，周月年永久各 3");
+        var now = new DateTimeOffset(2026, 10, 4, 12, 0, 0, TimeSpan.FromHours(8));
+        var items = new List<LadderItemRecord>();
+        for (var rank = 1; rank <= 11; rank++)
+            items.Add(new LadderItemRecord { Tier = "day", PeriodKey = "2026-10-03", ListKind = "event", Rank = rank, Label = "日" + rank, Reason = rank == 1 ? "这一天的终点" : "" });
+        items.Add(new LadderItemRecord { Tier = "day", PeriodKey = "2026-10-02", ListKind = "event", Rank = 1, Label = "更早的一天", Reason = "不该出现" });
+        items.Add(new LadderItemRecord { Tier = "day", PeriodKey = "2026-10-03", ListKind = "cognition", Rank = 1, Label = "她把怕的事说出来了", Reason = "关系往前了" });
+        for (var rank = 1; rank <= 4; rank++)
+            items.Add(new LadderItemRecord { Tier = "week", PeriodKey = "2026-09-28", ListKind = "event", Rank = rank, Label = "周" + rank, Reason = "本周理由" });
+        items.Add(new LadderItemRecord { Tier = "week", PeriodKey = "2026-09-21", ListKind = "event", Rank = 1, Label = "更早的一周", Reason = "不该出现" });
+        items.Add(new LadderItemRecord { Tier = "week", PeriodKey = "2026-10-05", ListKind = "event", Rank = 1, Label = "还没到的一周", Reason = "不该出现" });
+        items.Add(new LadderItemRecord { Tier = "month", PeriodKey = "2026-09", ListKind = "event", Rank = 1, Label = "九月留下的事", Reason = "月榜理由" });
+        items.Add(new LadderItemRecord { Tier = "year", PeriodKey = "2026", ListKind = "event", Rank = 1, Label = "这一年的事", Reason = "年榜理由" });
+        for (var rank = 1; rank <= 4; rank++)
+            items.Add(new LadderItemRecord { Tier = "forever", PeriodKey = "forever", ListKind = "event", Rank = rank, Label = "永久" + rank, Reason = "一直记得" });
+        var text = LadderContextLogic.Reading(items, now).Replace("\r\n", "\n");
+        Require(text.StartsWith("昨天\n1. 日1\n") && text.Contains("\n10. 日10\n") && !text.Contains("日11") &&
+            !text.Contains("更早的一天") && text.Contains("认知\n1. 她把怕的事说出来了\n"),
+            "昨天只取刚结束那天的日榜，事件 10 条，认知另列");
+        Require(text.Contains("本周\n1. 周1\n") && text.Contains("\n3. 周3") && !text.Contains("周4") &&
+            !text.Contains("更早的一周") && !text.Contains("还没到的一周"),
+            "本周用不晚于本周一的最新周榜，只取 3 条");
+        Require(text.Contains("本月\n1. 九月留下的事\n") && text.Contains("本年\n1. 这一年的事\n") &&
+            text.Contains("永久\n1. 永久1\n") && text.Contains("\n3. 永久3") && !text.Contains("永久4") &&
+            !text.Contains("这一天的终点") && !text.Contains("关系往前了") && !text.Contains("本周理由") && !text.Contains("一直记得"),
+            "本月、本年、永久取当前可见榜，永久只取 3 条，注入不带上榜理由");
+        Console.WriteLine("Ladder context checks passed: yesterday and standing boards, sized 10/3/3/3/3.");
+    }
+
+    private static void RunRetiredActiveEventReadingCleanupChecks()
+    {
+        var path = Path.Combine(Path.GetTempPath(), "tracesoul-events-reading-" + Guid.NewGuid().ToString("N") + ".sqlite3");
+        try
+        {
+            using (var raw = new SQLiteConnection(path))
+            {
+                raw.CreateTable<PluginDocumentRecord>();
+                raw.Insert(new PluginDocumentRecord
+                {
+                    Id = "runtime.reading-budget:main:events",
+                    PluginId = "runtime.reading-budget",
+                    DocumentKey = "main:events",
+                    Json = "{\"text\":\"旧活跃事件阅读\"}",
+                    UpdatedUnixMs = 1
+                });
+                raw.Insert(new PluginDocumentRecord
+                {
+                    Id = "runtime.reading-budget:main:events:attempt",
+                    PluginId = "runtime.reading-budget",
+                    DocumentKey = "main:events:attempt",
+                    Json = "旧原文",
+                    UpdatedUnixMs = 1
+                });
+                raw.Insert(new PluginDocumentRecord
+                {
+                    Id = "runtime.reading-budget:main:2026-10-03:trajectory",
+                    PluginId = "runtime.reading-budget",
+                    DocumentKey = "main:2026-10-03:trajectory",
+                    Json = "{\"text\":\"轨迹还在\"}",
+                    UpdatedUnixMs = 1
+                });
+            }
+            using (var store = new SqliteMemoryManager(path))
+            {
+                Require(store.LoadPluginDocument("runtime.reading-budget", "main:events") == string.Empty &&
+                    store.LoadPluginDocument("runtime.reading-budget", "main:events:attempt") == string.Empty &&
+                    store.LoadPluginDocument("runtime.reading-budget", "main:2026-10-03:trajectory").Contains("轨迹还在"),
+                    "升级一次性删掉已保存的活跃事件阅读，轨迹阅读保留");
+            }
+            using (var raw = new SQLiteConnection(path))
+            {
+                raw.Insert(new PluginDocumentRecord
+                {
+                    Id = "runtime.reading-budget:main:events",
+                    PluginId = "runtime.reading-budget",
+                    DocumentKey = "main:events",
+                    Json = "later",
+                    UpdatedUnixMs = 2
+                });
+            }
+            using (var store = new SqliteMemoryManager(path))
+                Require(store.LoadPluginDocument("runtime.reading-budget", "main:events") == "later", "清理只做一次");
+        }
+        finally { foreach (var suffix in new[] { "", "-wal", "-shm" }) if (File.Exists(path + suffix)) File.Delete(path + suffix); }
+        Console.WriteLine("Retired active-event reading cleanup passed: once, trajectory kept.");
     }
 }

@@ -116,6 +116,9 @@ namespace TraceSoul2.Logic
                         .Append(start.AddDays(1).ToString("yyyy年M月d日 HH:mm", CultureInfo.InvariantCulture))
                         .AppendLine("（北京时间，结束时刻归下一日）。").Append(daily);
                 }
+                var ladder = LadderContextLogic.Reading(storage.GetAllLadderItems(), now);
+                if (ladder.Length > 0)
+                    builder.AppendLine("\n【仍重要的事】").AppendLine("这是已经排过名的经历，不是今天正在发生的事。").Append(ladder);
             }
             return builder.ToString();
         }

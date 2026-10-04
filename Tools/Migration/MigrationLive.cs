@@ -254,7 +254,7 @@ namespace TraceSoul2.Migrate
                 builder.AppendLine();
                 builder.Append("今天我们的轨迹：").Append(trajectory.Text.Trim());
             }
-            var ladderText = BuildLadderText(context.Store.GetAllLadderItems());
+            var ladderText = LadderContextLogic.Reading(context.Store.GetAllLadderItems(), DateTimeOffset.Now);
             if (ladderText.Length > 0)
             {
                 builder.AppendLine();
@@ -273,33 +273,6 @@ namespace TraceSoul2.Migrate
             return "现在是 " + now.Year + "年" + now.Month + "月" + now.Day + "日（" + week + "·" +
                    TimeLanguage.DayKindLabel(now) + "）" + TimeLanguage.PeriodZh(TimeLanguage.PeriodOf(now)) +
                    " " + timeText + "。";
-        }
-
-        private static string BuildLadderText(List<LadderItemRecord> items)
-        {
-            var tiers = new[] { "day", "week", "month", "year", "forever" };
-            var names = new Dictionary<string, string>(StringComparer.Ordinal)
-            {
-                { "day", "日榜" }, { "week", "周榜" }, { "month", "月榜" },
-                { "year", "年榜" }, { "forever", "永久榜" }
-            };
-            var builder = new StringBuilder();
-            foreach (var tier in tiers)
-            {
-                var latest = items.Where(x => x.Tier == tier)
-                    .GroupBy(x => x.PeriodKey)
-                    .OrderByDescending(x => x.Key)
-                    .FirstOrDefault();
-                if (latest == null)
-                {
-                    builder.AppendLine(names[tier] + "：（暂无）");
-                    continue;
-                }
-                builder.AppendLine(names[tier] + "（" + latest.Key + "）：");
-                foreach (var item in latest.OrderBy(x => x.Rank))
-                    builder.AppendLine(item.Rank + ". " + item.Label + "（" + item.Reason + "）");
-            }
-            return builder.ToString().TrimEnd();
         }
 
         /// <summary>从 full_run_report.txt 解析当前进度：当前天/总数/剩余。</summary>

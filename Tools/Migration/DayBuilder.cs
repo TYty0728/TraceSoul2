@@ -20,7 +20,7 @@ namespace TraceSoul2.Migrate
     /// 新路线单天构筑：
     /// 1 天对话（已入库 moments）→ 批量构筑第四层多维索引 + 条目（一句话总结客观）
     /// → 当下切片整理、细节浸染与有依据的认知修订 → 身份摘要按依据更新（允许不变）。
-    /// 时间维度由 TimeLanguage 确定性翻译。榜单暂停，不建 ladder。
+    /// 时间维度由 TimeLanguage 确定性翻译。当天结束后排日榜，并按周一、月初、年初晋升周、月、年、永久榜。
     /// </summary>
     public static class DayBuilder
     {
