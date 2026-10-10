@@ -1,6 +1,8 @@
 # 发布验收记录
 
-2026-10-10：0.1.42准备发布。范围为认知复盘的具体字段LLM纠错，保持一次纠正、严格原始依据校验和失败暂停。真实响应只读诊断、认知专项、实际Migration入口模拟成功/连续失败/不部分写入、完整ChatCheck/Prompt与Host/Migration构建通过。未纳入工作区尚未完成的实时通话改动；独立发布检出与CI结果待补。未部署、调用真实模型或恢复日构建。
+2026-10-10：0.1.42已发布。范围为认知复盘的具体字段LLM纠错，保持一次纠正、严格原始依据校验和失败暂停。真实响应只读诊断、认知专项、实际Migration入口模拟成功/连续失败/不部分写入、完整ChatCheck/Prompt与Host/Migration构建通过。未纳入工作区尚未完成的实时通话改动；独立检出的Release全解决方案、完整ChatCheck/Prompt、Migration入口、CoreCheck、更新器及源码发布检查通过；构建0错误，24项既有相机测试类型冲突警告。未部署、调用真实模型或恢复日构建。
+
+发布确认：v0.1.42（7874bc1）已公开，[发布CI](https://github.com/TYty0728/TraceSoul2/actions/runs/38022134707) 完整回归、Docker升级/数据保留和三平台打包通过。匿名latest为v0.1.42，三个公开SHA-256文件与GitHub digest一致，SDK1.13.0资产齐全，WebUI可更新。本机未完整下载三个ZIP，未部署服务器、调用真实模型或恢复日构建。win-x64 `ad125b6eec0b8a1bed9087edab327cca81592906bce597d557c7a4a2b54806ca`；linux-x64 `90ea23344e2fa724408cff025583d1d3426ada0fc9b5294bb7694b082f460792`；linux-arm64 `211b4063db445ee3e42689774db0f59c1aaa11cf9c7062a7f503fe8d4586cabb`。
 
 2026-10-04：0.1.41已发布。表情包对不上不再记错误或警告。发布确认：v0.1.41（6d1b048）已公开，[发布CI](https://github.com/TYty0728/TraceSoul2/actions/runs/37210464710) 完整回归、Docker升级/数据保留和三平台打包通过。匿名latest为v0.1.41，三个公开SHA-256文件与GitHub digest一致，SDK1.13.0资产齐全，WebUI可更新。本机未完整下载三个ZIP，未部署服务器、调用真实模型或恢复日构建。win-x64 `190458f16a7031fc9c04a5aae0e10de34dbec1f4624c342941c569e167c33dcf`；linux-x64 `57a34db523c5c471d69797e1e5a1b16f4bcb57eb8c4955250d31c47291b64846`；linux-arm64 `df5381da46beac0d998e8c962b7e58b91d967762c2fda81aa22b89f830491f01`。
 

@@ -7,6 +7,8 @@
 
 产品 **0.1.42**，PluginApi **1.13.0**、时间调度 **1.2.4**、相机 **2.3.2**。认知专项、实际Migration入口的模拟纠错、完整ChatCheck/Prompt与Host/Migration构建通过；两份真实失败响应已只读回放定位。未部署、未恢复日构建或调用真实模型，真实模型纠错效果待更新后观察。
 
+发布确认：v0.1.42（7874bc1）已公开，[发布CI](https://github.com/TYty0728/TraceSoul2/actions/runs/38022134707) 完整回归、Docker升级/数据保留和三平台打包通过。匿名latest为v0.1.42，三个公开SHA-256文件与GitHub digest一致，SDK1.13.0资产齐全，WebUI可更新。本机未完整下载三个ZIP，未部署服务器、调用真实模型或恢复日构建。win-x64 `ad125b6eec0b8a1bed9087edab327cca81592906bce597d557c7a4a2b54806ca`；linux-x64 `90ea23344e2fa724408cff025583d1d3426ada0fc9b5294bb7694b082f460792`；linux-arm64 `211b4063db445ee3e42689774db0f59c1aaa11cf9c7062a7f503fe8d4586cabb`。
+
 ## 0.1.41（2026-10-04）
 
 - 表情包对不上不再记错误或警告，也不发系统通知。文字照常发送，下一轮聊天不受影响。错误保护页不再把表情未匹配写成 WARNING。
