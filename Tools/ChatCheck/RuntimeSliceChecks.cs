@@ -46,6 +46,7 @@ internal static partial class Program
             Require(night.Requests.Count >= 3 && sources.All(m => night.Requests.Any(p => p.Contains(m.Content))) &&
                 night.Requests[0].Contains("真实日构建切片标记"),
                 "实际 Migration 认知阶段覆盖全天完整原文，并带上对应当下切片");
+            RunCognitionRepairMigrationChecks(formation, context, store, day, sources[0]);
             migrationType.GetMethod("MarkDayCompleted").Invoke(migration, new object[] { day });
             var review = new AgentSequenceLlm("{\"summary\":\"这一天留下了仍待理解的感受。\"}");
             contextType.GetProperty("Llm").SetValue(context, review);
@@ -79,6 +80,70 @@ internal static partial class Program
         }
         finally { context?.Dispose(); Directory.Delete(dir, true); }
         Console.WriteLine("Runtime slice Migration checks passed: actual day entry, all evidence batches, late slices and replay.");
+    }
+
+    private static void RunCognitionRepairMigrationChecks(System.Reflection.MethodInfo formation, IDisposable context,
+        IMemoryStore store, string day, MomentRecord source)
+    {
+        const string tagId = "concept.life.test-opaque-id", wrongTag = "concept.life.合成测试标签";
+        var graph = (ICognitionGraphStore)store;
+        store.SeedLifeTags(new[] { new VectorIndexNode(tagId, VectorNodeLevel.Concept, "合成测试标签", "仅用于回归检查",
+            "test", new[] { "ass" }, null, null, null) });
+        BrainCognitionWriteData Write(string summary, string tag) => new BrainCognitionWriteData
+        {
+            operation = "create", summary = summary, about = "合成对象", scope = "测试", exceptions = "仅测试",
+            domains = new List<string> { "ass" }, identity_slot = "self", confidence = 0.7f, strength = 0.6f,
+            tag_ids = new List<string> { tag }, evidence_moment_ids = new List<string> { source.Id }
+        };
+        string Json(params BrainCognitionWriteData[] writes) => TraceJson.ToJson(new { cognitions = writes });
+        void Run(AgentSequenceLlm llm) => ((Task)formation.Invoke(null, new object[] {
+            context, store.LoadPairIdentity(), llm, day, new List<EventIndexRecord>(), new List<EventEntryRecord>(),
+            new List<MomentRecord> { source } })).GetAwaiter().GetResult();
+
+        var bad = Write("修正标签后保留原来的完整理解", wrongTag);
+        var corrected = Write(bad.summary, tagId);
+        var repair = new AgentSequenceLlm(Json(bad), Json(corrected));
+        Run(repair);
+        var saved = graph.GetCognitionNodes(100).Single(x => x.Summary == bad.summary);
+        var correction = repair.Messages[1].Last().content;
+        Require(repair.Requests.Count == 2 && correction.Contains("cognitions[0].tag_ids[0]") &&
+            correction.Contains("竖线左侧") && repair.Messages[1][0].content.Contains(tagId + " | 合成测试标签") &&
+            !correction.Contains(wrongTag) && store.GetCognitionTagIds(new[] { saved.Id })[saved.Id].SequenceEqual(new[] { tagId }) &&
+            graph.GetCognitionEvidence(new[] { saved.Id }).Single().MomentId == source.Id,
+            "真实Migration将具体标签错误送回LLM一次，候选完整保留，重新校验后保存正确标签及原依据");
+
+        var before = graph.GetCognitionNodes(100).Count;
+        var sibling = Write("同批有效条目在其他条目失败时也不提前写入", tagId);
+        var failed = Write("连续失败不能落库", wrongTag);
+        var repeated = new AgentSequenceLlm(Json(sibling, failed), Json(sibling, failed));
+        string failure = null;
+        try { Run(repeated); } catch (InvalidOperationException ex) { failure = ex.Message; }
+        Require(failure != null && failure.Contains("首次错误") && failure.Contains("纠正后错误") &&
+            failure.Contains("cognitions[1].tag_ids[0]") && !failure.Contains(wrongTag) &&
+            repeated.Requests.Count == 2 && graph.GetCognitionNodes(100).Count == before,
+            "连续标签错误只纠正一次，保留两次具体原因，整批不部分写入、不默默清空标签");
+
+        var changedError = Write("标签修好也必须复查原始证据", tagId);
+        changedError.evidence_moment_ids[0] = "unknown-private-evidence";
+        var invalidEvidence = new AgentSequenceLlm(Json(failed), Json(changedError));
+        failure = null;
+        try { Run(invalidEvidence); } catch (InvalidOperationException ex) { failure = ex.Message; }
+        Require(failure != null && failure.Contains("tag_ids[0]") && failure.Contains("evidence_moment_ids[0]") &&
+            !failure.Contains("unknown-private-evidence") && invalidEvidence.Requests.Count == 2 &&
+            graph.GetCognitionNodes(100).Count == before,
+            "纠正响应仍经过完整依据校验，错误变化不触发第三次请求或保存");
+
+        var noTag = Write("模型明确选择不挂可选标签仍可保存", wrongTag);
+        var noTagJson = Json(noTag); noTag.tag_ids.Clear();
+        var optional = new AgentSequenceLlm(noTagJson, Json(noTag));
+        Run(optional);
+        var optionalSaved = graph.GetCognitionNodes(100).Single(x => x.Summary == noTag.summary);
+        Require(optional.Requests.Count == 2 && store.GetCognitionTagIds(new[] { optionalSaved.Id }).Values.All(x => x.Count == 0),
+            "LLM可以在纠错时明确返回空可选标签，正文及原始依据仍经校验保存");
+        var direct = new AgentSequenceLlm(Json(Write("合法结果无需再纠错", tagId)));
+        Run(direct);
+        Require(direct.Requests.Count == 1, "合法认知不增加纠错调用");
+        Console.WriteLine("Cognition repair Migration checks passed: targeted retry, valid tags, optional empty tags, strict evidence and no partial writes.");
     }
 
     private static async Task RunRuntimeSliceChecksAsync()

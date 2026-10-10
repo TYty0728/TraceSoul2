@@ -507,8 +507,8 @@ namespace TraceSoul2.Migrate
                     new DeepSeekMessageData("user", CorePrompts.Migration.CognitionUser)
                 };
                 var output = await DeepSeekStructuredOutputLogic.CompleteAsync<ReplayPrompts.CognitionFormationOutputData>(
-                    llm, messages, x => x != null && CognitionFormationLogic.Valid(x.cognitions, evidence, activeCognitions, activeTags),
-                    "认知复盘输出无效：检查操作、四领域、已展示的目标/原始证据ID、范围与长度；无依据请输出空数组。", CancellationToken.None);
+                    llm, messages, null, "认知复盘必须输出包含 cognitions 数组的JSON对象。", CancellationToken.None,
+                    validationError: x => CognitionFormationLogic.ValidationError(x.cognitions, evidence, activeCognitions, activeTags));
                 var changed = context.Store.CommitCognitions(evidence[^1].Id, output.cognitions);
                 allChanged.AddRange(changed);
                 LogCall(context, dayKey, "cognition_formation", ++batchIndex,

@@ -61,6 +61,7 @@ internal static partial class Program
 
     private static void RunCognitionGraphChecks()
     {
+        RunCognitionValidationErrorChecks();
         var path = Path.Combine(Path.GetTempPath(), "tracesoul-graph-" + Guid.NewGuid().ToString("N") + ".db");
         string carriedId;
         try
@@ -242,5 +243,44 @@ internal static partial class Program
         Require(adapter.Recall(new ContextRecallQuery { MaxItems = 0 }, new[] { source }).Count == 0 &&
             adapter.Recall(new ContextRecallQuery { MaxChars = 0 }, new[] { source }).Count == 0, "零预算必须返回空结果");
         Console.WriteLine("Cognition graph checks passed: four domains, evidence, revision, conflict, runtime recall, legacy migration and bounds.");
+    }
+
+    private static void RunCognitionValidationErrorChecks()
+    {
+        var evidence = new List<MomentRecord> { new MomentRecord { Id = "source" } };
+        var tags = new List<LifeTagRecord> { new LifeTagRecord { Id = "concept.life.opaque-id", Label = "合成标签" } };
+        var nodes = new List<CognitionSliceRecord> { new CognitionSliceRecord { Id = "node" }, new CognitionSliceRecord { Id = "other" } };
+        BrainCognitionWriteData ValidWrite() => new BrainCognitionWriteData
+        {
+            operation = "create", summary = "仅用于验证的理解", domains = new List<string> { "ass" },
+            evidence_moment_ids = new List<string> { "source" }, tag_ids = new List<string> { tags[0].Id }
+        };
+        string Error(BrainCognitionWriteData write) => CognitionFormationLogic.ValidationError(new[] { write }, evidence, nodes, tags);
+        var invalidTag = ValidWrite(); invalidTag.tag_ids.Add("concept.life.合成标签");
+        var tagError = Error(invalidTag);
+        Require(tagError.Contains("cognitions[0].tag_ids[1]") && tagError.Contains("所有操作") &&
+            tagError.Contains("竖线左侧") && tagError.Contains("[]") && !tagError.Contains("合成标签") &&
+            tagError.Length <= 240 && invalidTag.tag_ids.Count == 2,
+            "标签纠错给出具体下标与完整ID选择规则，不回显未知值、不自动丢标签，且适配纠错长度预算");
+        Require(Error(ValidWrite()) == null &&
+            CognitionFormationLogic.ValidationError(Array.Empty<BrainCognitionWriteData>(), evidence, nodes, tags) == null &&
+            CognitionFormationLogic.ValidationError(null, evidence, nodes, tags).Contains("cognitions"),
+            "诊断和合法空数组/缺字段校验使用同一规则");
+        var badEvidence = ValidWrite(); badEvidence.evidence_moment_ids[0] = "不得泄露的未知来源";
+        Require(Error(badEvidence).Contains("evidence_moment_ids[0]") && !Error(badEvidence).Contains("不得泄露"),
+            "原始依据错误独立定位，不能被标签纠错放过或泄露未知ID");
+        var longBody = ValidWrite(); longBody.summary = new string('长', 601);
+        Require(Error(longBody).Contains("summary 当前601字，最多600字"), "长度纠错必须报告实际字段和计数");
+        var wrongDomain = ValidWrite(); wrongDomain.identity_slot = "self"; wrongDomain.domains = new List<string> { "user" };
+        Require(Error(wrongDomain).Contains(".domains") && Error(wrongDomain).Contains("ass"), "摘要用途与领域冲突仍严格纠正");
+        var wrongTarget = ValidWrite(); wrongTarget.operation = "revise"; wrongTarget.target_id = "unknown";
+        Require(Error(wrongTarget).Contains(".target_id"), "非create操作仍须选择展示的目标");
+        var first = ValidWrite(); first.operation = "reinforce"; first.target_id = "node";
+        Require(CognitionFormationLogic.ValidationError(new[] { first, first }, evidence, nodes, tags)
+            .Contains("cognitions[1].target_id"), "同批重复修改不能被详细纠错放宽");
+        first.operation = "retire";
+        var link = ValidWrite(); link.operation = "link"; link.target_id = "other"; link.related_id = "node"; link.relation = "related_to";
+        Require(CognitionFormationLogic.ValidationError(new[] { first, link }, evidence, nodes, tags)
+            .Contains("cognitions[1].related_id"), "同批关联刚退役节点须定位失效的一端");
     }
 }

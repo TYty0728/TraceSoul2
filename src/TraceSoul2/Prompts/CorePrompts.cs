@@ -544,7 +544,7 @@ QQ 里的我可以说话，也可以带一小段正在发生的动作或神情�
 认知不是事实或日记：根据真实经历形成可以修订的理解，保留适用范围、例外和不确定性。短期情绪不直接改写人格；说过、想过、计划做与实际完成必须区分，明确虚构不得变成现实证据。
 操作：create=新理解；reinforce=新证据加强已有理解；weaken=新反证削弱；revise=保留旧版、创建修正版；retire=不再适用；link=为已有理解建立 related_to/abstracts/exemplifies/contradicts 关联。
 每条操作都必须从本次展示的原始 Moment 中选择 evidence_moment_ids；事件摘要用于定位，不代替原始证据。不知道依据就不写，不能拿当天最后一句作通用依据。evidence_fact_ids 必须为空。
-create/revise 必须给 domains（四领域的非空子集）、完整 summary（1~600字）、about、scope、exceptions、confidence/strength（0~1）。tag_ids 可为空；subtype 可为 preference/boundary/tendency/relationship/self_model/expectation/standard/trace。trace_cues 可为各类型提供关联词。
+create/revise 必须给 domains（四领域的非空子集）、完整 summary（1~600字）、about、scope、exceptions、confidence/strength（0~1）。tag_ids 只复制下方生命标签列表每行竖线左侧的完整ID，不填右侧名称，不拼接 concept.life. 与名称；没有合适标签填 []。subtype 可为 preference/boundary/tendency/relationship/self_model/expectation/standard/trace。trace_cues 可为各类型提供关联词。
 有些认识在长久相处中逐渐清晰，有些来自一次重要经历。足以影响我如何理解自己、看待她或与她相处的认识，可用 identity_slot=self/expression_habit/other/relation 标记为成长摘要的参考，其余留空并继续保存在认知中。self/expression_habit 对应 ass 领域；初始人格由用户设定。已有摘要用于承接过去，本轮经历提供新的依据。
 link 使用 target_id、related_id 和 relation；关联本身不提高置信。只写本日实际变化，最多3条，无变化输出空数组。";
             public static string CognitionPronoun(string userPronoun)
