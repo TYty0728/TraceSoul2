@@ -23,6 +23,7 @@
     <Compile Include="$(MSBuildThisFileDirectory)../src/TraceSoul2/Logic/AgentOutputContractLogic.cs" />
     <Compile Include="$(MSBuildThisFileDirectory)../src/TraceSoul2/Logic/GoalMemoryLogic.cs" />
     <Compile Include="$(MSBuildThisFileDirectory)../src/TraceSoul2/Logic/CognitionFormationLogic.cs" />
+    <Compile Include="$(MSBuildThisFileDirectory)../src/TraceSoul2/Logic/CognitionReviewRecallLogic.cs" />
     <Compile Include="$(MSBuildThisFileDirectory)../src/TraceSoul2/Manager/SqliteCognitionGraph.cs" />
     <Compile Include="$(MSBuildThisFileDirectory)../src/TraceSoul2/Logic/AgentLoopLogic.cs" />
     <Compile Include="$(MSBuildThisFileDirectory)../src/TraceSoul2/Logic/AgentPromptContextLogic.cs" />

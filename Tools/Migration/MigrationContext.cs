@@ -26,7 +26,10 @@ namespace TraceSoul2.Migrate
         public ILifeStateStore LifeState { get; private set; }
         public string MigrationProviderId { get; private set; }
         public string MigrationModel { get; private set; }
+        public IVectorEncoder CognitionEncoder { get; private set; }
         private OnnxBgeEncoder encoder;
+
+        public IVectorEncoder RequireCognitionEncoder() => CognitionEncoder ?? RequireEncoder();
 
         public static MigrationContext Create()
         {

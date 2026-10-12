@@ -33,9 +33,11 @@ namespace TraceSoul2.Migrate
                 var old = current.FirstOrDefault(x => x.Slot == group.Key);
                 var oldBody = old != null && IdentityProjectionLogic.Current(old, visible) ? old.Body : "（原摘要依据已变化，需重新形成）";
                 var chosen = await ReviewSelectionLogic.SelectAsync(llm, candidates,
-                    "身份摘要" + group.Key + "；挑出最能改变或支撑稳定认识的认知，保留适用范围和例外，" +
-                    "反证与修订优先于重复支持，不把当天日记搬进身份卡；成稿约300字。已有摘要：" + oldBody,
-                    6, 6000, token);
+                    "身份摘要" + group.Key + "；选择能加深或改变自我认识、对她的理解、关系或表达方式的认知，" +
+                    "依据它们对相应身份认识的意义取舍，保留适用范围、例外和认识的确定程度。" +
+                    "将新的印证、修订与反证同已有认识一起考虑，让摘要准确承接当前理解。" +
+                    "已有摘要仍然贴切时可返回空选择；成稿约300字。已有摘要：" + oldBody,
+                    6, 6000, token, allowEmpty: true);
                 var ids = chosen.Select(x => x.Id).ToHashSet(StringComparer.Ordinal);
                 result.AddRange(items.Where(x => ids.Contains(x.Id)));
             }
@@ -124,7 +126,7 @@ namespace TraceSoul2.Migrate
                     target_body_chars = IdentityCardSlotValues.BodyTarget(group.Key),
                     max_body_chars = IdentityCardSlotValues.BodyLimit(group.Key), cognitions = group.ToList() });
             return "\n【成长摘要与可参考的认识，按 slot 分组】\n"
-                + "本次可更新范围由下面实际列出的分组确定，其余卡由程序保留原文。一个分组对应一张卡；同组的多条认知供综合理解。这里只提供入围认知的完整正文和条件；未入围原件仍在库中。对照已有摘要，将值得沉淀的变化融入仍然贴切的认识；无需改变时不更新。不要逐条改写认知或把当天日记搬入卡片。新正文按 target_body_chars 写下，不超过 max_body_chars，写完就是这份摘要。\n"
+                + "本次可更新范围由下面实际列出的分组确定，其余卡由程序保留原文。一个分组对应一张卡；同组的多条认知供综合理解，完整正文和条件如下。结合已有摘要，判断这些认识对相应身份理解的意义，将值得沉淀的变化融为连贯的当前认识；保持原样也是完整的复盘结果。新正文目标为 target_body_chars 字，上限为 max_body_chars 字。\n"
                 + TraceJson.ToJson(targets.ToList()) + "\n【保留原文的本人设定】\n" + string.Join(",", pinned);
         }
     }

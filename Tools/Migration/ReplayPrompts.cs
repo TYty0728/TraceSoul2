@@ -3,6 +3,7 @@ using System.Collections.Generic;
 using System.Linq;
 using System.Text;
 using TraceSoul2.Data;
+using TraceSoul2.Logic;
 using TraceSoul2.Prompts;
 
 namespace TraceSoul2.Migrate
@@ -263,11 +264,8 @@ namespace TraceSoul2.Migrate
             builder.AppendLine(CorePrompts.Migration.CognitionExistingHeader);
             var cognitions = activeCognitions ?? new List<CognitionSliceRecord>();
             if (cognitions.Count == 0) builder.AppendLine(CorePrompts.Migration.Empty);
-            foreach (var c in cognitions.Take(40))
-            {
-                var name = string.IsNullOrWhiteSpace(c.About) ? c.Summary : c.About;
-                builder.AppendLine("- " + c.Id + " | " + name + " | 领域 " + c.Domains + " | 摘要用途 " + c.IdentitySlot);
-            }
+            foreach (var c in cognitions)
+                builder.AppendLine(CognitionReviewRecallLogic.Describe(c));
             builder.AppendLine();
             builder.AppendLine(CorePrompts.Migration.CognitionTagsHeader);
             var tags = (activeTags ?? new List<LifeTagRecord>())

@@ -15,7 +15,7 @@ namespace TraceSoul2.Logic
     {
         public sealed class Output { public List<BrainCognitionWriteData> cognitions; }
         public static async Task<int> BuildAsync(SqliteMemoryManager store, ILlmClient llm, long startMs, long endMs,
-            CancellationToken token = default)
+            CancellationToken token = default, Func<IVectorEncoder> encoderFactory = null, IVectorCacheStore cache = null)
         {
             var count = 0;
             while (true)
@@ -26,15 +26,15 @@ namespace TraceSoul2.Logic
                 var group = pending.GroupBy(x => x.ConversationId).First().ToList();
                 var evidence = RuntimeSliceLogic.EvidenceBatches(store, group).FirstOrDefault();
                 if (evidence == null) throw new InvalidOperationException("公开经历没有可处理的完整证据，原件保留。");
-                var scope = group[0].ConversationId;
-                var existing = store.GetCognitionNodes(5000).Where(x => x.ContextConversationId == scope && PuzzleDomains.Live(x.Status))
-                    .Take(40).ToList();
+                var evidenceContext = RuntimeSliceLogic.EvidenceContext(store, evidence);
+                var existing = CognitionReviewRecallLogic.Select(store, evidence, encoderFactory, cache, evidenceContext, token);
                 var prompt = "我是" + store.LoadPairIdentity().Assname + "。整理本环境的实际经历，形成同一主体的长期理解。\n" +
                     "当前环境不是两人私密相处。user 指已绑定的专属用户；其他人有各自账号，放 world 或明确对象的 relation，不能冒认为用户。\n" +
                     CorePrompts.Migration.CognitionBody + "\n" +
-                    "现有本环境认知：\n" + TraceJson.ToJson(existing) + "\n完整证据（id、真实发言者、内容）：\n" +
+                    CorePrompts.Migration.CognitionExistingHeader + "\n" + string.Join("\n", existing.Select(CognitionReviewRecallLogic.Describe)) +
+                    "\n完整证据（id、真实发言者、内容）：\n" +
                     string.Join("\n", evidence.Select(x => x.Id + "｜" + PuzzleViewLogic.SubjectKey(x) + "｜" +
-                        EnvironmentLogic.PublicDialogue(x))) + RuntimeSliceLogic.EvidenceContext(store, evidence) +
+                        EnvironmentLogic.PublicDialogue(x))) + evidenceContext +
                     "\n" + CorePrompts.Migration.CognitionJsonSchema;
                 var output = await DeepSeekStructuredOutputLogic.CompleteAsync<Output>(llm,
                     new List<DeepSeekMessageData> { new("system", prompt), new("user", "只根据这些经历输出认知变更，没有变化时给空数组。") },

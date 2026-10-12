@@ -32,6 +32,7 @@
     <Compile Include="GoalMemoryChecks.cs" />
     <Compile Include="WebSearchChecks.cs" />
     <Compile Include="CognitionGraphChecks.cs" />
+    <Compile Include="CognitionReviewRecallChecks.cs" />
     <Compile Include="FailureProtectionChecks.cs" />
     <Compile Include="DailyBuildPreflightChecks.cs" />
     <Compile Include="ReviewOutputChecks.cs" />

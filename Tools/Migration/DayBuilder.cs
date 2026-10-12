@@ -37,7 +37,8 @@ namespace TraceSoul2.Migrate
                 var finishedDay = DateTime.ParseExact(dayKey, "yyyy-MM-dd", CultureInfo.InvariantCulture);
                 var finishedRange = DateRange.Parse(new[] { "--from", dayKey, "--to", dayKey });
                 if (context.Store.GetPublicMomentsInRange(finishedRange.DayStartMs(finishedDay), finishedRange.DayEndMs(finishedDay)).Count > 0)
-                    await PublicExperienceLogic.BuildAsync(context.Store, context.RequireLlm(), finishedRange.DayStartMs(finishedDay), finishedRange.DayEndMs(finishedDay));
+                    await PublicExperienceLogic.BuildAsync(context.Store, context.RequireLlm(), finishedRange.DayStartMs(finishedDay), finishedRange.DayEndMs(finishedDay),
+                        encoderFactory: context.RequireCognitionEncoder, cache: context.Vectors);
                 // 完成标记早于临时样本清理：即使上次进程恰好在两者之间退出，也能在这里补清理。
                 context.Store.RetireDayRuntimeSamples(MigrationContext.ConversationId, dayKey);
                 Console.WriteLine("日终复盘已完成，跳过重复构筑：" + dayKey);
@@ -79,7 +80,8 @@ namespace TraceSoul2.Migrate
             context.Migration.SetReviewStage("当下切片夜间整理");
             await RuntimeSliceLogic.ReviewDayAsync(context.Store, llm, MigrationContext.ConversationId, dayKey);
             context.Migration.SetReviewStage("公开经历按环境整理");
-            var publicCount = await PublicExperienceLogic.BuildAsync(context.Store, llm, range.DayStartMs(day), range.DayEndMs(day));
+            var publicCount = await PublicExperienceLogic.BuildAsync(context.Store, llm, range.DayStartMs(day), range.DayEndMs(day),
+                encoderFactory: context.RequireCognitionEncoder, cache: context.Vectors);
             if (moments.Count == 0 && publicCount > 0)
             {
                 context.Migration.MarkDayCompleted(dayKey);
@@ -484,9 +486,9 @@ namespace TraceSoul2.Migrate
             var batchIndex = 0;
             foreach (var evidence in batches)
             {
-                var scope = evidence[0].ConversationId;
-                var activeCognitions = context.Store.GetCognitionNodes(5000).Where(x => PuzzleDomains.Live(x.Status) && x.MemoryVisibility != "public" &&
-                    (string.IsNullOrEmpty(x.ContextConversationId) || x.ContextConversationId == scope)).Take(40).ToList();
+                var evidenceContext = RuntimeSliceLogic.EvidenceContext(context.Store, evidence);
+                var activeCognitions = CognitionReviewRecallLogic.Select(context.Store, evidence,
+                    context.RequireCognitionEncoder, context.Vectors, evidenceContext);
                 var activeTags = context.Store.GetActiveLifeTags().OrderByDescending(x => x.ActivationCount)
                     .ThenBy(x => x.Label, StringComparer.Ordinal).Take(60).ToList();
                 var cardsNow = context.Store.LoadIdentityCards(MigrationContext.ConversationId);
@@ -497,7 +499,7 @@ namespace TraceSoul2.Migrate
                 var batchIndexes = dayIndexes.Where(x => batchIndexIds.Contains(x.Id) || momentIds.Contains(x.FirstMomentId)).ToList();
                 var prompt = ReplayPrompts.BuildCognitionFormationPrompt(
                     pair, dayKey, activeCognitions, activeTags, batchIndexes, batchEntries, userPronoun, evidence)
-                    + RuntimeSliceLogic.EvidenceContext(context.Store, evidence);
+                    + evidenceContext;
                 var messages = new List<DeepSeekMessageData>
                 {
                     new DeepSeekMessageData("system", prompt),
