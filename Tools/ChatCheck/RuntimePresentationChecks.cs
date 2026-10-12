@@ -67,9 +67,9 @@ internal static partial class Program
         store.AddTodayNewItems(root, new[] { "新得知的内容" }, "after-midnight", day, now.AddMinutes(-30).ToUnixTimeMilliseconds());
         state = RuntimeContextLogic.State(turn, now);
         Require(state.Contains("2026年10月1日 04:00 至 2026年10月2日 04:00") &&
-            state.Contains("昨天深夜\n· 午夜前的经历") && state.Contains("凌晨\n· 午夜后的经历") &&
+            state.Contains("深夜\n· 午夜前的经历") && state.Contains("凌晨\n· 午夜后的经历") &&
             state.Contains("[2026年10月2日 00:30] 新得知的内容") && !state.Contains("四点后的经历"),
-            "跨午夜轨迹使用相对日期和时段，新识精确时间及04:00归属保持");
+            "跨午夜轨迹按同一记忆日显示时段，新识精确时间及04:00归属保持");
         var afterBoundary = RuntimeContextLogic.State(turn, now.AddHours(3));
         Require(afterBoundary.Contains("四点后的经历") && !afterBoundary.Contains("午夜前的经历"), "切日后展示新日期范围的经历");
 

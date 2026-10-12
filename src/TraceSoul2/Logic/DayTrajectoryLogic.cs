@@ -36,8 +36,23 @@ namespace TraceSoul2.Logic
             now = now.ToOffset(MemoryDayLogic.ChinaOffset);
             var start = TimeLanguageUtil.RelativeWhen(item.Start, now);
             var end = TimeLanguageUtil.RelativeWhen(item.End, now);
-            string Label(string value) => value.StartsWith("今天", StringComparison.Ordinal) ? value.Substring(2) : value;
-            var when = Label(start) + (end != start ? "至" + Label(end) : "");
+            string Label(long unixMs, string value)
+            {
+                if (unixMs > 0)
+                {
+                    try
+                    {
+                        var at = DateTimeOffset.FromUnixTimeMilliseconds(unixMs).ToOffset(MemoryDayLogic.ChinaOffset);
+                        if (MemoryDayLogic.CurrentDayKey(at) == MemoryDayLogic.CurrentDayKey(now))
+                            return TimeLanguageUtil.PeriodZh(at);
+                    }
+                    catch (ArgumentOutOfRangeException) { }
+                }
+                return value.StartsWith("今天", StringComparison.Ordinal) ? value.Substring(2) : value;
+            }
+            var startLabel = Label(item.Start, start);
+            var endLabel = Label(item.End, end);
+            var when = startLabel + (endLabel != startLabel ? "至" + endLabel : "");
             return when + (item.Legacy ? "（旧摘要保存时段）" : "");
         }
         public static string OverviewLine(DayTrajectoryOverviewLogic.Item item, DateTimeOffset now)
