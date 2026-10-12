@@ -100,6 +100,16 @@ namespace TraceSoul2.Logic
             while (true)
             {
                 token.ThrowIfCancellationRequested();
+                var crowded = store.GetRuntimeSlices(root, day)
+                    .GroupBy(x => (x.ContextConversationId, x.MemoryVisibility))
+                    .FirstOrDefault(x => x.Count() > RuntimeReviewSelectionLogic.CrowdedSliceCount &&
+                        (x.Any(s => string.IsNullOrEmpty(s.ReviewId)) ||
+                         !HasCurrentSummary(store, root, day, x.Key.ContextConversationId, x.Key.MemoryVisibility)));
+                if (crowded != null)
+                {
+                    count += await RuntimeReviewSelectionLogic.ReviewAsync(store, llm, crowded.ToList(), token);
+                    continue;
+                }
                 var pending = store.GetRuntimeSlices(root, day, true);
                 if (pending.Count == 0)
                 {

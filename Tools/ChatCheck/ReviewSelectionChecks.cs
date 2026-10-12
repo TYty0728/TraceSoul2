@@ -1,0 +1,223 @@
+using System;
+using System.Collections.Generic;
+using System.IO;
+using System.Linq;
+using System.Reflection;
+using System.Text.Json;
+using System.Threading;
+using System.Threading.Tasks;
+using TraceSoul2.Data;
+using TraceSoul2.Logic;
+using TraceSoul2.Manager;
+using TraceSoul2.Util;
+
+internal static partial class Program
+{
+    private sealed class SelectionProbeLlm : ILlmClient
+    {
+        public string ProviderId => "selection-check";
+        public string Model => "offline";
+        public readonly List<string> Requests = new();
+        public Func<List<DeepSeekMessageData>, string> Reply;
+        public Task<string> CompleteJsonAsync(List<DeepSeekMessageData> messages, CancellationToken cancellationToken = default, string promptCacheKey = null)
+        {
+            cancellationToken.ThrowIfCancellationRequested();
+            Requests.Add(string.Join("\n", messages.Select(x => x.content)));
+            return Task.FromResult(Reply(messages));
+        }
+        public Task<string> CompleteTextAsync(List<DeepSeekMessageData> messages, CancellationToken cancellationToken = default, string promptCacheKey = null)
+            => throw new InvalidOperationException("复盘只用结构化调用。");
+        public Task<IReadOnlyList<string>> ListModelsAsync(CancellationToken cancellationToken = default)
+            => Task.FromResult<IReadOnlyList<string>>(new[] { Model });
+    }
+
+    private static string Pick(params string[] ids) => TraceJson.ToJson(new { selected_ids = ids });
+    private static string Nominate(params string[] ids) => TraceJson.ToJson(new {
+        events = ids.Select(id => new { summary = "重要变化" + id, source_ids = new[] { id } }).ToArray() });
+
+    private static async Task RunReviewSelectionChecksAsync()
+    {
+        var candidates = Enumerable.Range(0, 140).Select(i => new ReviewSelectionLogic.Candidate {
+            Id = "real-" + i, Description = "候选" + i, EvidenceChars = 100 }).ToList();
+        var seen = new HashSet<string>();
+        var rank = new SelectionProbeLlm { Reply = messages => {
+            using var doc = JsonDocument.Parse(messages[1].content);
+            foreach (var item in doc.RootElement.EnumerateArray()) seen.Add(item.GetProperty("description").GetString());
+            return Pick(doc.RootElement[doc.RootElement.GetArrayLength() - 1].GetProperty("id").GetString());
+        } };
+        var chosen = await ReviewSelectionLogic.SelectAsync(rank, candidates, "测试全局候选", 3, 1000);
+        Require(seen.Count == 140 && chosen.Count <= 3 && chosen.Any(x => x.Id == "real-139") &&
+            rank.Requests.All(x => x.Length < 9000) && rank.Requests.Count < 15,
+            "大量目录分批提名再全局入围，晚出现的重要候选不被Take截掉，输入有界且递归收敛");
+        var invalid = new AgentSequenceLlm(Pick("not-an-id"), Pick("i1"));
+        var repaired = await ReviewSelectionLogic.SelectAsync(invalid, candidates.Take(8).ToList(), "校验", 2, 1000);
+        Require(repaired.Single().Id == "real-0" && invalid.Requests.Count == 2 &&
+            invalid.Requests[1].Contains("只能复制本次目录"), "入围必须是本批真实编号，纠正后才加载依据");
+        foreach (var bad in new[] { Pick("i1", "i1"), Pick("i1", "i2"), "{}" })
+        {
+            var model = new AgentSequenceLlm(bad, bad);
+            var failed = false;
+            try { await ReviewSelectionLogic.SelectAsync(model, candidates.Take(8).ToList(), "预算", 2, 100); }
+            catch (InvalidOperationException) { failed = true; }
+            Require(failed && model.Requests.Count == 2, "重复、超依据预算或缺失入围结果最多纠正一次，不能静默裁切");
+        }
+
+        var dir = Path.Combine(Path.GetTempPath(), "review-selection-" + Guid.NewGuid().ToString("N"));
+        Directory.CreateDirectory(dir);
+        try
+        {
+            var path = Path.Combine(dir, "brain.db");
+            const string day = "2020-08-20";
+            var begin = MemoryDayLogic.StartOf(day).ToUnixTimeMilliseconds();
+            using var store = new SqliteMemoryManager(path);
+            void Seed(string root, string scope, int count, string visibility = "private")
+            {
+                for (var i = 0; i < count; i++)
+                {
+                    var id = scope + "-" + i;
+                    if (store.GetEvidenceMoments(new[] { id }).Count == 0)
+                        store.SaveMoment(new MomentRecord { Id = id, ConversationId = scope, Role = "user",
+                            Content = "原始经历" + i, MemoryVisibility = visibility, CreatedUnixMs = begin + i });
+                    store.AppendRuntimeSlice(new RuntimeSliceRecord { RootConversationId = root, ContextConversationId = scope,
+                        MomentId = id, SnapshotJson = TraceJson.ToJson(new { today = "原始事件标记" + i, inner = "变化" + i }) });
+                }
+            }
+            Seed("resume", "resume", 81);
+            var broken = new AgentSequenceLlm(Nominate("s1", "s2"), Nominate("s1"), "{}", "{}");
+            var failed = false;
+            try { await RuntimeSliceLogic.ReviewDayAsync(store, broken, "resume", day); }
+            catch (InvalidOperationException) { failed = true; }
+            Require(failed && broken.Requests.Count == 4 && store.GetRuntimeSlices("resume", day, true).Count == 81 &&
+                store.GetRuntimeDayReviews("resume", day).Count == 0,
+                "成稿失败保留所有原切片为待处理，合格批次提名已存档，不把未入围当作删除");
+            using (var reopened = new SqliteMemoryManager(path))
+            {
+                var finish = new AgentSequenceLlm(TraceJson.ToJson(new { summary = new string(' ', 1001) + "这天有几处重要转折。" }));
+                Require(await RuntimeSliceLogic.ReviewDayAsync(reopened, finish, "resume", day) == 81 && finish.Requests.Count == 1 &&
+                    finish.Requests[0].Contains("resume-0｜") && finish.Requests[0].Contains("resume-80｜") &&
+                    !finish.Requests[0].Contains("resume-30｜") &&
+                    TraceJson.FromJson<List<string>>(reopened.GetRuntimeDaySummaries("resume", day).Single().SliceIdsJson).Count == 81 &&
+                    reopened.GetRuntimeSlices("resume", day).Count == 81,
+                    "重启复用提名，只对入围完整依据成稿；未入围仍保留可查证，整日处理来源完整");
+                var noCalls = new AgentSequenceLlm();
+                await RuntimeSliceLogic.ReviewDayAsync(reopened, noCalls, "resume", day);
+                Require(noCalls.Requests.Count == 0, "已有有效成稿不重复调用");
+            }
+            Seed("resume", "resume", 82);
+            var late = new AgentSequenceLlm(Nominate("s2"), "{\"summary\":\"新结果改变了原来的认识。\"}");
+            Require(await RuntimeSliceLogic.ReviewDayAsync(store, late, "resume", day) == 1 && late.Requests.Count == 2 &&
+                late.Requests[0].Contains("resume-81｜") && !late.Requests[0].Contains("resume-0｜") &&
+                store.GetRuntimeDaySummaries("resume", day).Single().Summary == "新结果改变了原来的认识。",
+                "迟到来源只使所属提名批次失效，重新全日成稿，不拼回旧长段");
+
+            Seed("privacy", "privacy", 13);
+            Seed("privacy", "privacy:environment:public", 13, "public");
+            var privacy = new AgentSequenceLlm(Nominate("s1"), "{\"summary\":\"私密回望。\"}",
+                Nominate("s1"), "{\"summary\":\"公开回望。\"}");
+            Require(await RuntimeSliceLogic.ReviewDayAsync(store, privacy, "privacy", day) == 26 &&
+                !privacy.Requests[2].Contains("runtime:privacy-0｜") && !privacy.Requests[3].Contains("私密回望") &&
+                store.GetRuntimeDaySummaries("privacy", day).Count == 2,
+                "提名、候选与成稿都按环境和可见性隔离");
+
+            Seed("unknown", "unknown", 13);
+            var wrongSource = new AgentSequenceLlm(Nominate("foreign"), Nominate("foreign"));
+            try { await RuntimeSliceLogic.ReviewDayAsync(store, wrongSource, "unknown", day); } catch (InvalidOperationException) { }
+            Require(wrongSource.Requests.Count == 2 && store.GetRuntimeSlices("unknown", day, true).Count == 13 &&
+                store.GetRuntimeDayReviews("unknown", day).Count == 0, "跨批次或未知来源不能提交提名与完成标记");
+
+            Seed("crowded", "crowded", 170);
+            var crowded = new SelectionProbeLlm { Reply = messages => {
+                if (messages[0].content.Contains("【当天回望事件提名】"))
+                    return Nominate("s1", "s2", "s3", "s4", "s5", "s6");
+                if (messages[0].content.Contains("【复盘候选入围】"))
+                {
+                    using var json = JsonDocument.Parse(messages[1].content);
+                    return Pick(json.RootElement[json.RootElement.GetArrayLength() - 1].GetProperty("id").GetString());
+                }
+                return "{\"summary\":\"全局筛选后的少数重要变化。\"}";
+            } };
+            Require(await RuntimeSliceLogic.ReviewDayAsync(store, crowded, "crowded", day) == 170 &&
+                crowded.Requests.Count == 5 && crowded.Requests[3].Contains("【复盘候选入围】") &&
+                crowded.Requests[4].Contains("crowded-165｜") && !crowded.Requests[4].Contains("crowded-0｜") &&
+                crowded.Requests.All(x => x.Length < 18000) && store.GetRuntimeSlices("crowded", day).Count == 170,
+                "170条切片先分批提名18件，再全局选取并只加载入围原件成稿，不先写三篇长文");
+
+            Seed("race", "race", 13);
+            var race = new SelectionProbeLlm { Reply = messages => {
+                if (messages[0].content.Contains("事件提名")) return Nominate("s1");
+                Seed("race", "race", 14);
+                return "{\"summary\":\"旧快照的回望。\"}";
+            } };
+            failed = false;
+            try { await RuntimeSliceLogic.ReviewDayAsync(store, race, "race", day); } catch (InvalidOperationException) { failed = true; }
+            Require(failed && store.GetRuntimeDaySummaries("race", day).Count == 0 && store.GetRuntimeSlices("race", day, true).Count == 1,
+                "成稿期间新来源使提交失败，旧快照不能被当成完整当天回望");
+            var recover = new AgentSequenceLlm(Nominate("s14"), "{\"summary\":\"补入新结果的完整回望。\"}");
+            await RuntimeSliceLogic.ReviewDayAsync(store, recover, "race", day);
+            Require(store.GetRuntimeDaySummaries("race", day).Single().Summary == "补入新结果的完整回望。",
+                "并发失败后可恢复，重新提名包含迟到来源");
+            var canceled = new AgentSequenceLlm();
+            try { await RuntimeSliceLogic.ReviewDayAsync(store, canceled, "unknown", day, new CancellationToken(true)); }
+            catch (OperationCanceledException) { }
+            Require(canceled.Requests.Count == 0 && store.GetRuntimeSlices("unknown", day, true).Count == 13,
+                "取消不调用模型或标记切片完成");
+        }
+        finally { Directory.Delete(dir, true); }
+        Console.WriteLine("Review selection checks passed: bounded selection, provenance, privacy, restart, late data and concurrency.");
+    }
+
+    private static void RunReviewSelectionMigrationChecks(Assembly assembly)
+    {
+        var dir = Path.Combine(Path.GetTempPath(), "selection-migration-" + Guid.NewGuid().ToString("N"));
+        Directory.CreateDirectory(dir);
+        IDisposable context = null;
+        try
+        {
+            var contextType = assembly.GetType("TraceSoul2.Migrate.MigrationContext", true);
+            var storeType = assembly.GetType("TraceSoul2.Manager.SqliteMemoryManager", true);
+            var path = Path.Combine(dir, "brain.db");
+            context = (IDisposable)Activator.CreateInstance(contextType);
+            var storeObject = Activator.CreateInstance(storeType, path);
+            var store = (IMemoryStore)storeObject;
+            contextType.GetProperty("Store").SetValue(context, storeObject);
+            contextType.GetProperty("Migration").SetValue(context, Activator.CreateInstance(
+                assembly.GetType("TraceSoul2.Migrate.MigrationDb", true), Path.Combine(dir, "migration.db"), path));
+            store.SavePairIdentity("本人", "同伴", "称呼");
+            using (var db = new SQLite.SQLiteConnection(path))
+            {
+                foreach (var node in Enumerable.Range(0, 50).Select(i => new CognitionSliceRecord {
+                    Id = "chosen-node-" + i.ToString("D2"), Status = "active", IdentitySlot = "relation",
+                    Summary = i == 49 ? "最后的新反证标记" : "旧重复理解" + i, Scope = "适用条件完整保留",
+                    Exceptions = "例外也完整保留", CreatedUnixMs = i, MemoryVisibility = "private", ContextConversationId = "tracesoul2" })) db.Insert(node);
+                db.Insert(new CognitionSliceRecord { Id = "public-node", Status = "active", IdentitySlot = "relation", Summary = "公开无权候选标记", MemoryVisibility = "public" });
+                db.Insert(new CognitionSliceRecord { Id = "pinned-node", Status = "active", IdentitySlot = "self", Summary = "固定卡候选标记" });
+            }
+            var model = new SelectionProbeLlm { Reply = messages => {
+                if (messages[0].content.Contains("【复盘候选入围】"))
+                {
+                    using var json = JsonDocument.Parse(messages[1].content);
+                    return Pick(json.RootElement[json.RootElement.GetArrayLength() - 1].GetProperty("id").GetString());
+                }
+                return TraceJson.ToJson(new { cards = new[] { new { slot = "relation", body = "结合新的反证修订理解。",
+                    cognition_ids = new[] { "chosen-node-49" } } } });
+            } };
+            var cards = IdentityCardSlotValues.All.Select(slot => new IdentityCardRecord { Slot = slot,
+                Body = "原有稳定认识", Pinned = slot == "personality" || slot == "self" }).ToList();
+            var run = assembly.GetType("TraceSoul2.Migrate.DayBuilder", true)
+                .GetMethod("RunDayReviewAsync", BindingFlags.NonPublic | BindingFlags.Static);
+            ((Task)run.Invoke(null, new object[] { context, store.LoadPairIdentity(), model, "2020-08-20", cards, "",
+                new List<EventIndexRecord> { new() { Id = "event", EventSummary = "不应进入身份长日记标记" } },
+                new List<EventEntryRecord> { new() { Id = "detail", IndexId = "event", Summary = "冗余事件", Detail = new string('长', 30000) } } })).GetAwaiter().GetResult();
+            var final = model.Requests.Last();
+            Require(model.Requests.Count > 1 && final.Contains("chosen-node-49") && final.Contains("最后的新反证标记") &&
+                final.Contains("适用条件完整保留") && final.Contains("例外也完整保留") &&
+                !final.Contains("chosen-node-00") && !final.Contains("不应进入身份长日记标记") && final.Length < 15000 &&
+                model.Requests.All(x => !x.Contains("公开无权候选标记") && !x.Contains("固定卡候选标记")),
+                "实际身份复盘先按slot筛选全部可见候选，40条以后的反证可入围，完整条件保留，全天冗余细节退出成稿输入");
+            Require(((ICognitionGraphStore)store).GetCognitionNodes(100).Count == 52,
+                "身份入围只改变本次摘要输入，不删除未入围认知或固定设定");
+        }
+        finally { context?.Dispose(); Directory.Delete(dir, true); }
+        Console.WriteLine("Review selection Migration checks passed: actual day review, late-ranked cognition, slot and visibility.");
+    }
+}

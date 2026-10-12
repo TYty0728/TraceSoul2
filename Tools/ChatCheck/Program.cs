@@ -20,6 +20,7 @@ internal static partial class Program
     private static void Main(string[] args)
     {
         SQLitePCL.Batteries_V2.Init();
+        if (args.Contains("--review-selection")) { RunReviewSelectionChecksAsync().GetAwaiter().GetResult(); return; }
         if (args.Length == 2 && args[0] == "--startup-overview-host") { RunStartupOverviewHostCheckAsync(args[1]).GetAwaiter().GetResult(); return; }
         if (args.Length == 3 && args[0] == "--oct3-review-replay") { RunOct3ReviewReplay(args[1], args[2]); return; }
         if (args.Contains("--automatic-photo")) { RunAutomaticPhotoChecksAsync().GetAwaiter().GetResult(); return; }
@@ -61,6 +62,7 @@ internal static partial class Program
             return;
         }
         RunExistenceChecksAsync().GetAwaiter().GetResult();
+        RunReviewSelectionChecksAsync().GetAwaiter().GetResult();
         RunRuntimePresentationChecksAsync().GetAwaiter().GetResult();
         RunDayOverviewChecksAsync().GetAwaiter().GetResult();
         RunEnvironmentChecksAsync().GetAwaiter().GetResult();

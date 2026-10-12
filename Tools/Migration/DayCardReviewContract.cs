@@ -16,6 +16,32 @@ namespace TraceSoul2.Migrate
         private static readonly string[] Slots = { IdentityCardSlotValues.Personality, IdentityCardSlotValues.Self,
             IdentityCardSlotValues.Other, IdentityCardSlotValues.Relation, IdentityCardSlotValues.ExpressionHabit };
 
+        public static async Task<List<CognitionSliceRecord>> SelectEvidenceAsync(ILlmClient llm,
+            IReadOnlyList<IdentityCardRecord> current, IReadOnlyList<CognitionSliceRecord> visible,
+            CancellationToken token = default)
+        {
+            var pinned = current.Where(x => x.Pinned).Select(x => x.Slot).ToHashSet(StringComparer.Ordinal);
+            pinned.Add(IdentityCardSlotValues.Personality);
+            var result = new List<CognitionSliceRecord>();
+            foreach (var group in visible.Where(x => x.Status == "active" && Slots.Contains(x.IdentitySlot) && !pinned.Contains(x.IdentitySlot))
+                .GroupBy(x => x.IdentitySlot))
+            {
+                var items = group.OrderBy(x => x.CreatedUnixMs).ThenBy(x => x.Id, StringComparer.Ordinal).ToList();
+                var candidates = items.Select(x => new ReviewSelectionLogic.Candidate { Id = x.Id,
+                    Description = TraceJson.ToJson(new { x.About, x.Summary, x.Scope, x.Exceptions,
+                        x.CreatedUnixMs, x.UpdatedUnixMs, x.LastChallengedUnixMs }), EvidenceChars = TraceJson.ToJson(x).Length }).ToList();
+                var old = current.FirstOrDefault(x => x.Slot == group.Key);
+                var oldBody = old != null && IdentityProjectionLogic.Current(old, visible) ? old.Body : "（原摘要依据已变化，需重新形成）";
+                var chosen = await ReviewSelectionLogic.SelectAsync(llm, candidates,
+                    "身份摘要" + group.Key + "；挑出最能改变或支撑稳定认识的认知，保留适用范围和例外，" +
+                    "反证与修订优先于重复支持，不把当天日记搬进身份卡；成稿约300字。已有摘要：" + oldBody,
+                    6, 6000, token);
+                var ids = chosen.Select(x => x.Id).ToHashSet(StringComparer.Ordinal);
+                result.AddRange(items.Where(x => ids.Contains(x.Id)));
+            }
+            return result;
+        }
+
         public static string ValidationError(ReplayPrompts.DayCardReviewOutputData output,
             IReadOnlyList<IdentityCardRecord> current, IReadOnlyList<CognitionSliceRecord> evidence)
             => Validate(output, current, evidence, true);
@@ -98,7 +124,7 @@ namespace TraceSoul2.Migrate
                     target_body_chars = IdentityCardSlotValues.BodyTarget(group.Key),
                     max_body_chars = IdentityCardSlotValues.BodyLimit(group.Key), cognitions = group.ToList() });
             return "\n【成长摘要与可参考的认识，按 slot 分组】\n"
-                + "本次可更新范围由下面实际列出的分组确定，其余卡由程序保留原文。一个分组对应一张卡；同组的多条认知供综合理解。对照已有摘要，选择值得沉淀的变化；仍然贴切的认识继续保留。新正文按 target_body_chars 写下，不超过 max_body_chars，写完就是这份摘要。\n"
+                + "本次可更新范围由下面实际列出的分组确定，其余卡由程序保留原文。一个分组对应一张卡；同组的多条认知供综合理解。这里只提供入围认知的完整正文和条件；未入围原件仍在库中。对照已有摘要，将值得沉淀的变化融入仍然贴切的认识；无需改变时不更新。不要逐条改写认知或把当天日记搬入卡片。新正文按 target_body_chars 写下，不超过 max_body_chars，写完就是这份摘要。\n"
                 + TraceJson.ToJson(targets.ToList()) + "\n【保留原文的本人设定】\n" + string.Join(",", pinned);
         }
     }
