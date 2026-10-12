@@ -221,6 +221,13 @@ internal static partial class Program
         item.End = now.ToUnixTimeMilliseconds();
         Require(DayTrajectoryLogic.OverviewLine(item, now) == "上午至下午 · 计划有了变化。", "跨时段保留范围");
         Require(DayTrajectoryLogic.OverviewLine(item, now.AddDays(1)) == "昨天上午至昨天下午 · 计划有了变化。", "跨日沿用活跃事件的相对日期语义");
+        var midnight = new DateTimeOffset(2026, 10, 13, 0, 16, 0, MemoryDayLogic.ChinaOffset);
+        var sameMemoryDay = new DayTrajectoryOverviewLogic.Item { Text = "记录仍在进行。",
+            Start = midnight.AddHours(-1).ToUnixTimeMilliseconds(), End = midnight.ToUnixTimeMilliseconds() };
+        Require(DayTrajectoryLogic.OverviewWhen(sameMemoryDay, midnight) == "深夜至凌晨" &&
+            DayTrajectoryLogic.OverviewWhen(new() { Start = midnight.AddHours(-15).ToUnixTimeMilliseconds(),
+                End = midnight.AddHours(-15).ToUnixTimeMilliseconds() }, midnight) == "上午",
+            "午夜后至04点前仍属于同一记忆日，今日轨迹使用时段而非昨天标签");
         var sameTime = new DayTrajectoryOverviewLogic.Item { Text = at.ToString("M月d日") + "周六上午，小雨买了新书。", Start = at.ToUnixTimeMilliseconds(), End = at.ToUnixTimeMilliseconds() };
         var cleaned = DayTrajectoryLogic.OverviewText(sameTime.Text, sameTime.Start);
         Require(cleaned == "小雨买了新书。" && DayTrajectoryLogic.OverviewText("约好10月5日上午读书。", sameTime.Start) == "约好10月5日上午读书。" &&
