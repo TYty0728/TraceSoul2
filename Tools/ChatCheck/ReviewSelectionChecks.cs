@@ -53,6 +53,22 @@ internal static partial class Program
         var repaired = await ReviewSelectionLogic.SelectAsync(invalid, candidates.Take(8).ToList(), "校验", 2, 1000);
         Require(repaired.Single().Id == "real-0" && invalid.Requests.Count == 2 &&
             invalid.Requests[1].Contains("只能复制本次目录"), "入围必须是本批真实编号，纠正后才加载依据");
+        var empty = new AgentSequenceLlm(Pick());
+        Require((await ReviewSelectionLogic.SelectAsync(empty, candidates.Take(8).ToList(), "身份候选", 2, 1000,
+            allowEmpty: true)).Count == 0 && empty.Requests.Count == 1,
+            "身份候选没有值得沉淀的内容时可以明确全不选，不强制纠正为空的合法判断");
+        var emptyBatches = new SelectionProbeLlm { Reply = _ => Pick() };
+        Require((await ReviewSelectionLogic.SelectAsync(emptyBatches, candidates.Take(25).ToList(), "身份候选", 2, 1000,
+            allowEmpty: true)).Count == 0 && emptyBatches.Requests.Count == 2,
+            "分批身份选择的单项尾批也可不入围，不能因为只剩一项就强行保留");
+        var missing = new AgentSequenceLlm("{}", Pick());
+        Require((await ReviewSelectionLogic.SelectAsync(missing, candidates.Take(8).ToList(), "身份候选", 2, 1000,
+            allowEmpty: true)).Count == 0 && missing.Requests.Count == 2,
+            "允许空入围仍拒绝缺失字段，不能将格式失败冒充全不选");
+        var required = new AgentSequenceLlm(Pick(), Pick("i1"));
+        Require((await ReviewSelectionLogic.SelectAsync(required, candidates.Take(8).ToList(), "当天回望", 2, 1000))
+            .Single().Id == "real-0" && required.Requests.Count == 2,
+            "身份的空入围许可不改变当天回望要求保留有效来源的契约");
         foreach (var bad in new[] { Pick("i1", "i1"), Pick("i1", "i2"), "{}" })
         {
             var model = new AgentSequenceLlm(bad, bad);
@@ -216,6 +232,16 @@ internal static partial class Program
                 "实际身份复盘先按slot筛选全部可见候选，40条以后的反证可入围，完整条件保留，全天冗余细节退出成稿输入");
             Require(((ICognitionGraphStore)store).GetCognitionNodes(100).Count == 52,
                 "身份入围只改变本次摘要输入，不删除未入围认知或固定设定");
+            var noGrowth = new SelectionProbeLlm { Reply = messages =>
+                messages[0].content.Contains("【复盘候选入围】") ? Pick() : "{\"cards\":[]}" };
+            var noGrowthTask = (Task)run.Invoke(null, new object[] { context, store.LoadPairIdentity(), noGrowth, "2020-08-20", cards, "",
+                new List<EventIndexRecord>(), new List<EventEntryRecord>() });
+            noGrowthTask.GetAwaiter().GetResult();
+            var noGrowthOutput = noGrowthTask.GetType().GetProperty("Result").GetValue(noGrowthTask);
+            Require(((System.Collections.IList)noGrowthOutput.GetType().GetField("cards").GetValue(noGrowthOutput)).Count == 0 &&
+                !noGrowth.Requests.Last().Contains("chosen-node-") &&
+                ((ICognitionGraphStore)store).GetCognitionNodes(100).Count == 52,
+                "实际身份复盘允许各批全不入围、整轮不更新，候选仍完整留存且不强行凑一张卡");
         }
         finally { context?.Dispose(); Directory.Delete(dir, true); }
         Console.WriteLine("Review selection Migration checks passed: actual day review, late-ranked cognition, slot and visibility.");

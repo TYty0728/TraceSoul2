@@ -11,6 +11,12 @@ namespace TraceSoul2.Manager
         public List<CognitionSliceRecord> GetCognitionNodes(int take) => connection.Table<CognitionSliceRecord>()
             .OrderByDescending(x => x.UpdatedUnixMs).Take(Math.Max(0, Math.Min(5000, take))).ToList();
 
+        public List<CognitionSliceRecord> GetCognitionReviewCandidates(string scope, bool isPublic) => connection.Query<CognitionSliceRecord>(
+            "SELECT * FROM cognition_slices WHERE Status IN ('active','weakened') AND " +
+            (isPublic ? "MemoryVisibility = 'public' AND ContextConversationId = ? " :
+                "COALESCE(MemoryVisibility, '') <> 'public' AND (COALESCE(ContextConversationId, '') = '' OR ContextConversationId = ?) ") +
+            "ORDER BY UpdatedUnixMs DESC, Id LIMIT 5000", scope ?? "");
+
         public List<CognitionEdgeRecord> GetCognitionEdges(IEnumerable<string> nodeIds)
         {
             var result = new Dictionary<string, CognitionEdgeRecord>();

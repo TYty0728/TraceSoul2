@@ -27,6 +27,7 @@ internal static partial class Program
             context = (IDisposable)Activator.CreateInstance(contextType); // 不调用会加载正式配置的 Create()。
             var actualStore = Activator.CreateInstance(storeType, db);
             contextType.GetProperty("Store").SetValue(context, actualStore);
+            contextType.GetProperty("CognitionEncoder").SetValue(context, new FakeEncoder());
             var migration = Activator.CreateInstance(migrationType, Path.Combine(dir, "migration.db"), db);
             contextType.GetProperty("Migration").SetValue(context, migration);
             var store = (IMemoryStore)actualStore;
@@ -47,6 +48,7 @@ internal static partial class Program
                 night.Requests[0].Contains("真实日构建切片标记"),
                 "实际 Migration 认知阶段覆盖全天完整原文，并带上对应当下切片");
             RunCognitionRepairMigrationChecks(formation, context, store, day, sources[0]);
+            RunCognitionRecallMigrationChecks(formation, context, store, day, sources[0]);
             migrationType.GetMethod("MarkDayCompleted").Invoke(migration, new object[] { day });
             var review = new AgentSequenceLlm("{\"summary\":\"这一天留下了仍待理解的感受。\"}");
             contextType.GetProperty("Llm").SetValue(context, review);
