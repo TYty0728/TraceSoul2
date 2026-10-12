@@ -359,28 +359,25 @@ namespace TraceSoul2.Migrate
             var otherCard = CurrentBody(IdentityCardSlotValues.Other);
             var relationCard = CurrentBody(IdentityCardSlotValues.Relation);
             var expressionCard = CurrentBody(IdentityCardSlotValues.ExpressionHabit);
-            var trajectory = DayTrajectoryLogic.Read(context.Store, MigrationContext.ConversationId, dayKey);
-            var todayNewItems = context.Store.GetTodayNewItemsByDay(
-                MigrationContext.ConversationId, dayKey);
+            var daySummary = string.Join("\n", context.Store.GetRuntimeDaySummaries(MigrationContext.ConversationId, dayKey)
+                .Where(x => x.MemoryVisibility != "public" && x.ContextConversationId == MigrationContext.ConversationId)
+                .Select(x => x.Summary));
             var currentInner = context.Store.LoadOrCreateInnerRuntime(MigrationContext.ConversationId);
             var subjectRevision = SubjectRuntimeLogic.Read(context.Store, MigrationContext.ConversationId).Revision;
             var currentLife = context.LifeState == null
                 ? null : context.LifeState.Load(MigrationContext.ConversationId);
             var reviewPrompt = ReplayPrompts.BuildDayCardReviewPrompt(
                 pair, dayKey, selfCard, otherCard, relationCard, expressionCard,
-                userProfileCard, dayIndexes, dayEntries,
-                trajectory == null ? string.Empty : trajectory.Text,
-                todayNewItems,
+                userProfileCard, new List<EventIndexRecord>(), new List<EventEntryRecord>(),
+                string.Empty,
+                new List<TodayNewItemRecord>(),
                 InnerLifeLogic.FormatForMind(currentInner),
-                FormatLifeState(currentLife));
-            var identityNodes = graphNodes.Where(x => x.Status == "active" &&
+                FormatLifeState(currentLife), selectedDayReview: daySummary);
+            var visibleNodes = graphNodes.Where(x => x.Status == "active" &&
                 x.MemoryVisibility != "public" && (string.IsNullOrEmpty(x.ContextConversationId) || x.ContextConversationId == MigrationContext.ConversationId) &&
-                !string.IsNullOrEmpty(x.IdentitySlot)).Take(40).ToList();
+                !string.IsNullOrEmpty(x.IdentitySlot)).ToList();
+            var identityNodes = await DayCardReviewContract.SelectEvidenceAsync(llm, cardsNow, visibleNodes);
             reviewPrompt += DayCardReviewContract.EvidenceContext(cardsNow, identityNodes);
-            reviewPrompt += "\n【本日切片已形成的经历与感受拼图】\n（主观痕迹不等于外部事实；摘要仍必须引用上面的认知依据。）\n" +
-                string.Join("\n", context.Store.GetRuntimeDaySummaries(MigrationContext.ConversationId, dayKey)
-                    .Where(x => x.MemoryVisibility != "public" && x.ContextConversationId == MigrationContext.ConversationId)
-                    .Select(x => x.Summary));
             var reviewMessages = new List<DeepSeekMessageData>
             {
                 new DeepSeekMessageData("system", reviewPrompt),

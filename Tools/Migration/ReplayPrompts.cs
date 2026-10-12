@@ -172,7 +172,8 @@ namespace TraceSoul2.Migrate
             string dayTrajectory,
             List<TodayNewItemRecord> todayNewItems,
             string currentInner,
-            string currentLife)
+            string currentLife,
+            string selectedDayReview = null)
         {
             pair = pair ?? PairIdentity.Missing;
             var builder = new StringBuilder();
@@ -190,29 +191,40 @@ namespace TraceSoul2.Migrate
             builder.AppendLine(CorePrompts.Migration.DayCardRelationHeader + (string.IsNullOrWhiteSpace(relationCard) ? CorePrompts.Migration.BlankCard : relationCard));
             builder.AppendLine(CorePrompts.Migration.DayCardHabitHeader + (string.IsNullOrWhiteSpace(expressionCard) ? CorePrompts.Migration.BlankCard : expressionCard));
             builder.AppendLine();
-            builder.AppendLine("本日实时样本（主观轨迹与便签，不等于已核实事实；对应日复盘成功后退出实时区）：");
-            builder.AppendLine("- 本日轨迹：" + (string.IsNullOrWhiteSpace(dayTrajectory) ? CorePrompts.Migration.Empty : dayTrajectory.Trim()));
-            builder.AppendLine("- 今日新识：");
-            var todayItems = todayNewItems ?? new List<TodayNewItemRecord>();
-            if (todayItems.Count == 0) builder.AppendLine("  " + CorePrompts.Migration.Empty);
-            else foreach (var item in todayItems) builder.AppendLine("  - " + item.Content);
+            if (selectedDayReview != null)
+            {
+                builder.AppendLine("【已形成的当天主观回望】（提供相处背景，不等于外部事实；身份摘要仍须引用入围认知。）");
+                builder.AppendLine(string.IsNullOrWhiteSpace(selectedDayReview) ? CorePrompts.Migration.Empty : selectedDayReview);
+            }
+            else
+            {
+                builder.AppendLine("本日实时样本（主观轨迹与便签，不等于已核实事实；对应日复盘成功后退出实时区）：");
+                builder.AppendLine("- 本日轨迹：" + (string.IsNullOrWhiteSpace(dayTrajectory) ? CorePrompts.Migration.Empty : dayTrajectory.Trim()));
+                builder.AppendLine("- 今日新识：");
+                var todayItems = todayNewItems ?? new List<TodayNewItemRecord>();
+                if (todayItems.Count == 0) builder.AppendLine("  " + CorePrompts.Migration.Empty);
+                else foreach (var item in todayItems) builder.AppendLine("  - " + item.Content);
+            }
             builder.AppendLine("- 复盘前内心运行态：" + (string.IsNullOrWhiteSpace(currentInner) ? CorePrompts.Migration.Empty : currentInner.Trim()));
             builder.AppendLine("- 复盘前生活状态：" + (string.IsNullOrWhiteSpace(currentLife) ? CorePrompts.Migration.Empty : currentLife.Trim()));
             builder.AppendLine();
-            builder.AppendLine(CorePrompts.Migration.DayCardEventsHeader);
-            var entriesByIndex = (dayEntries ?? new List<EventEntryRecord>())
-                .GroupBy(x => x.IndexId)
-                .ToDictionary(x => x.Key, x => x.ToList());
-            var indexes = (dayIndexes ?? new List<EventIndexRecord>());
-            if (indexes.Count == 0) builder.AppendLine(CorePrompts.Migration.Empty);
-            foreach (var index in indexes)
+            if (selectedDayReview == null)
             {
-                builder.AppendLine("- " + index.TimeLabel + "·" + index.PlaceLabel + "·" + index.PersonLabel
-                    + "·" + index.EventSummary + "·" + index.MoodLabel);
-                List<EventEntryRecord> entries;
-                if (entriesByIndex.TryGetValue(index.Id, out entries))
-                    foreach (var entry in entries)
-                        builder.AppendLine("  - " + entry.Summary + (string.IsNullOrWhiteSpace(entry.Detail) ? "" : "｜" + entry.Detail));
+                builder.AppendLine(CorePrompts.Migration.DayCardEventsHeader);
+                var entriesByIndex = (dayEntries ?? new List<EventEntryRecord>())
+                    .GroupBy(x => x.IndexId)
+                    .ToDictionary(x => x.Key, x => x.ToList());
+                var indexes = (dayIndexes ?? new List<EventIndexRecord>());
+                if (indexes.Count == 0) builder.AppendLine(CorePrompts.Migration.Empty);
+                foreach (var index in indexes)
+                {
+                    builder.AppendLine("- " + index.TimeLabel + "·" + index.PlaceLabel + "·" + index.PersonLabel
+                        + "·" + index.EventSummary + "·" + index.MoodLabel);
+                    List<EventEntryRecord> entries;
+                    if (entriesByIndex.TryGetValue(index.Id, out entries))
+                        foreach (var entry in entries)
+                            builder.AppendLine("  - " + entry.Summary + (string.IsNullOrWhiteSpace(entry.Detail) ? "" : "｜" + entry.Detail));
+                }
             }
             builder.AppendLine();
             CorePrompts.Write(builder, CorePrompts.Migration.DayCardInner);

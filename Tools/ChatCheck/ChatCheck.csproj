@@ -21,6 +21,7 @@
     <Compile Include="EnvironmentChecks.cs" />
     <Compile Include="ExistenceChecks.cs" />
     <Compile Include="RuntimeSliceChecks.cs" />
+    <Compile Include="ReviewSelectionChecks.cs" />
     <Compile Include="RuntimeContinuityChecks.cs" />
     <Compile Include="RuntimePresentationChecks.cs" />
     <Compile Include="DayOverviewChecks.cs" />
