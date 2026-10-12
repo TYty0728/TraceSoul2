@@ -6,7 +6,9 @@
 - 认知与身份摘要按真实经历中的表达、选择和反馈形成理解，正文凝练、条件明确。身份候选可以全部不入围，已有摘要保持贴切时可维持原状。
 - 本次改动不重写历史认知或身份卡，也不自动恢复失败日构建；真实模型的取舍质量需要后续使用观察。
 
-产品 **0.1.44**，PluginApi **1.13.0**、时间调度 **1.2.4**、相机 **2.3.2**。认知检索与实际Migration入口、候选筛选、完整ChatCheck/Prompt、Host/Migration构建已通过；发布资产验收进行中。
+产品 **0.1.44**，PluginApi **1.13.0**、时间调度 **1.2.4**、相机 **2.3.2**。独立检出的Release全解决方案、完整ChatCheck/Prompt、实际Migration认知入口与CoreCheck通过；本机未调用真实模型或恢复日构建。
+
+发布确认：v0.1.44（3f9f6a5）已公开，[发布CI](https://github.com/TYty0728/TraceSoul2/actions/runs/38240238835) 的回归、Docker升级/数据保留和三平台打包通过。匿名latest为v0.1.44，三个安装包公开访问返回200，公开SHA-256文件与GitHub digest一致，SDK1.13.0资产齐全，WebUI可更新。本机未完整下载三个ZIP，未部署或恢复日构建。win-x64 `78d04ce309f5c3dcf8116dc2ceff727de3706c630dc485abbfb0890664bb1402`；linux-x64 `d0459eb118e2b5f7110d07f7b4eb695ca1d5e60677ba2b250beb3731ac8418fb`；linux-arm64 `7973f83b17edc5a6a42b80dc6d06e0d41ced7c8eb430e1d99b55573984718f85`。
 
 ## 0.1.43（2026-10-12）
 
