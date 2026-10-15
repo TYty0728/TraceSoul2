@@ -790,16 +790,17 @@
         <div class="section-head"><h1>大脑 · LLM</h1><span class="muted">多种供应商同时在线；用途槽给灵魂和器官用</span></div>
         <div class="box">
           <h2>默认用途槽</h2>
-          <p class="muted">对话开口是灵魂说话用的。开口勾了「开启思考」时，改走思考槽（可换供应商/模型）。<b>复盘</b>给每日身份复盘和日构建用（关思考、稳 JSON）；留空则跟对话开口但关掉思考。<b>识图多模态</b>专门看她发来的图，看见的结果再交给心智；留空则只知道发了图，不会假装看见。语音、生图器官可跟对应槽，也可在插件齿轮里指定供应商。</p>
+          <p class="muted">主模型统一承担思考与表达。「启用模型推理」只调整该模型的推理参数，不切换供应商或模型。<b>复盘</b>给每日身份复盘和日构建用（关思考、稳 JSON）；留空则跟主模型但关掉思考。<b>识图多模态</b>专门看她发来的图，看见的结果再交给心智；留空则只知道发了图，不会假装看见。语音、生图器官可跟对应槽，也可在插件齿轮里指定供应商。</p>
           <div class="slot-grid">
-            <div><label>对话开口</label><select id="slotChat"></select></div>
-            <div><label>默认思考</label><select id="slotThinking"></select></div>
+            <div><label>主模型</label><select id="slotChat"></select></div>
+            <div><label>JEV（决策）</label><select id="slotJev"></select></div>
             <div><label>复盘</label><select id="slotReview"></select></div>
             <div><label>识图多模态</label><select id="slotMultimodal"></select></div>
             <div><label>语音</label><select id="slotSpeech"></select></div>
             <div><label>生图</label><select id="slotImage"></select></div>
             <div><label>&nbsp;</label><button class="primary" onclick="saveSlots()">保存槽位</button></div>
           </div>
+          <p class="muted">JEV 可独立选择决策模型；留空时不启用。目前只保存路由，工具调用和是否拍照尚未切换到 JEV。</p>
           <div class="row" style="margin-top:12px">
             <div><label>复盘专用温度（默认 0.2）</label><input id="reviewTemperature" type="number" min="0" max="1" step="0.05" /></div>
             <div class="nogrow"><label>&nbsp;</label><button onclick="saveReviewSettings()">保存复盘温度</button></div>
@@ -862,7 +863,7 @@
                 </div>
                 <div class="row">
                   <div class="nogrow"><label>&nbsp;</label>
-                    <label style="margin:0"><input type="checkbox" id="thinking" /> 开口走思考槽</label></div>
+                    <label style="margin:0"><input type="checkbox" id="thinking" /> 启用模型推理</label></div>
                   <div class="nogrow"><label>思考强度</label>
                     <select id="effort" style="width:100px">
                       <option value="low">low 日常</option>
@@ -899,7 +900,7 @@
               </div>
               <div class="role-filter" id="roleFilter"></div>
               <div id="modelBox"></div>
-              <p class="muted" style="margin-top:8px">点「获取模型列表」会打供应商的 /models。给模型打上对话 / 思考 / 识图多模态 / 语音 / 生图，再在上方用途槽里选默认。Google Gemini 走原生 generateContent；其余走 OpenAI 兼容。</p>
+              <p class="muted" style="margin-top:8px">点「获取模型列表」会打供应商的 /models。给模型打上主模型 / JEV决策 / 识图多模态 / 语音 / 生图，再在上方用途槽里选默认。Google Gemini 走原生 generateContent；其余走 OpenAI 兼容。</p>
             </div>
           </div>
         </div>
@@ -1655,8 +1656,8 @@
   }
 
   /* ================= 大脑 · LLM ================= */
-  const ROLE_LABELS = { chat: "对话", thinking: "思考", multimodal: "识图多模态", speech: "语音", image: "生图" };
-  const ROLE_KEYS = ["chat", "thinking", "multimodal", "speech", "image"];
+  const ROLE_LABELS = { chat: "主模型", jev: "JEV决策", multimodal: "识图多模态", speech: "语音", image: "生图" };
+  const ROLE_KEYS = ["chat", "jev", "multimodal", "speech", "image"];
   let providerCache = [];
   let slotCache = {};
   let selectedProviderId = "";
@@ -1699,7 +1700,7 @@
   }
   function renderSlots() {
     fillSlotSelect($("slotChat"), "chat", slotCache.chat, false);
-    fillSlotSelect($("slotThinking"), "thinking", slotCache.thinking, true);
+    fillSlotSelect($("slotJev"), "chat", slotCache.jev, true);
     fillSlotSelect($("slotReview"), "chat", slotCache.review, true);
     fillSlotSelect($("slotMultimodal"), "multimodal", slotCache.multimodal, true);
     fillSlotSelect($("slotSpeech"), "speech", slotCache.speech, true);
@@ -1729,7 +1730,7 @@
       return `<button class="prov-item ${p.id === selectedProviderId ? "active" : ""}" onclick="selectProvider('${esc(p.id)}')">` +
         `<div class="pid">${esc(p.displayName || p.id)}</div>` +
         `<div class="purl">${esc(p.baseUrl || "")}</div>` +
-        (p.current ? `<div class="now">对话开口 · ${esc(p.model || "")}</div>`
+        (p.current ? `<div class="now">主模型 · ${esc(p.model || "")}</div>`
           : `<div class="purl">${n} 个模型${p.model ? " · " + esc(p.model) : ""}</div>`);
     }).join("");
     fillProviderForm(providerCache.find(p => p.id === selectedProviderId) || cur);
@@ -1805,7 +1806,7 @@
         `<label class="sw" title="启用"><input type="checkbox" ${on ? "checked" : ""} onchange="toggleModelEnabled('${esc(m.id)}', this.checked)" /><i></i></label>` +
         `<div class="mid">${esc(m.id)}${cur && cur.model === m.id ? " · 该源对话默认" : ""}</div>` +
         `<div class="roles">${roles}</div>` +
-        `<button class="icon-btn" title="设为对话开口" onclick="useModel('${esc(m.id)}')">⤴</button>` +
+        `<button class="icon-btn" title="设为主模型" onclick="useModel('${esc(m.id)}')">⤴</button>` +
         `<button class="icon-btn danger" title="删除" onclick="deleteModel('${esc(m.id)}')">🗑</button>` +
         `</div>`;
     }).join("");
@@ -1850,7 +1851,7 @@
     try {
       await api("/providers/slots", "PUT", {
         chat: parseSlotValue($("slotChat").value),
-        thinking: parseSlotValue($("slotThinking").value),
+        jev: parseSlotValue($("slotJev").value),
         review: parseSlotValue($("slotReview").value),
         multimodal: parseSlotValue($("slotMultimodal").value),
         speech: parseSlotValue($("slotSpeech").value),
@@ -1877,7 +1878,7 @@
     try {
       await saveProvider().catch(() => {});
       await api("/providers/current", "PUT", { id: $("providerId").value, model: modelId });
-      logLine("当前开口：" + $("providerId").value + " / " + modelId);
+      logLine("当前主模型：" + $("providerId").value + " / " + modelId);
       await refreshProviders($("providerId").value);
     } catch (e) {
       logLine("设为开口失败：" + e.message);

@@ -29,8 +29,10 @@ namespace TraceSoul2.Host
             Directory.CreateDirectory(Path.GetDirectoryName(path) ?? ".");
             Protection = new FailureProtection(Path.GetDirectoryName(path) ?? ".");
             var created = !File.Exists(path);
-            data = LoadUnsafe();
-            if (created) SaveUnsafe();
+            data = LoadUnsafe(out var unified);
+            if (unified && !File.Exists(path + ".before-main-unification.bak"))
+                File.Copy(path, path + ".before-main-unification.bak");
+            if (created || unified) SaveUnsafe();
         }
 
         public string CurrentId
@@ -65,7 +67,7 @@ namespace TraceSoul2.Host
                     [LlmSlotNames.Chat] = chat == null
                         ? new LlmSlotRef()
                         : new LlmSlotRef { providerId = chat.id, model = chat.model ?? string.Empty },
-                    [LlmSlotNames.Thinking] = CloneSlot(data.thinking),
+                    [LlmSlotNames.Jev] = CloneSlot(data.jev),
                     [LlmSlotNames.Review] = CloneSlot(data.review),
                     [LlmSlotNames.Multimodal] = CloneSlot(data.multimodal),
                     [LlmSlotNames.Image] = CloneSlot(data.image),
@@ -169,7 +171,7 @@ namespace TraceSoul2.Host
                 data.providers.Remove(item);
                 if (string.Equals(data.currentId, item.id, StringComparison.OrdinalIgnoreCase))
                     data.currentId = data.providers[0].id;
-                ClearSlotIf(data.thinking, item.id);
+                ClearSlotIf(data.jev, item.id);
                 ClearSlotIf(data.review, item.id);
                 ClearSlotIf(data.multimodal, item.id);
                 ClearSlotIf(data.image, item.id);
@@ -292,7 +294,7 @@ namespace TraceSoul2.Host
                     var next = item.models.FirstOrDefault(x => x.enabled);
                     item.model = next == null ? string.Empty : next.id;
                 }
-                DropSlotModel(data.thinking, id, modelId);
+                DropSlotModel(data.jev, id, modelId);
                 DropSlotModel(data.review, id, modelId);
                 DropSlotModel(data.multimodal, id, modelId);
                 DropSlotModel(data.image, id, modelId);
@@ -326,25 +328,21 @@ namespace TraceSoul2.Host
 
         public ILlmClient CreateCurrentClient()
         {
-            string chatId;
-            bool thinkingOn;
-            LlmSlotRef thinking;
             lock (gate)
             {
-                chatId = data.currentId;
-                var chat = Find(chatId);
-                thinkingOn = chat != null && chat.thinkingEnabled;
-                thinking = CloneSlot(data.thinking);
+                // ThinkingEnabled controls this model's reasoning, never another provider's route.
+                return CreateClient(data.currentId, null, null);
             }
-            if (thinkingOn && thinking != null && !string.IsNullOrWhiteSpace(thinking.providerId))
-            {
-                var client = CreateClient(thinking.providerId, thinking.model, true);
-                if (client != null) return client;
-            }
-            return CreateClient(chatId, null, null);
         }
 
-        /// <summary>复盘：指定槽则用该模型并关思考；未指定则用对话开口关思考，避免推理模型把额度耗在 reasoning。</summary>
+        /// <summary>独立决策路由。只用明确配置的JEV模型；未配置或不可用时不回退到主模型或复盘。</summary>
+        public ILlmClient CreateJevClient()
+        {
+            var endpoint = ResolveExplicitSlot(LlmSlotNames.Jev);
+            return endpoint == null ? null : CreateClient(endpoint.ProviderId, endpoint.Model, null);
+        }
+
+        /// <summary>复盘：指定槽则用该模型并关思考；未指定则用主模型关思考，避免推理模型把额度耗在 reasoning。</summary>
         public float ReviewTemperature { get { lock (gate) return data.reviewTemperature ?? 0.2f; } }
 
         public void SetReviewTemperature(float temperature)
@@ -404,6 +402,8 @@ namespace TraceSoul2.Host
         public LlmEndpointData ResolveSlot(string slot)
         {
             slot = NormalizeSlot(slot);
+            // 决策模型必须由用户明确选择，清空槽后不能又按历史用途标记自动启用。
+            if (slot == LlmSlotNames.Jev) return ResolveExplicitSlot(slot);
             lock (gate)
             {
                 if (string.Equals(slot, LlmSlotNames.Chat, StringComparison.OrdinalIgnoreCase))
@@ -478,8 +478,9 @@ namespace TraceSoul2.Host
             return seed + "_" + Guid.NewGuid().ToString("N").Substring(0, 6);
         }
 
-        private FileData LoadUnsafe()
+        private FileData LoadUnsafe(out bool unified)
         {
+            unified = false;
             if (!File.Exists(path))
             {
                 var created = new FileData();
@@ -502,6 +503,24 @@ namespace TraceSoul2.Host
             }
             if (string.IsNullOrWhiteSpace(loaded.currentId))
                 loaded.currentId = loaded.providers[0].id;
+            if (loaded.thinking != null)
+            {
+                // Preserve the model actually used by the old conditional route on upgrade.
+                var chat = loaded.providers.FirstOrDefault(x =>
+                    string.Equals(x.id, loaded.currentId, StringComparison.OrdinalIgnoreCase));
+                var legacy = loaded.providers.FirstOrDefault(x =>
+                    string.Equals(x.id, loaded.thinking.providerId, StringComparison.OrdinalIgnoreCase));
+                if (chat?.thinkingEnabled == true && legacy != null && !string.IsNullOrWhiteSpace(legacy.apiKey))
+                {
+                    loaded.currentId = legacy.id;
+                    if (!string.IsNullOrWhiteSpace(loaded.thinking.model))
+                        legacy.model = loaded.thinking.model.Trim();
+                    legacy.thinkingEnabled = true;
+                    EnsureModel(legacy, legacy.model, LlmSlotNames.Chat);
+                }
+                loaded.thinking = null;
+                unified = true;
+            }
             return loaded;
         }
 
@@ -583,7 +602,7 @@ namespace TraceSoul2.Host
 
         private LlmSlotRef SlotOf(string slot)
         {
-            if (string.Equals(slot, LlmSlotNames.Thinking, StringComparison.OrdinalIgnoreCase)) return data.thinking;
+            if (string.Equals(slot, LlmSlotNames.Jev, StringComparison.OrdinalIgnoreCase)) return data.jev;
             if (string.Equals(slot, LlmSlotNames.Review, StringComparison.OrdinalIgnoreCase)) return data.review;
             if (string.Equals(slot, LlmSlotNames.Multimodal, StringComparison.OrdinalIgnoreCase)) return data.multimodal;
             if (string.Equals(slot, LlmSlotNames.Image, StringComparison.OrdinalIgnoreCase)) return data.image;
@@ -593,7 +612,7 @@ namespace TraceSoul2.Host
 
         private void AssignSlot(string slot, LlmSlotRef value)
         {
-            if (string.Equals(slot, LlmSlotNames.Thinking, StringComparison.OrdinalIgnoreCase)) data.thinking = value;
+            if (string.Equals(slot, LlmSlotNames.Jev, StringComparison.OrdinalIgnoreCase)) data.jev = value;
             else if (string.Equals(slot, LlmSlotNames.Review, StringComparison.OrdinalIgnoreCase)) data.review = value;
             else if (string.Equals(slot, LlmSlotNames.Multimodal, StringComparison.OrdinalIgnoreCase)) data.multimodal = value;
             else if (string.Equals(slot, LlmSlotNames.Image, StringComparison.OrdinalIgnoreCase)) data.image = value;
@@ -625,7 +644,8 @@ namespace TraceSoul2.Host
         private static string NormalizeSlot(string slot)
         {
             slot = (slot ?? string.Empty).Trim().ToLowerInvariant();
-            if (slot == "chat" || slot == "thinking" || slot == "review" || slot == "multimodal" ||
+            if (slot == "thinking") return LlmSlotNames.Chat; // Legacy plugin/role alias.
+            if (slot == "chat" || slot == "jev" || slot == "review" || slot == "multimodal" ||
                 slot == "image" || slot == "speech")
                 return slot;
             if (slot == "vision") return LlmSlotNames.Multimodal;
@@ -730,7 +750,9 @@ namespace TraceSoul2.Host
         private sealed class FileData
         {
             public string currentId { get; set; }
+            [System.Text.Json.Serialization.JsonIgnore(Condition = System.Text.Json.Serialization.JsonIgnoreCondition.WhenWritingNull)]
             public LlmSlotRef thinking { get; set; }
+            public LlmSlotRef jev { get; set; }
             public LlmSlotRef review { get; set; }
             public float? reviewTemperature { get; set; }
             public LlmSlotRef multimodal { get; set; }

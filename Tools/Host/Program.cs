@@ -608,7 +608,8 @@ app.MapPut("/providers/current", (SoulRuntime runtime, SelectWrite body) =>
 app.MapPut("/providers/slots", (SoulRuntime runtime, SlotBundleWrite body) =>
 {
     if (body == null) throw new InvalidOperationException("槽位不能为空。");
-    ProviderSlotApi.Apply(runtime, LlmSlotNames.Thinking, body.thinking);
+    // Old clients may still submit thinking; it no longer overrides the unified chat selection.
+    ProviderSlotApi.Apply(runtime, LlmSlotNames.Jev, body.jev);
     ProviderSlotApi.Apply(runtime, LlmSlotNames.Review, body.review);
     ProviderSlotApi.Apply(runtime, LlmSlotNames.Multimodal, body.multimodal);
     ProviderSlotApi.Apply(runtime, LlmSlotNames.Image, body.image);
@@ -1336,6 +1337,7 @@ internal sealed class SlotBundleWrite
 {
     public SlotRefWrite chat { get; set; }
     public SlotRefWrite thinking { get; set; }
+    public SlotRefWrite jev { get; set; }
     public SlotRefWrite review { get; set; }
     public SlotRefWrite multimodal { get; set; }
     public SlotRefWrite image { get; set; }

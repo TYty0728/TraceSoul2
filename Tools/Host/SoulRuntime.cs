@@ -932,7 +932,7 @@ namespace TraceSoul2.Host
             return new
             {
                 chat = PublicSlot(slots, LlmSlotNames.Chat),
-                thinking = PublicSlot(slots, LlmSlotNames.Thinking),
+                jev = PublicSlot(slots, LlmSlotNames.Jev),
                 review = PublicSlot(slots, LlmSlotNames.Review),
                 multimodal = PublicSlot(slots, LlmSlotNames.Multimodal),
                 image = PublicSlot(slots, LlmSlotNames.Image),

@@ -34,6 +34,20 @@ internal static partial class Program
             using (var runtime = (IDisposable)Activator.CreateInstance(type, new object[] { root, Path.Combine(root, "empty-plugins"), Path.Combine(root, "plugin-data") }))
             using (var check = new SqliteMemoryManager(database))
             {
+                // 同一真实宿主核对模型路由API所用DTO、写入处理与公开投影；只使用临时配置。
+                var bundleType = assembly.GetType("SlotBundleWrite", true);
+                var bundle = System.Text.Json.JsonSerializer.Deserialize(
+                    "{\"jev\":{\"providerId\":\"default\",\"model\":\"decision-test\"}}", bundleType);
+                var apply = assembly.GetType("ProviderSlotApi", true).GetMethod("Apply");
+                apply.Invoke(null, new[] { runtime, LlmSlotNames.Jev, bundleType.GetProperty("jev").GetValue(bundle) });
+                var oldBundle = System.Text.Json.JsonSerializer.Deserialize("{}", bundleType);
+                apply.Invoke(null, new[] { runtime, LlmSlotNames.Jev, bundleType.GetProperty("jev").GetValue(oldBundle) });
+                var slotsJson = System.Text.Json.JsonSerializer.Serialize(type.GetMethod("PublicSlots").Invoke(runtime, null));
+                using (var slots = System.Text.Json.JsonDocument.Parse(slotsJson))
+                    Require(slots.RootElement.GetProperty("jev").GetProperty("model").GetString() == "decision-test" &&
+                        !slotsJson.Contains("apiKey", StringComparison.OrdinalIgnoreCase) &&
+                        !slots.RootElement.TryGetProperty("thinking", out _),
+                        "宿主JEV路由DTO/写入/公开读回一致，旧客户端省略字段时保留选择，不公开Key或旧思考槽");
                 var deadline = DateTime.UtcNow.AddSeconds(10);
                 while (string.IsNullOrWhiteSpace(check.LoadPluginDocument("runtime.trajectory-overview", "tracesoul2:" + day)) && DateTime.UtcNow < deadline)
                     await Task.Delay(50);

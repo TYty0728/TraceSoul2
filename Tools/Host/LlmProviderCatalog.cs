@@ -60,7 +60,7 @@ namespace TraceSoul2.Host
             return string.Equals(NormalizeType(type), GoogleGenAi, StringComparison.OrdinalIgnoreCase);
         }
 
-        /// <summary>按模型 id 猜用途：对话 / 思考 / 识图多模态 / 生图 / 语音。嵌入与重排不标对话。</summary>
+        /// <summary>按模型 id 猜用途：主模型 / 识图多模态 / 生图 / 语音。嵌入与重排不标对话。</summary>
         public static List<string> GuessRoles(string modelId)
         {
             var id = (modelId ?? string.Empty).Trim().ToLowerInvariant();
@@ -73,11 +73,8 @@ namespace TraceSoul2.Host
             if (ContainsAny(id, "dall-e", "dalle", "gpt-image", "imagen", "flux", "kolors",
                     "stable-diffusion", "sdxl", "midjourney", "image-gen", "seedream"))
                 roles.Add("image");
-            if (ContainsAny(id, "reasoner", "thinking", "-r1", "r1-", "o1-", "o3-", "o4-mini", "qwq"))
-                roles.Add("thinking");
             if (ContainsAny(id, "kimi-k3", "kimi-k2"))
             {
-                if (!roles.Contains("thinking")) roles.Add("thinking");
                 if (!roles.Contains("multimodal")) roles.Add("multimodal");
             }
             if (ContainsAny(id, "vision", "-vl", "vl-", "gpt-4o", "gpt-4.1", "gpt-5", "gemini",
