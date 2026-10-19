@@ -86,6 +86,10 @@ def main():
             marker = root / 'Plugins/qq-sticker/keep.txt'
             marker.write_text('installed plugin stays')
             subprocess.run(['docker', 'restart', name], check=True)
+            # Docker may allocate a different host port when an ephemeral
+            # publication is restarted; always observe the current mapping.
+            port = subprocess.check_output(['docker', 'port', name, '5080/tcp'], text=True).strip().rsplit(':', 1)[1]
+            base = 'http://127.0.0.1:' + port
             ready()
             assert auth.read_bytes() == before
             assert keep.read_text() == 'private runtime stays' and marker.read_text() == 'installed plugin stays'
