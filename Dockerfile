@@ -19,7 +19,7 @@ RUN set -eu; \
       cp "ExternalPlugins/$project/plugin.json" "$target/"; \
       if [ -f "ExternalPlugins/$project/config_schema.json" ]; then cp "ExternalPlugins/$project/config_schema.json" "$target/"; fi; \
       if [ -d "ExternalPlugins/$project/protocol" ]; then cp -a "ExternalPlugins/$project/protocol" "$target/"; fi; \
-      plugins="$plugins$separator\"$name\""; separator=','; \
+      plugins=$(printf '%s%s"%s"' "$plugins" "$separator" "$name"); separator=','; \
     done; plugins="$plugins]"; \
     version=$(sed -n 's:.*<TraceSoul2Version>\([^<]*\)</TraceSoul2Version>.*:\1:p' Tools/Directory.Build.props | head -n 1 | tr -d '\r'); \
     printf '{\n  "product": "TraceSoul2",\n  "version": "%s",\n  "runtime": "%s",\n  "bundledPlugins": %s\n}\n' "$version" "$rid" "$plugins" > /seed/App/tracesoul2.install.json

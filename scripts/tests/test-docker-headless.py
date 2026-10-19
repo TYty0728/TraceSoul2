@@ -4,6 +4,7 @@ import hashlib
 import http.cookiejar
 import json
 import os
+import re
 from pathlib import Path
 import subprocess
 import tempfile
@@ -35,7 +36,8 @@ def main():
         before = auth.read_bytes()
         args = ['docker', 'run', '-d', '--name', name, '--user', f'{os.getuid()}:{os.getgid()}',
                 '-p', '127.0.0.1::5080', '--mount', f'type=bind,src={root},dst=/opt/tracesoul2',
-                '-e', 'TRACESOUL2_URLS=http://0.0.0.0:5080', image]
+                '-e', 'TRACESOUL2_URLS=http://0.0.0.0:5080',
+                '-e', 'TRACESOUL2_TRUST_CONTAINER_PROXY=1', image]
         try:
             subprocess.run(args, check=True)
             port = subprocess.check_output(['docker', 'port', name, '5080/tcp'], text=True).strip().rsplit(':', 1)[1]
@@ -52,13 +54,15 @@ def main():
 
             def ready():
                 deadline = time.monotonic() + 60
+                last_problem = 'no response'
                 while time.monotonic() < deadline:
                     try:
                         api('/auth/status')
                         return
-                    except (OSError, ValueError):
+                    except (OSError, ValueError) as error:
+                        last_problem = str(error)
                         time.sleep(0.3)
-                raise AssertionError('Headless Docker Host did not become ready')
+                raise AssertionError('Headless Docker Host did not become ready: ' + last_problem)
 
             ready()
             api('/auth/login', 'POST', dict(username='docker-fixture', password=password))
@@ -86,6 +90,12 @@ def main():
             assert auth.read_bytes() == before
             assert keep.read_text() == 'private runtime stays' and marker.read_text() == 'installed plugin stays'
             print('Source Docker passed: non-root startup, 9 official plugins, private auth, CPU ONNX, offline WXXZ and persistent restart.')
+        except Exception:
+            logs = subprocess.run(['docker', 'logs', '--tail', '60', name], capture_output=True, text=True)
+            diagnostic = logs.stdout + logs.stderr
+            diagnostic = re.sub(r'(初始密码[：:])[^\r\n]*', r'\1 [redacted]', diagnostic)
+            print(diagnostic[-12000:])
+            raise
         finally:
             subprocess.run(['docker', 'rm', '-f', name], check=False)
             subprocess.run(['docker', 'image', 'rm', image], check=False)
