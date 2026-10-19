@@ -1,10 +1,8 @@
 # 项目知识库
 
-2026-10-19发布续检：0.1.48源码7e03d8f的主分支Docker检查39254553655通过，已创建不可变v0.1.48标签。首次Release的Docker、完整.NET/Prompt/Migration和页面检查通过，Python音色测试因CI漏装运行依赖soundfile失败；仅补齐发布工作流依赖，从main重新dispatch同一标签，不改版本源码或移动标签。正式Release及三平台公开资产尚未生成，待重跑确认。
+2026-10-19全部当前修改已按用户授权集成并发布[v0.1.48](https://github.com/TYty0728/TraceSoul2/releases/tag/v0.1.48)（源码7e03d8f、PluginApi1.15.0）。[发布CI39257400960](https://github.com/TYty0728/TraceSoul2/actions/runs/39257400960)完整.NET/Prompt/实际Migration、页面、95项Python及三平台打包通过；实际Docker升级/数据保留和源码镜像非root启动、鉴权、九插件、CPU ONNX与重启保留通过。匿名latest和三ZIP公开HEAD200、公开SHA-256与GitHub digest一致，SDK可访问；WebUI可更新。本机未完整下载ZIP，未重启运行Host、部署服务器、采音/调用真实模型或恢复日构建。独立感官/TTS仍需私有HTTPS与Bearer，实体屏幕状态/动画仍待联调，见[发布确认](../RELEASES.md)、[容器连接](../DOCKER.md)。
 
-2026-10-19发布检查修订：0.1.47/2703e21已推送但未创建正式Release；真实Docker升级保留数据通过，新增源码镜像检查因测试未带正式Compose的TRACESOUL2_TRUST_CONTAINER_PROXY=1而拒绝请求。补齐该参数、失败诊断，并改用printf生成插件清单避免引号歧义。保留失败标签，不改写已推送历史；正式补丁改0.1.48，先等主分支Docker检查通过再创建新标签。
-
-2026-10-19用户授权将当前全部修改集成发布0.1.47（PluginApi1.15.0），不再沿用此前WXXZ暂不发布的阶段限制，但不自动部署服务器。集成统一Moment/WebUI、Decisions、私有千问、语音/名字/声纹、共用表情/显示和提名修复；新增Docker远端桥显式HTTPS+独立Bearer、九官方插件首次初始化与源码镜像无硬件启动CI。Release全解决方案、完整ChatCheck/Prompt、实际Migration、Core/Updater/UpdateCheck、15项页面及95项Python通过；477源码文件发布检查与暂存diff通过，无运行密钥/录音/声纹/图库/数据库。待推送及GitHub实际Docker/三平台发布结果，见[0.1.47](../RELEASES.md)、[容器连接](../DOCKER.md)。
+发布故障审计：0.1.47/2703e21仅保留失败标签，无正式Release；补0.1.48修正Compose代理参数、重启随机端口和镜像清单引号。0.1.48首次Release因CI漏装音频读取依赖soundfile失败，在main的8cffe71补齐后dispatch同一标签，版本源码与标签不动。此前各专题“不发布/待推送”是本次用户授权前的阶段记录，统一由本条发布状态取代。477源码文件发布检查通过，未提交运行密钥、录音、声纹、参考音色、图库或数据库。
 
 2026-10-19修正实时预览默认脸：进入身体与感官自动读取QQ共用图库，待机/未连接/直接演示均按已有标签选图库图，本轮真实回复图优先；发呆与提问优先对应用途，睡觉/流汗等专用图不乱用。演示图库手选立即同步，失败/空库显示文字占位，可手动刷新；状态缓存无逐帧请求、无额外BGE/LLM/JEV或设备动作。五项页面和diff通过，原5080实际自动发呆图/思考换图/动画验证，HTML已热更新与暂存，无需重启，实体仍未验收。此前“演示先手选再重选状态”说明由本修正取代，见[自动待机图](../WXXZ_DISPLAY.md)。
 

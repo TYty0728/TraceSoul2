@@ -10,7 +10,9 @@
 - 日终提名条数与篇幅分开校验，过长项有界重写；合格描述与检查点保留，持续失败仍暂停，不自动恢复既有失败任务。
 - Docker源码镜像补齐九个官方插件并在首次安装时初始化，已有插件与数据保留；WXXZ桥支持显式配置回环地址或带独立Bearer的HTTPS网关。普通服务器无USB/GPU/声纹时可正常启动，语音和硬件服务按需外接。
 
-产品 **0.1.48**，PluginApi **1.15.0**。发布构建同步Host与全部官方插件；Windows x64、Linux x64、Linux ARM64安装包及摘要按发布CI生成。容器连接、数据迁移和独立感官服务见[Docker指南](DOCKER.md)。本地Release全解决方案、完整ChatCheck/Prompt、实际Migration、CoreCheck、更新器/下载检查、15项页面与95项Python通过；477源码文件发布检查通过。0.1.47集成标签的升级检查通过，但新镜像检查因缺少Compose代理参数暂停，未正式发布；0.1.48补齐测试参数并修正镜像插件清单引号。正式Docker/三平台CI与公开资产待发布确认；不自动部署用户服务器或恢复日构建。
+产品 **0.1.48**，PluginApi **1.15.0**。发布构建同步Host与全部官方插件；提供Windows x64、Linux x64、Linux ARM64安装包及摘要。容器连接、数据迁移和独立感官服务见[Docker指南](DOCKER.md)。本地Release全解决方案、完整ChatCheck/Prompt、实际Migration、CoreCheck、更新器/下载检查、15项页面与95项Python通过；477源码文件发布检查通过。0.1.47仅保留失败集成标签，未正式发布；0.1.48修正镜像插件清单生成和容器检查参数、重启随机端口读取，正式发布工作流补齐soundfile测试依赖。版本标签未移动。
+
+发布确认：[v0.1.48](https://github.com/TYty0728/TraceSoul2/releases/tag/v0.1.48)（源码7e03d8f）已公开，[发布CI](https://github.com/TYty0728/TraceSoul2/actions/runs/39257400960)通过完整回归、实际Docker升级与数据保留、源码镜像非root启动/鉴权/九插件/CPU ONNX/重启保留以及三平台打包。首次发布CI漏装soundfile，已在main的8cffe71补齐后dispatch同一标签构建，无产品源码变化。匿名latest为v0.1.48，三个ZIP公开HEAD均为200，公开SHA-256文件与GitHub digest一致，SDK1.15.0可访问，供WebUI更新；未在本机完整下载三个ZIP、部署服务器或恢复日构建。win-x64 `a40b3c365daccdae84696a0aab85dde3cbeedc7cf2cc3e49b1156df6fe1e2875`；linux-x64 `a59ecbea2e6a692a483b1adeafa8f3a609bcdc2678783fc1156d6ad9a4f57e13`；linux-arm64 `59ba662876b64b626ec6e42442ee1dd9846e5ccc1945fc1dab12daaa31557c49`。
 
 ## 0.1.46（2026-10-15）
 
