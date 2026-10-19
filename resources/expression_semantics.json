@@ -1,0 +1,171 @@
+{
+  "schema_version": 1,
+  "tags": [
+    {
+      "tag": "睡觉",
+      "requires_intent": true,
+      "description": "睡觉、入睡、睡着了，盖着被子休息。我要去睡了，先睡一觉。",
+      "exclusions": [
+        "我暂时还不想睡觉，我们继续聊聊吧。",
+        "我们讨论睡觉这个词的含义，并不是现在要去睡。"
+      ]
+    },
+    {
+      "tag": "困了",
+      "requires_intent": true,
+      "description": "很困，困得睁不开眼，打哈欠，想睡一会儿。",
+      "exclusions": [
+        "我一点也不困，精神还很好，还想继续聊天。",
+        "我暂时还不想睡觉，我们继续聊聊吧。"
+      ]
+    },
+    {
+      "tag": "晚安",
+      "requires_intent": true,
+      "description": "晚安，早点睡，祝你好梦，明天见。",
+      "exclusions": [
+        "现在还没到说晚安的时候，我不准备睡，我们接着聊。"
+      ]
+    },
+    {
+      "tag": "流汗",
+      "requires_intent": true,
+      "description": "冒汗、汗颜，流下一滴汗。呃，这也太尴尬了，我都冒汗了。"
+    },
+    {
+      "tag": "尴尬",
+      "requires_intent": false,
+      "description": "有点尴尬，不知道如何接话，尴尬但不失礼貌地微笑。"
+    },
+    {
+      "tag": "无语",
+      "requires_intent": false,
+      "description": "无话可说，不知道该说什么，实在让人无语。"
+    },
+    {
+      "tag": "打招呼",
+      "requires_intent": true,
+      "description": "你好，早上好，好久不见，很高兴见到你。"
+    },
+    {
+      "tag": "告别",
+      "requires_intent": true,
+      "description": "再见，拜拜，我先走了，我们下次再聊。"
+    },
+    {
+      "tag": "赞同",
+      "requires_intent": true,
+      "description": "赞同、同意和认可。你说得对，就这样办，我也是这么想的。"
+    },
+    {
+      "tag": "夸奖",
+      "requires_intent": true,
+      "description": "夸赞对方做得好。你好棒，干得漂亮，真厉害，给你点赞。"
+    },
+    {
+      "tag": "加油",
+      "requires_intent": true,
+      "description": "鼓励对方。加油，你可以的，再坚持一下，我支持你。"
+    },
+    {
+      "tag": "感谢",
+      "requires_intent": true,
+      "description": "表达感谢。谢谢你，多亏有你，真的很感谢。"
+    },
+    {
+      "tag": "道歉",
+      "requires_intent": true,
+      "description": "对不起，抱歉，是我做错了，向对方道歉。"
+    },
+    {
+      "tag": "请求原谅",
+      "requires_intent": true,
+      "description": "求原谅，别生我的气，我知道错了。"
+    },
+    {
+      "tag": "表达喜爱",
+      "requires_intent": false,
+      "description": "喜欢你，爱你，送你一颗心，想要抱抱你。"
+    },
+    {
+      "tag": "安慰",
+      "requires_intent": true,
+      "description": "安慰对方。别难过，我陪着你，辛苦了，抱抱你。"
+    },
+    {
+      "tag": "求安慰",
+      "requires_intent": false,
+      "description": "自己想被安慰。我有点委屈，想要抱抱，能安慰我一下吗。"
+    },
+    {
+      "tag": "提问",
+      "requires_intent": true,
+      "description": "提出疑问，不明白对方在说什么。这是什么意思，能再解释一下吗。"
+    },
+    {
+      "tag": "抗议",
+      "requires_intent": true,
+      "description": "生气地表达不满。太过分了，我不接受，我要抗议。"
+    },
+    {
+      "tag": "庆祝",
+      "requires_intent": false,
+      "description": "庆祝好事。成功了，太开心了，真是个惊喜，太棒了！"
+    },
+    {
+      "tag": "得意",
+      "requires_intent": false,
+      "description": "自己被夸奖或做成事情，感到得意和自豪。嘿嘿，我厉害吧。"
+    },
+    {
+      "tag": "卖萌",
+      "requires_intent": false,
+      "description": "可爱地卖萌，眨眼，撒娇，嘿嘿，装无辜。"
+    },
+    {
+      "tag": "装可怜",
+      "requires_intent": false,
+      "description": "可怜巴巴地望着对方，装可怜，求求你啦。"
+    },
+    {
+      "tag": "发懵",
+      "requires_intent": false,
+      "description": "脑子转不过来，信息太多，大脑宕机，晕头转向，头上乱线。"
+    },
+    {
+      "tag": "发呆",
+      "requires_intent": false,
+      "description": "呆呆看着前方，放空脑袋，暂时什么也不想。"
+    },
+    {
+      "tag": "喜极而泣",
+      "requires_intent": false,
+      "description": "开心得哭了，感动得流眼泪，终于等到好转了。"
+    },
+    {
+      "tag": "大哭",
+      "requires_intent": false,
+      "description": "哭泣、大哭、眼泪止不住，非常伤心或委屈。"
+    },
+    {
+      "tag": "累瘫",
+      "requires_intent": false,
+      "description": "极度疲惫，累瘫了，虚脱了，灵魂出窍。"
+    },
+    {
+      "tag": "摆烂",
+      "requires_intent": false,
+      "description": "不想干了，躺平摆烂，放弃思考，先歇一会儿。"
+    },
+    {
+      "tag": "被摸头",
+      "requires_intent": true,
+      "description": "被人轻轻摸头，享受摸摸头，想要被摸头。"
+    },
+    {
+      "tag": "害羞",
+      "requires_intent": false,
+      "description": "被夸得不好意思，脸红，害羞地笑了。"
+    }
+  ]
+}

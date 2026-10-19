@@ -12,7 +12,10 @@
     <ProjectReference Include="../PluginApi/TraceSoul2.PluginApi.csproj" />
     <PackageReference Include="sqlite-net-pcl" Version="1.9.172" />
     <PackageReference Include="Microsoft.ML.OnnxRuntime" Version="1.19.2" />
+    <PackageReference Include="TinyPinyin.Net" Version="1.0.2" />
     <Content Include="../../resources/identity_cards.json" CopyToOutputDirectory="PreserveNewest" Link="identity_cards.json" />
+    <Content Include="../../resources/emotion_tags.json" CopyToOutputDirectory="PreserveNewest" Link="emotion_tags.json" />
+    <Content Include="../../resources/expression_semantics.json" CopyToOutputDirectory="PreserveNewest" Link="expression_semantics.json" />
     <Content Include="../../models/BgeSmallZh/bge-small-zh-v1.5.onnx" CopyToOutputDirectory="PreserveNewest" Link="Models/BgeSmallZh/bge-small-zh-v1.5.onnx" />
     <Content Include="../../models/BgeSmallZh/vocab.txt" CopyToOutputDirectory="PreserveNewest" Link="Models/BgeSmallZh/vocab.txt" />
     <Content Update="wwwroot/**" CopyToOutputDirectory="PreserveNewest" />

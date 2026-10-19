@@ -49,6 +49,8 @@ namespace TraceSoul2.Plugins
 
         /// <summary>文本语义向量编码服务（宿主注入；为 null 时插件自行兜底）。</summary>
         public IEmbeddingService Embedding { get; set; }
+        /// <summary>Shared image library and emotion scoring; independent of a particular platform plugin.</summary>
+        public IExpressionLibrary Expressions { get; set; }
 
         /// <summary>记忆神经子代理专用小模型（宿主注入；为 null 时退回字符路由）。</summary>
         public ILlmClient NerveLlm { get; set; }
@@ -178,6 +180,11 @@ namespace TraceSoul2.Plugins
 
         /// <summary>本轮心智/开口共用的预激活记忆原文；插件装配上下文时应原样传入。</summary>
         public string SharedMemory { get; set; }
+        /// <summary>One selection for this expression only; never carried to another audience or conversation.</summary>
+        public ExpressionMatch ExpressionMatch { get; set; }
+        /// <summary>Typed observations accompanying this input; never attributed to a speaker.</summary>
+        public List<MomentRecord> Observations { get; } = new List<MomentRecord>();
+        public string ObservationStatus { get; set; }
         public HashSet<string> RecalledCognitionIds { get; } = new HashSet<string>(StringComparer.Ordinal);
 
         /// <summary>本轮已读到的 QQ 说说摘要；心智和开口共用，避免假装看过。</summary>

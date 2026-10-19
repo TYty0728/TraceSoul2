@@ -12,8 +12,17 @@ RUN set -eu; \
     dotnet publish Tools/Updater/TraceSoul2.Updater.csproj -c Release -r "$rid" --self-contained false -o /tmp/updater; \
     cp /tmp/updater/TraceSoul2.Updater* /seed/App/; \
     cp scripts/Start-TraceSoul2.sh /seed/App/; \
+    plugins='['; separator=''; \
+    for spec in qq-tts:QqTts qq-imagegen:QqImageGen qq-qzone:QqQzone qq-status:QqStatus qq-sticker:QqSticker game-session:GameSession media-understanding:MediaUnderstanding realtime-call:RealtimeCall tavily:Tavily; do \
+      name=${spec%%:*}; project=${spec#*:}; target=/seed/App/BundledPlugins/$name; \
+      dotnet publish "ExternalPlugins/$project/TraceSoul2.Plugin.$project.csproj" -c Release -r "$rid" --self-contained false -o "$target"; \
+      cp "ExternalPlugins/$project/plugin.json" "$target/"; \
+      if [ -f "ExternalPlugins/$project/config_schema.json" ]; then cp "ExternalPlugins/$project/config_schema.json" "$target/"; fi; \
+      if [ -d "ExternalPlugins/$project/protocol" ]; then cp -a "ExternalPlugins/$project/protocol" "$target/"; fi; \
+      plugins="$plugins$separator\"$name\""; separator=','; \
+    done; plugins="$plugins]"; \
     version=$(sed -n 's:.*<TraceSoul2Version>\([^<]*\)</TraceSoul2Version>.*:\1:p' Tools/Directory.Build.props | head -n 1 | tr -d '\r'); \
-    printf '{\n  "product": "TraceSoul2",\n  "version": "%s",\n  "runtime": "%s"\n}\n' "$version" "$rid" > /seed/App/tracesoul2.install.json
+    printf '{\n  "product": "TraceSoul2",\n  "version": "%s",\n  "runtime": "%s",\n  "bundledPlugins": %s\n}\n' "$version" "$rid" "$plugins" > /seed/App/tracesoul2.install.json
 
 FROM mcr.microsoft.com/dotnet/aspnet:8.0-bookworm-slim
 WORKDIR /opt/tracesoul2

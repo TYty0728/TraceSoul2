@@ -5,12 +5,17 @@ namespace TraceSoul2.Host
 {
     /// <summary>
     /// 供应商模板，字段与 AstrBot <c>provider_group.metadata.provider.config_template</c> 对齐。
-    /// 只抄对话类（chat_completion），不抄 TTS / 嵌入 / 重排序。
+    /// 对话模板、独立 Decisions 与专用 Qwen TTS 协议。
     /// </summary>
     public static class LlmProviderCatalog
     {
         public const string OpenAiChat = "openai_chat_completion";
         public const string GoogleGenAi = "googlegenai_chat_completion";
+        public const string OpenRouterDecisions = "openrouter_decisions";
+        public const string QwenTts = "qwen_tts";
+        public static bool IsDecisions(string type) => string.Equals(type, OpenRouterDecisions, StringComparison.OrdinalIgnoreCase);
+        public static bool IsTts(string type) => string.Equals(type, QwenTts, StringComparison.OrdinalIgnoreCase);
+        public static bool IsChat(string type) => !IsDecisions(type) && !IsTts(type);
 
         public static IReadOnlyList<LlmProviderTemplate> Templates()
         {
@@ -25,6 +30,8 @@ namespace TraceSoul2.Host
                     "https://generativelanguage.googleapis.com/v1beta/openai/", "gemini-2.5-flash", 0.7f),
                 T("AIHubMix", "aihubmix", OpenAiChat, "https://aihubmix.com/v1", "", 0.7f),
                 T("OpenRouter", "openrouter", OpenAiChat, "https://openrouter.ai/api/v1", "", 0.7f),
+                T("OpenRouter Decisions", "openrouter-decisions", OpenRouterDecisions, "https://openrouter.ai/api", "typesafe/jev-1.14", 0),
+                T("本地千问 TTS", "qwen-local-tts", QwenTts, "http://127.0.0.1:5088/v1", "qwen3-tts-local", 0),
                 T("Kimi 官方", "moonshot", OpenAiChat, "https://api.moonshot.cn/v1", "kimi-k3", 1f, 0.95f, 32768),
                 T("Ollama", "ollama", OpenAiChat, "http://127.0.0.1:11434/v1", "", 0.7f)
             };

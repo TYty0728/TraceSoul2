@@ -50,12 +50,13 @@ namespace TraceSoul2.Logic
                 dynamic += "\n本轮表达受理情况：" + (responded ? "已受理，无需重复追加。" : "尚未受理。") +
                     "已提案状态由程序保留，后续只需填写修订。";
                 if (!EnvironmentLogic.IsHumanInput(turn))
-                    dynamic += "\n【当前运行事件，不是对方发言】\n" + (turn.Moment?.Content ?? string.Empty);
+                    dynamic += (MomentTypes.IsPerception(turn.Moment?.Type)
+                        ? "\n【当前感知，不是对方发言】\n" : "\n【当前运行事件，不是对方发言】\n") + MomentTypes.ForPrompt(turn.Moment);
                 if (turn.Moment?.SourcePluginId == "runtime.execution")
                     dynamic += "\n【设备确认回执】\n" + Limit(turn.Moment.PayloadJson, 12000);
                 if (round == MaxActionRounds) dynamic += "\n" + AgentLoopPrompts.Budget;
                 var messages = LlmContextPackLogic.Assemble(llm, LlmContextPackLogic.SharedSystem(llm, turn), turn,
-                    memory, EnvironmentLogic.IsHumanInput(turn) ? turn.Moment?.Content ?? string.Empty : string.Empty,
+                    memory, EnvironmentLogic.IsHumanInput(turn) ? MomentTypes.ForPrompt(turn.Moment) : string.Empty,
                     AgentLoopPrompts.Header, stable, dynamic);
                 IReadOnlyCollection<string> providedFields = null;
                 var output = await DeepSeekStructuredOutputLogic.CompleteAsync<AgentOutputData>(llm, messages,

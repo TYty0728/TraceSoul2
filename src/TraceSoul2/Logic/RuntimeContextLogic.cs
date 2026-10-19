@@ -156,12 +156,17 @@ namespace TraceSoul2.Logic
 
         public static string Trigger(TraceTurnContext turn)
         {
+            var moment = turn.Moment;
+            var source = !string.IsNullOrWhiteSpace(moment?.Type)
+                ? "\n本轮类型：" + MomentTypes.Label(moment.Type) + "；来源平台：" + MomentTypes.PlatformLabel(moment.SourcePlatform) + "。\n" : "";
+            if (MomentTypes.IsObservation(moment?.Type))
+                return source + "\n【本轮】这是已提供的感知观察，不是对方说出的话；按实际内容决定是否行动或表达。\n";
             if (EnvironmentLogic.IsHumanInput(turn)) return turn.RequiresExpression
-                ? "\n【本轮】对方正在对我说话，需要回应。结合当前环境和关系选择内容与方式。\n"
-                : "\n【本轮】听到在场者交谈，可以参与，也可以继续旁听。\n";
+                ? source + "\n【本轮】对方正在对我说话，需要回应。结合当前环境和关系选择内容与方式。\n"
+                : source + "\n【本轮】听到在场者交谈，可以参与，也可以继续旁听。\n";
             if (HeartbeatLogic.IsHeartbeatContent(turn.Moment?.Content))
                 return "\n【本轮】\n" + AgentLoopPrompts.Heartbeat + "\n";
-            return "\n【本轮】后台事件唤醒；根据实际变化判断是否需要行动或表达。\n";
+            return source + "\n【本轮】后台事件唤醒；根据实际变化判断是否需要行动或表达。\n";
         }
     }
 }

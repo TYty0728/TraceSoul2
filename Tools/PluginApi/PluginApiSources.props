@@ -12,6 +12,7 @@
     <Compile Include="$(MSBuildThisFileDirectory)../../src/TraceSoul2/Plugins/TraceExecutionRegistry.cs" />
     <Compile Include="$(MSBuildThisFileDirectory)../../src/TraceSoul2/Data/AgentArchitectureData.cs" />
     <Compile Include="$(MSBuildThisFileDirectory)../../src/TraceSoul2/Data/ChatMemoryData.cs" />
+    <Compile Include="$(MSBuildThisFileDirectory)../../src/TraceSoul2/Data/MomentSemantics.cs" />
     <Compile Include="$(MSBuildThisFileDirectory)../../src/TraceSoul2/Data/IdentityCardData.cs" />
     <Compile Include="$(MSBuildThisFileDirectory)../../src/TraceSoul2/Data/InnerLifeData.cs" />
     <Compile Include="$(MSBuildThisFileDirectory)../../src/TraceSoul2/Data/PairIdentityData.cs" />
@@ -26,6 +27,7 @@
     <Compile Include="$(MSBuildThisFileDirectory)../../src/TraceSoul2/Manager/IEmbeddingService.cs" />
     <Compile Include="$(MSBuildThisFileDirectory)../../src/TraceSoul2/Manager/IVectorEncoder.cs" />
     <Compile Include="$(MSBuildThisFileDirectory)../../src/TraceSoul2/Plugins/ITracePlugin.cs" />
+    <Compile Include="$(MSBuildThisFileDirectory)../../src/TraceSoul2/Plugins/IExpressionLibrary.cs" />
     <Compile Include="$(MSBuildThisFileDirectory)../../src/TraceSoul2/Plugins/ILlmContextAssembler.cs" />
     <Compile Include="$(MSBuildThisFileDirectory)../../src/TraceSoul2/Plugins/TracePluginContext.cs" />
     <Compile Include="$(MSBuildThisFileDirectory)../../src/TraceSoul2/Plugins/PlatformRegistry.cs" />

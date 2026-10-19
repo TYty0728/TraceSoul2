@@ -53,6 +53,8 @@ namespace TraceSoul2.Logic
 
         public static string SubjectKey(MomentRecord moment)
         {
+            if (moment?.Role == MomentTypes.PerceptionRole || MomentTypes.IsObservation(moment?.Type))
+                return "perception:" + MomentTypes.Platform(moment.SourcePlatform);
             var env = EnvironmentLogic.FromMoment(moment);
             return env == null ? "legacy:unresolved" : env.SpeakerIsOwner ? "owner" :
                 env.PlatformId + ":" + env.SpeakerId;

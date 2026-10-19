@@ -156,6 +156,11 @@ namespace TraceSoul2.Logic
             messages.AddRange(BuildRecentChatHistory(turn, includeAssistantReasoning));
             // 角色头贴在第一个非空指令段上：新用法归稳定段，插件旧用法（仅动态段）归动态段。
             var stable = (roleStable ?? string.Empty).Trim();
+            if (turn?.Environment?.PlatformId == "wxxz")
+                stable += "\n\n【WXXZ 现场场景】你通过微雪小智开发板与现场的人相处，回复会显示并按当前WXXZ语音配置读出。" +
+                    "明确发言来自管理员手动文字或板载麦克风完成的本地听写，以本轮提供内容为据。摄像头尚未接入，不声称看见或听见未提供的信息。" +
+                    "【我听见】标记你通过板载麦克风听到的话，标签不是对方说出的内容，回复时不复述标签，不据此补出语气或环境。" +
+                    "沿用同一主体的身份与心智，现场回复通常一两句、60字以内，适合直接听懂；只向本轮 WXXZ 会话表达。";
             var dynamic = (roleDynamic ?? string.Empty).Trim();
             if (stable.Length > 0) AppendNamed(messages, roleHeader, stable);
             AppendNamed(messages, MemoryHeader, sharedMemory);
@@ -223,7 +228,7 @@ namespace TraceSoul2.Logic
             var pair = turn.Services.Storage.LoadPairIdentity();
             var filtered = turn.RecentMoments
                 .Where(x => x != null &&
-                            (pair.IsHumanMoment(x.Role) || pair.IsCompanionMoment(x.Role)) &&
+                            (pair.IsHumanMoment(x.Role) || pair.IsCompanionMoment(x.Role) || MomentTypes.IsPerception(x.Type)) &&
                             !string.IsNullOrWhiteSpace(x.Content) &&
                             !MindLogic.IsOutboundProtocolMoment(x.Content) &&
                             (!EnvironmentLogic.IsPublic(turn) || x.ConversationId == turn.ConversationId))
@@ -243,8 +248,9 @@ namespace TraceSoul2.Logic
         // 每条记录保留独立边界。时间只由发生时刻决定，不随新一轮的“现在”改写。
         private static string FormatHistoryMoment(MomentRecord moment, PairIdentity pair, bool isPublic)
         {
-            var speaker = pair.IsCompanionMoment(moment.Role) ? "我" : pair.Username;
-            if (isPublic && !pair.IsCompanionMoment(moment.Role))
+            var observation = moment.Role == MomentTypes.PerceptionRole || MomentTypes.IsObservation(moment.Type);
+            var speaker = observation ? "感知" : pair.IsCompanionMoment(moment.Role) ? "我" : pair.Username;
+            if (isPublic && !pair.IsCompanionMoment(moment.Role) && !observation)
             {
                 var environment = EnvironmentLogic.FromMoment(moment);
                 speaker = string.IsNullOrWhiteSpace(environment?.SpeakerName) ? "参与者" : environment.SpeakerName;
@@ -262,7 +268,7 @@ namespace TraceSoul2.Logic
                 }
                 catch (ArgumentOutOfRangeException) { }
             }
-            var body = moment.Content ?? string.Empty;
+            var body = MomentTypes.ForPrompt(moment);
             if (pair.IsHumanMoment(moment.Role) && VisionLogic.HasInboundImages(moment.PayloadJson))
             {
                 var prefix = CorePrompts.Vision.SeenPrefix;
@@ -274,7 +280,8 @@ namespace TraceSoul2.Logic
                     body = body.Substring(0, index) + "【当时的图片观察】\n" + body.Substring(index + prefix.Length);
                 }
             }
-            return "【" + speaker + " · " + time + "】\n" + body;
+            var platform = string.IsNullOrWhiteSpace(moment.SourcePlatform) ? "" : " · " + MomentTypes.PlatformLabel(moment.SourcePlatform);
+            return "【" + speaker + platform + " · " + time + "】\n" + body;
         }
 
         private static void AppendNamed(List<DeepSeekMessageData> messages, string header, string body)

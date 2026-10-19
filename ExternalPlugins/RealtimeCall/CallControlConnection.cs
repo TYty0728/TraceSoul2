@@ -10,18 +10,21 @@ public sealed class CallControlConnection : IDisposable
     private readonly string owner = Guid.NewGuid().ToString("N");
     private readonly string conversationId;
     private readonly CallDialogueHub? dialogue;
+    private readonly VoiceprintGate? voiceprint;
     private readonly Func<string, CancellationToken, Task>? serverPush;
     private readonly Dictionary<long, (string Request, string Response)> replay = new();
     private long lastSequence;
     private bool disposed;
 
     public CallControlConnection(RealtimeSessionRegistry registry, string conversationId,
-        CallDialogueHub? dialogue = null, Func<string, CancellationToken, Task>? serverPush = null)
+        CallDialogueHub? dialogue = null, Func<string, CancellationToken, Task>? serverPush = null,
+        VoiceprintGate? voiceprint = null)
     {
         this.registry = registry;
         this.conversationId = conversationId;
         this.dialogue = dialogue;
         this.serverPush = serverPush;
+        this.voiceprint = voiceprint;
     }
 
     public string Handle(string text)
@@ -54,6 +57,9 @@ public sealed class CallControlConnection : IDisposable
                         protocol = "realtime.call.v1", audio_ready = false, video_ready = false,
                         dialogue_ready = dialogue != null, stage = dialogue == null ? "control_only" : "transcript_bridge",
                         input = dialogue == null ? "none" : "final_transcript",
+                        voiceprint_required = voiceprint?.Required ?? false,
+                        voiceprint_status = voiceprint?.Status ?? "disabled",
+                        keepalive_seconds = 10, silence_ends_call = false,
                         output = dialogue == null ? "none" : "assistant_text_for_client_tts",
                         operations = dialogue == null
                             ? new[] { "hello", "ping", "start", "status", "interrupt", "playback", "end" }
@@ -91,6 +97,9 @@ public sealed class CallControlConnection : IDisposable
     private object Transcript(JsonElement root, long sequence)
     {
         if (dialogue == null) throw new CallProtocolException("unsupported_operation");
+        ValidateGeneration(root);
+        var rejection = voiceprint?.RejectReason(root);
+        if (rejection != null) return new { accepted = false, reason = rejection };
         var item = dialogue.EnqueueTranscript(owner, Required(root, "session_id"), Number(root, "generation"),
             RequiredText(root, "text", 4000), sequence);
         return new { accepted = true, event_id = item.ExternalEventId };
@@ -98,6 +107,11 @@ public sealed class CallControlConnection : IDisposable
 
     private object Interrupt(JsonElement root)
     {
+        ValidateGeneration(root);
+        var manual = root.TryGetProperty("reason", out var reason) &&
+            reason.ValueKind == JsonValueKind.String && reason.GetString() == "manual";
+        if (!manual && voiceprint?.RejectReason(root) is { } rejection)
+            throw new CallProtocolException(rejection);
         var sessionId = Required(root, "session_id");
         var generation = Number(root, "generation");
         return dialogue == null ? registry.Interrupt(owner, sessionId, generation) : dialogue.Interrupt(owner, sessionId, generation);
@@ -129,6 +143,12 @@ public sealed class CallControlConnection : IDisposable
     }
 
     private object Ping() { registry.Heartbeat(owner); return new { alive = true }; }
+    private void ValidateGeneration(JsonElement root)
+    {
+        var session = registry.Get(owner, Required(root, "session_id"));
+        if (session.State != "connected") throw new CallProtocolException("session_ended");
+        if (session.Generation != Number(root, "generation")) throw new CallProtocolException("stale_generation");
+    }
     private static string Error(long seq, string op, string code) => JsonSerializer.Serialize(new { ok = false, seq, op, error = code });
     private static string Required(JsonElement root, string key)
     {

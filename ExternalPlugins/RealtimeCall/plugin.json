@@ -2,5 +2,9 @@
   "dll": "TraceSoul2.Plugin.RealtimeCall.dll",
   "access_token": "",
   "conversation_id": "tracesoul2",
-  "idle_timeout_seconds": 120
+  "idle_timeout_seconds": 120,
+  "require_voiceprint": true,
+  "voiceprint_threshold": 0.65,
+  "speaker_id": "voice-owner",
+  "private_call": false
 }

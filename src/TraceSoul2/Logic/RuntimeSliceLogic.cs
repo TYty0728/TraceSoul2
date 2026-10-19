@@ -44,11 +44,16 @@ namespace TraceSoul2.Logic
 
         public static string EvidenceContext(SqliteMemoryManager store, IEnumerable<MomentRecord> evidence)
         {
-            var lines = store.GetRuntimeSlicesForMoments(evidence.Select(x => x.Id))
+            var records = evidence.ToList();
+            var metadata = records.Where(x => !string.IsNullOrWhiteSpace(x.Type)).Select(x =>
+                x.Id + "｜" + MomentTypes.Label(x.Type) + "｜" + MomentTypes.PlatformLabel(x.SourcePlatform) +
+                (string.IsNullOrWhiteSpace(x.ParentMomentId) ? "" : "｜关联输入=" + x.ParentMomentId)).ToList();
+            var semantics = metadata.Count == 0 ? "" : "\n【经历类型与来源】\n感知观察不是对方亲口发言；不把视觉、接触或身体感受冒认为用户自述。\n" + string.Join("\n", metadata);
+            var lines = store.GetRuntimeSlicesForMoments(records.Select(x => x.Id))
                 .Select(x => x.MomentId + "｜" + SliceFeeling(x.SnapshotJson))
                 .Where(x => !x.EndsWith("｜", StringComparison.Ordinal)).ToList();
-            if (lines.Count == 0) return "";
-            return "\n【这些经历发生时的 runtime 切片】\n切片是当时的主观感受、关注与轨迹，不是外部事实确认；"
+            if (lines.Count == 0) return semantics;
+            return semantics + "\n【这些经历发生时的 runtime 切片】\n切片是当时的主观感受、关注与轨迹，不是外部事实确认；"
                 + "只能引用本批真实 Moment 作为认知依据，不将自己的想法当作对方反馈。\n"
                 + string.Join("\n", lines);
         }

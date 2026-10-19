@@ -13,6 +13,11 @@ TestResults/
 *.suo
 
 # Runtime data must never enter the source repository
+**/voiceprint.json
+**/owner-voiceprint.json
+**/local-voice-client.json
+**/access.json
+**/.voiceprint-*
 *.sqlite
 *.sqlite-*
 *.sqlite3

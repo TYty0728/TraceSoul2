@@ -47,6 +47,12 @@ namespace TraceSoul2.Logic
                     catch (Exception error) { turn.Services.LogTiming(turn.TraceId, "器官本轮提示失败", detail: error.GetType().Name); }
                 }
             builder.Append(RuntimeContextLogic.Trigger(turn));
+            foreach (var observation in turn.Workspace.Observations)
+                builder.AppendLine().Append("【本轮感知 · ").Append(MomentTypes.PlatformLabel(observation.SourcePlatform))
+                    .AppendLine("；不是对方发言】").AppendLine(MomentTypes.ForPrompt(observation));
+            if (!string.IsNullOrWhiteSpace(turn.Workspace.ObservationStatus))
+                builder.AppendLine().AppendLine("【视觉处理状态；没有取得可用的视觉观察】")
+                    .AppendLine(turn.Workspace.ObservationStatus);
             return builder.ToString();
         }
 

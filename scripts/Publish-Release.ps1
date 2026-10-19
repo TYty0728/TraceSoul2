@@ -61,6 +61,7 @@ $bundledPlugins = @(
     @{ Name = 'qq-imagegen'; Project = 'ExternalPlugins\QqImageGen\TraceSoul2.Plugin.QqImageGen.csproj' },
     @{ Name = 'qq-qzone'; Project = 'ExternalPlugins\QqQzone\TraceSoul2.Plugin.QqQzone.csproj' },
     @{ Name = 'qq-status'; Project = 'ExternalPlugins\QqStatus\TraceSoul2.Plugin.QqStatus.csproj' },
+    @{ Name = 'qq-sticker'; Project = 'ExternalPlugins\QqSticker\TraceSoul2.Plugin.QqSticker.csproj' },
     @{ Name = 'game-session'; Project = 'ExternalPlugins\GameSession\TraceSoul2.Plugin.GameSession.csproj' },
     @{ Name = 'media-understanding'; Project = 'ExternalPlugins\MediaUnderstanding\TraceSoul2.Plugin.MediaUnderstanding.csproj' },
     @{ Name = 'realtime-call'; Project = 'ExternalPlugins\RealtimeCall\TraceSoul2.Plugin.RealtimeCall.csproj' },

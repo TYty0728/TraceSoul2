@@ -580,6 +580,54 @@
     @media (prefers-reduced-motion: reduce) {
       *, *::before, *::after { scroll-behavior: auto !important; transition: none !important; }
     }
+
+    .moment-filters { margin-bottom: 14px; }
+    .moment-meta { display:flex; flex-wrap:wrap; align-items:center; gap:7px; margin-bottom:6px; color:var(--muted); font-size:12px; white-space:normal; }
+    .moment-badge { display:inline-block; border:1px solid var(--border); border-radius:20px; padding:2px 9px; background:var(--surface, #f5f7fa); }
+    .moment-body { white-space:pre-wrap; overflow-wrap:anywhere; }
+    .moment-time { margin-left:auto; font-size:11px; }
+    .conversation-call { padding:12px 15px; margin:14px 0; border:1px solid var(--border); border-radius:12px; }
+    .device-detail { border-top:1px solid var(--border); margin-top:14px; padding-top:12px; }
+    .device-detail > summary { cursor:pointer; font-weight:600; }
+    .expression-motion-box{margin-top:18px;padding:16px;border:1px solid #e1e7df;border-radius:14px}
+    .expression-motion-grid{display:grid;grid-template-columns:minmax(180px,256px) minmax(180px,1fr);gap:22px;margin-top:14px;align-items:center}
+    .expression-motion-stage{height:232px;padding:16px;display:flex;justify-content:center;align-items:center;overflow:hidden;background:#fff;border:1px solid #e7ebe3;border-radius:18px}
+    .expression-motion-stage img{display:block;width:200px;height:200px;max-width:100%;object-fit:contain;transform-origin:50% 82%}
+    .expression-motion-stage img[hidden]{display:none}
+    .expression-motion-stage img[data-sway="on"]{animation:expression-idle-double-hop var(--hop-period,12s) cubic-bezier(.35,0,.35,1) infinite;will-change:transform}
+    .expression-motion-grid input[type=range]{display:block;width:100%;margin:10px 0 18px}
+    .expression-motion-grid output{font-weight:normal;color:#718477}
+    @keyframes expression-idle-double-hop{
+      0%,84%,99%,100%{transform:translateY(0) scale(1,1)}
+      86%{transform:translateY(0) scale(calc(1 + var(--hop-squish)),calc(1 - var(--hop-squish)))}
+      89%{transform:translateY(calc(var(--hop-height)*-1)) scale(calc(1 - var(--hop-squish)*.5),calc(1 + var(--hop-squish)*.5))}
+      92%{transform:translateY(0) scale(calc(1 + var(--hop-squish)),calc(1 - var(--hop-squish)))}
+      95%{transform:translateY(calc(var(--hop-height)*-.7)) scale(calc(1 - var(--hop-squish)*.35),calc(1 + var(--hop-squish)*.35))}
+      97%{transform:translateY(0) scale(calc(1 + var(--hop-squish)*.5),calc(1 - var(--hop-squish)*.5))}
+    }
+    @media(max-width:650px){.expression-motion-grid{grid-template-columns:1fr}}
+    @media(prefers-reduced-motion:reduce){.expression-motion-stage img{animation:none!important;transform:none!important}}
+    .companion-layout{display:flex;gap:28px;align-items:flex-start;flex-wrap:wrap;margin-top:18px}
+    .companion-shell{width:348px;max-width:100%;padding:14px;border-radius:24px;background:#35433e}
+    .companion-screen{width:320px;max-width:100%;height:480px;border-radius:12px;background:#f7f7f2;color:#293d3c;padding:20px 16px 12px;box-sizing:border-box}
+    .companion-header{display:flex;justify-content:space-between;align-items:center;height:30px;gap:12px}
+    .companion-header strong{font-size:23px;overflow:hidden;text-overflow:ellipsis;white-space:nowrap}
+    .companion-header span{font-size:11px;color:#687f71;border-radius:14px;padding:5px 9px;background:#e9eee7;white-space:nowrap}
+    .companion-art{height:190px;display:flex;align-items:center;justify-content:center;overflow:hidden}
+    .companion-artwork{width:284px;height:166px;object-fit:contain;transform-origin:50% 85%;--hop-period:12s;--hop-height:5.4px;--hop-squish:.01575}
+    .companion-artwork[hidden],.companion-face[hidden],.companion-focus[hidden]{display:none}
+    .companion-artwork[data-sway="on"]{animation:expression-idle-double-hop var(--hop-period) cubic-bezier(.35,0,.35,1) infinite}
+    .companion-face{width:166px;height:132px;border-radius:58px;background:#deeadf;display:flex;align-items:center;justify-content:center;font-size:36px;letter-spacing:6px;color:#526d60}
+    .companion-title{text-align:center;font-size:23px;line-height:32px}
+    .companion-hint{text-align:center;color:#7b8882;font-size:12px;height:25px;line-height:24px;white-space:nowrap;overflow:hidden;text-overflow:ellipsis}
+    .companion-focus{display:block;width:134px;height:3px;margin:0 auto;accent-color:#659884}
+    .companion-caption{height:139px;margin-top:12px;padding:11px 16px;border:1px solid #e7ebe2;border-radius:16px;background:white;box-sizing:border-box}
+    .companion-caption small{display:block;font-size:11px;color:#7b8882;margin-bottom:5px}
+    .companion-caption pre{font:20px/25px system-ui,sans-serif;white-space:pre;margin:0;border:0;padding:0;background:none;color:#293d3c;overflow:hidden}
+    .companion-footer{display:flex;justify-content:space-between;font-size:10px;line-height:12px;color:#9ba69d;margin:5px 4px 0}
+    .companion-controls{flex:1;min-width:210px;max-width:470px}
+    .companion-controls p{line-height:1.8}
+    @media(prefers-reduced-motion:reduce){.companion-artwork{animation:none!important;transform:none!important}}
   </style>
 </head>
 <body>
@@ -628,17 +676,19 @@
     <!-- ================= 左侧导航 ================= -->
     <aside class="sidebar">
       <div class="nav-group">日常</div>
-      <button class="nav-item" data-section="chat" onclick="showSection('chat')"><span class="ic">💬</span>对话</button>
-      <button class="nav-item" data-section="game" onclick="showSection('game')"><span class="ic">🎮</span>一起玩</button>
+      <button class="nav-item" data-section="chat" onclick="showSection('chat')"><span class="ic">💬</span>经历与对话</button>
       <button class="nav-item" data-section="live" onclick="showSection('live')"><span class="ic">📡</span>实时状态</button>
+      <button class="nav-item" data-section="game" onclick="showSection('game')"><span class="ic">🎮</span>一起玩</button>
+      <div class="nav-group">内在</div>
       <button class="nav-item" data-section="identity" onclick="showSection('identity')"><span class="ic">👤</span>身份</button>
       <button class="nav-item" data-section="memory" onclick="showSection('memory')"><span class="ic">🧭</span>记忆</button>
-      <div class="nav-group">系统</div>
+      <div class="nav-group">连接与能力</div>
+      <button class="nav-item" data-section="platform" onclick="showSection('platform')"><span class="ic">🔌</span>身体与感官</button>
       <button class="nav-item" data-section="brain" onclick="showSection('brain')"><span class="ic">🧠</span>大脑 · LLM</button>
-      <button class="nav-item" data-section="platform" onclick="showSection('platform')"><span class="ic">🔌</span>平台 · QQ</button>
-      <button class="nav-item" data-section="plugins" onclick="showSection('plugins')"><span class="ic">🧩</span>插件</button>
-      <button class="nav-item" data-section="update" onclick="showSection('update')"><span class="ic">⬆️</span>系统更新</button>
+      <button class="nav-item" data-section="plugins" onclick="showSection('plugins')"><span class="ic">🧩</span>能力与插件</button>
+      <div class="nav-group">维护</div>
       <button class="nav-item" data-section="log" onclick="showSection('log')"><span class="ic">📜</span>日志</button>
+      <button class="nav-item" data-section="update" onclick="showSection('update')"><span class="ic">⬆️</span>系统更新</button>
       <div class="foot">数据目录切换在顶部；切换后宿主自动重启（约 2 秒）。</div>
     </aside>
 
@@ -647,17 +697,35 @@
 
       <!-- 对话 -->
       <section id="sec-chat" class="panel-section">
-        <div class="section-head"><h1>对话</h1><span class="muted">Moment → Brain → 表达（一次一轮）</span></div>
+        <div class="section-head"><h1>经历与对话</h1><span class="muted">按发生的事查看，再按类型与平台筛选</span></div>
         <div class="box">
+          <div class="row moment-filters">
+            <div><label>经历类型</label><select id="momentTypeFilter" onchange="refreshTranscript()"><option value="">全部类型</option></select></div>
+            <div><label>来源平台</label><select id="momentPlatformFilter" onchange="refreshTranscript()"><option value="">全部平台</option></select></div>
+            <div class="nogrow"><label>&nbsp;</label><button onclick="refreshTranscript()">刷新经历</button></div>
+          </div>
           <div class="transcript" id="transcript"></div>
-          <label>发送内容</label>
-          <textarea id="content" rows="3"></textarea>
+          <h2>发起对话</h2>
+          <label>从哪里发言</label>
+          <select id="momentSource" onchange="applyWxxzMonitorLocks()"><option value="console">控制台文字</option><option value="wxxz">小智开发板（回复送到设备）</option></select>
+          <p class="muted">手动输入按「我收到消息」记录；真实采音听写按「我听见」记录。回复仍沿本轮平台与会话送出。</p>
+          <div class="conversation-call">
+            <div class="row"><strong>小智语音通话</strong><button onclick="showSection('platform')">连接设备 / 管理声纹</button></div>
+          <div style="margin-top:8px">
+            <button id="wxxzCallStart" onclick="startWxxzCall()">开始语音通话</button>
+            <button id="wxxzCallStop" onclick="stopWxxzCall()" disabled>结束通话</button>
+            <div id="wxxzCallState" class="muted">开启名字唤醒时先叫名字，专注30秒内可直接说话；停顿约1秒后听写，实际指令需本人声纹确认。播音时暂停采音，无需JEV逐句判断。</div>
+            <div id="wxxzCallLast" class="muted"></div>
+          </div>
+          </div>
+          <textarea id="content" rows="3" oninput="wxxzCaptureId=null"></textarea>
           <button id="sendBtn" class="primary" onclick="sendMoment()">发送一个 Moment</button>
           <span id="sendState" class="muted"></span>
         </div>
         <div class="box">
-          <h2>最近一轮（链路 / 决策）</h2>
+          <details><summary>最近一轮 · 处理详情</summary>
           <div id="turnBox"></div>
+          </details>
         </div>
       </section>
 
@@ -800,7 +868,7 @@
             <div><label>生图</label><select id="slotImage"></select></div>
             <div><label>&nbsp;</label><button class="primary" onclick="saveSlots()">保存槽位</button></div>
           </div>
-          <p class="muted">JEV 可独立选择决策模型；留空时不启用。目前只保存路由，工具调用和是否拍照尚未切换到 JEV。</p>
+          <p class="muted">JEV 可选择 OpenRouter Decisions 原生决策模型，支持直连或专用中转；旧聊天配置仍保留并标明。保存槽位不会开启采集或定时调用，Moment 准入尚未接入。</p>
           <div class="row" style="margin-top:12px">
             <div><label>复盘专用温度（默认 0.2）</label><input id="reviewTemperature" type="number" min="0" max="1" step="0.05" /></div>
             <div class="nogrow"><label>&nbsp;</label><button onclick="saveReviewSettings()">保存复盘温度</button></div>
@@ -839,6 +907,25 @@
                   <input id="apiKey" type="password" placeholder="留空则保持已保存的 Key" /></div>
                 <div><label>API Base URL</label><input id="baseUrl" /></div>
               </div>
+              <div id="decisionOptions" hidden>
+                <div class="row">
+                  <div><label>决策连接方式</label><select id="decisionMode" onchange="changeDecisionMode()"><option value="direct">直连 OpenRouter</option><option value="relay">专用中转</option></select></div>
+                  <div id="relayKeyField"><label>中转凭据（留空=不修改）<span id="hasRelayKey" class="muted"></span></label><input id="relayKey" type="password" autocomplete="new-password" /><label><input id="clearRelayKey" type="checkbox" /> 清除已保存的中转凭据</label></div>
+                </div>
+                <p id="decisionUrlHint" class="muted"></p>
+                <p class="muted">API Key 填 OpenRouter Key。获取模型列表不推理；模型行的「决策测试」会发送一次固定模拟场景并使用账号额度，不执行动作。聊天温度、推理强度等参数不参与 Decisions 请求。</p>
+                <p id="decisionTestStatus" class="muted">尚未测试；模型列表可见不代表账号可调用。</p>
+              </div>
+              <div id="ttsOptions" hidden>
+                <p class="muted">专用语音合成供应商。Base URL 填千问服务的 /v1 基址，API Key 填该服务的独立密钥。开发板选择本地千问时使用上方「语音」槽；保存配置不会启动通话。</p>
+                <div class="row">
+                  <div><label>音色ID</label><input id="ttsVoice" placeholder="character" /></div>
+                  <div class="nogrow"><label>&nbsp;</label><a id="ttsWorkbench" target="_blank" rel="noopener noreferrer">输入文字，听ta说 / 音色抽卡</a></div>
+                </div>
+                <label>输入文字，听ta说</label><textarea id="ttsPreviewText" rows="2" maxlength="240">你好，我是小汐。我们现在测试本地角色语音。</textarea>
+                <button id="ttsPreviewButton" onclick="previewTts()">生成试听</button>
+                <audio id="ttsPreviewAudio" controls hidden></audio><p id="ttsPreviewState" class="muted">试听在网页播放，不发送到开发板或聊天。</p>
+              </div>
               <details class="adv">
                 <summary>高级配置</summary>
                 <div class="row">
@@ -846,7 +933,7 @@
                     <input id="timeout" type="number" min="10" max="600" style="width:90px" /></div>
                   <div class="nogrow"><label>过载退避重试（次）</label>
                     <input id="transientRetries" type="number" min="0" max="2" style="width:90px" /></div>
-                  <div><label>代理地址（暂存，HTTP 客户端稍后接入）</label>
+                  <div><label>代理地址（Decisions 已支持；其他协议仍为暂存）</label>
                     <input id="proxy" placeholder="http://127.0.0.1:7890" /></div>
                 </div>
                 <p class="muted" style="margin:4px 0 8px">仅用于 429、5xx、请求超时等瞬时故障；优先采用 Retry-After，否则按 2、4 秒退避，单次最多等待 60 秒。0 为关闭，最多重试 2 次；含空响应与兼容重试在内，单次模型调用最多请求 3 次。耗尽后暂停通道，余额/鉴权错误直接暂停。</p>
@@ -873,6 +960,19 @@
                 </div>
                 <p class="muted" style="margin:4px 0 0">kimi-k3 不能关思考，最低是 low。平时聊天选 low；只有要推敲、出门办事时再加到 high / max。这个值只对 Kimi 官网生效，OpenCode 中转站不会带出去。</p>
               </details>
+              <h2>已配置的模型</h2>
+              <div class="model-bar">
+                <input id="modelSearch" placeholder="搜索模型或 ID" oninput="renderModelList()" />
+                <button class="primary" onclick="fetchModels()">获取模型列表</button>
+                <button onclick="addCustomModel()">自定义模型</button>
+              </div>
+              <div class="role-filter" id="roleFilter"></div>
+              <div id="modelBox"></div>
+              <p class="muted" style="margin-top:8px">给模型标记用途，再在上方选择默认槽。千问TTS只用于语音，Decisions只用于JEV；各类供应商使用对应的调用协议。</p>
+            </div>
+          </div>
+        </div>
+        <div class="box"><h2>上下文与运行节奏</h2><p class="muted">这些设置属于当前Soul，独立于上方选中的供应商。</p>
               <div class="row" style="align-items:flex-end;margin-top:12px">
                 <div class="nogrow"><label>拼接最高条数</label>
                   <input id="ctxMax" type="number" min="0" max="100" style="width:90px"
@@ -892,30 +992,181 @@
                 <div class="nogrow"><label>&nbsp;</label><button class="primary" onclick="saveHeartbeat()">保存心跳</button></div>
               </div>
               <p class="muted" style="margin-top:4px">他会为清醒时的下一次联系安排时间；没有指定时间时，首次心跳在此范围内安排。到期再决定要不要开口，安静或进入空闲仍保留下次计划。睡下后心跳暂停，等她发来再醒。两端都填 0 则关闭心跳。</p>
-              <h2>已配置的模型</h2>
-              <div class="model-bar">
-                <input id="modelSearch" placeholder="搜索模型或 ID" oninput="renderModelList()" />
-                <button class="primary" onclick="fetchModels()">获取模型列表</button>
-                <button onclick="addCustomModel()">自定义模型</button>
-              </div>
-              <div class="role-filter" id="roleFilter"></div>
-              <div id="modelBox"></div>
-              <p class="muted" style="margin-top:8px">点「获取模型列表」会打供应商的 /models。给模型打上主模型 / JEV决策 / 识图多模态 / 语音 / 生图，再在上方用途槽里选默认。Google Gemini 走原生 generateContent；其余走 OpenAI 兼容。</p>
-            </div>
-          </div>
         </div>
       </section>
 
       <!-- 平台 · QQ -->
       <section id="sec-platform" class="panel-section">
-        <div class="section-head"><h1>平台 · QQ</h1><span class="muted">平台连接状态 + OneBot v11 / NapCat 配置</span></div>
+        <div class="section-head"><h1>身体与感官</h1><span class="muted">设备连接、输入感官与输出方式</span></div>
+        <div class="box device-overview"><h2>输入如何进入经历</h2><p class="muted">感知类型与平台分别记录：QQ收到的文字是「我收到消息 · QQ」，板载语音是「我听见 · 小智开发板」。同一类型以后也可以来自机器人；未接入的摄像头与触觉不会产生实际观察。</p></div>
+        <div class="box" id="companionPanel"><h2>小智屏幕 · 实时预览</h2>
+          <p class="muted">跟随本机小智的状态、回复字幕和共用表情选图。这里只观察，不会开始监听或播放声音。</p>
+          <div class="companion-layout">
+            <div>
+              <div class="companion-shell"><div class="companion-screen" id="companionScreen" data-state="offline">
+                <div class="companion-header"><strong id="companionName">Soul</strong><span id="companionBadge">真实状态</span></div>
+                <div class="companion-art"><img id="companionImage" class="companion-artwork" alt="共用图库角色表情" hidden onerror="companionImageFailed()" /><div id="companionFace" class="companion-face" style="font-size:14px;letter-spacing:0;padding:16px;text-align:center">正在读取共用表情…</div></div>
+                <div id="companionTitle" class="companion-title">等待状态</div>
+                <progress id="companionFocus" class="companion-focus" max="30" value="0" hidden></progress>
+                <div id="companionHint" class="companion-hint">正在读取本机小智状态</div>
+                <div class="companion-caption"><small id="companionCaptionLabel">字幕</small><pre id="companionSubtitle"></pre></div>
+                <div class="companion-footer"><span>TraceSoul</span><span id="companionPage">1 / 1</span></div>
+              </div></div>
+              <div class="row" style="justify-content:space-between;margin-top:10px"><button id="companionPrev" onclick="companionPage(-1)" disabled>上一页字幕</button><button id="companionNext" onclick="companionPage(1)" disabled>下一页字幕</button></div>
+            </div>
+            <div class="companion-controls">
+              <label>查看方式<select id="companionMode" onchange="changeCompanionMode()"><option value="live">跟随真实状态</option><option value="standby">演示：发呆</option><option value="focused">演示：30秒专注</option><option value="listening">演示：倾听</option><option value="thinking">演示：思考／合成语音</option><option value="speaking">演示：说话与字幕</option><option value="paused">演示：暂停</option><option value="offline">演示：断线</option><option value="error">演示：错误</option></select></label>
+              <p id="companionSource" class="muted" role="status">等待读取真实状态。</p>
+              <p id="companionArtworkSource" class="muted" role="status">自动联动QQ共用表情库，无需手动选图。</p>
+              <button id="companionArtworkReload" onclick="refreshCompanionArtwork()">刷新表情联动</button>
+              <p class="muted">发呆／等待时隔一阵轻蹦两下；倾听、思考和说话时保持稳定。专注计时随后台更新，30秒没有新指令后回到发呆。</p>
+              <p class="muted">本轮回复优先使用语义选中的表情；没有回复时，按当前状态从共用图库选待机图。共用的是图片与标签，不读取QQ对话。演示也会自动选图，点下方图库「预览动感」可立即换成指定图，不会改变真实会话。</p>
+              <p class="muted">电脑预览为320×480布局，字幕换行以实机字体为准；当前不代表实体屏幕已同步，也未取得实机播放进度。</p>
+            </div>
+          </div>
+        </div>
+        <div class="box" id="expressionPanel"><h2>共用表情库</h2>
+          <p class="muted">QQ 与小智共用图片、42个心情标签和可扩展的用途语义。先匹配睡觉、流汗、夸奖等用途，再结合心情排名；相关度不足则跳过。这里仅预览，不发送消息、不连接设备。</p>
+          <button id="expressionLoad" onclick="loadExpressions()">查看图库与标签</button>
+          <button id="expressionReload" onclick="reloadExpressions()">重新加载图库配置</button>
+          <div id="expressionState" class="muted" role="status" aria-live="polite">尚未加载。</div>
+          <details id="expressionDetails"><summary>语义选图预览</summary>
+            <label>Soul 准备说的话<textarea id="expressionText" maxlength="2000" rows="3" placeholder="例如：听你这么说，我也安心了。"></textarea></label>
+            <label>Soul 此刻的感受（选填）<input id="expressionMood" maxlength="500" placeholder="例如：温暖、安心" /></label>
+            <label>本次预览参与匹配的前 n 个标签<input id="expressionTop" type="number" min="1" max="42" value="4" style="width:90px" /></label>
+            <button id="expressionPreview" onclick="previewExpression()">计算标签与选图</button>
+            <p class="muted">得分是语义匹配分，不是情绪概率；不增加大模型调用。图片按已有描述和标签建档，GIF 在板子上显示首帧。日常 n 与阈值在「插件 → QQ 表情」保存，再点上方「重新加载图库配置」。</p>
+            <div id="expressionTags" style="display:flex;flex-wrap:wrap;gap:8px;margin:12px 0"></div>
+            <h3>用途语义</h3><div id="expressionSemantics" class="muted">加载图库后可查看语义词表。</div>
+            <p class="muted">用途来自每张图的标签标注，不是现场识图。下方可单独编辑保存；新增词语会加入共用词表。全部图片尚未标注时，保留原心情匹配。</p>
+          </details>
+          <details id="expressionMotionDetails" class="expression-motion-box" open>
+            <summary>选中表情 · 动感预览</summary>
+            <div class="expression-motion-grid">
+              <div>
+                <div class="expression-motion-stage"><img id="expressionMotionImage" alt="选中表情的动感预览" hidden /><span id="expressionMotionEmpty" class="muted">计算选图，或点图片下的「预览动感」</span></div>
+                <div id="expressionMotionCaption" class="muted" style="overflow-wrap:anywhere;margin-top:8px">仅电脑预览，未下发开发板。</div>
+              </div>
+              <div>
+                <label style="display:flex;align-items:center;gap:8px"><input id="expressionMotionEnabled" type="checkbox" checked onchange="configureExpressionMotion()" /> 隔一阵，轻轻蹦两下</label>
+                <label>蹦跶幅度 <output id="expressionMotionAmountLabel">轻微 · 45%</output><input id="expressionMotionAmount" type="range" min="0" max="100" value="45" oninput="configureExpressionMotion()" /></label>
+                <label>每轮间隔 <output id="expressionMotionPeriodLabel">12.0秒</output><input id="expressionMotionPeriod" type="range" min="60" max="200" value="120" oninput="configureExpressionMotion()" /></label>
+                <p id="expressionMotionState" class="muted" role="status">等待选择图片。</p>
+                <p class="muted">只移动图片，文字与卡片保持稳定。此处不会改变QQ原图或设备设置；实机动画待板端本地绘制接入。</p>
+              </div>
+            </div>
+          </details>
+          <div id="expressionGallery" style="display:grid;grid-template-columns:repeat(auto-fill,minmax(150px,1fr));gap:14px;margin-top:16px"></div>
+        </div>
+        <div class="box" id="wxxzDevicePanel"><h2>小智开发板</h2>
+          <p class="muted">先连接会话；声纹用于识别本人。日常通话在「经历与对话」开始，模型和音色在「大脑 · LLM」管理。</p>
+          <label><input type="checkbox" id="wxxzPrivate" /> WXXZ 为本人私密现场（确认没有其他受众）</label>
+          <button id="wxxzConnect" onclick="connectWxxz()">连接 WXXZ 会话</button>
+          <button id="wxxzDisconnect" onclick="disconnectWxxz()">关闭 WXXZ 会话</button>
+          <button id="wxxzListen" onclick="listenWxxz()">录音 8 秒并听写</button>
+          <div class="muted">点击后对板子说话。听写只填入下方输入框，核对后再点「发送一个 Moment」。静音或识别失败不自动提交。</div>
+          <span id="wxxzState" class="muted">WXXZ 尚未连接</span>
+          <details><summary>WXXZ 设备回执</summary><pre id="wxxzReceipt">暂无回执。这里是驱动执行结果，不能代替现场确认画面与声音。</pre></details>
+
+          <div class="device-detail" oninput="wxxzWakeDirty=true">
+            <h3>名字唤醒与听写校正</h3>
+            <label><input id="wxxzWakeEnabled" type="checkbox" checked /> 连接后由后台监听名字（关闭网页仍会采音）</label>
+            <label>规范名字<input id="wxxzWakeName" maxlength="32" placeholder="小汐" oninput="$('wxxzWakePronunciation').value=''" /></label>
+            <label><input id="wxxzWakePhonetic" type="checkbox" checked /> 按读音匹配同音字（不区分声调）</label>
+            <label>匹配读音<input id="wxxzWakePronunciation" maxlength="256" placeholder="xiao xi / a xun；留空按名字自动生成" /></label>
+            <p class="muted">例如小溪、小希、小西读音都是 xiao xi，均归一为小汐，无需逐个填字。改名时读音框会清空，保存后自动生成；多音字可手动指定。这里只校正本地听写，尚非直接检测音频里的唤醒词。</p>
+            <label>其他误识别（可选，逗号分隔）<input id="wxxzWakeAliases" placeholder="例如阿旭读 a xu，可单独指定为阿循的近音变体" /></label>
+            <label>唤醒应答<input id="wxxzWakeReply" maxlength="30" value="诶，我在。" /></label>
+            <button id="wxxzWakeSave" onclick="saveWxxzWake()">保存名字设置</button>
+            <button id="wxxzWakePrepare" onclick="prepareWxxzWakeAudio()">预生成唤醒语音（不播放）</button>
+            <div id="wxxzWakeAudioState" class="muted" role="status">本地千问可预生成已保存的唤醒应答；文字或音色改变后会重新生成。</div>
+            <button id="wxxzWakeStart" onclick="startWxxzCall(true)">开始名字监听</button>
+            <button id="wxxzWakeStop" onclick="stopWxxzCall()" disabled>暂停监听</button>
+            <div id="wxxzAttentionState" class="muted" role="status" aria-live="polite">名字监听未开始。</div>
+            <p class="muted">叫名字后简短应答，专注30秒；本人继续说话或回复完成后重新计时，超时回到等待名字。短名字只唤醒，实际指令仍需本人声纹确认。刷新、关闭网页不停止后台采音，请显式点暂停；Host重启后需重新开始。</p>
+            <label>输入一段识别结果试试<input id="wxxzWakePreviewText" placeholder="小希你好 / xiao xi / 河边有一条小溪" /></label>
+            <button id="wxxzWakePreview" onclick="previewWxxzWake()">预览已保存规则</button>
+            <div id="wxxzWakeResult" class="muted" role="status"></div>
+            <p class="muted">拼音与特殊变体仅在称呼语境校正，保留原始听写。近音不会自动合并：a xu 与 a xun 不同，需明确添加。预览不采音、不发送Moment。</p>
+          </div>
+
+          <div class="device-detail">
+            <h3>注意力调试面板</h3>
+            <div id="wxxzMonitorState" class="muted" role="status">后台监听未启动。</div>
+            <button onclick="pollWxxzMonitor()">刷新后台状态</button>
+            <button onclick="clearWxxzDiagnostics()">清空本机诊断记录</button>
+            <p class="muted">下面是实际后台记录，最多40条、每项文字最多500字，仅保留在本机内存；不会把未准入的话送给主模型。关闭网页后仍由后台处理，重新打开可查看状态。</p>
+            <div id="wxxzDiagnostics" style="max-height:420px;overflow:auto"></div>
+            <details class="device-detail">
+              <summary>纯文字沙盘 · 不需要开发板</summary>
+              <label>模拟听写<input id="wxxzSandboxText" placeholder="小希你好 / 今天天气怎么样" maxlength="4000" /></label>
+              <label><input id="wxxzSandboxFocused" type="checkbox" /> 假设仍在30秒专注窗口内</label>
+              <label>假设声音证据<select id="wxxzSandboxSpeaker"><option value="owner">模拟本人声纹通过</option><option value="unknown">模拟陌生声音</option><option value="short">模拟短名字、无声纹证据</option></select></label>
+              <button id="wxxzSandboxRun" onclick="previewWxxzAttention()">检查这句会怎样处理</button>
+              <pre id="wxxzSandboxResult" style="white-space:pre-wrap">这是规则沙盘，不是实际识别结果；不采音、不播放、不写入Moment、不调用主模型。</pre>
+            </details>
+          </div>
+
+          <details class="device-detail"><summary>本人声纹与诊断</summary>
+          <div style="margin-top:12px">
+            <button id="wxxzEnroll" onclick="enrollWxxzVoice()">录入本人声纹（第1/3段，8秒）</button>
+            <span id="wxxzVoiceState" class="muted">自动通话前需录入本人声纹；各段特征和听写仅在本地保存，不保存原始录音。</span>
+            <div id="wxxzEnrollState" class="muted" role="status" aria-live="polite"></div>
+            <progress id="wxxzEnrollProgress" max="8" value="0" aria-label="声纹录入实际采音进度" style="width:100%;height:14px"></progress>
+            <pre id="wxxzEnrollTranscript" style="white-space:pre-wrap"></pre>
+            <div class="muted">三段齐全后在本地保存各段特征和听写，之后可单独重录。不保存原始录音，不发送对话；未通过时保留原段。</div>
+            <div class="muted">录入时请仅本人说话。声纹按整句辨认，两秒检查窗仅供诊断；暂不分离多人声音。</div>
+            <div style="margin-top:8px;padding:8px;border:1px solid #666;border-radius:6px">
+              <b>本人声纹 · 第1段</b> <span id="wxxzSampleState1" class="muted">未录入</span>
+              <pre id="wxxzSampleText1" style="white-space:pre-wrap"></pre>
+              <button id="wxxzSampleRecord1" onclick="enrollWxxzVoice(1)">录入第1段（8秒）</button>
+            </div>
+            <div style="margin-top:8px;padding:8px;border:1px solid #666;border-radius:6px">
+              <b>本人声纹 · 第2段</b> <span id="wxxzSampleState2" class="muted">未录入</span>
+              <pre id="wxxzSampleText2" style="white-space:pre-wrap"></pre>
+              <button id="wxxzSampleRecord2" onclick="enrollWxxzVoice(2)">录入第2段（8秒）</button>
+            </div>
+            <div style="margin-top:8px;padding:8px;border:1px solid #666;border-radius:6px">
+              <b>本人声纹 · 第3段</b> <span id="wxxzSampleState3" class="muted">未录入</span>
+              <pre id="wxxzSampleText3" style="white-space:pre-wrap"></pre>
+              <button id="wxxzSampleRecord3" onclick="enrollWxxzVoice(3)">录入第3段（8秒）</button>
+            </div>
+          </div>
+          <div style="margin-top:12px">
+            <button id="wxxzVoiceCheck" onclick="checkWxxzVoice()">声纹诊断（8秒，不发送）</button>
+            <div id="wxxzCheckState" role="status" aria-live="polite" style="font-size:17px;margin:6px 0">点击后倒计时3秒，看到“正在录音”再说话；不会修改已保存声纹。</div>
+            <progress id="wxxzCheckProgress" max="8" value="0" aria-label="声纹诊断录音进度" style="width:100%;height:14px"></progress>
+            <div id="wxxzCheckVolume" aria-label="8秒音量分布，每格半秒" style="display:flex;align-items:flex-end;gap:2px;height:54px;margin:8px 0"></div>
+            <pre id="wxxzCheckResult" style="white-space:pre-wrap"></pre>
+          </div>
+          </details>
+          <details style="margin:8px 0" oninput="wxxzSpeechDirty=true"><summary>开发板播放音色</summary>
+            <p><a id="wxxzVoiceLab" href="/wxxz/speech/workbench" target="_blank" rel="noopener noreferrer">打开本地语音工作台（输入文字 / 音色抽卡） ↗</a></p>
+            <label>语音服务</label>
+            <select id="wxxzSpeechEngine">
+              <option value="system">Windows 系统测试音色</option>
+              <option value="remote">远端角色语音（复用现有TTS配置）</option>
+              <option value="qwen_local">本地千问（大脑 · LLM 语音槽）</option>
+            </select>
+            <label>本地千问音色 ID</label><input id="wxxzSpeechLocalVoice" value="character" placeholder="character（当前日常角色音色）" />
+            <div class="muted">本地千问的地址、密钥和音色统一在「大脑 · LLM」的千问TTS供应商中修改。日常音色为 character；缺少音色时会报错，不自动换声。</div>
+            <label>远端模型（留空沿用现有配置）</label><input id="wxxzSpeechRemoteModel" />
+            <label>远端音色 ID（留空沿用现有配置）</label><input id="wxxzSpeechRemoteVoice" />
+            <div class="muted">远端地址和凭据沿用已有语音配置；合成后由开发板播放。请先结束通话再保存切换。</div>
+            <button id="wxxzSpeechSave" onclick="saveWxxzSpeech()">保存语音设置</button>
+            <button id="wxxzSpeechTest" onclick="testWxxzSpeech()">开发板试听已保存音色</button>
+            <div id="wxxzSpeechState" class="muted" role="status">连接WXXZ后显示当前语音配置。试听固定测试句，不提交Moment。</div>
+          </details>
+
+          <button onclick="showSection('chat')">回到对话 / 查看听写</button>
+        </div>
         <div class="box">
           <h2>平台连接</h2>
           <div id="platforms" class="muted">加载中…</div>
         </div>
         <div class="box">
           <h2>身体路由</h2>
-          <p class="muted">近的压过远的：物理身体 → 你们自己的软件 → 文字聊天软件 → 控制台（最低的文字壳，不算自己的软件）。同层才打分。说话才改激活的身体；发图/视频只是那只器官下滑，不会把整段对话搬走。</p>
+          <p class="muted">QQ、小智等明确输入的回复沿本轮平台和会话输出；目标不可用时报告失败，不切换平台代发。下面管理身体情境、可用器官及同层选择。</p>
           <div class="row">
             <div class="nogrow"><label>情境</label>
               <select id="bodyScene"><option value="home">在家</option><option value="out">出门</option></select></div>
@@ -967,7 +1218,7 @@
 
       <!-- 插件 -->
       <section id="sec-plugins" class="panel-section">
-        <div class="section-head"><h1>插件</h1><span class="muted">平台 → 器官 · 齿轮里填写配置</span></div>
+        <div class="section-head"><h1>能力与插件</h1><span class="muted">能力启停、插件安装与专属配置</span></div>
         <div class="box">
           <div class="plugin-toolbar">
             <input id="pluginSearch" type="text" placeholder="搜索插件…" oninput="filterPluginCards()" />
@@ -976,7 +1227,7 @@
             <span class="spacer"></span>
             <button class="primary" onclick="rescanExternal()">重新扫描</button>
           </div>
-          <p class="muted" style="margin-top:0">上层是平台（QQ），下面是器官包。点齿轮填写配置；配置和运行数据保存在 plugins_data，卸载代码包不会删除。</p>
+          <p class="muted" style="margin-top:0">按平台与能力管理插件，点齿轮填写专属配置。模型和声音供应商在「大脑 · LLM」管理，设备连接与声纹在「身体与感官」管理。</p>
           <div id="pluginsBox" class="muted">加载中…</div>
         </div>
       </section>
@@ -1243,6 +1494,264 @@
     return (bytes / 1048576).toFixed(1) + " MB";
   }
 
+  /* Shared expression preview: no delivery, no Moment, no main-model request. */
+  let expressionCatalog=null, expressionBusy=false;
+  const expressionSemanticDrafts=new Map();
+  const expressionMotionPreference=typeof matchMedia==='function'?matchMedia('(prefers-reduced-motion: reduce)'):{matches:false};
+  function configureExpressionMotion() {
+    const image=$('expressionMotionImage');
+    const amount=Math.max(0,Math.min(100,Number($('expressionMotionAmount').value)||0));
+    const period=Math.max(60,Math.min(200,Number($('expressionMotionPeriod').value)||120))/10;
+    image.style.setProperty('--hop-height',(12*amount/100)+'px');
+    image.style.setProperty('--hop-squish',String(.035*amount/100));
+    image.style.setProperty('--hop-period',period+'s');
+    const moving=!image.hidden&&$('expressionMotionEnabled').checked&&amount>0&&!expressionMotionPreference.matches&&!document.hidden;
+    image.dataset.sway=moving?'on':'off';
+    $('expressionMotionAmountLabel').textContent=(amount<=60?'轻微':'较明显')+' · '+amount+'%';
+    $('expressionMotionPeriodLabel').textContent=period.toFixed(1)+'秒';
+    $('expressionMotionState').textContent=image.hidden?'等待选择图片。':expressionMotionPreference.matches?'系统已启用减少动态，保持静止。':moving?'大部分时间静止，每'+period.toFixed(1)+'秒轻轻蹦两下。':'已暂停动感，图片保持静止。';
+  }
+  function showExpressionMotion(id,automatic=false) {
+    const asset=expressionCatalog?.assets.find(a=>a.id===id&&/^[a-f0-9]{64}$/.test(a.id));
+    const image=$('expressionMotionImage');image.hidden=!asset;$('expressionMotionEmpty').hidden=!!asset;
+    if(asset){image.src='/expressions/assets/'+asset.id;$('expressionMotionDetails').open=true;}
+    else image.removeAttribute('src');
+    $('expressionMotionCaption').textContent=asset?(automatic?'本轮选中：':'手动选图：')+asset.name:'仅电脑预览，未下发开发板。';
+    configureExpressionMotion();
+    if(asset&&typeof companionPreviewSelected==='function')companionPreviewSelected(asset.id);
+  }
+  if(typeof document.addEventListener==='function')document.addEventListener('visibilitychange',configureExpressionMotion);
+  if(expressionMotionPreference.addEventListener)expressionMotionPreference.addEventListener('change',configureExpressionMotion);
+  function expressionCards(match) {
+    const catalog=expressionCatalog;if(!catalog)return;
+    if(typeof receiveCompanionCatalog==='function')receiveCompanionCatalog(catalog);
+    const rank=new Map((match?.candidates||[]).map((item,i)=>[item.id,{...item,rank:i+1}]));
+    const assets=[...catalog.assets].sort((a,b)=>(rank.get(a.id)?.rank||9999)-(rank.get(b.id)?.rank||9999));
+    $('expressionGallery').innerHTML=assets.map(asset=>{
+      if(!/^[a-f0-9]{64}$/.test(asset.id))return '';
+      const selected=asset.id===match?.selectedId, candidate=rank.get(asset.id);
+      const labels=[...(asset.tags||[])].sort((a,b)=>b.score-a.score).slice(0,4).map(t=>esc(t.tag)+' '+Number(t.score).toFixed(2)).join(' · ');
+      const semanticValue=expressionSemanticDrafts.has(asset.id)?expressionSemanticDrafts.get(asset.id):(asset.semanticTags||[]).join('、');
+      return '<article style="border:1px solid '+(selected?'#648d70':'var(--border,#ddd)')+';border-radius:12px;padding:12px;min-width:0;overflow-wrap:anywhere">'+
+        '<img loading="lazy" src="/expressions/assets/'+asset.id+'" alt="'+esc(asset.name)+'" style="width:100%;height:130px;object-fit:contain" />'+
+        '<div>'+esc(asset.name)+'</div><div class="muted">'+(selected?'本轮选中 · ':'')+(candidate?'第'+candidate.rank+'名 · '+candidate.score.toFixed(3):'尚未匹配')+'</div>'+
+        (candidate?'<small class="muted">用途 '+Number(candidate.semanticScore||0).toFixed(3)+' · 心情 '+Number(candidate.emotionScore||0).toFixed(3)+(candidate.eligible===false?' · 用途不符，排除':'')+'</small><br>':'')+
+        '<small class="muted">'+(labels||'首次计算后显示心情得分')+'</small>'+
+        '<label style="display:block;margin-top:12px">用途标签<input id="expressionSemantic-'+asset.id+'" maxlength="550" value="'+esc(semanticValue)+'" placeholder="睡觉、困了、晚安" oninput="expressionSemanticDrafts.set(\''+asset.id+'\',this.value)" /></label>'+
+        '<small class="muted">'+(asset.requiresSemanticMatch?'需要明确用途匹配':'未命中明确用途时，可按心情匹配')+'；每张图单独保存，可新增词语。</small><br>'+
+        '<button style="margin:8px 6px 0 0" onclick="showExpressionMotion(\''+asset.id+'\')">预览动感</button>'+
+        '<button data-expression-semantic-save onclick="saveExpressionSemantics(\''+asset.id+'\')">保存用途标签</button></article>';
+    }).join('');
+    showExpressionMotion(match?.selectedId,true);
+  }
+  async function expressionOperation(action) {
+    if(expressionBusy)return;expressionBusy=true;
+    for(const id of ['expressionLoad','expressionReload','expressionPreview'])$(id).disabled=true;
+    document.querySelectorAll('[data-expression-semantic-save]').forEach(button=>button.disabled=true);
+    $('expressionState').textContent='正在计算或读取图库，首次会建立本地语义档案……';
+    try {await action();}
+    catch(e){$('expressionState').textContent='未完成：'+e.message+'；没有发送消息或设备指令。';}
+    finally {expressionBusy=false;for(const id of ['expressionLoad','expressionReload','expressionPreview'])$(id).disabled=false;document.querySelectorAll('[data-expression-semantic-save]').forEach(button=>button.disabled=false);}
+  }
+  async function loadExpressions() {
+    return expressionOperation(async()=>{
+      expressionCatalog=await api('/expressions');
+      $('expressionTop').max=expressionCatalog.tags.length;$('expressionTop').value=expressionCatalog.topTags;
+      $('expressionDetails').open=true;
+      $('expressionTags').textContent=expressionCatalog.tags.map(t=>t.tag).join(' · ');
+      $('expressionSemantics').textContent=(expressionCatalog.semanticTags||[]).join(' · ');
+      expressionCards(null);
+      $('expressionState').textContent=expressionCatalog.tags.length+'个心情标签 · '+(expressionCatalog.semanticTags||[]).length+'个用途标签 · '+expressionCatalog.assets.length+'张图片 · 心情阈值 '+expressionCatalog.threshold+' · '+(expressionCatalog.model||'语义模型尚未就绪');
+    });
+  }
+  async function reloadExpressions() {
+    return expressionOperation(async()=>{
+      expressionCatalog=await api('/expressions/reload','POST',{});expressionCards(null);
+      $('expressionTags').textContent=expressionCatalog.tags.map(t=>t.tag).join(' · ');
+      $('expressionSemantics').textContent=(expressionCatalog.semanticTags||[]).join(' · ');
+      $('expressionTop').max=expressionCatalog.tags.length;$('expressionTop').value=expressionCatalog.topTags;
+      $('expressionState').textContent='图库配置已重新载入，共'+expressionCatalog.assets.length+'张。原始图片与配置未修改。';
+    });
+  }
+  async function previewExpression() {
+    return expressionOperation(async()=>{
+      const n=Number($('expressionTop').value);
+      if(!Number.isInteger(n)||n<1||n>42)throw Error('n 应为1～42的整数');
+      const match=await api('/expressions/preview','POST',{text:$('expressionText').value,mood:$('expressionMood').value,topTags:n});
+      expressionCatalog=await api('/expressions');
+      if(expressionCatalog.revision!==match.revision)throw Error('图库已被重新加载，请重新计算');
+      expressionCards(match);
+      $('expressionTags').innerHTML=match.tags.map((t,i)=>'<span style="padding:4px 8px;border-radius:8px;background:'+(i<n?'#e8efe5':'var(--bg,#f4f4f4)')+'">'+esc(t.tag)+' '+t.score.toFixed(3)+'</span>').join('');
+      $('expressionSemantics').textContent=(match.semanticMode==='intent'?'明确用途优先：':'用途不明确，回到心情匹配：')+(match.semanticTags||[]).slice(0,6).map(t=>t.tag+' '+t.score.toFixed(3)).join(' · ');
+      const excluded=(match.semanticTags||[]).filter(t=>t.excluded&&t.similarity>=match.semanticThreshold);
+      if(excluded.length)$('expressionSemantics').textContent+='；更接近排除语义：'+excluded.map(t=>t.tag).join('、');
+      const reasons={no_match:'合格图片的心情分不足',semantic_no_asset:'用途已识别，图库没有对应图片',empty_expression:'尚未填写表达',embedding_unavailable:'本地语义模型未就绪',weak_emotion_signal:'情绪语义不足',empty_library:'图库为空'};
+      $('expressionState').textContent=(match.status==='matched'?'已选出最高分表情':('本轮跳过：'+(reasons[match.reason]||match.reason)))+' · 心情前'+match.topTags+'个标签 · 心情阈值 '+match.threshold+' / 用途阈值 '+(match.semanticThreshold??'—')+'。仅预览，未发送。';
+    });
+  }
+  async function saveExpressionSemantics(id) {
+    if(!/^[a-f0-9]{64}$/.test(id))return;
+    return expressionOperation(async()=>{
+      const tags=$('expressionSemantic-'+id).value.split(/[,，、;；\n]/).map(s=>s.trim()).filter(Boolean);
+      if(tags.length>16||tags.some(s=>s.length>32)||new Set(tags).size!==tags.length)throw Error('每张图最多16个不重复标签，每项最多32字');
+      expressionCatalog=await api('/expressions/assets/'+id+'/semantics','PUT',{tags});
+      expressionSemanticDrafts.delete(id);expressionCards(null);
+      $('expressionSemantics').textContent=(expressionCatalog.semanticTags||[]).join(' · ');
+      $('expressionState').textContent='本图用途标签已保存，共用图库已重新载入。QQ和板端均生效；未发送消息或设备指令。';
+    });
+  }
+  /* End shared expression preview. */
+
+  /* Companion lifecycle preview: status projection only, never commands the body. */
+  const companionStates={
+    standby:['发呆中','叫我的名字，就会听你说','ᴗ ᴗ'],
+    focused:['我在呢','注意力集中','· ◡ ·'],
+    listening:['正在听你说','说完后，停顿一下就好','· ◡ ·'],
+    thinking:['让我想一想','正在整理这句话','· · ·'],
+    speaking:['说给你听','回复正在交付，实际进度以设备为准','⌒ ◡ ⌒'],
+    paused:['休息一下','监听已暂停','ᴗ ᴗ'],
+    offline:['连接断开','等待重新连接','— —'],
+    error:['遇到一点问题','请在控制台查看详情','· _ ·']
+  };
+  let companionLatest=null,companionReceived=0,companionLost=false,companionDemo=null;
+  let companionPageIndex=0,companionCaptionKey='',companionPagesValue=[['']],companionTimer=null,companionBadImage='';
+  let companionCatalog=null,companionCatalogBusy=false,companionCatalogAttempted=false,companionCatalogError=false,companionCatalogGeneration=0;
+  const companionStateImages=new Map();
+  function receiveCompanionCatalog(catalog) {
+    companionCatalogGeneration++;companionCatalog=catalog;companionCatalogAttempted=true;companionCatalogError=false;companionStateImages.clear();drawCompanion();
+  }
+  async function refreshCompanionArtwork() {
+    if(companionCatalogBusy)return;
+    companionCatalogBusy=true;companionCatalogAttempted=true;companionCatalogError=false;
+    const generation=companionCatalogGeneration;
+    if(companionBadImage){companionBadImage='';$('companionImage').dataset.asset='';}
+    $('companionArtworkReload').disabled=true;drawCompanion();
+    try {const catalog=await api('/expressions');if(generation===companionCatalogGeneration)receiveCompanionCatalog(catalog);}
+    catch {if(generation===companionCatalogGeneration)companionCatalogError=true;}
+    finally {companionCatalogBusy=false;$('companionArtworkReload').disabled=false;drawCompanion();}
+  }
+  function setCompanionVisible(visible) {
+    if(visible&&!companionCatalogAttempted)void refreshCompanionArtwork();
+  }
+  function companionStateArtwork(state) {
+    if(!companionCatalog)return null;
+    if(companionStateImages.has(state))return companionStateImages.get(state);
+    // Presentation defaults use existing image labels only. They are not a new inference
+    // about Soul's mood, and never replace a real reply's server-selected expression.
+    const calm={平静:1,安宁:1,温和:.9,放松:.8,安心:.7,满足:.6,温暖:.5,开心:.15};
+    const weights=state==='thinking'?{好奇:1,困惑:.9,洞察:.8,平静:.3}
+      :['focused','listening'].includes(state)?{在意:1,温和:.8,好奇:.7,温暖:.5,开心:.2}:calm;
+    const purposes=state==='thinking'?['思考','提问','疑问','困惑']
+      :['standby','offline'].includes(state)?['发呆','等待']
+      :['focused','listening'].includes(state)?['倾听','在听']:[];
+    const choices=(companionCatalog.assets||[]).filter(a=>/^[a-f0-9]{64}$/.test(a.id)).map(asset=>{
+      const purpose=(asset.semanticTags||[]).some(tag=>purposes.includes(tag));
+      if(asset.requiresSemanticMatch&&!purpose)return null;
+      const labels=new Map((asset.legacyTags||[]).map(tag=>[tag,1]));
+      for(const tag of asset.tags||[])labels.set(tag.tag,Math.max(labels.get(tag.tag)||0,Number(tag.score)||0));
+      let score=purpose?3:0;
+      for(const [tag,weight] of Object.entries(weights))score+=weight*(labels.get(tag)||0);
+      for(const tag of ['伤心','委屈','压抑','焦虑'])score-=.6*(labels.get(tag)||0);
+      return {id:asset.id,score};
+    }).filter(Boolean).sort((a,b)=>b.score-a.score||a.id.localeCompare(b.id));
+    const id=choices[0]?.id||null;companionStateImages.set(state,id);return id;
+  }
+  function companionPreviewSelected(id) {
+    if(!companionDemo)return;
+    companionDemo.expressionId=id;drawCompanion();
+  }
+  function companionPages(text,measure) {
+    const lines=[];let line='';
+    for(const char of String(text||'').replace(/\r\n?/g,'\n')) {
+      if(char==='\n'){lines.push(line);line='';continue;}
+      if(measure(line+char)>252) {
+        const chars=Array.from(line);
+        if('，。！？；：、）》】”’.,!?;:'.includes(char)&&chars.length>1) {
+          lines.push(chars.slice(0,-1).join(''));line=chars.at(-1)+char;
+        } else {lines.push(line);line=char;}
+      } else line+=char;
+    }
+    lines.push(line);const pages=[];
+    for(let i=0;i<lines.length;i+=4)pages.push(lines.slice(i,i+4));
+    return pages;
+  }
+  function receiveCompanionStatus(status) {
+    companionLatest=status;companionReceived=Date.now();companionLost=false;
+    if(companionTimer===null)companionTimer=setInterval(()=>{if(!document.hidden)drawCompanion();},500);
+    drawCompanion();
+  }
+  function companionUnavailable() {companionLost=true;drawCompanion();}
+  function changeCompanionMode() {
+    const mode=$('companionMode').value;
+    if(mode==='live')companionDemo=null;
+    else if(companionStates[mode]) {
+      companionDemo={version:1,name:companionLatest?.displayState?.name||companionLatest?.wake?.name||'Soul',
+        state:mode,phase:mode,focusRemainingMs:mode==='focused'?30000:0,wake:true,
+        subtitle:mode==='speaking'?'嗯，我在呢。你慢慢说，我听着。\n这是字幕分页演示，长一点的回复会分成多页，可以用下方按钮逐页查看。每一页都保留原来的字号，不会缩成一小行。':'',
+        expressionId:null,at:Date.now()};
+    }
+    companionCaptionKey='';drawCompanion();
+  }
+  function drawCompanion() {
+    const demo=companionDemo,live=companionLatest?.displayState;
+    let value=demo||live;
+    const stale=!demo&&(companionLost || companionReceived>0&&Date.now()-companionReceived>5000);
+    const supported=!!demo||live?.version===1;
+    if(!value || !supported || stale)value={state:'offline',name:companionLatest?.wake?.name||'Soul',subtitle:''};
+    let state=companionStates[value.state]?value.state:'error';
+    const elapsed=Date.now()-(demo?.at??companionReceived);
+    const remaining=Math.max(0,Math.min(30000,Number(value.focusRemainingMs)||0)-Math.max(0,elapsed));
+    if(value.wake&&value.focusRemainingMs>0&&remaining===0&&['focused','listening'].includes(state))state='standby';
+    const info=companionStates[state];
+    $('companionScreen').dataset.state=state;
+    $('companionName').textContent=value.name||'Soul';
+    $('companionBadge').textContent=demo?'演示 · 非真实':stale?'状态未知':supported?'真实状态':'等待新版Host';
+    $('companionTitle').textContent=info[0];
+    $('companionHint').textContent=stale?'暂时读不到后台，监听是否继续需恢复后核对'
+      :state==='thinking'&&value.phase==='synthesizing'?'正在准备这句话的声音'
+      :remaining>0&&['focused','listening'].includes(state)?'注意力还有 '+Math.ceil(remaining/1000)+' 秒':info[1];
+    $('companionFocus').hidden=remaining<=0||!['focused','listening'].includes(state);
+    $('companionFocus').value=remaining/1000;
+    const replyId=typeof value.expressionId==='string'&&/^[a-f0-9]{64}$/.test(value.expressionId)?value.expressionId:null;
+    const image=$('companionImage'),id=replyId||companionStateArtwork(state);
+    const src=typeof id==='string'&&/^[a-f0-9]{64}$/.test(id)?'/expressions/assets/'+id:'';
+    if(image.dataset.asset!==src) {
+      image.dataset.asset=src;companionBadImage='';
+      if(src)image.src=src;else image.removeAttribute('src');
+    }
+    image.hidden=!src||companionBadImage===src;
+    $('companionFace').hidden=!image.hidden;
+    $('companionFace').textContent=companionCatalogBusy?'正在读取共用表情…':companionCatalogError?'共用图库读取失败':'共用图库暂无可用图片';
+    $('companionArtworkSource').textContent=companionBadImage===src&&src?'图片暂时无法读取，可刷新表情联动。'
+      :src?(replyId?(demo?'演示指定表情':'本轮回复自动选图'):'当前状态的待机表情')+' · 来自QQ共用图库'
+      :companionCatalogBusy?'正在读取QQ共用图库…':companionCatalogError?'共用图库读取失败，点击“刷新表情联动”重试。':'共用图库暂无适合当前状态的图片。';
+    const reduced=typeof matchMedia==='function'&&matchMedia('(prefers-reduced-motion: reduce)').matches;
+    image.dataset.sway=!image.hidden&&['standby','focused'].includes(state)&&!document.hidden&&!reduced?'on':'off';
+    const caption=String(value.subtitle||'');
+    const key=(demo?'demo':value.sessionId||'')+':'+(value.outputSequence||0)+'\n'+caption;
+    if(key!==companionCaptionKey) {
+      companionCaptionKey=key;companionPageIndex=0;
+      const canvas=document.createElement('canvas'),context=canvas.getContext('2d');context.font='20px system-ui, sans-serif';
+      companionPagesValue=companionPages(caption,text=>context.measureText(text).width);
+    }
+    $('companionSubtitle').textContent=caption?companionPagesValue[companionPageIndex].join('\n'):'';
+    $('companionCaptionLabel').textContent=caption?'回复字幕':'字幕 · 等待本次回复';
+    $('companionPage').textContent=(companionPageIndex+1)+' / '+companionPagesValue.length;
+    $('companionPrev').disabled=companionPageIndex===0;
+    $('companionNext').disabled=companionPageIndex+1>=companionPagesValue.length;
+    $('companionSource').textContent=demo?'演示画面，不代表正在采音或播放；切回“跟随真实状态”即可继续观察。'
+      :stale?'后台状态暂时未知；网页断线不等于监听已停止。'
+      :!supported?'当前Host尚未提供新版显示状态；载入新程序后将自动跟随。演示可先查看布局。'
+      :'读取本机小智真实状态；字幕可手动翻页，不模拟实机播放进度。';
+  }
+  function companionPage(delta) {
+    companionPageIndex=Math.max(0,Math.min(companionPagesValue.length-1,companionPageIndex+delta));drawCompanion();
+  }
+  function companionImageFailed() {
+    companionBadImage=$('companionImage').dataset.asset;$('companionImage').hidden=true;$('companionFace').hidden=false;
+  }
+  if(typeof document.addEventListener==='function')document.addEventListener('visibilitychange',drawCompanion);
+  /* End companion lifecycle preview. */
   async function api(path, method, body) {
     const res = await fetch(path, {
       method: method || "GET",
@@ -1353,6 +1862,7 @@
       .forEach(s => s.classList.toggle("active", s.id === "sec-" + id));
     document.querySelectorAll(".nav-item")
       .forEach(n => n.classList.toggle("active", n.dataset.section === id));
+    if(typeof setCompanionVisible==='function')setCompanionVisible(id==='platform');
     if (!sectionLoaded[id] && sectionLoaders[id]) {
       sectionLoaded[id] = true;
       try { await sectionLoaders[id](); }
@@ -1428,31 +1938,479 @@
 
   /* ================= 对话 ================= */
   async function loadChat() {
+    ensureWxxzMonitorPolling(); await pollWxxzMonitor();
+    const catalog = await api('/moments/catalog');
+    for (const [id, items, label] of [['momentTypeFilter', catalog.types, '全部类型'], ['momentPlatformFilter', catalog.platforms, '全部平台']]) {
+      const current = $(id).value;
+      $(id).innerHTML = '<option value="">' + label + '</option>' + (items || []).map(x =>
+        '<option value="' + esc(x.id) + '">' + esc(x.label) + '</option>').join('');
+      $(id).value = current;
+    }
     await refreshTranscript();
     const turn = await api("/turns/last");
     renderTurn(turn);
   }
   async function refreshTranscript() {
-    const moments = await api("/moments?take=100");
+    const moments = await api('/moments?take=100&source=all&type=' + encodeURIComponent($('momentTypeFilter').value || '') +
+      '&platform=' + encodeURIComponent($('momentPlatformFilter').value || ''));
     const box = $("transcript");
     box.innerHTML = "";
+    if (!moments.length) {
+      const empty = document.createElement('p'); empty.className = 'muted'; empty.textContent = '这个范围内还没有经历。'; box.append(empty);
+    }
     for (const m of moments) {
       const div = document.createElement("div");
       div.className = "msg" + (m.role && currentUsername && m.role === currentUsername ? " me" : "");
-      div.innerHTML = "<b>" + esc(m.role || "?") + "</b>：" + esc(m.content);
+      const time = m.createdUnixMs ? new Date(m.createdUnixMs).toLocaleString('zh-CN', {hour12:false}) : '时间未记录';
+      div.innerHTML = '<div class="moment-meta"><b>' + esc(m.role || '?') + '</b>' +
+        '<span class="moment-badge">' + esc(m.typeLabel || m.type || '发生事件') + '</span>' +
+        '<span class="moment-badge">' + esc(m.platformLabel || m.sourcePlatform || '未记录平台') + '</span>' +
+        (m.parentMomentId ? '<span>关联观察</span>' : '') + '<time class="moment-time">' + esc(time) + '</time></div>' +
+        '<div class="moment-body">' + esc(m.content || '') + '</div>';
       box.append(div);
     }
     box.scrollTop = box.scrollHeight;
   }
+  let wxxzSession = null;
+  let wxxzCaptureId = null;
+  let wxxzCallId = null;
+  let wxxzVoiceSamples = 0;
+  let wxxzWakeEnabled = false;
+  let wxxzFocusUntil = 0;
+  let wxxzAttentionTimer = null;
+  let wxxzMonitorId = null;
+  let wxxzLegacyCallId = null;
+  let wxxzMonitorActive = false;
+  let wxxzMonitorTimer = null;
+  let wxxzMonitorPolling = false;
+  let wxxzMonitorTurns = null;
+  let wxxzDiagnosticsVersion = null;
+  let wxxzWakeDirty = false;
+  let wxxzSpeechDirty = false;
+  let wxxzWakePreparing = false;
+  function renderWxxzWakeAudio(value) {
+    if(!value || wxxzWakePreparing) return;
+    const describe = r => `${({hit:'命中缓存',miss:'新生成并缓存',unsupported:'服务未确认支持缓存'}[r.cache] || '结果未知')} · 取音${r.elapsedMs ?? '?'}毫秒`;
+    const pieces = [];
+    if(value.lastPreparation) pieces.push(`上次预生成“${value.lastPreparation.text}”：${describe(value.lastPreparation)}`);
+    if(value.lastUse) pieces.push(`上次唤醒取音：${describe(value.lastUse)}`);
+    $('wxxzWakeAudioState').textContent = pieces.length ? pieces.join('；')+'。这是上次结果；每次使用都会重新核对当前文字和音色。'
+      : value.supported ? '尚未预生成；开始名字监听前会自动准备。本按钮不播放、不采音。' : '唤醒缓存仅支持本地千问；请先保存播放音色。';
+  }
+  async function prepareWxxzWakeAudio() {
+    if(sending || wxxzMonitorActive) return;
+    if(wxxzWakeDirty || wxxzSpeechDirty) { $('wxxzWakeAudioState').textContent='请先保存名字设置和播放音色，再预生成。'; return; }
+    sending=true; wxxzWakePreparing=true; wxxzVoiceBusy(true);
+    $('wxxzWakeAudioState').textContent='正在预生成已保存的唤醒应答，仅合成、不播放，请稍候……';
+    try {
+      const result=await api('/wxxz/wake/audio/prepare','POST',{});
+      wxxzWakePreparing=false;
+      renderWxxzWakeAudio({lastPreparation:result});
+    } catch(e) { $('wxxzWakeAudioState').textContent='预生成失败：'+e.message+'；未播放，未自动重试。'; }
+    finally { wxxzWakePreparing=false; sending=false; applyWxxzMonitorLocks(); }
+  }
+  function applyWxxzMonitorLocks() {
+    if (sending) return;
+    wxxzVoiceBusy(wxxzMonitorActive);
+    $('momentSource').disabled=false;
+    const inputBlocked=wxxzMonitorActive && $('momentSource').value==='wxxz';
+    $('content').disabled=inputBlocked;
+    $('sendBtn').disabled=inputBlocked;
+    $('wxxzCallStop').disabled=!wxxzMonitorActive;
+    $('wxxzWakeStop').disabled=!wxxzMonitorActive;
+  }
+  function ensureWxxzMonitorPolling() {
+    if(wxxzMonitorTimer===null) wxxzMonitorTimer=setInterval(pollWxxzMonitor,1000);
+  }
+  async function pollWxxzMonitor() {
+    if(wxxzMonitorPolling) return;
+    wxxzMonitorPolling=true;
+    try {
+      const status=await api('/wxxz');
+      renderWxxzStatus(status);
+      const monitor=status.monitor;
+      if(monitor && wxxzMonitorTurns!==null && monitor.turns!==wxxzMonitorTurns) {
+        await refreshTranscript(); renderTurn(await api('/turns/last'));
+      }
+      wxxzMonitorTurns=monitor?.turns ?? null;
+    } catch(e) {
+      $('wxxzMonitorState').textContent='暂时读不到后台状态；网页断线不等于监听已停止，请恢复连接后核对。';
+      if(typeof companionUnavailable==='function')companionUnavailable();
+    } finally {wxxzMonitorPolling=false;}
+  }
+  function renderWxxzMonitor(monitor,entries,legacyCall) {
+    if(monitor) {
+      wxxzLegacyCallId=!monitor.active && legacyCall ? legacyCall : null;
+      wxxzMonitorActive=monitor.active || !!wxxzLegacyCallId; wxxzMonitorId=monitor.id;
+      wxxzCallId=monitor.active ? (monitor.callId || monitor.id) : wxxzLegacyCallId;
+      const phase=({starting:'启动中',listening:'正在监听',replying:'正在回复',stopping:'正在收尾',stopped:'已停止',faulted:'发生错误，已停止'})[monitor.phase] || monitor.phase;
+      $('wxxzMonitorState').textContent=wxxzLegacyCallId ? '旧客户端通话仍在运行；可以先暂停，再切换为后台监听。'
+        : '后台：'+phase+' · 已完成 '+monitor.turns+' 轮。'+(monitor.reason || '');
+      $('wxxzCallState').textContent=$('wxxzMonitorState').textContent;
+      applyWxxzMonitorLocks();
+    }
+    if(!entries) return;
+    const version=entries.length+':'+(entries.at(-1)?.sequence ?? 0);
+    if(version===wxxzDiagnosticsVersion) return;
+    wxxzDiagnosticsVersion=version;
+    const box=$('wxxzDiagnostics'); box.textContent='';
+    for(const entry of entries.slice().reverse()) {
+      const row=document.createElement('details');
+      const heading=document.createElement('summary');
+      heading.textContent='#'+entry.sequence+' · '+entry.code+' · '+entry.reason;
+      const text=document.createElement('pre'); text.style.whiteSpace='pre-wrap';
+      text.textContent='原始听写：'+(entry.rawText ?? '—')+'\n校正文字：'+(entry.text ?? '—')+
+        '\n匹配读音：'+(entry.pronunciation || '—')+' · 方式：'+(entry.matchMode || '—')+
+        '\n声纹：'+(entry.voiceConfirmed==null ? '未检查' : entry.voiceConfirmed ? '通过' : '未确认')+
+        ' · 分数：'+(entry.voiceScore ?? '—')+'\n交给主逻辑：'+(entry.admitted ? '是' : '否');
+      row.appendChild(heading);row.appendChild(text);box.appendChild(row);
+    }
+  }
+  async function clearWxxzDiagnostics() {
+    try {renderWxxzStatus(await api('/wxxz/diagnostics/clear','POST',{}));}
+    catch(e) {$('wxxzMonitorState').textContent='清空失败：'+e.message;}
+  }
+  async function previewWxxzAttention() {
+    try {
+      const r=await api('/wxxz/attention/preview','POST',{text:$('wxxzSandboxText').value,
+        focused:$('wxxzSandboxFocused').checked,speaker:$('wxxzSandboxSpeaker').value});
+      $('wxxzSandboxResult').textContent='【纯文字沙盘，非实际采音】\n'+r.note+
+        '\n校正：'+r.correction.rawText+' → '+r.correction.text+'\n读音：'+(r.correction.pronunciation || '—')+
+        '\n原因：'+r.decision.reason+'\n会简短应答：'+(r.wouldAcknowledge ? '是' : '否')+
+        '\n会进入Moment：'+(r.wouldCreateMoment ? '是' : '否')+'\n预计状态：'+r.nextState;
+    } catch(e) {$('wxxzSandboxResult').textContent='沙盘检查失败：'+e.message;}
+  }
+  function renderWxxzAttention(attention) {
+    if (!attention) return;
+    if (wxxzAttentionTimer !== null) clearInterval(wxxzAttentionTimer);
+    wxxzAttentionTimer = null;
+    wxxzFocusUntil = Date.now() + (attention.focusRemainingMs || 0);
+    const draw = () => {
+      const remaining = Math.max(0, Math.ceil((wxxzFocusUntil-Date.now())/1000));
+      $('wxxzAttentionState').textContent = attention.state === 'responding' ? '正在回应，播完后重新计时。'
+        : attention.state === 'direct' ? '持续对话中 · 本人发言直接处理，未启用名字唤醒。'
+        : attention.state === 'stopped' ? '名字监听已暂停。'
+        : remaining > 0 ? `专注中 · 剩余 ${remaining} 秒，可直接说话。` : '发呆中 · 等待你叫名字。';
+    };
+    draw();
+    if (attention.state === 'focused') wxxzAttentionTimer = setInterval(draw, 500);
+  }
+  function renderWxxzWake(wake) {
+    if (!wake) return;
+    wxxzWakeEnabled = wake.enabled;
+    if (wxxzWakeDirty) return;
+    $('wxxzWakeEnabled').checked = wake.enabled;
+    $('wxxzWakeName').value = wake.name || '';
+    $('wxxzWakePhonetic').checked = wake.phonetic !== false;
+    $('wxxzWakePronunciation').value = wake.pronunciation || '';
+    $('wxxzWakeAliases').value = (wake.aliases || []).join('、');
+    $('wxxzWakeReply').value = wake.reply || '诶，我在。';
+  }
+  async function saveWxxzWake() {
+    if (sending || wxxzCallId) return;
+    try {
+      const status = await api('/wxxz/wake','PUT',{enabled:$('wxxzWakeEnabled').checked,
+        name:$('wxxzWakeName').value.trim(),aliases:$('wxxzWakeAliases').value.split(/[,，、;；\n]+/).map(x=>x.trim()).filter(Boolean),
+        phonetic:$('wxxzWakePhonetic').checked,pronunciation:$('wxxzWakePronunciation').value.trim(),
+        reply:$('wxxzWakeReply').value.trim()});
+      wxxzWakeDirty=false;
+      renderWxxzStatus(status);
+      $('wxxzWakeResult').textContent='名字设置已保存；预览采用这些规则。';
+    } catch(e) { $('wxxzWakeResult').textContent='保存失败：'+e.message; }
+  }
+  async function previewWxxzWake() {
+    try {
+      const r = await api('/wxxz/wake/preview','POST',{text:$('wxxzWakePreviewText').value});
+      const mode=({phonetic:'按读音匹配',alias:'按特殊变体匹配',literal:'原名匹配',none:'未匹配'})[r.matchMode] || '';
+      $('wxxzWakeResult').textContent=`原文：${r.rawText} → 校正：${r.text}；${r.mentioned ? '命中唤醒名字' : '未命中唤醒名字'}。${r.pronunciation ? '读音：'+r.pronunciation+'；' : ''}${mode}`;
+    } catch(e) { $('wxxzWakeResult').textContent='预览失败：'+e.message; }
+  }
+  function renderWxxzSpeech(speech) {
+    if (!speech || wxxzSpeechDirty) return;
+    $('wxxzSpeechEngine').value=speech.engine;
+    $('wxxzSpeechLocalVoice').value=speech.localVoice || 'character';
+    $('wxxzSpeechLocalVoice').readOnly=!!speech.localProviderManaged;
+    $('wxxzSpeechRemoteModel').value=speech.remoteModel || '';
+    $('wxxzSpeechRemoteVoice').value=speech.remoteVoice || '';
+    $('wxxzSpeechRemoteModel').placeholder=speech.remoteDefaultModel || '请配置远端语音模型';
+    $('wxxzSpeechRemoteVoice').placeholder=speech.remoteDefaultVoice || '请配置远端音色';
+    $('wxxzSpeechState').textContent='当前：'+speech.description+'；远端配置'+(speech.remoteConfigured ? '可读取' : '未就绪')+'。';
+  }
+  async function saveWxxzSpeech() {
+    if (sending || wxxzCallId) return;
+    sending=true; wxxzVoiceBusy(true);
+    try {
+      const status=await api('/wxxz/speech','PUT',{engine:$('wxxzSpeechEngine').value,
+        localVoice:$('wxxzSpeechLocalVoice').value.trim(),remoteModel:$('wxxzSpeechRemoteModel').value.trim(),
+        remoteVoice:$('wxxzSpeechRemoteVoice').value.trim()});
+      wxxzSpeechDirty=false;
+      renderWxxzStatus(status);
+      $('wxxzSpeechState').textContent='已保存：'+status.voice+'；可以点击开发板试听。';
+    } catch(e) { $('wxxzSpeechState').textContent=e instanceof TypeError && /fetch|networkerror|load failed/i.test(e.message)
+      ? '连接中断，保存结果未确认。请确认 TraceSoul2 主程序正在运行，刷新核对当前设置后再保存。'
+      : '保存失败：'+e.message; }
+    finally { sending=false; wxxzVoiceBusy(false); }
+  }
+  async function testWxxzSpeech() {
+    if (sending || wxxzCallId) return;
+    if (!wxxzSession) { $('wxxzSpeechState').textContent='请先连接WXXZ会话'; return; }
+    sending=true; wxxzVoiceBusy(true);
+    $('wxxzSpeechState').textContent='正在合成并播放固定测试句，请听开发板……';
+    try {
+      const result=await api('/wxxz/speech/test','POST',{sessionId:wxxzSession});
+      $('wxxzSpeechState').textContent='试听播放完成：'+result.voice+'；请以实际听感为准。';
+    } catch(e) { $('wxxzSpeechState').textContent='试听失败：'+e.message; }
+    finally { sending=false; wxxzVoiceBusy(false); }
+  }
+  function renderWxxzVoice(voice) {
+    if (!voice) return;
+    wxxzVoiceSamples = voice.samples || 0;
+    $('wxxzVoiceState').textContent = voice.enrolled
+      ? (wxxzVoiceSamples>0 && wxxzVoiceSamples<3 ? `重新录入 ${wxxzVoiceSamples}/3 段，完成后替换；旧声纹仍保留。`
+          : '本人声纹已录入；当前阈值需现场验证，仍可能误拒绝或误识别。')
+      : `已录入 ${wxxzVoiceSamples}/3 段；每段请连续说话至少4秒。`;
+    $('wxxzEnroll').textContent = wxxzVoiceSamples >= 3 || (voice.enrolled && !wxxzVoiceSamples)
+      ? '重新录入全部三段（先录第1/3段，8秒）'
+      : `录入本人声纹（第${wxxzVoiceSamples+1}/3段，8秒）`;
+    $('wxxzEnroll').dataset.restart = (wxxzVoiceSamples >= 3 || (voice.enrolled && !wxxzVoiceSamples)) ? '1' : '0';
+    for (let number=1;number<=3;number++) {
+      const slot=voice.slots?.find(s=>s.number===number);
+      $('wxxzSampleState'+number).textContent=slot?.accepted ? `已接受 · 有效语音 ${(slot.speechMs/1000).toFixed(2)}秒` : '未录入';
+      $('wxxzSampleText'+number).textContent=slot?.accepted ? (slot.text || '本段未识别出听写文字') : '录入后在这里显示本段听写。';
+      $('wxxzSampleRecord'+number).textContent=`${slot?.accepted ? '重录' : '录入'}第${number}段（8秒）`;
+    }
+    if (voice.legacyProfile && !wxxzVoiceSamples)
+      $('wxxzVoiceState').textContent='旧声纹仍可使用；旧版未保存各段，重新录完三段后即可逐段查看听写和单独重录。';
+  }
+  function wxxzVoiceBusy(busy) {
+    $('wxxzWakePrepare').disabled=busy;
+    for (const id of ['wxxzWakeEnabled','wxxzWakeName','wxxzWakePhonetic','wxxzWakePronunciation','wxxzWakeAliases','wxxzWakeReply','wxxzWakeSave','wxxzWakeStart','wxxzListen','sendBtn','wxxzConnect','wxxzDisconnect','wxxzEnroll','wxxzSampleRecord1','wxxzSampleRecord2','wxxzSampleRecord3','wxxzVoiceCheck','wxxzCallStart','momentSource','wxxzPrivate','content','wxxzSpeechEngine','wxxzSpeechLocalVoice','wxxzSpeechRemoteModel','wxxzSpeechRemoteVoice','wxxzSpeechSave','wxxzSpeechTest'])
+      $(id).disabled = busy;
+  }
+  async function checkWxxzVoice() {
+    if (sending || wxxzCallId) return;
+    if (!wxxzSession) { $('wxxzCheckState').textContent='请先连接 WXXZ 会话'; return; }
+    sending=true; wxxzVoiceBusy(true);
+    $('wxxzCheckResult').textContent=''; $('wxxzCheckProgress').value=0; $('wxxzCheckVolume').textContent='';
+    let active=true, polling=false, timer=null;
+    const requestId=crypto.randomUUID().replaceAll('-','');
+    const update=async()=>{
+      if (!active || polling) return;
+      polling=true;
+      try {
+        const state=await api('/wxxz/voice/check/state','POST',{sessionId:wxxzSession,requestId});
+        if (!active) return;
+        if (state.phase==='recording') {
+          const seconds=Math.max(0,Math.min(8,(state.recorded_ms || 0)/1000));
+          $('wxxzCheckProgress').value=seconds;
+          $('wxxzCheckState').textContent=`🟢 正在录音，请现在说话 · ${seconds.toFixed(1)}/8秒`;
+        } else if (state.phase==='processing') {
+          $('wxxzCheckProgress').value=8;
+          $('wxxzCheckState').textContent='采音完成，正在计算整句与分段分数……';
+        }
+      } catch(e) {
+        if (active) $('wxxzCheckState').textContent='暂时读不到采音进度，请等本次结果；不要重复点击。';
+      } finally { polling=false; }
+    };
+    try {
+      for (let left=3;left>0;left--) {
+        $('wxxzCheckState').textContent=`⏳ ${left}秒后准备录音，请先靠近板子……`;
+        await new Promise(resolve=>setTimeout(resolve,1000));
+      }
+      $('wxxzCheckState').textContent='正在准备麦克风，等出现绿色录音提示后再说话……';
+      timer=setInterval(update,200);
+      const result=await api('/wxxz/voice/check','POST',{sessionId:wxxzSession,requestId});
+      active=false;
+      const d=result.diagnostic || {}, quality=result.quality || {};
+      const score=value=>typeof value==='number' ? value.toFixed(4) : '—';
+      const lines=[`本次采音编号：${quality.capture_id ?? result.receipt?.id ?? requestId}`,
+        `实际采音：${((quality.recorded_ms || 0)/1000).toFixed(2)}秒；检测到语音：${((quality.speech_ms ?? d.speechMs ?? 0)/1000).toFixed(2)}秒`];
+      const volume=quality.volume_500ms || [], maximum=Math.max(1,...volume);
+      for (const [i,value] of volume.entries()) {
+        const bar=document.createElement('div');
+        bar.style.cssText=`flex:1;min-width:2px;height:${Math.max(2,value/maximum*100)}%;background:#6b74ef;border-radius:2px`;
+        bar.title=`${(i*0.5).toFixed(1)}～${((i+1)*0.5).toFixed(1)}秒，音量 ${value}`;
+        $('wxxzCheckVolume').appendChild(bar);
+      }
+      if (volume.length) lines.push('上方音量图：从左到右0～8秒，每格半秒（有音量不等于有语音）。');
+      if (quality.segments) lines.push('语音位置：'+(quality.segments.length ? quality.segments.map(s=>
+        `${(s.start_ms/1000).toFixed(2)}～${((s.start_ms+s.duration_ms)/1000).toFixed(2)}秒`).join('；') : '未检测到'));
+      if (typeof quality.full_text==='string') lines.push('全段本地听写（仅诊断，不发送）：'+(quality.full_text || '未识别出文字'));
+      if (d.reason) lines.push(d.reason);
+      else {
+        const minimumWindow=d.minimumWindowScore ?? ((d.windowScores || []).length ? Math.min(...d.windowScores) : null);
+        lines.push(`整句相似度：${score(d.wholeScore)}（判定门槛 ${d.threshold}）`,
+          `分窗最低相似度：${score(minimumWindow)}（仅诊断，不单独否决）`,
+          `判定依据：${d.decisionBasis==='whole_utterance' ? '完整一句的声纹相似度' : '当前Host规则'}`,
+          `按现有规则：${d.matched ? '通过' : '未通过'}；本次仅诊断，不发送对话。`);
+        lines.push('以下是本次语音的重叠检查窗，不是三段录入样本：');
+        for (const [i,value] of (d.windowScores || []).entries())
+          lines.push(`检查窗${i+1}（${((d.windowMs?.[i] || 0)/1000).toFixed(2)}秒）：${score(value)}`);
+      }
+      $('wxxzCheckResult').textContent=lines.join('\n');
+      $('wxxzCheckProgress').value=8;
+      $('wxxzCheckState').textContent='诊断完成，结果如下；声纹与对话记录均未修改。';
+    } catch(e) { $('wxxzCheckState').textContent='诊断失败：'+e.message; }
+    finally { active=false; if(timer!==null) clearInterval(timer); sending=false; wxxzVoiceBusy(false); }
+  }
+  async function enrollWxxzVoice(sampleNumber=null) {
+    if (sending || wxxzCallId) return;
+    if (!wxxzSession) { $('sendState').textContent='请先连接 WXXZ 会话'; return; }
+    sending=true; wxxzVoiceBusy(true);
+    const requestId=crypto.randomUUID().replaceAll('-','');
+    const restart=sampleNumber===null && $('wxxzEnroll').dataset.restart==='1';
+    let active=true,polling=false,timer=null;
+    $('wxxzEnrollProgress').value=0; $('wxxzEnrollTranscript').textContent='';
+    const progress=async()=>{
+      if (!active || polling) return;
+      polling=true;
+      try {
+        const state=await api('/wxxz/voice/check/state','POST',{sessionId:wxxzSession,requestId});
+        if (!active) return;
+        if (state.phase==='recording') {
+          const seconds=Math.max(0,Math.min(8,(state.recorded_ms || 0)/1000));
+          $('wxxzEnrollProgress').value=seconds;
+          $('wxxzEnrollState').textContent=`🟢 正在录音，请现在说话 · ${seconds.toFixed(1)}/8秒；建议自然说5～7秒。`;
+        } else if (state.phase==='processing') {
+          $('wxxzEnrollProgress').value=8;
+          $('wxxzEnrollState').textContent='采音完成，正在本地听写并校验声纹……';
+        }
+      } catch(e) { if(active) $('wxxzEnrollState').textContent='暂时读不到采音进度，请等本次结果，不要重复点击。'; }
+      finally { polling=false; }
+    };
+    $('sendState').textContent='声纹录入中，不会提交对话。';
+    try {
+      for(let left=3;left>0;left--) {
+        $('wxxzEnrollState').textContent=`⏳ ${left}秒后准备录音，请先靠近板子……`;
+        await new Promise(resolve=>setTimeout(resolve,1000));
+      }
+      $('wxxzEnrollState').textContent='正在准备麦克风，等出现绿色录音提示后再说话……';
+      timer=setInterval(progress,200);
+      const result=await api('/wxxz/voice/enroll','POST',{sessionId:wxxzSession,restart,sampleNumber,requestId});
+      active=false;
+      $('wxxzEnrollProgress').value=8;
+      $('wxxzEnrollTranscript').textContent='本次本地听写（不发送）：'+(result.quality?.full_text || '未识别出文字');
+      renderWxxzVoice(result.voiceprint);
+      if (result.accepted===false) {
+        const duration=result.quality?.speech_ms;
+        $('wxxzEnrollState').textContent='本段未录入：'+result.reason+(typeof duration==='number' ? `（有效语音 ${(duration/1000).toFixed(2)}秒）` : '');
+        $('sendState').textContent='本次未替换原段，请查看原因后重录。';
+        return;
+      }
+      $('wxxzEnrollState').textContent=`本段已接受，有效语音 ${((result.quality?.speech_ms || 0)/1000).toFixed(2)}秒。`;
+      $('sendState').textContent=result.voiceprint.enrolled && result.voiceprint.samples===3
+        ? '三段声纹已保存；可以单独重录任意一段，或开始语音通话。' : '本段已录入，请继续录其余段；已录段也可单独重录。';
+    } catch(e) { $('wxxzEnrollState').textContent='声纹录入失败：'+e.message; $('sendState').textContent='请查看声纹按钮旁的错误。'; }
+    finally { active=false; if(timer!==null) clearInterval(timer); sending=false; wxxzVoiceBusy(false); }
+  }
+  async function stopWxxzCall() {
+    $('wxxzCallState').textContent='正在请求后台停止；迟到语音不再准入，已开始的回复会收尾。';
+    try {
+      const status=await api(wxxzLegacyCallId ? '/wxxz/call/stop' : '/wxxz/monitor/stop','POST',
+        wxxzLegacyCallId ? {callId:wxxzLegacyCallId} : {monitorId:wxxzMonitorId});
+      renderWxxzStatus(status);ensureWxxzMonitorPolling();
+    } catch(e) {
+      $('wxxzCallState').textContent='停止结果未确认，后台可能仍在监听；恢复连接后请核对，必要时再次点暂停。';
+    }
+  }
+  async function startWxxzCall(wake = wxxzWakeEnabled) {
+    if(sending || wxxzMonitorActive) return;
+    if(!wxxzSession) {$('wxxzCallState').textContent='请先连接开发板会话。';return;}
+    if($('content').value.trim()) {$('sendState').textContent='请先发送或清空现有输入';return;}
+    sending=true;wxxzVoiceBusy(true);
+    $('wxxzCallState').textContent='正在启动后台监听，关闭网页后仍会继续采音。';
+    try {
+      const status=await api('/wxxz/monitor/start','POST',{sessionId:wxxzSession,wake});
+      renderWxxzStatus(status);ensureWxxzMonitorPolling();
+    } catch(e) {
+      $('wxxzCallState').textContent='启动结果未确认：'+e.message+'；请刷新后台状态，勿重复开始。';
+      ensureWxxzMonitorPolling();
+    } finally {sending=false;applyWxxzMonitorLocks();}
+  }
+  window.addEventListener('pagehide',()=>{
+    if(wxxzMonitorTimer!==null) clearInterval(wxxzMonitorTimer);
+    if(wxxzAttentionTimer!==null) clearInterval(wxxzAttentionTimer);
+    wxxzMonitorTimer=null;wxxzAttentionTimer=null;
+    // Closing a dashboard only stops polling. Explicit pause is the sole user stop action.
+  });
+  window.addEventListener('pageshow',()=>{ensureWxxzMonitorPolling();void pollWxxzMonitor();});
+  async function listenWxxz() {
+    if (sending) return;
+    if (!wxxzSession) { $('sendState').textContent = '请先连接 WXXZ 会话'; return; }
+    if ($('content').value.trim()) { $('sendState').textContent = '请先发送或清空现有输入，避免覆盖'; return; }
+    sending = true;
+    $('wxxzListen').disabled = true; $('sendBtn').disabled = true;
+    $('sendState').textContent = '正在录音 8 秒，请对开发板说话；随后进行本地听写……';
+    $('wxxzState').textContent = $('sendState').textContent;
+    try {
+      const result = await api('/wxxz/listen','POST',{sessionId:wxxzSession});
+      $('momentSource').value = 'wxxz';
+      $('content').value = result.text || '';
+      wxxzCaptureId = result.captureId || null;
+      $('sendState').textContent = result.text ? '听写完成，请核对后发送。' : '未识别出清晰语音，请靠近板子重试。';
+      $('wxxzState').textContent = result.text ? '听写完成，请回到「经历与对话」核对后发送。' : $('sendState').textContent;
+      $('wxxzReceipt').textContent = JSON.stringify(result,null,2);
+    } catch(e) { $('sendState').textContent = '录音或听写失败：' + e.message; $('wxxzState').textContent = $('sendState').textContent; }
+    finally { sending=false; $('wxxzListen').disabled=false; $('sendBtn').disabled=false; }
+  }
+  function renderWxxzStatus(status) {
+    if(typeof receiveCompanionStatus==='function')receiveCompanionStatus(status);
+    if('sessionId' in status) wxxzSession=status.sessionId;
+    renderWxxzMonitor(status.monitor,status.diagnostics,status.callId);
+    renderWxxzWake(status.wake);
+    renderWxxzAttention(status.monitor?.active && !(status.monitor.wake && status.wake?.enabled)
+      ? {state:'direct'} : status.attention);
+    renderWxxzVoice(status.voiceprint);
+    renderWxxzSpeech(status.speech);
+    renderWxxzWakeAudio(status.wakeAudio);
+    const delivery = status.delivery;
+    const label = value => ({completed:'完成',pending:'进行中',not_started:'未开始',failed_or_unknown:'失败或结果未知'}[value] || value);
+    $('wxxzState').textContent = delivery
+      ? 'WXXZ 屏幕传输：' + label(delivery.display) + ' · 语音：' + label(delivery.audio) + ' · ' + (status.voice || '')
+      : status.sessionId ? 'WXXZ 已连接 · ' + (status.privateSession ? '本人私密现场' : '公开现场') + ' · ' + (status.voice || '')
+      : 'WXXZ 已关闭';
+    $('wxxzReceipt').textContent = JSON.stringify(status, null, 2);
+  }
+  async function connectWxxz() {
+    if (sending || wxxzCallId) return;
+    try {
+      const previous=await api('/wxxz');
+      if(previous.monitor?.active) {
+        renderWxxzStatus(previous); ensureWxxzMonitorPolling(); return;
+      }
+      if (previous.callId) await api('/wxxz/call/stop','POST',{callId:previous.callId});
+      const status = await api('/wxxz/session', 'POST', {privateSession: $('wxxzPrivate').checked});
+      wxxzSession = status.sessionId;
+      wxxzCaptureId = null;
+      $('momentSource').value = 'wxxz';
+      await refreshTranscript();
+      renderWxxzStatus(status);
+      ensureWxxzMonitorPolling();
+      if (status.wake?.enabled && status.voiceprint?.enrolled) void startWxxzCall(true);
+    } catch (e) { $('wxxzState').textContent = '连接失败：' + e.message; }
+  }
+  async function disconnectWxxz() {
+    if (sending || wxxzCallId) return;
+    try {
+      const status = await api('/wxxz/session', 'DELETE'); wxxzSession = null; wxxzCaptureId = null;
+      renderWxxzStatus(status);
+    } catch (e) { $('wxxzState').textContent = e.message; }
+  }
   async function sendMoment() {
     const text = $("content").value.trim();
     if (!text || sending) return;
+    const isWxxz = $('momentSource').value === 'wxxz';
+    if(isWxxz && wxxzMonitorActive) {$('sendState').textContent='后台正在管理WXXZ语音；请先暂停，或切换为控制台文字。';return;}
+    if (isWxxz && !wxxzSession) { $('sendState').textContent = '请先连接 WXXZ 会话'; return; }
     sending = true;
     $("sendBtn").disabled = true;
     $("sendState").textContent = "● Brain 思考中……";
     try {
-      const turn = await api("/moments", "POST", { content: text });
+      const turn = await api(isWxxz ? '/wxxz/moments' : '/moments', 'POST',
+        isWxxz ? { content: text, sessionId: wxxzSession, requestId: crypto.randomUUID(), captureId: wxxzCaptureId } : { content: text });
+      if (turn.wxxz) renderWxxzStatus(turn.wxxz);
       $("content").value = "";
+      wxxzCaptureId = null;
       logLine("已发送并收到回复：" + (turn.reply || "").slice(0, 40));
       await refreshTranscript();
       const full = await api("/turns/last");
@@ -1461,9 +2419,13 @@
     } catch (e) {
       logLine("发送失败：" + e.message);
       $("sendState").textContent = "发送失败：" + e.message;
+      if (isWxxz) {
+        try { renderWxxzStatus(await api('/wxxz')); } catch (_) {}
+      }
     } finally {
       sending = false;
       $("sendBtn").disabled = false;
+      applyWxxzMonitorLocks();
     }
   }
 
@@ -1662,6 +2624,12 @@
   let slotCache = {};
   let selectedProviderId = "";
   let modelRoleFilter = "";
+  let decisionTestPending = false;
+  function isDecisionProvider(p) { return p && p.type === "openrouter_decisions"; }
+  function isTtsProvider(p) { return p && p.type === "qwen_tts"; }
+  let ttsPreviewUrl = null;
+  let ttsPreviewProviderId = null;
+  let ttsPreviewPending = false;
   function slotValue(providerId, model) {
     return (providerId || "") + "||" + (model || "");
   }
@@ -1674,15 +2642,19 @@
   function allModelOptions(role) {
     const rows = [];
     (providerCache || []).forEach(p => {
+      const decision = isDecisionProvider(p);
+      if (decision && role !== "jev") return;
+      if (isTtsProvider(p) && role !== "speech") return;
       const models = p.models && p.models.length ? p.models : (p.model ? [{ id: p.model, enabled: true, roles: ["chat"] }] : []);
       models.forEach(m => {
         if (!m || !m.id || m.enabled === false) return;
-        if (role && !(m.roles || []).includes(role) && role !== "chat") return;
+        if (role && !(m.roles || []).includes(role) && role !== "chat" && role !== "jev") return;
+        if (role === "jev" && !decision && !(m.roles || []).includes("chat") && !(m.roles || []).includes("jev")) return;
         if (role === "chat" && (m.roles || []).length && !(m.roles || []).includes("chat") &&
             ((m.roles || []).includes("speech") || (m.roles || []).includes("image"))) return;
         rows.push({
           value: slotValue(p.id, m.id),
-          label: (p.displayName || p.id) + " / " + m.id
+          label: (p.displayName || p.id) + " / " + m.id + (role === "jev" && !decision ? "（聊天协议，旧配置）" : "")
         });
       });
     });
@@ -1700,7 +2672,7 @@
   }
   function renderSlots() {
     fillSlotSelect($("slotChat"), "chat", slotCache.chat, false);
-    fillSlotSelect($("slotJev"), "chat", slotCache.jev, true);
+    fillSlotSelect($("slotJev"), "jev", slotCache.jev, true);
     fillSlotSelect($("slotReview"), "chat", slotCache.review, true);
     fillSlotSelect($("slotMultimodal"), "multimodal", slotCache.multimodal, true);
     fillSlotSelect($("slotSpeech"), "speech", slotCache.speech, true);
@@ -1761,6 +2733,25 @@
     $("effort").value = cur.reasoningEffort || "high";
     $("hasKey").textContent = cur.hasApiKey ? "（已保存）" : "（未保存）";
     $("apiKey").value = "";
+    $("decisionOptions").hidden = !isDecisionProvider(cur);
+    $("ttsOptions").hidden = !isTtsProvider(cur);
+    if (ttsPreviewProviderId !== cur.id) {
+      $('ttsPreviewAudio').pause(); $('ttsPreviewAudio').removeAttribute('src'); $('ttsPreviewAudio').hidden = true;
+      if (ttsPreviewUrl) URL.revokeObjectURL(ttsPreviewUrl);
+      ttsPreviewUrl = null; ttsPreviewProviderId = cur.id;
+      $('ttsPreviewState').textContent = '试听在网页播放，不发送到开发板或聊天。';
+    }
+    $("ttsVoice").value = cur.voice || "character";
+    $("ttsWorkbench").href = "/providers/" + encodeURIComponent(cur.id) + "/speech/workbench";
+    $("decisionMode").value = cur.decisionMode || "direct";
+    $("relayKey").value = "";
+    $("clearRelayKey").checked = false;
+    $("hasRelayKey").textContent = cur.hasRelayKey ? "（已保存）" : "（未保存）";
+    $("decisionTestStatus").textContent = "尚未测试当前配置；模型列表可见不代表账号可调用。";
+    ["tempSlider", "topPSlider", "maxTokens", "thinking", "effort", "transientRetries"].forEach(id => $(id).disabled = isDecisionProvider(cur) || isTtsProvider(cur));
+    $("timeout").disabled = isTtsProvider(cur);
+    $("proxy").disabled = isTtsProvider(cur);
+    updateDecisionHint();
     $("provTitle").textContent = cur.displayName || cur.id || "—";
     $("provSub").textContent = (cur.baseUrl || "") + (cur.model ? " · " + cur.model : "");
     renderRoleFilter();
@@ -1773,6 +2764,18 @@
     box.innerHTML = keys.map(k =>
       `<button class="filter-chip ${modelRoleFilter === k ? "on" : ""}" onclick="setRoleFilter('${k}')">${k ? ROLE_LABELS[k] : "全部"}</button>`
     ).join("");
+  }
+  function updateDecisionHint() {
+    const relay = $("decisionMode").value === "relay";
+    $("relayKeyField").hidden = !relay;
+    $("decisionUrlHint").textContent = relay
+      ? "Base URL 填专用中转基址（例如 https://relay.example.com/tracesoul），程序追加 /decisions 和 /models。"
+      : "Base URL 填 https://openrouter.ai/api（不是 /api/v1）；程序使用 /alpha/decisions 和决策模型列表。运行 Host 的机器须能联网；仅浏览器 VPN 不一定生效，可在高级配置填 Host 可达的代理地址。";
+  }
+  function changeDecisionMode() {
+    if ($("decisionMode").value === "relay" && $("baseUrl").value.replace(/\/$/, "") === "https://openrouter.ai/api") $("baseUrl").value = "";
+    else if ($("decisionMode").value === "direct" && !$("baseUrl").value.trim()) $("baseUrl").value = "https://openrouter.ai/api";
+    updateDecisionHint();
   }
   function setRoleFilter(role) {
     modelRoleFilter = role || "";
@@ -1799,14 +2802,14 @@
     }
     box.innerHTML = models.map(m => {
       const on = m.enabled !== false;
-      const roles = ROLE_KEYS.map(r =>
-        `<button class="role-chip ${(m.roles || []).includes(r) ? "on" : ""}" onclick="toggleModelRole('${esc(m.id)}','${r}')">${ROLE_LABELS[r]}</button>`
+      const roles = (isDecisionProvider(cur) ? ["jev"] : isTtsProvider(cur) ? ["speech"] : ROLE_KEYS).map(r =>
+        `<button class="role-chip ${(m.roles || []).includes(r) ? "on" : ""}" ${isTtsProvider(cur) ? "disabled" : ""} onclick="toggleModelRole('${esc(m.id)}','${r}')">${ROLE_LABELS[r]}</button>`
       ).join("");
       return `<div class="model-row">` +
         `<label class="sw" title="启用"><input type="checkbox" ${on ? "checked" : ""} onchange="toggleModelEnabled('${esc(m.id)}', this.checked)" /><i></i></label>` +
-        `<div class="mid">${esc(m.id)}${cur && cur.model === m.id ? " · 该源对话默认" : ""}</div>` +
+        `<div class="mid">${esc(m.id)}${cur && cur.model === m.id ? " · 该源默认" : ""}</div>` +
         `<div class="roles">${roles}</div>` +
-        `<button class="icon-btn" title="设为主模型" onclick="useModel('${esc(m.id)}')">⤴</button>` +
+        (isDecisionProvider(cur) ? `<button ${on && !decisionTestPending ? "" : "disabled"} onclick="testDecision('${esc(m.id)}', this)">决策测试（使用额度）</button>` : isTtsProvider(cur) ? `<button ${on ? "" : "disabled"} onclick="useSpeechModel('${esc(m.id)}')">用于语音</button>` : `<button class="icon-btn" title="设为主模型" onclick="useModel('${esc(m.id)}')">⤴</button>`) +
         `<button class="icon-btn danger" title="删除" onclick="deleteModel('${esc(m.id)}')">🗑</button>` +
         `</div>`;
     }).join("");
@@ -1829,6 +2832,10 @@
       baseUrl: $("baseUrl").value,
       model: cur && cur.model ? cur.model : "",
       apiKey: key,
+      voice: isTtsProvider(cur) ? $("ttsVoice").value.trim() : undefined,
+      decisionMode: isDecisionProvider(cur) ? $("decisionMode").value : undefined,
+      relayKey: isDecisionProvider(cur) ? $("relayKey").value.trim() : undefined,
+      clearRelayKey: isDecisionProvider(cur) && $("clearRelayKey").checked,
       temperature: parseFloat($("tempSlider").value),
       topP: parseFloat($("topPSlider").value),
       maxTokens: parseInt($("maxTokens").value) || 0,
@@ -1861,6 +2868,50 @@
       invalidateDailyPlan();
       await refreshProviders(selectedProviderId);
     } catch (e) { alert("保存槽位失败：" + e.message); }
+  }
+  async function useSpeechModel(model) {
+    try {
+      await saveProvider();
+      await api('/providers/slots', 'PUT', { speech: { providerId: selectedProviderId, model } });
+      logLine('语音槽已选择：' + selectedProviderId + ' / ' + model);
+      await refreshProviders(selectedProviderId);
+    } catch (e) { alert('选择语音失败：' + e.message); }
+  }
+  async function previewTts() {
+    if (ttsPreviewPending) return;
+    const providerId = selectedProviderId;
+    const text = $('ttsPreviewText').value.trim();
+    if (!text) { $('ttsPreviewState').textContent = '请先输入试听文字。'; return; }
+    ttsPreviewPending = true; $('ttsPreviewButton').disabled = true;
+    try {
+      await saveProvider();
+      $('ttsPreviewState').textContent = '正在合成，请稍候…';
+      const response = await fetch('/providers/' + encodeURIComponent(providerId) + '/speech-test', {
+        method: 'POST', headers: { 'Content-Type': 'application/json' }, body: JSON.stringify({ text })
+      });
+      if (!response.ok) { const error = await response.json(); throw Error(error.error || '语音生成失败'); }
+      const blob = await response.blob();
+      if (selectedProviderId !== providerId) return;
+      if (ttsPreviewUrl) URL.revokeObjectURL(ttsPreviewUrl);
+      ttsPreviewUrl = URL.createObjectURL(blob);
+      $('ttsPreviewAudio').src = ttsPreviewUrl; $('ttsPreviewAudio').hidden = false;
+      $('ttsPreviewState').textContent = '生成完成，点击播放器试听。';
+    } catch (e) { if (selectedProviderId === providerId) $('ttsPreviewState').textContent = '试听失败：' + e.message; }
+    finally { ttsPreviewPending = false; $('ttsPreviewButton').disabled = false; }
+  }
+  async function testDecision(model, button) {
+    if (decisionTestPending) return;
+    decisionTestPending = true;
+    const id = $("providerId").value;
+    button.disabled = true;
+    try {
+      await saveProvider();
+      $("decisionTestStatus").textContent = "正在测试 " + model + "…";
+      const result = await api("/providers/" + encodeURIComponent(id) + "/decision-test", "POST", { model });
+      if (selectedProviderId === id) $("decisionTestStatus").textContent = "测试成功：" + model + " → " + result.choice + "；" + result.elapsedMs + " ms；费用 USD " + (result.usage.cost == null ? "未上报" : result.usage.cost) + "。未执行动作。";
+    } catch (e) {
+      if (selectedProviderId === id) $("decisionTestStatus").textContent = "测试失败：" + e.message;
+    } finally { decisionTestPending = false; button.disabled = false; renderModelList(); }
   }
   async function saveReviewSettings() {
     try {
@@ -1895,7 +2946,7 @@
   async function fetchModels() {
     const id = $("providerId").value;
     try {
-      await saveProvider().catch(() => {});
+      await saveProvider();
       const data = await api("/providers/" + encodeURIComponent(id) + "/models", "POST");
       logLine("已获取 " + (data.models || []).length + " 个模型");
       await refreshProviders(id);
@@ -1908,7 +2959,7 @@
     const id = prompt("自定义模型 id（接口里的名字，不是显示名）");
     if (!id || !id.trim()) return;
     await api("/providers/" + encodeURIComponent($("providerId").value) + "/models", "PUT", {
-      id: id.trim(), enabled: true, roles: ["chat"]
+      id: id.trim(), enabled: true, roles: isTtsProvider(selectedProvider()) ? ["speech"] : ["chat"]
     });
     logLine("已添加模型：" + id.trim());
     await refreshProviders($("providerId").value);
@@ -2293,7 +3344,12 @@
   }
 
   /* ================= 平台 · QQ ================= */
-  async function loadPlatform() { await loadPlatforms(); }
+  async function loadPlatform() {
+    ensureWxxzMonitorPolling();
+    await loadPlatforms();
+    try { renderWxxzStatus(await api('/wxxz')); }
+    catch (e) { $('wxxzState').textContent = '开发板状态未取得：' + e.message; }
+  }
   async function loadPlatforms() {
     try {
       const list = await api("/platforms");

@@ -93,6 +93,10 @@ namespace TraceSoul2.Data
     /// </summary>
     public sealed class PluginEventData
     {
+        /// <summary>Semantic input/output kind, independent of role, evidence and platform routing.</summary>
+        public string Type { get; set; }
+        public string SourcePlatform { get; set; }
+        public string ParentMomentId { get; set; }
         /// <summary>跨入站、Brain、器官与出站日志的本轮短追踪号；不参与业务语义。</summary>
         public string TraceId { get; set; }
         public string PluginId { get; set; }

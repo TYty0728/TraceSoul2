@@ -1,0 +1,45 @@
+const assert=require('node:assert/strict');
+const fs=require('node:fs');
+const vm=require('node:vm');
+const path=require('node:path');
+const html=fs.readFileSync(path.join(__dirname,'../../Tools/Host/wwwroot/index.html'),'utf8');
+const nodes=new Map();
+const $=id=>{if(!nodes.has(id))nodes.set(id,{value:'',textContent:'',checked:false,disabled:false,dataset:{}});return nodes.get(id);};
+const writes=[];
+let pending,fail=false;
+const sandbox={$,sending:false,setTimeout,setInterval:()=>1,clearInterval(){},window:{addEventListener(){}},
+  api:async(url,method,body)=>{
+    writes.push({url,method,body});
+    if(pending) await pending;
+    if(fail) throw new Error('服务不可用');
+    return {text:'诶，我在。',cache:'hit',elapsedMs:8,synthesisMs:0,audioMs:1000};
+  }};
+vm.createContext(sandbox);
+vm.runInContext(html.slice(html.indexOf('  let wxxzSession ='),html.indexOf('  /* ---------- 最近一轮渲染')),sandbox);
+(async()=>{
+  assert.match(html,/预生成唤醒语音（不播放）/);
+  let release;pending=new Promise(resolve=>release=resolve);
+  const preparing=sandbox.prepareWxxzWakeAudio();
+  assert.match($('wxxzWakeAudioState').textContent,/正在预生成/);
+  assert.equal($('wxxzWakePrepare').disabled,true);
+  sandbox.renderWxxzWakeAudio({supported:true});
+  assert.match($('wxxzWakeAudioState').textContent,/正在预生成/,'轮询不覆盖进度');
+  await sandbox.prepareWxxzWakeAudio();
+  assert.equal(writes.length,1,'进行中不重复提交');
+  release();await preparing;pending=null;
+  assert.match($('wxxzWakeAudioState').textContent,/命中缓存.*8毫秒/);
+  assert.match($('wxxzWakeAudioState').textContent,/上次结果/);
+  assert.equal($('wxxzWakePrepare').disabled,false);
+  vm.runInContext('wxxzWakeDirty=true',sandbox);
+  await sandbox.prepareWxxzWakeAudio();
+  assert.equal(writes.length,1);assert.match($('wxxzWakeAudioState').textContent,/先保存/);
+  vm.runInContext('wxxzWakeDirty=false;wxxzMonitorActive=true',sandbox);
+  await sandbox.prepareWxxzWakeAudio();assert.equal(writes.length,1,'监听期间不能额外预生成');
+  vm.runInContext('wxxzMonitorActive=false',sandbox);
+  fail=true;await sandbox.prepareWxxzWakeAudio();
+  assert.equal(writes.length,2);assert.match($('wxxzWakeAudioState').textContent,/失败.*未自动重试/);
+  sandbox.renderWxxzWakeAudio({lastPreparation:{text:'我在',cache:'unsupported',elapsedMs:30}});
+  assert.match($('wxxzWakeAudioState').textContent,/未确认支持缓存/);
+  assert.ok(writes.every(x=>x.url==='/wxxz/wake/audio/prepare'&&x.method==='POST'),'只请求合成，不连接、采音、播放或发Moment');
+  console.log('WXXZ wake cache UI checks passed: computer-only preparation, no playback, progress, busy, dirty, failure and truthful history.');
+})().catch(e=>{console.error(e);process.exit(1);});

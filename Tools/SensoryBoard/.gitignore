@@ -1,0 +1,5 @@
+__pycache__/
+firmware/build/
+firmware/managed_components/
+firmware/sdkconfig
+firmware/sdkconfig.old

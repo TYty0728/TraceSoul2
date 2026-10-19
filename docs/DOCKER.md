@@ -139,8 +139,35 @@ python3 scripts/update-server.py --root /home/ubuntu/TraceSoul2 --version 0.1.7
 - `plugins_data/`
 - `Plugins/` 中不属于该 Release 的第三方插件
 
-`Plugins/` 中的 `qq-tts`、`qq-imagegen`、`qq-qzone`、`qq-status`、`game-session`、`media-understanding`、`realtime-call` 等官方包会随正式版本升级，但对应 `plugins_data/<包名>/` 配置和生成文件保持原样。旧 `App` 与旧官方插件包会作为隐藏备份目录保留在 `runtime/`，确认新版稳定后再人工清理。
+`Plugins/` 中的 `qq-tts`、`qq-imagegen`、`qq-qzone`、`qq-status`、`qq-sticker`、`game-session`、`media-understanding`、`realtime-call`、`tavily` 官方包会随正式版本升级，但对应 `plugins_data/<包名>/` 配置和生成文件保持原样。旧 `App` 与旧官方插件包会作为隐藏备份目录保留在 `runtime/`，确认新版稳定后再人工清理。
 
 ## 6. 整目录带回本地
 
 停止容器后复制整个 `runtime/`。在另一台 Linux 或安装了 Docker Desktop 的电脑上，把它放回项目根目录并再次运行 `scripts/docker-up.sh` 即可。SQLite 的 `-wal`、`-shm` 文件必须和主数据库一起复制，不能在线漏拷。
+
+## 7. 0.1.47感官与语音服务
+
+主Docker容器负责Soul、Moment、供应商请求和表情选择，不安装USB驱动、ASR模型、PyTorch或千问GPU模型。没有开发板、声纹或TTS服务时，Host正常启动，WXXZ显示未连接且不会自动监听。新镜像初始化九个官方插件；重启不覆盖已经存在的插件目录或任何plugins_data。已有runtime/App不会因重建镜像而强行升级，仍使用WebUI或上文更新脚本升级。
+
+QQ和WXXZ的共用图库位于`runtime/plugins_data/qq-sticker/`，模型与语义词表随App发布，用户图片和索引跟随持久数据迁移。发布包不含个人图片、录音、声纹或角色参考音频。TTS特殊供应商与Decisions供应商配置仍位于角色目录的私密供应商文件；原账号/角色迁移后继续使用。
+
+### 千问TTS
+
+在「大脑 · LLM」把千问供应商基址改为服务器容器实际可达的`https://voice.example.com/v1`，填写该语音服务的独立API Key并选择语音槽。此域名应是受保护的专用入口，不能直接把Windows回环服务暴露公网；供应商依然校验证书、不跟随重定向、不借用其他供应商密钥。回环HTTP仅适用于**同一网络命名空间**内的服务或SSH端口转发，不接受远端明文HTTP。`host.docker.internal`本身不能替代TLS与鉴权。
+
+模型仍可放在有GPU的个人电脑或独立Linux/CUDA服务上，`Tools/LocalVoice/server.py`以独立Python环境运行，凭据文件支持Linux的0600权限。Windows安装/启动PS1仅是本机辅助工具，不在Linux主容器内执行。服务的HTTPS反向代理须校验API Key、保持`Authorization`头、覆盖上游`Host`为其回环地址，工作台应使用其同源HTTPS入口并转发安全的Origin；不能删掉服务现有Host/Origin或Bearer检查。具体模型依赖和本机安装见[本地语音](../Tools/LocalVoice/README.md)。
+
+### 开发板桥
+
+开发板仍连接有USB的本地电脑，由`Tools/SensoryBoard/bridge.py`采音、ASR及播放。服务器不能直接使用本地电脑的COM端口。可选择受保护的HTTPS网关，或把SSH转发建立在Host所在网络命名空间的回环端口；默认地址仍为`http://127.0.0.1:5089/`。
+
+专用HTTPS入口在Compose的私密`.env`中填写：
+
+```dotenv
+TRACESOUL2_WXXZ_BRIDGE_URL=https://body.example.com/wxxz/
+TRACESOUL2_WXXZ_BRIDGE_KEY=YOUR_32_TO_256_CHARACTER_PRIVATE_TOKEN
+```
+
+远端桥必须配置32～256位英文字母/数字/下划线/短横线的独立Bearer；不能填供应商Key或控制台Cookie。网关负责验证该令牌，再将固定路径转发给本地回环桥，覆盖上游Host为`127.0.0.1:5089`并清除跨站Origin，不接受任意目标URL。桥自身仍仅监听回环并保留来源校验，本版本不自动部署网关或创建隧道。没有网关时不要把URL改成公网IP，不要开放裸5089端口。
+
+配置后重新创建Host容器，再明确连接/开始监听；Host重启不会自动采音。本机密钥、声纹档案和音色参考目录需要备份，均不进入镜像构建上下文或Git。状态预览可在无硬件时演示，但不代表实体屏幕动画已接入。

@@ -241,6 +241,7 @@ namespace TraceSoul2.Logic
         {
             var live = (candidates ?? Enumerable.Empty<TraceContributionDescriptorData>())
                 .Where(x => x != null &&
+                            EnvironmentLogic.CanUse(turn, x) &&
                             string.Equals(OrganOf(x), organ, StringComparison.Ordinal) &&
                             IsBodyLive(BodyOf(x), turn))
                 .ToList();

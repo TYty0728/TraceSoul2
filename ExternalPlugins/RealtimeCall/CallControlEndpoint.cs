@@ -7,10 +7,11 @@ namespace TraceSoul2.ExternalPlugins.RealtimeCall;
 
 public sealed class CallControlEndpoint : ITraceWebSocketEndpoint, IDisposable
 {
-    public const int MaxMessageBytes = 16 * 1024;
+    public const int MaxMessageBytes = 64 * 1024;
     private static readonly UTF8Encoding StrictUtf8 = new(false, true);
     private readonly RealtimeSessionRegistry registry;
     private readonly CallDialogueHub? dialogue;
+    private readonly VoiceprintGate? voiceprint;
     private readonly string conversationId;
     private readonly byte[] tokenBytes;
     private readonly TimeSpan idleTimeout;
@@ -22,13 +23,14 @@ public sealed class CallControlEndpoint : ITraceWebSocketEndpoint, IDisposable
     public string Path => "/plugins/realtime-call/ws";
 
     public CallControlEndpoint(RealtimeSessionRegistry registry, string conversationId, string accessToken,
-        TimeSpan? idleTimeout = null, CallDialogueHub? dialogue = null)
+        TimeSpan? idleTimeout = null, CallDialogueHub? dialogue = null, VoiceprintGate? voiceprint = null)
     {
         this.registry = registry;
         this.conversationId = conversationId;
         tokenBytes = Encoding.UTF8.GetBytes(accessToken);
         this.idleTimeout = idleTimeout ?? TimeSpan.FromSeconds(120);
         this.dialogue = dialogue;
+        this.voiceprint = voiceprint;
     }
 
     public bool Accept(string authorizationHeader, string queryString)
@@ -63,7 +65,7 @@ public sealed class CallControlEndpoint : ITraceWebSocketEndpoint, IDisposable
                 }
                 finally { sendGate.Release(); }
             }
-            using var connection = new CallControlConnection(registry, conversationId, dialogue, SendText);
+            using var connection = new CallControlConnection(registry, conversationId, dialogue, SendText, voiceprint);
             var buffer = new byte[4096];
             while (socket.State == WebSocketState.Open && !linked.IsCancellationRequested)
             {

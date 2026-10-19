@@ -55,7 +55,7 @@ namespace TraceSoul2.Manager
                 : assemblies;
             foreach (var type in sources.SelectMany(SafeTypes)
                          .Where(x => x != null && !x.IsAbstract && !x.IsInterface &&
-                                     typeof(ITracePlugin).IsAssignableFrom(x)))
+                                     typeof(ITracePlugin).IsAssignableFrom(x) && x.GetConstructor(Type.EmptyTypes) != null))
             {
                 ITracePlugin instance;
                 try { instance = (ITracePlugin)Activator.CreateInstance(type); }

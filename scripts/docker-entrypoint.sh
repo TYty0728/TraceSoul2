@@ -15,4 +15,14 @@ if [ ! -f "$APP/tracesoul2.install.json" ]; then
   echo "已从镜像初始化 TraceSoul2 App。"
 fi
 
+# Fresh installs receive the same official plugins as Release packages. Existing
+# plugin code and all plugins_data remain untouched; upgrades use the updater.
+for plugin in "$APP"/BundledPlugins/*; do
+  [ -d "$plugin" ] || continue
+  name=${plugin##*/}
+  if [ ! -e "$ROOT/Plugins/$name" ] && [ ! -L "$ROOT/Plugins/$name" ]; then
+    cp -a "$plugin" "$ROOT/Plugins/$name"
+  fi
+done
+
 exec sh "$APP/Start-TraceSoul2.sh"

@@ -1,0 +1,87 @@
+const assert=require('node:assert/strict'),fs=require('node:fs'),vm=require('node:vm'),path=require('node:path');
+const html=fs.readFileSync(path.join(__dirname,'../../Tools/Host/wwwroot/index.html'),'utf8');
+const nodes=new Map(),$=id=>{if(!nodes.has(id))nodes.set(id,{value:'',textContent:'',hidden:false,disabled:false,dataset:{},removeAttribute(k){delete this[k];}});return nodes.get(id);};
+let now=100000,reduced=false;const timers=[];
+const sandbox={$,Date:{now:()=>now},setInterval:fn=>{timers.push(fn);return 1;},matchMedia:()=>({matches:reduced}),
+ document:{hidden:false,createElement:()=>({getContext:()=>({measureText:text=>({width:Array.from(text).length*20})})})}};
+vm.createContext(sandbox);vm.runInContext(html.slice(html.indexOf('  /* Companion lifecycle preview:'),html.indexOf('  /* End companion lifecycle preview. */')),sandbox);
+const image='a'.repeat(64);
+const status={sessionId:'s',displayState:{version:1,sessionId:'s',callId:'c',name:'测试同伴',state:'focused',phase:'idle',subtitle:'公开合成字幕',expressionId:image,focusRemainingMs:30000,wake:true}};
+sandbox.receiveCompanionStatus(status);
+assert.equal($('companionScreen').dataset.state,'focused');assert.equal($('companionImage').dataset.sway,'on');
+assert.equal($('companionImage').src,'/expressions/assets/'+image);assert.equal(timers.length,1);
+now+=4000;timers[0]();assert.equal($('companionFocus').value,26,'本地倒计时不延长后台专注租期');
+now+=2000;timers[0]();assert.match($('companionBadge').textContent,/未知/,'超过5秒未收到状态不假装仍在倾听');
+assert.equal($('companionImage').hidden,true,'状态未知不保留旧画面');
+sandbox.receiveCompanionStatus({...status,displayState:{...status.displayState,state:'speaking',phase:'speaking',subtitle:'<img onerror=evil()>\n'+'长句'.repeat(150)}});
+assert.equal($('companionImage').dataset.sway,'off','倾听/思考/说话停止蹦跶');
+assert.equal($('companionScreen').dataset.state,'speaking');assert.equal($('companionNext').disabled,false);
+const first=$('companionSubtitle').textContent;sandbox.companionPage(1);assert.notEqual($('companionSubtitle').textContent,first);
+sandbox.receiveCompanionStatus({...status,displayState:{...status.displayState,state:'speaking',subtitle:'<img onerror=evil()>\n'+'长句'.repeat(150)}});
+assert.match($('companionPage').textContent,/^2 \/ /,'轮询不重置当前字幕页');
+assert.equal($('companionSubtitle').innerHTML,undefined,'字幕不用HTML渲染');
+sandbox.receiveCompanionStatus({...status,displayState:{...status.displayState,expressionId:'../private',subtitle:'新回复'}});
+assert.equal($('companionImage').hidden,true);assert.match($('companionPage').textContent,/^1 \/ /,'新回复重新从第一页显示');
+sandbox.receiveCompanionStatus(status);sandbox.companionImageFailed();timers[0]();assert.equal($('companionImage').hidden,true,'图片失败不重复加载');
+sandbox.receiveCompanionStatus({...status,displayState:{...status.displayState,expressionId:'b'.repeat(64)}});
+assert.equal($('companionImage').hidden,false);
+reduced=true;timers[0]();assert.equal($('companionImage').dataset.sway,'off');reduced=false;
+sandbox.document.hidden=true;sandbox.drawCompanion();assert.equal($('companionImage').dataset.sway,'off');sandbox.document.hidden=false;
+$('companionMode').value='speaking';$('expressionMotionImage').hidden=false;$('expressionMotionImage').src='/expressions/assets/'+image;
+sandbox.changeCompanionMode();assert.match($('companionBadge').textContent,/演示/);
+sandbox.receiveCompanionStatus({sessionId:null,displayState:{version:1,state:'offline',name:'测试同伴'}});
+assert.equal($('companionScreen').dataset.state,'speaking','后台轮询不会抢掉显式演示');
+$('companionMode').value='live';sandbox.changeCompanionMode();assert.equal($('companionScreen').dataset.state,'offline');
+sandbox.receiveCompanionStatus({sessionId:null});assert.match($('companionSource').textContent,/尚未提供新版/);
+sandbox.companionUnavailable();assert.match($('companionSource').textContent,/断线不等于监听已停止/);
+const pages=sandbox.companionPages('字'.repeat(500),text=>Array.from(text).length*20);
+assert.equal(pages.flat().join(''),'字'.repeat(500));assert.ok(pages.every(p=>p.length<=4&&p.every(l=>l.length<=12)));
+assert.equal(sandbox.api,undefined,'整个显示模块没有网络命令入口');
+(async()=>{
+  const requests=[],neutral='c'.repeat(64),sleep='d'.repeat(64),question='e'.repeat(64);
+  const library={revision:'library-a',assets:[
+    {id:sleep,legacyTags:['平静'],semanticTags:['睡觉'],requiresSemanticMatch:true},
+    {id:neutral,legacyTags:['平静'],semanticTags:['发呆'],tags:[],requiresSemanticMatch:false},
+    {id:question,legacyTags:['困惑'],semanticTags:['提问'],requiresSemanticMatch:true},
+    {id:'../private',legacyTags:['平静'],requiresSemanticMatch:false}
+  ]};
+  sandbox.api=async(url,method)=>{requests.push({url,method});return library;};
+  sandbox.receiveCompanionStatus({sessionId:null,displayState:{version:1,state:'offline',name:'测试同伴'}});
+  sandbox.setCompanionVisible(true);
+  await new Promise(setImmediate);
+  assert.equal(requests.length,1);assert.equal(requests[0].url,'/expressions');
+  assert.equal($('companionImage').src,'/expressions/assets/'+neutral,'未连接/未回复也自动用共用图库待机图，不需手选');
+  assert.equal($('companionImage').hidden,false);assert.equal($('companionScreen').dataset.state,'offline');
+  assert.match($('companionArtworkSource').textContent,/待机表情.*QQ共用图库/);
+  for(let i=0;i<20;i++){sandbox.setCompanionVisible(true);sandbox.drawCompanion();}
+  assert.equal(requests.length,1,'半秒绘制和重复进入不反复请求图库或模型');
+  $('companionMode').value='thinking';sandbox.changeCompanionMode();
+  assert.equal($('companionImage').src,'/expressions/assets/'+question,'演示思考直接匹配图库已有用途标签');
+  $('companionMode').value='standby';sandbox.changeCompanionMode();
+  assert.equal($('companionImage').src,'/expressions/assets/'+neutral,'发呆不误用睡觉等专用图');
+  sandbox.companionPreviewSelected(sleep);
+  assert.equal($('companionImage').src,'/expressions/assets/'+sleep,'图库指定图立即同步演示，无需重新选择状态');
+  $('companionMode').value='live';sandbox.changeCompanionMode();
+  assert.equal($('companionImage').src,'/expressions/assets/'+neutral,'演示手选不污染真实模式');
+  sandbox.receiveCompanionStatus(status);
+  assert.equal($('companionImage').src,'/expressions/assets/'+image,'真实本轮回复图优先于待机图');
+  sandbox.companionPreviewSelected(sleep);
+  assert.equal($('companionImage').src,'/expressions/assets/'+image,'图库手选不能替换真实回复图');
+  let resolve;const delayed=new Promise(r=>resolve=r);
+  sandbox.api=async(url,method)=>{requests.push({url,method});return delayed;};
+  const loading=sandbox.refreshCompanionArtwork();
+  const replacement='f'.repeat(64);
+  sandbox.receiveCompanionCatalog({assets:[{id:replacement,legacyTags:['平静']}]});
+  resolve(library);await loading;
+  sandbox.receiveCompanionStatus({displayState:{version:1,state:'standby',name:'测试同伴'}});
+  assert.equal($('companionImage').src,'/expressions/assets/'+replacement,'旧GET回包不覆盖较新的图库');
+  sandbox.receiveCompanionCatalog({assets:[]});
+  assert.equal($('companionImage').hidden,true);assert.match($('companionFace').textContent,/暂无可用图片/);
+  sandbox.api=async(url,method)=>{requests.push({url,method});throw Error('offline');};
+  await sandbox.refreshCompanionArtwork();const afterFailure=requests.length;
+  sandbox.setCompanionVisible(true);sandbox.drawCompanion();
+  assert.equal(requests.length,afterFailure,'失败不每秒自动重试');
+  assert.match($('companionArtworkSource').textContent,/读取失败/);
+  assert.ok(requests.every(r=>r.url==='/expressions'&&!r.method),'仅GET图库，不调用模型、QQ或设备');
+  console.log('WXXZ display UI checks passed: automatic shared-library defaults, purpose guards, real-reply priority, instant demo linking, bounded GETs/stale-library guards, safe pagination and lifecycle status.');
+})().catch(e=>{console.error(e);process.exitCode=1;});

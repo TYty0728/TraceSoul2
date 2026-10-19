@@ -66,6 +66,7 @@ namespace TraceSoul2.Plugins.Builtin
                 return new PluginEventData
                 {
                     PluginId = Descriptor.PluginId,
+                    Type = MomentTypes.Message, SourcePlatform = "console",
                     ExternalEventId = Guid.NewGuid().ToString("N"),
                     Role = string.IsNullOrWhiteSpace(role) ? "user" : role.Trim(),
                     Content = content.Trim(),

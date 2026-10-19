@@ -1,6 +1,34 @@
 # JEV 决策路由与后续接口
 
-当前发布：0.1.46 已包含统一主模型和 JEV 配置槽。TypeSafe Jev / OpenAI Decisions 原生协议、高频调度和实际决策执行仍待实现；下方早期“未发布”为当时验证记录。
+2026-10-16 后续实现：原生 Decisions 客户端与 WebUI 供应商、JEV 选择、直连/中转、显式代理及单次测试已加入源码并验证；尚未发布或替换运行实例。当前可配置和联调，WXXZ Moment 准入及自动调度仍未实现。操作见 [原生配置](JEV_PROVIDER_SETUP.md)，下方“原生尚未实现”保留为此前状态记录。
+
+2026-10-16 主链修订见 [WXXZ 与统一 Moment](WXXZ_MOMENT_FLOW.md)：JEV 在背景感知候选落 Moment 前判定，明确对话直接进入；WebUI 拟新增原生 Decisions 协议并修正槽位筛选；WXXZ/QQ 按本轮来源输出，共用拼接逻辑与不同场景 Prompt。此接入尚未实现，现有配置槽不等于已运行准入器。
+
+当前发布：0.1.46 已包含统一主模型和 JEV 配置槽。现已部署 OpenRouter 决策中转，并提供独立 Python 联调客户端；Host 内的原生协议适配、高频调度和实际决策执行仍待实现。下方早期“未发布”为当时验证记录。
+
+## 已部署：OpenRouter 专用中转（2026-10-15）
+
+后续真实联调：用户提供 Key 后，Jev 1.14 经中转完成三个模拟场景，依次选择等待、补充观察、交给主模型，choice/noul/score 校验全部通过；总耗时 0.644～0.908 秒，三次响应报告费用合计 USD 0.000088662。GPT Decisions 首次及一次诊断请求均返回上游 403（provider Terms Of Service），具体访问限制原因未确定，停止重试。没有真实场景数据、动作执行或定时调度；样本不足以评价长期质量。详见[首次真实联调](../Tools/DecisionRelay/README.md#首次真实联调2026-10-15)。下段“未使用真实 Key”为部署当时记录。
+
+用户确认直接使用新加坡服务器中转。现有 Nginx 新增 HTTPS 专用路径：`POST /tracesoul/decisions` 固定转发到 OpenRouter `/api/alpha/decisions`，`GET /tracesoul/models` 获取 `output_modalities=decisions` 模型列表。原 New API 路由与服务保持正常，没有升级容器或修改渠道。
+
+入口使用独立中转凭据，决策请求额外携带调用端的 OpenRouter Bearer Key；中转凭据不会转发给上游。这条路径使用 OpenRouter 账号额度，不使用 New API 令牌或计费。已启用上游证书校验、固定 Host/SNI、限流、并发/请求体/超时上限，禁止 POST 自动重试。实际入口、私密连接文件和恢复备份位置记在工作区本机运行记录，密钥不进入仓库。
+
+[独立客户端与操作说明](../Tools/DecisionRelay/README.md)使用原生 `state/questions → answers` 协议，支持 choice、noul、score 校验和两种候选模型选择。该客户端不执行模型动作，尚未接入 Host 供应商页面、JEV 槽、定时调度或感官采集，不能把当前中转地址直接作为普通聊天接口使用。
+
+验证：`nginx -t` 与平滑 reload 成功；外网 HTTPS 证书校验通过，模型发现包含 `typesafe/jev-1.14` 与 `openai/gpt-6-luna-decisions`；无中转凭据 403、错误方法 405、未知路径 404、超限请求 413，伪造 OpenRouter Key 得到上游 JSON 401；原 New API 状态仍正常。客户端 11 项测试及通过真实中转获取模型列表均通过。未使用真实 OpenRouter Key，付费推理、账号权限、延迟与决策质量尚未验证。
+
+## 新加坡中转只读核对（2026-10-15）
+
+用户授权通过 SSH 检查现有 New API。实机运行 `calciumion/new-api:latest`，镜像标签及 `/api/status` 均为 `v1.0.0-rc.24`，镜像 revision `5c3abffe8572aa8a49f15c3916707d2019d66af4`；`latest` 标签不代表已经拉取最新镜像。
+
+对本机监听的 New API 发送无凭据、空 JSON 的 POST：`/v1/chat/completions` 返回 401，`/v1/decisions`、`/api/alpha/decisions`、`/v1/systemone` 均返回 404 Invalid URL。[对应版本路由源码](https://github.com/QuantumNous/new-api/blob/5c3abffe8572aa8a49f15c3916707d2019d66af4/router/relay-router.go)也未注册这些决策路由，当前部署不能仅靠手填模型名接通。
+
+在该服务器上实际 GET OpenRouter 默认模型列表及 `?output_modalities=decisions`，两者均为 HTTP 200；默认列表未返回目标决策模型，后者返回 `typesafe/jev-1.14`、`typesafe/jev-1.13`、`~typesafe/jev-latest` 与 `openai/gpt-6-luna-decisions`。默认响应只含文本模型的规则见 [OpenRouter Models](https://openrouter.ai/docs/guides/overview/models)。这验证网络与模型发现，不代表已验证账号权限或付费推理。
+
+只读核对时 Nginx 已启用 HTTPS，并代理到 New API 的本机端口，尚无决策路径；后续经用户确认已完成上述专用中转。无需另写服务端转发应用，TraceSoul Host 仍须实现 Decisions 请求/结果适配。需要多用户独立令牌、模型白名单与配额管理时，再考虑专门网关。
+
+此前只读核对阶段未读取渠道密钥/数据库，未修改配置、拉取镜像、重启服务或发送真实模型推理请求。SSH 连接凭据仅在内存使用，不进入源码或文档。
 
 2026-10-10：本次范围是独立路由及后续接口设计。工具调用、是否拍照和 Agent 输出契约尚未迁移，配置 JEV 不会新增运行时模型请求。
 
@@ -58,6 +86,8 @@
 
 ## 后续设计：高频轻量检查与按需深入处理
 
+2026-10-15 在真实联调后形成 [首版决策契约草案](JEV_DECISION_CONTRACT.md)：关注事项 + 有效事实 + 回执作为输入，首版每轮一个原生 choice，从具体候选中选择等待、补充观察或唤起主模型。该文尚待讨论，不代表实现或用户已经确认所有细节；下面早期自由 JSON 输出建议以该草案中的原生答案与服务器元数据分离为后续方向。
+
 以下类型、参数与调度均待实现。用户明确的节奏是静息约 300 秒、专注约 30 秒；精确预算与接口是实施建议。
 
 ```text
@@ -104,11 +134,7 @@
 
 ### 最小结果与权威边界
 
-候选接口为 `IJevAttentionPlanner.DecideAsync(JevAttentionRequest, CancellationToken)`。输入由服务器绑定环境、上下文版本和本轮有效的观察引用，输出仅包含 `step: wait / observe / engage_main`、短原因、证据引用，以及 `observe` 时的已提供观察 ID。例如：
-
-```json
-{"step":"wait","reason":"用户仍在专注工作，没有需要处理的新变化。","evidence_refs":["obs-7"],"observation_id":null}
-```
+早期候选接口为 `IJevAttentionPlanner.DecideAsync(JevAttentionRequest, CancellationToken)`，尚未实现。原生协议明确后，不再要求模型生成带 reason/evidence_refs 的自由 JSON；建议由原生 `answers.next_step.choice` 选择本轮具体候选，服务器绑定环境、相关状态版本、来源引用和具体观察参数。完整输入输出与关注事项见 [首版决策契约草案](JEV_DECISION_CONTRACT.md)。
 
 `observe` 仅能请求当前会话已允许的补充观察，不自动开启已关闭的摄像头或麦克风，不发送文字/语音；`engage_main` 只提交一次核心处理请求，不直接代写回复、人格、记忆或任意系统提示。程序核对引用、能力、上下文版本、请求有效期和已处理事件，执行后登记真实回执。主模型继续拥有完整的思考、行动与表达能力；不把它缩减成润色器，也不让两个模型同时决定同一动作。
 

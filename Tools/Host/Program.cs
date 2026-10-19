@@ -481,13 +481,28 @@ app.MapPut("/plugins/{id}/config", async (SoulRuntime runtime, string id, Plugin
     catch (InvalidOperationException exception) { return Results.BadRequest(new { error = exception.Message }); }
 });
 
-app.MapGet("/moments", (SoulRuntime runtime, int? take) =>
+app.MapGet("/moments/catalog", (SoulRuntime runtime) => Results.Json(new
+{
+    types = MomentTypes.All.Select(type => new { id = type, label = MomentTypes.Label(type) }),
+    platforms = runtime.Store.GetMomentPlatforms().Concat(new[] { "console", "qq", "wxxz", "robot" }).Distinct()
+        .Select(platform => new { id = platform, label = MomentTypes.PlatformLabel(platform) })
+}));
+
+app.MapGet("/moments", (SoulRuntime runtime, int? take, string source, string type, string platform) =>
 {
     var pair = runtime.Store.LoadPairIdentity();
-    return Results.Json(runtime.Store.GetRecentMoments(runtime.ConversationId, take ?? 40).Select(x => new
+    var scope = source == "wxxz" ? runtime.Wxxz.ContextConversationId : runtime.ConversationId;
+    var rows = source == "all" ? runtime.Store.GetMomentFeed(Math.Clamp(take ?? 40, 1, 100), type, platform)
+        : runtime.Store.GetRecentMoments(scope ?? "wxxz:not-connected", Math.Clamp(take ?? 40, 1, 100));
+    return Results.Json(rows.Select(x => new
     {
         x.Id,
-        role = pair.LabelForRole(x.Role),
+        role = EnvironmentLogic.MomentSpeaker(x, pair),
+        x.Type,
+        typeLabel = MomentTypes.Label(x.Type),
+        x.SourcePlatform,
+        platformLabel = MomentTypes.PlatformLabel(x.SourcePlatform),
+        x.ParentMomentId,
         x.Content,
         x.SourcePluginId,
         x.CreatedUnixMs
@@ -508,6 +523,71 @@ app.MapPost("/moments", async (SoulRuntime runtime, MomentWrite body, Cancellati
 {
     var turn = await runtime.PostMomentAsync(body.content, token);
     return Results.Json(new { turn.Reply, turn.BrainMode, turn.BrainIntent, turn.DecisionSummary });
+});
+
+// Dashboard-authenticated, same-origin simulator. No device-supplied routing/owner claims.
+app.MapGet("/wxxz", (SoulRuntime runtime) => Results.Json(runtime.Wxxz.Status()));
+app.MapGet("/expressions", (SoulRuntime runtime) => Results.Json(runtime.Expressions.Catalog()));
+app.MapPost("/expressions/reload", async (SoulRuntime runtime,CancellationToken token) =>
+    Results.Json(await runtime.ExclusiveAsync(()=>runtime.ReloadExpressions(),token)));
+app.MapPost("/expressions/preview", async (SoulRuntime runtime,ExpressionQuery body,CancellationToken token) =>
+    Results.Json(await runtime.Expressions.MatchAsync(body,token)));
+app.MapPut("/expressions/assets/{id}/semantics", async (SoulRuntime runtime,string id,ExpressionSemanticsWrite body,CancellationToken token)=>
+    Results.Json(await runtime.ExclusiveAsync(()=>runtime.SaveExpressionSemantics(id,body.tags),token)));
+app.MapGet("/expressions/assets/{id}", (SoulRuntime runtime,string id,HttpContext context) => {
+    var image=runtime.Expressions.ReadImage(id);
+    context.Response.Headers.CacheControl="no-store";
+    context.Response.Headers["X-Content-Type-Options"]="nosniff";
+    return Results.File(image.bytes,image.contentType);
+});
+app.MapPut("/wxxz/wake", async (SoulRuntime runtime, WxxzAttention.Settings body, CancellationToken token) =>
+    Results.Json(await runtime.ExclusiveAsync(() => runtime.Wxxz.ConfigureWake(body), token)));
+app.MapPost("/wxxz/wake/preview", (SoulRuntime runtime, SpeechTestWrite body) => Results.Json(runtime.Wxxz.PreviewWords(body?.text)));
+app.MapPost("/wxxz/wake/audio/prepare", async (SoulRuntime runtime, CancellationToken token) =>
+    Results.Json(await runtime.Wxxz.PrepareWakeAudioAsync(token)));
+app.MapPost("/wxxz/attention/preview",(SoulRuntime runtime,WxxzAttentionPreviewWrite body)=>
+    Results.Json(runtime.Wxxz.PreviewAttention(body.text,body.focused,body.speaker)));
+app.MapPost("/wxxz/diagnostics/clear",(SoulRuntime runtime)=>{
+    runtime.Wxxz.Diagnostics.Clear();return Results.Json(runtime.Wxxz.Status());
+});
+app.MapPost("/wxxz/monitor/start",async(SoulRuntime runtime,WxxzMomentWrite body,CancellationToken token)=>
+    Results.Json(await runtime.StartWxxzMonitorAsync(body.sessionId,body.wake,token)));
+app.MapPost("/wxxz/monitor/stop",async(SoulRuntime runtime,WxxzMomentWrite body)=>
+    Results.Json(await runtime.StopWxxzMonitorAsync(body.monitorId)));
+app.MapGet("/wxxz/speech/workbench", async (SoulRuntime runtime, HttpContext context, CancellationToken token) =>
+{
+    context.Response.Headers.CacheControl="no-store";
+    context.Response.Headers["Referrer-Policy"]="no-referrer";
+    return Results.Redirect(await runtime.Wxxz.OpenVoiceWorkbenchAsync(token));
+});
+app.MapPut("/wxxz/speech", async (SoulRuntime runtime, WxxzSpeech.Settings body, CancellationToken token) =>
+    Results.Json(await runtime.ExclusiveAsync(() => runtime.Wxxz.ConfigureSpeech(body), token)));
+app.MapPost("/wxxz/speech/test", async (SoulRuntime runtime, WxxzMomentWrite body, CancellationToken token) =>
+    Results.Json(await runtime.VoiceWxxzAsync("speech_test", body.sessionId, null, false, token)));
+app.MapPost("/wxxz/listen", async (SoulRuntime runtime, WxxzMomentWrite body, CancellationToken token) =>
+    Results.Json(await runtime.ListenWxxzAsync(body.sessionId, token)));
+app.MapPost("/wxxz/voice/enroll", async (SoulRuntime runtime, WxxzMomentWrite body, CancellationToken token) =>
+    Results.Json(await runtime.VoiceWxxzAsync("enroll", body.sessionId, null, body.restart, token, body.requestId, body.sampleNumber)));
+app.MapPost("/wxxz/voice/check", async (SoulRuntime runtime, WxxzMomentWrite body, CancellationToken token) =>
+    Results.Json(await runtime.VoiceWxxzAsync("check", body.sessionId, null, false, token, body.requestId)));
+// Progress must remain readable while a diagnostic holds the runtime gate.
+app.MapPost("/wxxz/voice/check/state", async (SoulRuntime runtime, WxxzMomentWrite body, CancellationToken token) =>
+    Results.Json(await runtime.Wxxz.CheckVoiceStateAsync(body.sessionId, body.requestId, token)));
+app.MapPost("/wxxz/call/start", async (SoulRuntime runtime, WxxzMomentWrite body, CancellationToken token) =>
+    Results.Json(await runtime.VoiceWxxzAsync("start", body.sessionId, null, false, token, wakeMode: body.wake)));
+app.MapPost("/wxxz/call/listen", async (SoulRuntime runtime, WxxzMomentWrite body, CancellationToken token) =>
+    Results.Json(await runtime.VoiceWxxzAsync("listen", body.sessionId, body.callId, false, token)));
+// Stop cannot queue behind the capture/runtime gate it is intended to cancel.
+app.MapPost("/wxxz/call/stop", async (SoulRuntime runtime, WxxzMomentWrite body, CancellationToken token) =>
+    Results.Json(await runtime.StopWxxzCallAsync(body.callId, token)));
+app.MapPost("/wxxz/session", async (SoulRuntime runtime, WxxzSessionWrite body, CancellationToken token) =>
+    Results.Json(await runtime.StartWxxzAsync(body.privateSession, token)));
+app.MapDelete("/wxxz/session", async (SoulRuntime runtime, CancellationToken token) =>
+    Results.Json(await runtime.DisconnectWxxzAsync(token)));
+app.MapPost("/wxxz/moments", async (SoulRuntime runtime, WxxzMomentWrite body, CancellationToken token) =>
+{
+    var turn = await runtime.PostWxxzAsync(body.content, body.sessionId, body.requestId, token, body.captureId);
+    return Results.Json(new { turn.Reply, turn.BrainMode, turn.BrainIntent, turn.DecisionSummary, wxxz = runtime.Wxxz.Status() });
 });
 
 app.MapGet("/providers", (SoulRuntime runtime) =>
@@ -554,6 +634,10 @@ app.MapPut("/providers/{id}", (SoulRuntime runtime, string id, ProviderWrite bod
         baseUrl = body.baseUrl,
         model = body.model,
         apiKey = body.apiKey,
+        voice = body.voice,
+        decisionMode = body.decisionMode,
+        relayKey = body.relayKey,
+        clearRelayKey = body.clearRelayKey,
         temperature = body.temperature,
         topP = body.topP,
         maxTokens = body.maxTokens,
@@ -569,9 +653,20 @@ app.MapPut("/providers/{id}", (SoulRuntime runtime, string id, ProviderWrite bod
 
 app.MapPost("/providers/{id}/models", async (SoulRuntime runtime, string id, CancellationToken token) =>
 {
-    var client = runtime.Providers.CreateClient(id);
-    if (client == null) throw new InvalidOperationException("这个提供商还没有 API Key。");
-    var fetched = await client.ListModelsAsync(token);
+    IReadOnlyList<string> fetched;
+    if (LlmProviderCatalog.IsTts(runtime.Providers.Get(id)?.type))
+        fetched = await QwenTtsProvider.ListModelsAsync(runtime.Providers.Get(id), token);
+    else if (LlmProviderCatalog.IsDecisions(runtime.Providers.Get(id)?.type))
+    {
+        using var decision = runtime.Providers.CreateDecisionClient(id);
+        fetched = await decision.ListModelsAsync(token);
+    }
+    else
+    {
+        var client = runtime.Providers.CreateClient(id);
+        if (client == null) throw new InvalidOperationException("这个提供商还没有 API Key。");
+        fetched = await client.ListModelsAsync(token);
+    }
     var saved = runtime.Providers.MergeFetched(id, fetched);
     runtime.Emit("已获取 " + fetched.Count + " 个模型，已写入供应商「" + id + "」");
     return Results.Json(new
@@ -579,6 +674,33 @@ app.MapPost("/providers/{id}/models", async (SoulRuntime runtime, string id, Can
         models = fetched,
         configured = runtime.PublicProvider(saved)
     });
+});
+
+app.MapPost("/providers/{id}/speech-test", async (SoulRuntime runtime, string id, SpeechTestWrite body, CancellationToken token) =>
+{
+    // A browser-only preview: no Moment, main model, board output or saved voice mutation.
+    var provider = runtime.Providers.SpeechProvider(id);
+    var speech = WxxzSpeech.ForProvider(() => provider);
+    return Results.File(await speech.SynthesizeAsync(body?.text, token), "audio/wav");
+});
+
+app.MapGet("/providers/{id}/speech/workbench", async (SoulRuntime runtime, string id, HttpContext context, CancellationToken token) =>
+{
+    var provider = runtime.Providers.SpeechProvider(id);
+    var speech = WxxzSpeech.ForProvider(() => provider);
+    context.Response.Headers.CacheControl = "no-store";
+    context.Response.Headers["Referrer-Policy"] = "no-referrer";
+    return Results.Redirect(await speech.WorkbenchAsync(token));
+});
+
+app.MapPost("/providers/{id}/decision-test", async (SoulRuntime runtime, string id, DecisionTestWrite body, CancellationToken token) =>
+{
+    var provider = runtime.Providers.Get(id);
+    if (provider == null || string.IsNullOrWhiteSpace(body?.model) ||
+        !provider.models.Any(m => m.enabled && m.id == body.model))
+        return Results.BadRequest(new { error = "请选择该供应商已启用的决策模型。" });
+    using var client = runtime.Providers.CreateDecisionClient(id);
+    return Results.Json(await client.TestAsync(body.model, token));
 });
 
 app.MapPut("/providers/{id}/models", (SoulRuntime runtime, string id, ModelWrite body) =>
@@ -1228,6 +1350,25 @@ internal sealed class PairWrite
 internal sealed class FailureResumeWrite { public string key { get; set; } }
 internal sealed class CardWrite { public string body { get; set; } }
 internal sealed class EnabledWrite { public bool enabled { get; set; } }
+internal sealed class WxxzSessionWrite { public bool privateSession { get; set; } }
+internal sealed class WxxzMomentWrite
+{
+    public string monitorId { get; set; }
+    public bool wake { get; set; }
+    public int? sampleNumber { get; set; }
+    public string callId { get; set; }
+    public bool restart { get; set; }
+    public string captureId { get; set; }
+    public string content { get; set; }
+    public string sessionId { get; set; }
+    public string requestId { get; set; }
+}
+internal sealed class WxxzAttentionPreviewWrite
+{
+    public string text {get;set;}
+    public bool focused {get;set;}
+    public string speaker {get;set;}="owner";
+}
 internal sealed class PluginConfigWrite
 {
     public Dictionary<string, JsonElement> values { get; set; }
@@ -1310,6 +1451,10 @@ internal sealed class ProviderWrite
     public string baseUrl { get; set; }
     public string model { get; set; }
     public string apiKey { get; set; }
+    public string voice { get; set; }
+    public string decisionMode { get; set; }
+    public string relayKey { get; set; }
+    public bool clearRelayKey { get; set; }
     public float temperature { get; set; }
     public float topP { get; set; }
     public int maxTokens { get; set; }
@@ -1319,6 +1464,10 @@ internal sealed class ProviderWrite
     public bool thinkingEnabled { get; set; }
     public string reasoningEffort { get; set; }
 }
+
+internal sealed class DecisionTestWrite { public string model { get; set; } }
+internal sealed class SpeechTestWrite { public string text { get; set; } }
+internal sealed class ExpressionSemanticsWrite { public string[] tags { get; set; } }
 
 internal sealed class ModelWrite
 {

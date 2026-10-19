@@ -20,7 +20,13 @@ internal static partial class Program
     private static void Main(string[] args)
     {
         SQLitePCL.Batteries_V2.Init();
+        if(args.Contains("--expressions")){RunExpressionChecksAsync().GetAwaiter().GetResult();return;}
+        if(args.Length==4&&args[0]=="--expression-probe"){RunExpressionProbeAsync(args[1],args[2],args[3]).GetAwaiter().GetResult();return;}
+        if (args.Contains("--moment-semantics")) { RunMomentSemanticsChecksAsync().GetAwaiter().GetResult(); return; }
+        if (args.Contains("--qwen-tts")) { RunQwenTtsChecksAsync().GetAwaiter().GetResult(); return; }
+        if (args.Contains("--decisions")) { RunDecisionsChecksAsync().GetAwaiter().GetResult(); return; }
         if (args.Contains("--review-selection")) { RunReviewSelectionChecksAsync().GetAwaiter().GetResult(); return; }
+        if (args.Contains("--realtime-call")) { RunRealtimeCallChecksAsync().GetAwaiter().GetResult(); return; }
         if (args.Length == 2 && args[0] == "--startup-overview-host") { RunStartupOverviewHostCheckAsync(args[1]).GetAwaiter().GetResult(); return; }
         if (args.Length == 3 && args[0] == "--oct3-review-replay") { RunOct3ReviewReplay(args[1], args[2]); return; }
         if (args.Contains("--automatic-photo")) { RunAutomaticPhotoChecksAsync().GetAwaiter().GetResult(); return; }
@@ -61,11 +67,19 @@ internal static partial class Program
             Console.WriteLine("Inbound vision checks passed.");
             return;
         }
+        if (args.Contains("--wxxz")) { RunWxxzChecksAsync().GetAwaiter().GetResult(); return; }
+        if (args.Contains("--wxxz-board")) { RunWxxzChecksAsync(true).GetAwaiter().GetResult(); return; }
+        RunWxxzChecksAsync().GetAwaiter().GetResult();
+        RunMomentSemanticsChecksAsync().GetAwaiter().GetResult();
+        RunExpressionChecksAsync().GetAwaiter().GetResult();
+        RunDecisionsChecksAsync().GetAwaiter().GetResult();
+        RunQwenTtsChecksAsync().GetAwaiter().GetResult();
         RunExistenceChecksAsync().GetAwaiter().GetResult();
         RunReviewSelectionChecksAsync().GetAwaiter().GetResult();
         RunRuntimePresentationChecksAsync().GetAwaiter().GetResult();
         RunDayOverviewChecksAsync().GetAwaiter().GetResult();
         RunEnvironmentChecksAsync().GetAwaiter().GetResult();
+        RunRealtimeCallChecksAsync().GetAwaiter().GetResult();
         RunCognitionGraphChecks();
         RunAgentPromptChecksAsync().GetAwaiter().GetResult();
         RunAgentContractChecksAsync().GetAwaiter().GetResult();
@@ -657,6 +671,8 @@ internal static partial class Program
                 });
             }
 
+            using (var legacyRows = new SQLite.SQLiteConnection(path))
+                legacyRows.Execute("UPDATE moments SET Type=NULL,SourcePlatform=NULL WHERE Id IN ('legacy-time-event','legacy-image-receipt')");
             using (var reopened = new SqliteMemoryManager(path))
             {
                 var runtime = reopened.LoadOrCreateInnerRuntime(conversationId);

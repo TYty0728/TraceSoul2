@@ -9,6 +9,7 @@ public sealed class RealtimeCallPlugin : ITracePlugin
     private CallControlEndpoint? endpoint;
     private CallDialogueHub? dialogue;
     private TracePluginServices? services;
+    private Func<TraceTurnContext, string>? callContext;
     public TracePluginMetadataData Metadata { get; } = new()
     {
         Id = "realtime.call", DisplayName = "实时通话", Version = "0.2.0", Author = "TraceSoul2",
@@ -22,6 +23,10 @@ public sealed class RealtimeCallPlugin : ITracePlugin
         var accessToken = "";
         var conversationId = "tracesoul2";
         var idleSeconds = 120;
+        var requireVoiceprint = true;
+        var voiceprintThreshold = 0.65;
+        var speakerId = "voice-owner";
+        var privateCall = false;
         foreach (var path in new[]
         {
             context.PackageDirectory == null ? null : Path.Combine(context.PackageDirectory, "plugin.json"),
@@ -34,15 +39,27 @@ public sealed class RealtimeCallPlugin : ITracePlugin
             if (root.TryGetProperty("access_token", out var t)) accessToken = t.GetString() ?? "";
             if (root.TryGetProperty("conversation_id", out var c)) conversationId = c.GetString() ?? "";
             if (root.TryGetProperty("idle_timeout_seconds", out var i)) idleSeconds = i.GetInt32();
+            if (root.TryGetProperty("require_voiceprint", out var v)) requireVoiceprint = v.GetBoolean();
+            if (root.TryGetProperty("voiceprint_threshold", out var s)) voiceprintThreshold = s.GetDouble();
+            if (root.TryGetProperty("speaker_id", out var p)) speakerId = p.GetString() ?? "";
+            if (root.TryGetProperty("private_call", out var a)) privateCall = a.GetBoolean();
         }
         if (accessToken.Length != 0 && (accessToken.Length < 32 || accessToken.Length > 256 || accessToken.Any(char.IsWhiteSpace)))
             throw new InvalidOperationException("通话令牌必须为 32–256 个非空白字符。");
         if (string.IsNullOrWhiteSpace(conversationId) || conversationId.Length > 128)
             throw new InvalidOperationException("通话所属对话不能为空或超过 128 字符。");
         if (idleSeconds is < 15 or > 3600) throw new InvalidOperationException("通话空闲超时必须为 15–3600 秒。");
+        if (string.IsNullOrWhiteSpace(speakerId) || speakerId.Length > 128)
+            throw new InvalidOperationException("通话发言者标识须为 1–128 字符。");
         var registry = new RealtimeSessionRegistry();
-        dialogue = new CallDialogueHub(registry);
-        endpoint = new CallControlEndpoint(registry, conversationId, accessToken, TimeSpan.FromSeconds(idleSeconds), dialogue);
+        dialogue = new CallDialogueHub(registry, speakerId, privateCall);
+        var voiceprint = new VoiceprintGate(context.PluginDataDirectory == null ? null :
+            Path.Combine(context.PluginDataDirectory, "voiceprint.json"), requireVoiceprint, voiceprintThreshold);
+        endpoint = new CallControlEndpoint(registry, conversationId, accessToken, TimeSpan.FromSeconds(idleSeconds), dialogue, voiceprint);
+        callContext = turn => dialogue?.CanSpeak(turn) == true
+            ? "【持续通话】电话仍接通。安静不代表对方说了话，无需填补沉默。沿用已有主动联系安排，想开口时可通过通话自然问候或问对方在做什么；没有回应时不要连续追问。不能把背景声音推测成对方的活动。"
+            : "";
+        services.MindTurnPromptAppends.Add(callContext);
         context.AddWebSocketEndpoint(endpoint);
         context.AddBackgroundService(new CallInboxService(dialogue));
         context.AddCallable(new CallTextEffector(dialogue));
@@ -54,7 +71,8 @@ public sealed class RealtimeCallPlugin : ITracePlugin
             {
                 controlConfigured = endpoint?.Configured ?? false, controlConnections = endpoint?.ActiveConnections ?? 0,
                 activeSessions = registry.ActiveCount, audioReady = false, videoReady = false, dialogueReady = true,
-                audioMode = "external_asr_tts"
+                audioMode = "external_asr_tts", voiceprintRequired = voiceprint.Required,
+                voiceprintStatus = voiceprint.Status
             }
         });
         Metadata.Note = endpoint.Configured
@@ -65,6 +83,8 @@ public sealed class RealtimeCallPlugin : ITracePlugin
     public void Shutdown()
     {
         endpoint?.Dispose();
+        if (callContext != null) services?.MindTurnPromptAppends.Remove(callContext);
+        callContext = null;
         services?.Platforms.Unregister("realtime.call");
         dialogue = null;
     }
@@ -93,17 +113,21 @@ public sealed class RealtimeCallPlugin : ITracePlugin
             Id = "realtime.call.text.send", Kind = TraceContributionKindValues.Effector,
             DisplayName = "实时通话发言", Provides = "expression.realtime_call.text",
             Description = "把当前回复推送给通话客户端合成并播放；只有客户端确认播放的部分才进入语义记忆。",
+            WhenToUse = "当前电话接通时，可回应对方，也可在已有主动联系唤醒时自然开口。",
+            WhenNotToUse = "安静不需要填补，不从电视、杂音或被拒绝的语音推测对方说了什么。",
             Boundary = "实时通话｜自由文本（客户端负责 TTS）",
             BodyId = "realtime.call", BodyTier = BodyTierValues.App, Organ = BodyOrganValues.Text,
             ParametersJsonSchema = "{text:string}", HasExternalSideEffect = true
         };
 
         public bool IsAvailable(TraceTurnContext context) =>
-            context != null && dialogue.HasActive(context.ConversationId);
+            context != null && dialogue.CanSpeak(context);
 
         public async Task<TraceCapabilityResultData> ExecuteAsync(BrainCapabilityCallData call,
             TraceTurnContext context, CancellationToken cancellationToken)
         {
+            if (!dialogue.CanSpeak(context)) return new TraceCapabilityResultData
+                { Status = "failed", Summary = "当前通话目标或在场范围不匹配。" };
             var text = call.GetArgument("text").Trim();
             if (text.Length == 0) return new TraceCapabilityResultData { Status = "failed", Summary = "通话发言为空。" };
             try

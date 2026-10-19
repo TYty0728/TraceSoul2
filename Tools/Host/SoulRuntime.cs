@@ -51,6 +51,8 @@ namespace TraceSoul2.Host
         public SqliteMemoryManager Store { get; private set; }
         public TracePluginManager Plugins { get; private set; }
         public LlmProviderStore Providers { get; private set; }
+        public WxxzPlatform Wxxz { get; private set; }
+        public WxxzVoiceMonitor WxxzMonitor { get; private set; }
         public int HistoryWindowMax { get; private set; }
         public int HistoryWindowAlign { get; private set; }
         public int HistoryWindowMin { get; private set; }
@@ -107,8 +109,24 @@ namespace TraceSoul2.Host
                     Path.GetDirectoryName(PluginsDirectory) ?? PluginsDirectory,
                     "plugins_data");
             PluginsDataDirectory = Path.GetFullPath(pluginsDataDirectory);
+            try { services.Expressions = CreateExpressionLibrary(); }
+            catch { Emit("共享表情库未载入，请检查情绪词表和图片索引；不影响普通对话。"); }
             Directory.CreateDirectory(PluginsDirectory);
             Directory.CreateDirectory(PluginsDataDirectory);
+            try { Providers.ImportLocalVoice(Path.Combine(PluginsDataDirectory, "local-voice", "config.json")); }
+            catch (Exception e) when (e is IOException or UnauthorizedAccessException or JsonException or InvalidOperationException or KeyNotFoundException)
+            { Emit("本地千问供应商未自动迁移，请在大脑 · LLM中配置；原凭据文件保留。"); }
+            Wxxz = new WxxzPlatform(voiceprintPath: Path.Combine(DataDirectory, "wxxz", "owner-voiceprint.json"),
+                speech: new WxxzSpeech(Path.Combine(DataDirectory, "wxxz", "speech.json"),
+                    Path.Combine(PluginsDataDirectory, "qq-tts", "config.json"),
+                    localConfigPath: Path.Combine(PluginsDataDirectory,"local-voice","config.json"),
+                    localProvider: () => Providers.SpeechProvider()));
+            Plugins.RegisterExternal(Wxxz);
+            WxxzMonitor=new WxxzVoiceMonitor(StartManagedWxxzCallAsync,ListenManagedWxxzAsync,ReplyManagedWxxzAsync,
+                async id=>{await Wxxz.StopCallAsync(id,CancellationToken.None);},
+                (phase,code,reason)=>Wxxz.Diagnostics.Add(phase,code,reason));
+            Wxxz.MonitorStatus=()=>WxxzMonitor.Status();
+            Wxxz.ManagedAdmissionAllowed=call=>WxxzMonitor.AdmissionAllowed(call);
             externalPlugins = new ExternalPluginLoader(PluginsDirectory, PluginsDataDirectory);
             externalPlugins.ScanAndLoad(Plugins, Emit);
             // 记忆神经已改造成新事件结构（event_indexes/event_entries），只读召回，强制启用
@@ -124,6 +142,19 @@ namespace TraceSoul2.Host
             Emit("host 已启动");
         }
 
+        private IExpressionLibrary CreateExpressionLibrary()=>new ExpressionLibrary(Path.Combine(AppContext.BaseDirectory,"emotion_tags.json"),
+            Path.Combine(PluginsDataDirectory,"qq-sticker"),Path.Combine(PluginsDirectory,"qq-sticker"),()=>liveServices.Embedding);
+        public IExpressionLibrary Expressions => liveServices.Expressions??throw new InvalidOperationException("共享表情库尚未就绪，请检查词表和索引。");
+        public object ReloadExpressions()
+        {
+            var replacement=CreateExpressionLibrary(); // Preserve the old library if validation fails.
+            liveServices.Expressions=replacement;return replacement.Catalog();
+        }
+        public object SaveExpressionSemantics(string id,string[] tags)
+        {
+            var replacement=((ExpressionLibrary)Expressions).WithSemanticTags(id,tags);
+            liveServices.Expressions=replacement;return replacement.Catalog();
+        }
         public object SetHistoryWindow(int max, int align)
         {
             if (align <= 0)
@@ -580,7 +611,123 @@ namespace TraceSoul2.Host
             };
         }
 
-        public async Task<ChatTurnResultData> PostMomentAsync(string text, CancellationToken cancellationToken)
+        public Task<ChatTurnResultData> PostMomentAsync(string text, CancellationToken cancellationToken) =>
+            PostInputAsync(text, null, null, cancellationToken);
+
+        public async Task<object> StartWxxzAsync(bool privateSession, CancellationToken token)
+        {
+            await gate.WaitAsync(token);
+            try
+            {
+                if (!Plugins.GetPlugins().Any(x => x.Id == WxxzPlatform.Id && x.Enabled))
+                    throw new InvalidOperationException("WXXZ 插件未启用。");
+                return await Wxxz.StartAsync(privateSession, token);
+            }
+            finally { gate.Release(); }
+        }
+
+        public Task<ChatTurnResultData> PostWxxzAsync(string text, string sessionId, string requestId, CancellationToken token, string captureId = null) =>
+            PostInputAsync(text, sessionId ?? "", requestId, token, captureId);
+
+        private async Task<string> StartManagedWxxzCallAsync(string session,bool wake,CancellationToken token)
+        {
+            await gate.WaitAsync(token);
+            try
+            {
+                if(!Plugins.GetPlugins().Any(x=>x.Id==WxxzPlatform.Id && x.Enabled)) throw new InvalidOperationException("WXXZ 插件未启用。");
+                Wxxz.ValidateCallStart(session,wake,background:true);
+            }
+            finally {gate.Release();}
+            // Pre-generation never captures or plays. Keep the Soul gate free during GPU work.
+            if(wake && Wxxz.ShouldPrepareWakeAudio) await Wxxz.PrepareWakeAudioAsync(token,monitorStarting:true);
+            await gate.WaitAsync(token);
+            try
+            {
+                if(!Plugins.GetPlugins().Any(x=>x.Id==WxxzPlatform.Id && x.Enabled)) throw new InvalidOperationException("WXXZ 插件未启用。");
+                var result=JsonSerializer.SerializeToElement(await Wxxz.StartCallAsync(session,token,wake,background:true));
+                return result.GetProperty("callId").GetString();
+            }
+            finally {gate.Release();}
+        }
+        private async Task<JsonElement> ListenManagedWxxzAsync(string session,string call,CancellationToken admissionToken,CancellationToken lifetimeToken)
+        {
+            // USB/VAD/ASR waits run outside the Soul gate. Stop still cancels the exact board listen ID.
+            admissionToken.ThrowIfCancellationRequested();
+            var capture=await Wxxz.CaptureCallAsync(session,call,lifetimeToken,background:true);
+            await gate.WaitAsync(admissionToken);
+            try
+            {
+                admissionToken.ThrowIfCancellationRequested();
+                if(!Plugins.GetPlugins().Any(x=>x.Id==WxxzPlatform.Id && x.Enabled)) throw new InvalidOperationException("WXXZ 插件未启用。");
+                return JsonSerializer.SerializeToElement(await Wxxz.CompleteCallAsync(capture,lifetimeToken));
+            }
+            finally {gate.Release();}
+        }
+        private async Task<bool> ReplyManagedWxxzAsync(string session,string call,string text,string capture,CancellationToken lifetimeToken)
+        {
+            var previous=Wxxz.DeliveryState();
+            var result=await PostInputAsync(text,session,Guid.NewGuid().ToString(),lifetimeToken,capture,call);
+            var delivered=Wxxz.DeliveryState();
+            return delivered.id!=previous.id ? delivered.display=="completed" && delivered.audio=="completed"
+                : string.IsNullOrWhiteSpace(result.Reply);
+        }
+        public async Task<object> StartWxxzMonitorAsync(string session,bool wake,CancellationToken token)
+        {
+            await WxxzMonitor.StartAsync(session,wake,token);
+            return Wxxz.Status();
+        }
+        public async Task<object> StopWxxzMonitorAsync(string expectedId)
+        {
+            await WxxzMonitor.StopAsync(expectedId);
+            return Wxxz.Status();
+        }
+        public async Task<object> StopWxxzCallAsync(string call,CancellationToken token)
+        {
+            var monitor=WxxzMonitor.Status();
+            if(monitor.active && monitor.callId==call) await WxxzMonitor.StopAsync(monitor.id);
+            else await Wxxz.StopCallAsync(call,token);
+            return Wxxz.Status();
+        }
+        public async Task<object> DisconnectWxxzAsync(CancellationToken token)
+        {
+            await WxxzMonitor.StopAsync();
+            await WxxzMonitor.WaitAsync(token);
+            return await ExclusiveAsync(()=>{Wxxz.Shutdown();return Wxxz.Status();},token);
+        }
+
+        public async Task<object> ListenWxxzAsync(string sessionId, CancellationToken token)
+        {
+            await gate.WaitAsync(token);
+            try
+            {
+                if (!Plugins.GetPlugins().Any(x => x.Id == WxxzPlatform.Id && x.Enabled))
+                    throw new InvalidOperationException("WXXZ 插件未启用。");
+                return await Wxxz.ListenAsync(sessionId, token);
+            }
+            finally { gate.Release(); }
+        }
+
+        public async Task<object> VoiceWxxzAsync(string action, string sessionId, string callId, bool restart, CancellationToken token, string requestId = null, int? sampleNumber = null, bool wakeMode = false)
+        {
+            await gate.WaitAsync(token);
+            try
+            {
+                if (!Plugins.GetPlugins().Any(x => x.Id == WxxzPlatform.Id && x.Enabled))
+                    throw new InvalidOperationException("WXXZ 插件未启用。");
+                return action switch
+                {
+                    "enroll" => await Wxxz.EnrollAsync(sessionId, restart, token, sampleNumber, requestId),
+                    "speech_test" => await Wxxz.TestSpeechAsync(sessionId, token),
+                    "check" => await Wxxz.CheckVoiceAsync(sessionId, requestId, token),
+                    "start" => await Wxxz.StartCallAsync(sessionId, token, wakeMode),
+                    "listen" => await Wxxz.ListenCallAsync(sessionId, callId, token),
+                    _ => throw new ArgumentException("无效的WXXZ语音请求。")
+                };
+            }
+            finally { gate.Release(); }
+        }
+
+        private async Task<ChatTurnResultData> PostInputAsync(string text, string wxxzSession, string requestId, CancellationToken cancellationToken, string captureId = null, string backgroundCall = null)
         {
             if (string.IsNullOrWhiteSpace(text))
                 throw new InvalidOperationException("Moment 内容不能为空。");
@@ -594,14 +741,26 @@ namespace TraceSoul2.Host
             EmitTiming(traceId, "本地对话接收，等待运行锁");
             ChatTurnResultData completed = null;
             KernelLogic.DeferredTurnWork deferred = null;
+            var wxxzAccepted = false;
             await gate.WaitAsync(cancellationToken);
             try
             {
                 EmitTiming(traceId, "本地对话取得运行锁", queueTimer.ElapsedMilliseconds);
                 var chat = new KernelLogic(Store, client, Plugins);
-                var result = await chat.ChatAsync(
-                    ConversationId, text.Trim(), "dialogue.receive",
-                    HistoryWindowMax, cancellationToken, traceId, HistoryWindowAlign);
+                ChatTurnResultData result;
+                if (wxxzSession == null)
+                    result = await chat.ChatAsync(ConversationId, text.Trim(), "dialogue.receive",
+                        HistoryWindowMax, cancellationToken, traceId, HistoryWindowAlign);
+                else
+                {
+                    if (!Plugins.GetPlugins().Any(x => x.Id == WxxzPlatform.Id && x.Enabled))
+                        throw new InvalidOperationException("WXXZ 插件未启用。");
+                    var source = Wxxz.Receive(wxxzSession, requestId, text, Store.LoadPairIdentity().Username, ConversationId, captureId,backgroundCall);
+                    wxxzAccepted = true;
+                    source.TraceId = traceId;
+                    result = await chat.ProcessPluginEventAsync(ConversationId, source, HistoryWindowMax,
+                        cancellationToken, HistoryWindowAlign);
+                }
                 deferred = chat.TakeDeferredWork();
                 Providers.Protection.ObserveTurnFailures(result);
                 LastTurn = result;
@@ -613,12 +772,13 @@ namespace TraceSoul2.Host
                 completed = result;
             }
             catch (OperationCanceledException) when (cancellationToken.IsCancellationRequested) { throw; }
+            catch (OperationCanceledException) when (backgroundCall!=null && !wxxzAccepted) { throw; }
             catch (Exception error)
             {
                 Providers.Protection.Report("dialogue", "对话处理", error);
                 throw;
             }
-            finally { gate.Release(); }
+            finally { if (wxxzAccepted) Wxxz.CompleteResponse(success:completed!=null); gate.Release(); }
             QueueDeferredTurn(deferred);
             return completed;
         }
@@ -907,7 +1067,10 @@ namespace TraceSoul2.Host
                 record.displayName,
                 record.baseUrl,
                 record.model,
+                record.voice,
                 hasApiKey = !string.IsNullOrWhiteSpace(record.apiKey),
+                decisionMode = record.decisionMode ?? "direct",
+                hasRelayKey = !string.IsNullOrWhiteSpace(record.relayKey),
                 record.temperature,
                 record.topP,
                 record.maxTokens,
@@ -1113,6 +1276,7 @@ namespace TraceSoul2.Host
         {
             if (disposed) return;
             disposed = true;
+            WxxzMonitor?.Dispose();
             try { deferredTurns.Writer.TryComplete(); } catch { /* ignored */ }
             try { maintenanceTurns.Writer.TryComplete(); } catch { /* ignored */ }
             try { deferredCts.Cancel(); } catch { /* ignored */ }
@@ -1121,6 +1285,7 @@ namespace TraceSoul2.Host
             deferredCts.Dispose();
             try { externalPlugins?.Dispose(); } catch { /* ignored */ }
             Plugins.Dispose();
+            Wxxz.Dispose();
             Store.Dispose();
             vectorStore.Dispose();
             if (encoder != null) encoder.Dispose();

@@ -24,6 +24,11 @@ namespace TraceSoul2.Data
         [Indexed]
         public string ConversationId { get; set; }
         public string Role { get; set; }
+        [Indexed]
+        public string Type { get; set; }
+        [Indexed]
+        public string SourcePlatform { get; set; }
+        public string ParentMomentId { get; set; }
         public string Content { get; set; }
         public string Realm { get; set; }
         public string EvidenceType { get; set; }

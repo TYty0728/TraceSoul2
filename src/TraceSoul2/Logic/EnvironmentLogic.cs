@@ -43,6 +43,7 @@ namespace TraceSoul2.Logic
 
         public static bool IsPublic(TraceTurnContext turn) => turn?.Environment?.Visibility == "public";
         public static bool IsHumanInput(TraceTurnContext turn) => turn?.Moment != null &&
+            !MomentTypes.IsObservation(turn.Moment.Type) &&
             turn.Services.Storage.LoadPairIdentity().IsHumanMoment(turn.Moment.Role);
 
         public static EnvironmentSnapshotData Resolve(IMemoryStore store, string root, PluginEventData source)
@@ -68,7 +69,8 @@ namespace TraceSoul2.Logic
             var id = platform + ":" + observation.AccountId + ":" + observation.SessionType + ":" + observation.SessionId;
             if (string.IsNullOrWhiteSpace(observation.SessionId)) id = platform + ":unknown:" + (source.ExternalEventId ?? Guid.NewGuid().ToString("N"));
             var rootId = Read<EnvironmentSnapshotData>(store.LoadPluginDocument(StoreId, "target:" + root))?.RootConversationId ?? root;
-            var scope = isPrivate ? rootId : rootId + ":environment:" +
+            // WXXZ shares the subject, but keeps its raw dialogue separate from QQ/console.
+            var scope = isPrivate && platform != "wxxz" ? rootId : rootId + ":environment:" +
                 Convert.ToHexString(SHA256.HashData(Encoding.UTF8.GetBytes(id))).Substring(0, 24).ToLowerInvariant();
             return new EnvironmentSnapshotData
             {
@@ -108,11 +110,24 @@ namespace TraceSoul2.Logic
 
         public static string PublicDialogue(MomentRecord moment)
         {
+            if (moment.Role == MomentTypes.PerceptionRole || MomentTypes.IsObservation(moment.Type))
+                return "[感知 · " + MomentTypes.PlatformLabel(moment.SourcePlatform) + "] " + MomentTypes.ForPrompt(moment);
             var environment = FromMoment(moment);
             var speaker = moment.Role == "assistant" ? "我" :
                 string.IsNullOrWhiteSpace(environment?.SpeakerName) ? "参与者" : environment.SpeakerName;
             var id = moment.Role == "assistant" ? "" : environment?.SpeakerId;
             return "[" + speaker + (string.IsNullOrWhiteSpace(id) ? "" : " · " + id) + "] " + (moment.Content ?? "").Trim();
+        }
+
+        public static string MomentSpeaker(MomentRecord moment, PairIdentity pair)
+        {
+            if (moment.Role == MomentTypes.PerceptionRole || MomentTypes.IsObservation(moment.Type)) return "感知";
+            if (moment.MemoryVisibility == "public" && pair.IsHumanMoment(moment.Role))
+            {
+                var name = FromMoment(moment)?.SpeakerName;
+                return string.IsNullOrWhiteSpace(name) ? "参与者" : name;
+            }
+            return pair.LabelForRole(moment.Role);
         }
 
         public static EnvironmentSnapshotData FromMoment(MomentRecord moment) => Read<EnvironmentSnapshotData>(moment?.EnvironmentJson);
@@ -129,6 +144,9 @@ namespace TraceSoul2.Logic
             if (IsPublic(turn) && descriptor?.SupportsPublicEnvironment != true) return false;
             if (turn?.Environment == null || descriptor == null || descriptor.Kind != TraceContributionKindValues.Effector ||
                 descriptor.Id == "dialogue.print") return true;
+            // A physical-body turn cannot fall through to QQ tools/media (or vice versa).
+            if (turn.Environment.PlatformId == "wxxz" || MouthLogic.BodyOf(descriptor) == "wxxz")
+                return turn.Environment.AudienceConfirmed && MouthLogic.BodyOf(descriptor) == MouthLogic.BodyOfPlugin(turn.Environment.PlatformId);
             if (!IsPublic(turn) && MouthLogic.OrganOf(descriptor) is not (BodyOrganValues.Text or BodyOrganValues.Voice or BodyOrganValues.Image or BodyOrganValues.Sticker)) return true;
             var body = MouthLogic.BodyOf(descriptor);
             if (string.IsNullOrWhiteSpace(body)) return true;

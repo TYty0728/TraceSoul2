@@ -98,9 +98,95 @@ internal static partial class Program
                         MomentId = id, SnapshotJson = TraceJson.ToJson(new { today = "原始事件标记" + i, inner = "变化" + i }) });
                 }
             }
+            var longDraft = "不要回传的超长草稿" + new string('长', 113); // 122字，复现现场边界。
+            string Nominations(int count, params int[] longItems) => TraceJson.ToJson(new {
+                events = Enumerable.Range(1, count).Select(i => new {
+                    summary = longItems.Contains(i) ? longDraft : "已合格事件目录" + i,
+                    source_ids = new[] { "s" + i } }).ToList() });
+            string Rewrite(params string[] ids) => TraceJson.ToJson(new {
+                summaries = ids.Select(id => new { id, summary = "重写后的必要变化" + id }).ToList() });
+
+            Seed("nomination-repair", "nomination-repair", 24);
+            var nominationRepair = new AgentSequenceLlm(Nominations(8, 6), Nominations(6, 6), Rewrite("e6"),
+                "{\"summary\":\"少数重要事件的当天回望。\"}");
+            Require(longDraft.Length == 122 &&
+                await RuntimeSliceLogic.ReviewDayAsync(store, nominationRepair, "nomination-repair", day) == 24 &&
+                nominationRepair.Requests.Count == 4 && nominationRepair.Requests[1].Contains("1～6项") &&
+                !nominationRepair.Requests[1].Contains(longDraft) &&
+                nominationRepair.Requests[2].Contains("【事件提名短句重写】") &&
+                nominationRepair.Requests[2].Contains("nomination-repair-5｜") &&
+                !nominationRepair.Requests[2].Contains("nomination-repair-0｜") &&
+                !nominationRepair.Requests[2].Contains(longDraft) &&
+                !nominationRepair.Requests[2].Contains("已合格事件目录1") &&
+                nominationRepair.Requests[3].Contains("已合格事件目录1") &&
+                nominationRepair.Requests[3].Contains("重写后的必要变化e6") &&
+                !nominationRepair.Requests[3].Contains(longDraft) &&
+                store.GetRuntimeDaySummaries("nomination-repair", day).Count == 1,
+                "8件纠正为6件后122字条目只单独重写一次，合格目录与来源保留，完整原件不截断");
+
+            Seed("nomination-resume", "nomination-resume", 13);
+            var tooLong = TraceJson.ToJson(new { summaries = new[] { new { id = "e1", summary = longDraft } } });
+            var shortFailure = new AgentSequenceLlm(Nominations(2, 1), tooLong);
+            var failed = false;
+            try { await RuntimeSliceLogic.ReviewDayAsync(store, shortFailure, "nomination-resume", day); }
+            catch (InvalidOperationException error) { failed = error.Message.Contains("122字") && error.Message.Contains("检查点"); }
+            Require(failed && shortFailure.Requests.Count == 2 &&
+                store.GetRuntimeSlices("nomination-resume", day, true).Count == 13 &&
+                store.GetRuntimeDayReviews("nomination-resume", day).Count == 0,
+                "短句重写仍超120字立即停止，不追加循环请求或将不合格提名标成完成");
+            using (var reopened = new SqliteMemoryManager(path))
+            {
+                var resumeShort = new AgentSequenceLlm(Rewrite("e1"), "{\"summary\":\"恢复后的一篇回望。\"}");
+                Require(await RuntimeSliceLogic.ReviewDayAsync(reopened, resumeShort, "nomination-resume", day) == 13 &&
+                    resumeShort.Requests.Count == 2 && resumeShort.Requests[0].Contains("【事件提名短句重写】") &&
+                    resumeShort.Requests[1].Contains("已合格事件目录2"),
+                    "重启复用结构合格的提名检查点，只补写超长短句及成稿，不重新选择整批事件");
+            }
+
+            Seed("nomination-multiple", "nomination-multiple", 13);
+            var multipleShort = new AgentSequenceLlm(Nominations(3, 1, 3), Rewrite("e3", "e1"),
+                "{\"summary\":\"多条短句一并修好。\"}");
+            Require(await RuntimeSliceLogic.ReviewDayAsync(store, multipleShort, "nomination-multiple", day) == 13 &&
+                multipleShort.Requests.Count == 3 && multipleShort.Requests[1].Contains("nomination-multiple-0｜") &&
+                multipleShort.Requests[1].Contains("nomination-multiple-2｜") &&
+                !multipleShort.Requests[1].Contains("nomination-multiple-1｜") &&
+                multipleShort.Requests[2].Contains("已合格事件目录2"),
+                "多条超长短句合为一次请求，乱序返回按稳定编号更新，未超长条目保持原样");
+
+            var badRewrites = new[] { "{}", "{", Rewrite("e2"), Rewrite("e1", "e1"),
+                "{\"summaries\":[{\"id\":\"e1\",\"summary\":\"\"}]}", tooLong };
+            for (var i = 0; i < badRewrites.Length; i++)
+            {
+                var scope = "nomination-invalid-" + i;
+                Seed(scope, scope, 13);
+                var badRewrite = new AgentSequenceLlm(Nominations(1, 1), badRewrites[i]);
+                failed = false;
+                try { await RuntimeSliceLogic.ReviewDayAsync(store, badRewrite, scope, day); }
+                catch (InvalidOperationException) { failed = true; }
+                Require(failed && badRewrite.Requests.Count == 2 && store.GetRuntimeSlices(scope, day, true).Count == 13 &&
+                    store.GetRuntimeDayReviews(scope, day).Count == 0,
+                    "短句重写缺项、语法失败、未知或重复编号、空正文及持续超长均不提交且只调用一次");
+            }
+
+            Seed("nomination-cancel", "nomination-cancel", 13);
+            using (var cancellation = new CancellationTokenSource())
+            {
+                var cancelRewrite = new SelectionProbeLlm { Reply = messages => {
+                    if (!messages[0].content.Contains("【事件提名短句重写】")) return Nominations(1, 1);
+                    cancellation.Cancel();
+                    return Rewrite("e1");
+                } };
+                var wasCanceled = false;
+                try { await RuntimeSliceLogic.ReviewDayAsync(store, cancelRewrite, "nomination-cancel", day, cancellation.Token); }
+                catch (OperationCanceledException) { wasCanceled = true; }
+                Require(wasCanceled && cancelRewrite.Requests.Count == 2 &&
+                    store.GetRuntimeSlices("nomination-cancel", day, true).Count == 13 &&
+                    store.GetRuntimeDayReviews("nomination-cancel", day).Count == 0,
+                    "短句重写后取消继续向上传播，不保存为合格提名或发布成稿");
+            }
             Seed("resume", "resume", 81);
             var broken = new AgentSequenceLlm(Nominate("s1", "s2"), Nominate("s1"), "{}", "{}");
-            var failed = false;
+            failed = false;
             try { await RuntimeSliceLogic.ReviewDayAsync(store, broken, "resume", day); }
             catch (InvalidOperationException) { failed = true; }
             Require(failed && broken.Requests.Count == 4 && store.GetRuntimeSlices("resume", day, true).Count == 81 &&

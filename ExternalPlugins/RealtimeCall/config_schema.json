@@ -3,6 +3,10 @@
   "fields": [
     { "key": "access_token", "label": "客户端连接令牌", "type": "password", "description": "Unity/QQ 音频网关通过 Authorization: Bearer 请求头连接；不把令牌放进链接。" },
     { "key": "conversation_id", "label": "所属对话", "type": "string", "description": "由服务端绑定，客户端不能任意选择其他对话。" },
-    { "key": "idle_timeout_seconds", "label": "空闲断连秒数", "type": "number", "min": 15, "max": 3600, "default": 120, "description": "客户端应每 30 秒以内 ping。" }
+    { "key": "idle_timeout_seconds", "label": "连接失联超时秒数", "type": "number", "min": 15, "max": 3600, "default": 120, "description": "与说话无关；客户端每 10 秒 ping，静音不会结束通话。" },
+    { "key": "require_voiceprint", "label": "只接收本人声音", "type": "bool", "default": true, "description": "默认开启。需先录入声纹并升级音频网关；未录入或校验失败的转写不进入聊天。" },
+    { "key": "voiceprint_threshold", "label": "声纹相似度门槛", "type": "number", "min": 0.4, "max": 0.95, "default": 0.65, "description": "越高越严格，也更容易漏掉轻声或短句。0.65 为待实录校准的初值，不是准确率。" },
+    { "key": "speaker_id", "label": "录入者标识", "type": "string", "default": "voice-owner", "description": "在宿主本人账号中绑定平台 realtime.call 和此标识，才能沿用私密记忆；声纹不自动授予本人权限。" },
+    { "key": "private_call", "label": "确认仅本人私密通话", "type": "bool", "default": false, "description": "确认受众只有本人时开启。未确认或未绑定本人账号时，插件不输出私密回复。" }
   ]
 }

@@ -244,6 +244,7 @@ Check(dialogueRegistry.ActiveCount == 0 && dialogueHub.ActiveSessions == 0 && di
 Check(dialogueHub.TakeInbound().Single().Content == "甲乙", "disconnect archives only played prefix");
 
 // Isolated loopback Kestrel exercises the actual endpoint, not the user's Host or QQ.
+await VoiceprintChecks.Run(Check);
 const string accessToken = "test-only-0123456789abcdefghijklmn";
 var socketRegistry = new RealtimeSessionRegistry();
 using var endpoint = new CallControlEndpoint(socketRegistry, "test", accessToken, TimeSpan.FromSeconds(5));
@@ -310,6 +311,12 @@ using (var client = await Connect(uri))
 }
 using (var client = await Connect(new Uri(address.Replace("http://", "ws://") + "/idle")))
 {
+    for (var sequence = 1; sequence <= 8; sequence++)
+    {
+        await Send(client, JsonSerializer.Serialize(new { seq = sequence, op = "ping" }));
+        Check(Read(await Receive(client)).GetProperty("ok").GetBoolean(), "silent socket alive through keepalive");
+        await Task.Delay(50, deadline.Token);
+    }
     try { await Receive(client); throw new InvalidOperationException("idle connection stayed open"); }
     catch (WebSocketException) { Check(true, "idle connection aborted"); }
 }

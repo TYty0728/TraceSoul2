@@ -23,7 +23,8 @@ namespace TraceSoul2.Logic
             CancellationToken cancellationToken,
             string promptCacheKey = null,
             Func<T, string> validationError = null,
-            Action<T, IReadOnlyCollection<string>> onParsed = null)
+            Action<T, IReadOnlyCollection<string>> onParsed = null,
+            bool includeInvalidResponse = true)
             where T : class
         {
             var raw = await client.CompleteJsonAsync(messages, cancellationToken, promptCacheKey);
@@ -46,7 +47,7 @@ namespace TraceSoul2.Logic
                 ? "上一份写得太长，没有写完。按原篇幅筛掉不重要的，重新输出更短的完整 JSON。不要继续上一份，不要逐条复述输入。"
                 : DescribeFailure(firstError, typeof(T));
             var repair = new List<DeepSeekMessageData>(messages);
-            if (!runaway)
+            if (!runaway && includeInvalidResponse)
                 repair.Add(new DeepSeekMessageData("assistant", Limit(raw, 16000)));
             var lengthOverrun = IsLengthOverrun(firstError);
             repair.Add(new DeepSeekMessageData(

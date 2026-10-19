@@ -56,17 +56,15 @@ namespace TraceSoul2.Plugins.Builtin
             if (string.IsNullOrWhiteSpace(nickname)) nickname = JsonText.ExtractString(platformPayload, "card");
 
             var content = BuildMessageText(platformPayload);
-            var prefix = sessionType == "group"
-                ? "[QQ·群" + sessionId + "·" + nickname + "(" + userId + ")] "
-                : "[QQ·私聊" + (string.IsNullOrWhiteSpace(nickname) ? string.Empty : " " + nickname) + "] ";
 
             return new PluginEventData
             {
                 PluginId = PlatformId,
+                Type = MomentTypes.Message, SourcePlatform = "qq",
                 Environment = ReadEnvironment(platformPayload),
                 ExternalEventId = JsonText.ExtractLong(platformPayload, "message_id").ToString(),
                 Role = "user",
-                Content = prefix + content,
+                Content = content,
                 Realm = TraceRealmValues.SharedScene,
                 EvidenceType = EvidenceTypeValues.DialogueExplicit,
                 Organ = MouthLogic.ClassifyInboundOrgan(content),

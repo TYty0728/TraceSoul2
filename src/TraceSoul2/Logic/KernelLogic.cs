@@ -133,6 +133,11 @@ namespace TraceSoul2.Logic
                 throw new ArgumentException("conversationId 不能为空。", "conversationId");
             if (source == null || string.IsNullOrWhiteSpace(source.Content))
                 throw new ArgumentException("Moment 内容不能为空。", "source");
+            if (!string.IsNullOrWhiteSpace(source.Type))
+            {
+                source.Type = MomentTypes.Normalize(source.Type);
+                if (MomentTypes.IsObservation(source.Type)) source.Role = MomentTypes.PerceptionRole;
+            }
             if (string.IsNullOrWhiteSpace(source.TraceId))
                 source.TraceId = Guid.NewGuid().ToString("N").Substring(0, 8);
             var totalTimer = Stopwatch.StartNew();
@@ -197,11 +202,12 @@ namespace TraceSoul2.Logic
                     new List<TraceCapabilityResultData>());
             }
 
+            string visualObservation = null;
             if (VisionLogic.HasInboundImages(source.PayloadJson))
             {
                 var visionTimer = Stopwatch.StartNew();
                 var seen = await VisionLogic.SeeInboundAsync(source, plugins.Services, cancellationToken);
-                source.Content = VisionLogic.AttachSeen(source.Content, seen);
+                visualObservation = seen;
                 var visionStage = seen == CorePrompts.Vision.LoadFailed ? "识图未成功" :
                     seen == CorePrompts.Vision.Unconfigured ? "识图未配置" : "识图完成";
                 plugins.Services.LogTiming(source.TraceId, visionStage, visionTimer.ElapsedMilliseconds,
@@ -239,6 +245,20 @@ namespace TraceSoul2.Logic
                 wake == KernelWakeValues.Dialogue && pair.IsHumanMoment(source.Role) && environment.DirectAddress,
                 plugins.Services,
                 environment, wake, source.TraceId, historyWindow.Align);
+            if (!string.IsNullOrWhiteSpace(visualObservation))
+            {
+                if (visualObservation == CorePrompts.Vision.LoadFailed || visualObservation == CorePrompts.Vision.Unconfigured)
+                    turn.Workspace.ObservationStatus = visualObservation;
+                else
+                    turn.Workspace.Observations.Add(PersistPluginEvent(conversationId, new PluginEventData
+                    {
+                        PluginId = source.PluginId, Type = MomentTypes.Sight, Role = MomentTypes.PerceptionRole,
+                        ExternalEventId = (source.ExternalEventId ?? triggerMoment.Id) + ":vision", ParentMomentId = triggerMoment.Id,
+                        Content = visualObservation, Realm = source.Realm, EvidenceType = EvidenceTypeValues.PluginObserved,
+                        OccurredUnixMs = triggerMoment.CreatedUnixMs, TraceId = source.TraceId,
+                        PayloadJson = TraceSoul2.Util.TraceJson.ToJson(new { parent_moment_id = triggerMoment.Id, observation = "image_recognition" })
+                    }, environment));
+            }
             onPrepared(turn);
             SubjectRuntimeLogic.Begin(turn);
             MouthLogic.NoticeInbound(source, turn);
@@ -260,6 +280,7 @@ namespace TraceSoul2.Logic
             BrainStructuredOutputData final;
             MindDecisionData mindDecision = null;
             TraceCapabilityResultData expression = null;
+            turn.Workspace.ExpressionMatch=null;
             var responseFlushed = false;
 
             if (KernelWakeLogic.IsSubconscious(wake))
@@ -603,6 +624,16 @@ namespace TraceSoul2.Logic
                 final.expression_capability_id = replyChannel;
             }
             TraceCapabilityResultData expression = null;
+            if(plugins.Services.Expressions!=null && !string.IsNullOrWhiteSpace(final.reply))
+            {
+                try
+                {
+                    turn.Workspace.ExpressionMatch=await plugins.Services.Expressions.MatchAsync(new ExpressionQuery {
+                        text=final.reply,mood=SubjectRuntimeLogic.View(turn).Mood??string.Empty },cancellationToken);
+                }
+                catch(OperationCanceledException) {throw;}
+                catch {plugins.Services.LogTiming(turn.TraceId,"表情匹配未完成",0,"未使用随机表情，不影响正文表达。");}
+            }
             if (!string.IsNullOrWhiteSpace(final.expression_capability_id))
             {
                 var expressionCall = new BrainCapabilityCallData
@@ -1568,7 +1599,7 @@ namespace TraceSoul2.Logic
             var total = storage.CountDialogueMoments(conversationId);
             var triggerIsDialogue = triggerMoment != null &&
                                     (pair.IsHumanMoment(triggerMoment.Role) ||
-                                     pair.IsCompanionMoment(triggerMoment.Role));
+                                     pair.IsCompanionMoment(triggerMoment.Role) || MomentTypes.IsPerception(triggerMoment.Type));
             if (triggerIsDialogue) total = Math.Max(0, total - 1);
             var take = CommonContextPackLogic.AlignedWindowTake(total, min, align);
             if (take <= 0) return new List<MomentRecord>();
@@ -1576,7 +1607,7 @@ namespace TraceSoul2.Logic
             return storage.GetRecentDialogueMoments(conversationId, take + extra)
                 .Where(x => x != null &&
                             (triggerMoment == null || x.Id != triggerMoment.Id) &&
-                            (pair.IsHumanMoment(x.Role) || pair.IsCompanionMoment(x.Role)))
+                            (pair.IsHumanMoment(x.Role) || pair.IsCompanionMoment(x.Role) || MomentTypes.IsPerception(x.Type)))
                 .TakeLast(take)
                 .ToList();
         }
@@ -1597,6 +1628,8 @@ namespace TraceSoul2.Logic
         {
             var moment = ToMoment(conversationId, source);
             moment.EnvironmentJson = environment == null ? null : TraceSoul2.Util.TraceJson.ToJson(environment);
+            moment.SourcePlatform = MomentTypes.Platform(source.PluginId) == "system" ? "system" :
+                MomentTypes.Platform(environment?.PlatformId ?? source.Environment?.PlatformId ?? source.SourcePlatform ?? source.PluginId);
             moment.MemoryVisibility = environment?.Visibility ?? "private";
             if (!source.IsOperational)
             {
@@ -1649,6 +1682,9 @@ namespace TraceSoul2.Logic
                 Id = Guid.NewGuid().ToString("N"),
                 ConversationId = conversationId.Trim(),
                 Role = source.Role,
+                Type = source.Type,
+                SourcePlatform = source.SourcePlatform,
+                ParentMomentId = source.ParentMomentId,
                 Content = source.Content,
                 Realm = source.Realm,
                 EvidenceType = source.EvidenceType,

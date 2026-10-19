@@ -1,0 +1,46 @@
+<!doctype html>
+<html lang="zh-CN">
+<meta charset="utf-8"><meta name="viewport" content="width=device-width,initial-scale=1">
+<title>TraceSoul · 屏幕预览</title>
+<style>
+*{box-sizing:border-box}body{margin:0;background:#eff1ec;color:#293d3c;font:15px/1.7 system-ui,sans-serif}main{max-width:980px;margin:40px auto;padding:24px}h1{font-size:29px;letter-spacing:-1px;margin:4px 0 8px}p{color:#78857e;margin:8px 0 26px}.eyebrow{color:#718c7d;font-size:12px;letter-spacing:2px}.grid{display:grid;grid-template-columns:minmax(300px,1fr) 352px;gap:44px;align-items:start}.card{padding:24px;border:1px solid #dce2d6;border-radius:20px;background:#fafbf7}label{display:block;margin-bottom:15px;font-size:13px;color:#687b70}input,select,textarea{display:block;width:100%;margin-top:6px;padding:11px 12px;border:1px solid #d7ded1;border-radius:10px;background:#fff;color:#293d3c;font:inherit;font-size:15px;line-height:1.6}textarea{font:15px/1.7 system-ui;resize:vertical;min-height:126px}button{padding:10px 15px;border:1px solid #c8d5c5;border-radius:10px;background:#e2ebdd;color:#395646;cursor:pointer;font:inherit}button:disabled{opacity:.4;cursor:default}.row{display:flex;gap:12px;align-items:center;justify-content:space-between}small{color:#839083;font-size:12px}.device{padding:16px;border-radius:28px;background:#35433e;box-shadow:0 18px 50px #33412d20;width:352px}#screen{display:block;width:320px;height:480px;border-radius:14px;background:#f7f7f2}#result{font-size:12px;min-height:48px;color:#6e7e70;margin-top:16px}.note{border-left:3px solid #9bb194;padding-left:16px;margin-top:24px;color:#6e7e70;font-size:13px}.pager{margin-top:18px}.pager button{background:transparent;padding:6px 10px}input[type=range]{padding:0}.screen-caption{text-align:center;margin-top:18px;font-size:12px;color:#7f8b80}@media(max-width:760px){main{margin:12px auto}.grid{display:flex;flex-direction:column-reverse;align-items:center;gap:24px}.card{width:100%}h1{font-size:25px}}@media(prefers-reduced-motion:reduce){*{scroll-behavior:auto}}
+</style>
+<style>[hidden]{display:none!important}</style>
+<main><div class="eyebrow">TRACESOUL / BODY DISPLAY</div><h1>把陪伴，放到屏幕上。</h1><p>角色表情、当前状态和字幕。按开发板原生320×480渲染。</p>
+<div class="grid"><section><div class="card">
+<label>角色名字<input id="name" maxlength="32" value="小汐"></label>
+<label>预览状态<select id="state"><option value="standby">发呆中</option><option value="focused">我在呢 · 30秒专注</option><option value="listening">正在听你说</option><option value="thinking">让我想一想</option><option value="speaking" selected>说给你听</option><option value="paused">休息一下</option><option value="offline">连接断开</option><option value="error">遇到一点问题</option></select></label>
+<label id="remainingLabel" hidden>模拟注意力剩余时间：<span id="seconds">30</span>秒<input id="remaining" type="range" min="0" max="30" value="30"></label>
+<label>字幕内容<textarea id="subtitle" maxlength="500">嗯，我在呢。
+你慢慢说，我听着。</textarea></label>
+<div class="row"><button id="render">更新预览</button><small id="count">0 / 500字</small></div>
+<div id="result" role="status" aria-live="polite">正在生成画面……</div>
+</div><div class="note">纯电脑预览，不连接开发板、不采音、不播放，也不调用模型。这里的状态由你手动选择，不代表设备的真实状态。<br>字幕固定20像素，长句分成多页，可逐页检查；当前没有接入自动翻页或真实通话状态。</div></section>
+<section><div class="device"><img id="screen" alt="320×480板端画面预览"></div><div class="row pager"><button id="prev" disabled>上一页</button><small id="page">1 / 1</small><button id="next" disabled>下一页</button></div><div class="screen-caption">电脑生成的画面 · 不是实体屏幕拍摄</div></section></div></main>
+<script>
+const $=id=>document.getElementById(id);
+let currentPage=0,totalPages=1,sequence=0,timer=null;
+async function render(){
+ const requestId=++sequence;
+ $('remainingLabel').hidden=$('state').value!=='focused';$('seconds').textContent=$('remaining').value;
+ $('count').textContent=`${Array.from($('subtitle').value).length} / 500字`;
+ $('result').textContent='正在生成画面……';$('prev').disabled=true;$('next').disabled=true;
+ try{
+  const response=await fetch('/api/display/preview',{method:'POST',headers:{'Content-Type':'application/json'},body:JSON.stringify({state:$('state').value,name:$('name').value,subtitle:$('subtitle').value,page:currentPage,remaining:Number($('remaining').value)})});
+  const data=await response.json();if(requestId!==sequence)return;
+  if(!response.ok||!data.ok)throw Error(data.error||'预览失败');
+  totalPages=data.display.page_count;currentPage=data.display.page;
+  $('screen').src='data:image/png;base64,'+data.preview;
+  $('page').textContent=`${currentPage+1} / ${totalPages}`;
+  $('result').textContent=`画面已生成 · 320×480 · 字幕20px · 共${totalPages}页。没有发送到开发板。`;
+  $('prev').disabled=currentPage===0;$('next').disabled=currentPage+1>=totalPages;
+ }catch(error){if(requestId===sequence)$('result').textContent='未更新画面：'+error.message;}
+}
+function changed(){currentPage=0;sequence++;clearTimeout(timer);timer=setTimeout(render,240);}
+for(const id of ['name','subtitle','remaining'])$(id).addEventListener('input',changed);
+$('state').addEventListener('change',changed);
+$('render').onclick=()=>{clearTimeout(timer);currentPage=0;void render();};
+$('prev').onclick=()=>{if(currentPage>0){currentPage--;void render();}};
+$('next').onclick=()=>{if(currentPage+1<totalPages){currentPage++;void render();}};
+void render();
+</script></html>

@@ -63,6 +63,8 @@ KernelLogic → 保存输入 / 判断唤醒类型 / 识图 / 记忆预激活
 
 ## 数据与部署边界
 
+- Moment以独立Type与SourcePlatform表示经历种类与来源，Role/证据/Environment各守原职责。新识图为关联原消息的观察行，语音正文不拼标签；见[统一Moment](../MOMENT_SEMANTICS.md)。管理后台统一浏览，模型历史仍按原环境隔离。
+
 长期拼图围绕他/user、世界/world、我/ass、我和他/relation 四领域关联；runtime 保留当下状态。`ContextRecallAdapter` 已通过 `MemoryRecallLogic` 接入预激活与按需查询，`SqliteCognitionGraph` 管理证据和修订，`CognitionFormationLogic` 校验日构建可见证据。身份由共同投影视图加载，夜间回望保留主观痕迹并参与有界召回，执行仍看真实设备回执。能力和预算见 [四领域拼图](../COGNITION_PUZZLE.md)。
 
 - 主 SQLite：对话 Moment、运行事件、内心、身份、事实与索引等；向量 SQLite 由 `SqliteVectorManager` 管理。

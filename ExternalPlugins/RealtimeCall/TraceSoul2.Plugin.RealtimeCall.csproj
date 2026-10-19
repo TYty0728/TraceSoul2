@@ -10,5 +10,6 @@
     <ProjectReference Include="../../Tools/PluginApi/TraceSoul2.PluginApi.csproj" Private="false" PrivateAssets="all" />
     <None Update="plugin.json" CopyToOutputDirectory="PreserveNewest" />
     <None Update="config_schema.json" CopyToOutputDirectory="PreserveNewest" />
+    <None Update="gateway/**/*.py;gateway/requirements.txt;README.md" CopyToOutputDirectory="PreserveNewest" CopyToPublishDirectory="PreserveNewest" />
   </ItemGroup>
 </Project>

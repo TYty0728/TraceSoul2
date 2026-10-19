@@ -36,6 +36,24 @@ assert.equal(nodes.slotJev.value, '', '旧配置显示未指定');
 assert.match(nodes.slotJev.innerHTML, /p\|\|chat/);
 assert.match(nodes.slotJev.innerHTML, /p\|\|decision/);
 assert.doesNotMatch(nodes.slotJev.innerHTML, /disabled|picture/);
+vm.runInContext(`providerCache.push({ id: 'native', type: 'openrouter_decisions', displayName: 'Native', models: [
+  { id: 'jev-native', enabled: true, roles: ['jev'] },
+  { id: 'stale-roles', enabled: true, roles: ['chat', 'image'] },
+  { id: 'native-off', enabled: false, roles: ['jev'] }
+] });`, sandbox);
+sandbox.renderSlots();
+assert.match(nodes.slotJev.innerHTML, /native\|\|jev-native/);
+assert.doesNotMatch(nodes.slotJev.innerHTML, /native-off/);
+for (const name of ['Chat', 'Review', 'Multimodal', 'Speech', 'Image'])
+  assert.doesNotMatch(nodes['slot' + name].innerHTML, /native\|\|/, '原生决策不能出现在非 JEV 槽');
+assert.match(nodes.slotJev.innerHTML, /聊天协议，旧配置/);
+vm.runInContext(`providerCache.push({id:'qwen', type:'qwen_tts', models:[
+  {id:'qwen3-tts-local',enabled:true,roles:['speech','chat','jev','image','multimodal']}
+]});`, sandbox);
+sandbox.renderSlots();
+assert.match(nodes.slotSpeech.innerHTML, /qwen\|\|qwen3-tts-local/);
+for (const name of ['Chat', 'Jev', 'Review', 'Multimodal', 'Image'])
+  assert.doesNotMatch(nodes['slot' + name].innerHTML, /qwen\|\|/, '千问TTS即使残留错误用途也不能进入非语音槽');
 
 (async () => {
   nodes.slotJev.value = 'p||decision';

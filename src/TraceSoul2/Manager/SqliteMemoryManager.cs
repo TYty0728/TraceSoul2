@@ -49,8 +49,27 @@ namespace TraceSoul2.Manager
                 moment.Role = moment.MemoryVisibility == "public"
                     ? (pair.IsHumanMoment(moment.Role) ? "user" : pair.IsCompanionMoment(moment.Role) ? "assistant" : moment.Role)
                     : pair.CanonicalMomentRole(moment.Role);
+            moment.Type = MomentTypes.InferType(moment, pair.IsCompanionMoment(moment.Role), pair.IsHumanMoment(moment.Role));
+            moment.SourcePlatform = MomentTypes.InferPlatform(moment);
             connection.Insert(moment);
         }
+
+        public List<MomentRecord> GetMomentFeed(int take, string type = null, string platform = null)
+        {
+            if (take <= 0) return new List<MomentRecord>();
+            if (!string.IsNullOrWhiteSpace(type)) type = MomentTypes.Normalize(type);
+            if (!string.IsNullOrWhiteSpace(platform)) platform = MomentTypes.Platform(platform);
+            var query = connection.Table<MomentRecord>().Where(x => x.MemoryStatus == null || x.MemoryStatus != "operational");
+            if (!string.IsNullOrWhiteSpace(type)) query = query.Where(x => x.Type == type);
+            if (!string.IsNullOrWhiteSpace(platform)) query = query.Where(x => x.SourcePlatform == platform);
+            return query.OrderByDescending(x => x.CreatedUnixMs).Take(Math.Min(200, take)).ToList()
+                .OrderBy(x => x.CreatedUnixMs).ThenBy(x => string.IsNullOrEmpty(x.ParentMomentId) ? 0 : 1).ToList();
+        }
+
+        public List<string> GetMomentPlatforms() => connection.Query<MomentRecord>(
+            "SELECT DISTINCT SourcePlatform FROM moments WHERE SourcePlatform IS NOT NULL AND SourcePlatform!='' " +
+            "AND (MemoryStatus IS NULL OR MemoryStatus!='operational') ORDER BY SourcePlatform")
+            .Select(x => x.SourcePlatform).ToList();
 
         public void SaveOperationalEvent(OperationalEventRecord operationalEvent)
         {
@@ -973,6 +992,9 @@ namespace TraceSoul2.Manager
             EnsureColumn("event_indexes", "TimeUnixMs", "INTEGER");
             EnsureColumn("turn_reviews", "PayloadJson", "TEXT");
             EnsureColumn("moments", "MemoryStatus", "TEXT");
+            EnsureColumn("moments", "Type", "TEXT");
+            EnsureColumn("moments", "SourcePlatform", "TEXT");
+            EnsureColumn("moments", "ParentMomentId", "TEXT");
             EnsureColumn("inner_runtime", "Asleep", "INTEGER");
             EnsureColumn("inner_runtime", "Idle", "INTEGER");
             EnsureColumn("cognition_slices", "About", "TEXT");
@@ -980,7 +1002,34 @@ namespace TraceSoul2.Manager
             EnsureColumn("cognition_slices", "Exceptions", "TEXT");
             EnsureColumn("cognition_slices", "Strength", "REAL");
             ArchiveLegacyOperationalMoments();
+            BackfillMomentSemantics();
             DropRetiredActiveEventReadings();
+        }
+
+        private void BackfillMomentSemantics()
+        {
+            const string marker = "moment-semantics-v1";
+            if (LoadPluginDocument("kernel.upgrades", marker) == "done") return;
+            var pair = LoadPairIdentity();
+            connection.RunInTransaction(() =>
+            {
+                // Bounded pages, preserving the exact content, IDs, evidence and visibility of historical rows.
+                string after = null;
+                while (true)
+                {
+                    var rows = connection.Query<MomentRecord>(
+                        "SELECT * FROM moments WHERE (? IS NULL OR Id>?) ORDER BY Id LIMIT 500", after, after);
+                    if (rows.Count == 0) break;
+                    foreach (var row in rows)
+                    {
+                        var type = MomentTypes.InferType(row, pair.IsCompanionMoment(row.Role), pair.IsHumanMoment(row.Role));
+                        var platform = MomentTypes.InferPlatform(row);
+                        connection.Execute("UPDATE moments SET Type=?,SourcePlatform=? WHERE Id=?", type, platform, row.Id);
+                        after = row.Id;
+                    }
+                }
+                SavePluginDocument("kernel.upgrades", marker, "done");
+            });
         }
 
         /// <summary>0.1.35 曾把全部活跃事件收成一份阅读稿。这次升级删掉那份稿，只做一次；事件索引保留。</summary>
@@ -1004,7 +1053,7 @@ namespace TraceSoul2.Manager
             const string legacyWhere =
                 "((SourcePluginId='builtin.time' AND Role='system_event') OR " +
                 "(SourcePluginId='builtin.onebot' AND EvidenceType='ass_performed' AND " +
-                "(Content LIKE '[QQ %' OR Content LIKE '[CQ:%')))";
+                "(Content LIKE '[QQ %' OR Content LIKE '[CQ:%'))) AND (Type IS NULL OR Type='')";
             connection.RunInTransaction(() =>
             {
                 connection.Execute(

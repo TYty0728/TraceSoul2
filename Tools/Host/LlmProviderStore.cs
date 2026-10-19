@@ -57,11 +57,57 @@ namespace TraceSoul2.Host
             }
         }
 
+        /// <summary>One-time migration of the already paired local voice service; never overwrites user edits.</summary>
+        public void ImportLocalVoice(string configPath)
+        {
+            lock (gate)
+            {
+                if (data.localVoiceImported || !File.Exists(configPath)) return;
+                var existing = data.providers.FirstOrDefault(x => LlmProviderCatalog.IsTts(x.type));
+                if (existing == null)
+                {
+                    using var json = JsonDocument.Parse(File.ReadAllText(configPath));
+                    var url = json.RootElement.GetProperty("api_url").GetString() ?? "";
+                    const string suffix = "/audio/speech";
+                    if (!url.EndsWith(suffix, StringComparison.Ordinal))
+                        throw new InvalidOperationException("原本地千问地址无效，未迁移供应商。");
+                    existing = new LlmProviderRecord { id = UniqueId("qwen-local-tts"), type = LlmProviderCatalog.QwenTts,
+                        displayName = "本地千问 TTS", baseUrl = url[..^suffix.Length], model = "qwen3-tts-local",
+                        apiKey = json.RootElement.GetProperty("api_key").GetString(), voice = "character", timeout = 120 };
+                    QwenTtsProvider.Validate(existing, true);
+                    EnsureModel(existing, existing.model, LlmSlotNames.Speech);
+                    NormalizeProvider(existing);
+                    data.providers.Add(existing);
+                }
+                if (string.IsNullOrWhiteSpace(data.speech?.providerId))
+                    data.speech = new LlmSlotRef { providerId = existing.id, model = existing.model };
+                data.localVoiceImported = true;
+                SaveUnsafe();
+            }
+        }
+
+        public LlmProviderRecord SpeechProvider(string id = null)
+        {
+            lock (gate)
+            {
+                var slot = data.speech;
+                var item = Find(id ?? slot?.providerId);
+                if (item == null || !LlmProviderCatalog.IsTts(item.type))
+                    throw new InvalidOperationException("请在大脑 · LLM的语音槽选择本地千问TTS供应商。");
+                var result = Clone(item);
+                if (id == null && !string.IsNullOrWhiteSpace(slot?.model)) result.model = slot.model;
+                if (!item.models.Any(m => m.enabled && m.id == result.model))
+                    throw new InvalidOperationException("当前千问语音模型已停用或移除，请重新选择。");
+                QwenTtsProvider.Validate(result, true);
+                return result;
+            }
+        }
+
         public Dictionary<string, LlmSlotRef> Slots()
         {
             lock (gate)
             {
-                var chat = Find(data.currentId) ?? data.providers.FirstOrDefault();
+                var chat = FindChat();
                 var map = new Dictionary<string, LlmSlotRef>(StringComparer.OrdinalIgnoreCase)
                 {
                     [LlmSlotNames.Chat] = chat == null
@@ -83,12 +129,8 @@ namespace TraceSoul2.Host
             var id = string.IsNullOrWhiteSpace(incoming.id) ? "default" : incoming.id.Trim();
             lock (gate)
             {
-                var item = Find(id);
-                if (item == null)
-                {
-                    item = new LlmProviderRecord { id = id };
-                    data.providers.Add(item);
-                }
+                var previous = Find(id);
+                var item = previous == null ? new LlmProviderRecord { id = id } : Clone(previous);
                 item.type = LlmProviderCatalog.NormalizeType(
                     string.IsNullOrWhiteSpace(incoming.type) ? item.type : incoming.type);
                 item.displayName = string.IsNullOrWhiteSpace(incoming.displayName)
@@ -101,6 +143,7 @@ namespace TraceSoul2.Host
                     EnsureModel(item, item.model, LlmSlotNames.Chat);
                 }
                 if (!string.IsNullOrWhiteSpace(incoming.apiKey)) item.apiKey = incoming.apiKey.Trim();
+                if (incoming.voice != null) item.voice = incoming.voice.Trim();
                 if (incoming.temperature > 0) item.temperature = incoming.temperature;
                 if (incoming.topP > 0) item.topP = incoming.topP;
                 if (incoming.maxTokens > 0) item.maxTokens = incoming.maxTokens;
@@ -108,11 +151,34 @@ namespace TraceSoul2.Host
                 if (incoming.transientRetries >= 0)
                     item.transientRetries = Math.Max(0, Math.Min(2, incoming.transientRetries));
                 if (incoming.proxy != null) item.proxy = incoming.proxy.Trim();
+                if (incoming.decisionMode != null) item.decisionMode = incoming.decisionMode.Trim();
+                if (incoming.clearRelayKey) item.relayKey = null;
+                else if (!string.IsNullOrWhiteSpace(incoming.relayKey)) item.relayKey = incoming.relayKey.Trim();
                 item.thinkingEnabled = incoming.thinkingEnabled;
                 if (!string.IsNullOrWhiteSpace(incoming.reasoningEffort))
                     item.reasoningEffort = incoming.reasoningEffort.Trim();
-                if (string.IsNullOrWhiteSpace(data.currentId)) data.currentId = id;
+                if (LlmProviderCatalog.IsDecisions(item.type))
+                {
+                    if (incoming.baseUrl != null) item.baseUrl = incoming.baseUrl.Trim();
+                    DecisionsClient.ValidateConfiguration(item);
+                    if (string.Equals(data.currentId, id, StringComparison.OrdinalIgnoreCase) ||
+                        new[] { data.review, data.multimodal, data.image, data.speech }.Any(s =>
+                            string.Equals(s?.providerId, id, StringComparison.OrdinalIgnoreCase)))
+                        throw new InvalidOperationException("请先将该供应商从主模型及非 JEV 槽移除，再改为 Decisions 协议。");
+                }
+                if (LlmProviderCatalog.IsTts(item.type))
+                {
+                    if (string.Equals(data.currentId, id, StringComparison.OrdinalIgnoreCase) ||
+                        new[] { data.jev, data.review, data.multimodal, data.image }.Any(s =>
+                            string.Equals(s?.providerId, id, StringComparison.OrdinalIgnoreCase)))
+                        throw new InvalidOperationException("请先从非语音用途槽移除此供应商，再改为TTS协议。");
+                    if (string.IsNullOrWhiteSpace(item.voice)) item.voice = "character";
+                    QwenTtsProvider.Validate(item);
+                }
+                if (string.IsNullOrWhiteSpace(data.currentId) && LlmProviderCatalog.IsChat(item.type)) data.currentId = id;
                 NormalizeProvider(item);
+                if (previous == null) data.providers.Add(item);
+                else data.providers[data.providers.IndexOf(previous)] = item;
                 SaveUnsafe();
                 return Clone(item);
             }
@@ -141,6 +207,7 @@ namespace TraceSoul2.Host
                     timeout = 120,
                     transientRetries = 2
                 };
+                if (LlmProviderCatalog.IsTts(item.type)) item.voice = "character";
                 if (string.Equals(template.id, "moonshot", StringComparison.OrdinalIgnoreCase))
                 {
                     item.thinkingEnabled = true;
@@ -154,7 +221,8 @@ namespace TraceSoul2.Host
                 if (!string.IsNullOrWhiteSpace(item.model))
                     EnsureModel(item, item.model, LlmSlotNames.Chat);
                 data.providers.Add(item);
-                if (string.IsNullOrWhiteSpace(data.currentId)) data.currentId = item.id;
+                NormalizeProvider(item);
+                if (string.IsNullOrWhiteSpace(data.currentId) && LlmProviderCatalog.IsChat(item.type)) data.currentId = item.id;
                 SaveUnsafe();
                 return Clone(item);
             }
@@ -170,7 +238,7 @@ namespace TraceSoul2.Host
                     throw new InvalidOperationException("至少保留一个供应商。");
                 data.providers.Remove(item);
                 if (string.Equals(data.currentId, item.id, StringComparison.OrdinalIgnoreCase))
-                    data.currentId = data.providers[0].id;
+                    data.currentId = data.providers.FirstOrDefault(x => LlmProviderCatalog.IsChat(x.type))?.id ?? "";
                 ClearSlotIf(data.jev, item.id);
                 ClearSlotIf(data.review, item.id);
                 ClearSlotIf(data.multimodal, item.id);
@@ -187,6 +255,8 @@ namespace TraceSoul2.Host
             {
                 var item = Find(id);
                 if (item == null) throw new InvalidOperationException("没有这个语言模型提供商：" + id);
+                if (LlmProviderCatalog.IsDecisions(item.type)) throw new InvalidOperationException("Decisions 模型只能用于 JEV，不能设为聊天主模型。");
+                if (LlmProviderCatalog.IsTts(item.type)) throw new InvalidOperationException("千问TTS只能用于语音，不能设为聊天主模型。");
                 data.currentId = item.id;
                 if (!string.IsNullOrWhiteSpace(model))
                 {
@@ -216,6 +286,10 @@ namespace TraceSoul2.Host
                 {
                     var item = Find(providerId);
                     if (item == null) throw new InvalidOperationException("没有这个供应商：" + providerId);
+                    if (LlmProviderCatalog.IsDecisions(item.type) && slot != LlmSlotNames.Jev)
+                        throw new InvalidOperationException("Decisions 模型只能用于 JEV 槽。");
+                    if (LlmProviderCatalog.IsTts(item.type) && slot != LlmSlotNames.Speech)
+                        throw new InvalidOperationException("千问TTS只能用于语音槽。");
                     var chosen = string.IsNullOrWhiteSpace(model) ? item.model : model.Trim();
                     if (!string.IsNullOrWhiteSpace(chosen))
                         EnsureModel(item, chosen, slot);
@@ -272,6 +346,8 @@ namespace TraceSoul2.Host
                         .Distinct(StringComparer.OrdinalIgnoreCase)
                         .ToList();
                 }
+                if (LlmProviderCatalog.IsDecisions(item.type)) model.roles = new List<string> { LlmSlotNames.Jev };
+                if (LlmProviderCatalog.IsTts(item.type)) model.roles = new List<string> { LlmSlotNames.Speech };
                 if (string.IsNullOrWhiteSpace(item.model) && model.enabled)
                     item.model = model.id;
                 SaveUnsafe();
@@ -317,7 +393,11 @@ namespace TraceSoul2.Host
             lock (gate)
             {
                 var item = Find(id);
+                if (item != null && LlmProviderCatalog.IsTts(item.type))
+                    throw new InvalidOperationException("千问TTS使用语音合成协议，不能创建聊天客户端。");
                 if (item == null || string.IsNullOrWhiteSpace(item.apiKey)) return null;
+                if (LlmProviderCatalog.IsDecisions(item.type))
+                    throw new InvalidOperationException("此供应商使用原生 Decisions 协议，请使用决策客户端。");
                 var config = ToConfig(item, model, thinkingOverride);
                 if (review) config.Temperature = data.reviewTemperature ?? 0.2f;
                 if (LlmProviderCatalog.IsGeminiNative(item.type))
@@ -340,6 +420,28 @@ namespace TraceSoul2.Host
         {
             var endpoint = ResolveExplicitSlot(LlmSlotNames.Jev);
             return endpoint == null ? null : CreateClient(endpoint.ProviderId, endpoint.Model, null);
+        }
+
+        public DecisionsClient CreateDecisionClient(string providerId)
+        {
+            var item = Get(providerId);
+            if (item == null || !LlmProviderCatalog.IsDecisions(item.type))
+                throw new InvalidOperationException("请选择 OpenRouter Decisions 供应商。");
+            return new DecisionsClient(item);
+        }
+
+        public DecisionsClient CreateJevDecisionClient()
+        {
+            var slot = Slots()[LlmSlotNames.Jev];
+            if (string.IsNullOrWhiteSpace(slot.providerId)) return null;
+            var item = Get(slot.providerId);
+            if (item == null || !LlmProviderCatalog.IsDecisions(item.type))
+                throw new InvalidOperationException("当前 JEV 槽是旧聊天配置，请选择 OpenRouter Decisions。");
+            var model = string.IsNullOrWhiteSpace(slot.model) ? item.model : slot.model;
+            if (!item.models.Any(x => x.id == model && x.enabled))
+                throw new InvalidOperationException("当前 JEV 模型已停用或移除。");
+            item.model = model;
+            return new DecisionsClient(item);
         }
 
         /// <summary>复盘：指定槽则用该模型并关思考；未指定则用主模型关思考，避免推理模型把额度耗在 reasoning。</summary>
@@ -384,7 +486,7 @@ namespace TraceSoul2.Host
         {
             lock (gate)
             {
-                var item = Find(data.currentId) ?? data.providers.FirstOrDefault();
+                var item = FindChat();
                 return item == null ? null : ToConfig(item, null, null);
             }
         }
@@ -408,7 +510,7 @@ namespace TraceSoul2.Host
             {
                 if (string.Equals(slot, LlmSlotNames.Chat, StringComparison.OrdinalIgnoreCase))
                 {
-                    var chat = Find(data.currentId) ?? data.providers.FirstOrDefault();
+                    var chat = FindChat();
                     return chat == null || string.IsNullOrWhiteSpace(chat.apiKey)
                         ? null
                         : ToEndpoint(chat, chat.model);
@@ -417,12 +519,15 @@ namespace TraceSoul2.Host
                 if (refer != null && !string.IsNullOrWhiteSpace(refer.providerId))
                 {
                     var item = Find(refer.providerId);
+                    if (item != null && LlmProviderCatalog.IsTts(item.type) && slot != LlmSlotNames.Speech)
+                        throw new InvalidOperationException("千问TTS只能用于语音槽。");
                     if (item != null && !string.IsNullOrWhiteSpace(item.apiKey))
                         return ToEndpoint(item, string.IsNullOrWhiteSpace(refer.model) ? item.model : refer.model);
                 }
                 foreach (var provider in data.providers)
                 {
-                    if (provider == null || string.IsNullOrWhiteSpace(provider.apiKey)) continue;
+                    if (provider == null || LlmProviderCatalog.IsDecisions(provider.type) ||
+                        LlmProviderCatalog.IsTts(provider.type) && slot != LlmSlotNames.Speech || string.IsNullOrWhiteSpace(provider.apiKey)) continue;
                     NormalizeProvider(provider);
                     var match = provider.models.FirstOrDefault(x =>
                         x.enabled && LlmProviderCatalog.HasRole(x, slot));
@@ -439,7 +544,7 @@ namespace TraceSoul2.Host
             {
                 if (string.Equals(slot, LlmSlotNames.Chat, StringComparison.OrdinalIgnoreCase))
                 {
-                    var chat = Find(data.currentId) ?? data.providers.FirstOrDefault();
+                    var chat = FindChat();
                     return chat == null || string.IsNullOrWhiteSpace(chat.apiKey)
                         ? null
                         : ToEndpoint(chat, chat.model);
@@ -447,6 +552,8 @@ namespace TraceSoul2.Host
                 var refer = SlotOf(slot);
                 if (refer == null || string.IsNullOrWhiteSpace(refer.providerId)) return null;
                 var item = Find(refer.providerId);
+                if (item != null && LlmProviderCatalog.IsTts(item.type) && slot != LlmSlotNames.Speech)
+                    throw new InvalidOperationException("千问TTS只能用于语音槽。");
                 if (item == null || string.IsNullOrWhiteSpace(item.apiKey)) return null;
                 return ToEndpoint(item, string.IsNullOrWhiteSpace(refer.model) ? item.model : refer.model);
             }
@@ -458,6 +565,13 @@ namespace TraceSoul2.Host
             {
                 return data.providers.Select(ToBrief).ToList();
             }
+        }
+
+        private LlmProviderRecord FindChat()
+        {
+            var current = Find(data.currentId);
+            return current != null && LlmProviderCatalog.IsChat(current.type) ? current :
+                data.providers.FirstOrDefault(x => LlmProviderCatalog.IsChat(x.type));
         }
 
         private LlmProviderRecord Find(string id)
@@ -502,7 +616,7 @@ namespace TraceSoul2.Host
                 NormalizeProvider(item);
             }
             if (string.IsNullOrWhiteSpace(loaded.currentId))
-                loaded.currentId = loaded.providers[0].id;
+                loaded.currentId = loaded.providers.FirstOrDefault(x => LlmProviderCatalog.IsChat(x.type))?.id ?? "";
             if (loaded.thinking != null)
             {
                 // Preserve the model actually used by the old conditional route on upgrade.
@@ -526,7 +640,27 @@ namespace TraceSoul2.Host
 
         private void SaveUnsafe()
         {
-            File.WriteAllText(path, JsonSerializer.Serialize(data, JsonOptions));
+            var temporary = path + "." + Guid.NewGuid().ToString("N") + ".tmp";
+            try
+            {
+                using (File.Create(temporary)) { }
+                if (OperatingSystem.IsWindows())
+                {
+                    var security = new System.Security.AccessControl.FileSecurity();
+                    security.SetAccessRuleProtection(true, false);
+                    security.AddAccessRule(new System.Security.AccessControl.FileSystemAccessRule(
+                        System.Security.Principal.WindowsIdentity.GetCurrent().User,
+                        System.Security.AccessControl.FileSystemRights.FullControl, System.Security.AccessControl.AccessControlType.Allow));
+                    security.AddAccessRule(new System.Security.AccessControl.FileSystemAccessRule(
+                        new System.Security.Principal.SecurityIdentifier(System.Security.Principal.WellKnownSidType.LocalSystemSid, null),
+                        System.Security.AccessControl.FileSystemRights.FullControl, System.Security.AccessControl.AccessControlType.Allow));
+                    new FileInfo(temporary).SetAccessControl(security);
+                }
+                else File.SetUnixFileMode(temporary, UnixFileMode.UserRead | UnixFileMode.UserWrite);
+                File.WriteAllText(temporary, JsonSerializer.Serialize(data, JsonOptions));
+                File.Move(temporary, path, true);
+            }
+            finally { if (File.Exists(temporary)) File.Delete(temporary); }
         }
 
         private static LlmProviderRecord DefaultProvider()
@@ -561,12 +695,25 @@ namespace TraceSoul2.Host
                     .ToList();
                 if (model.roles.Count == 0)
                     model.roles = LlmProviderCatalog.GuessRoles(model.id);
+                if (LlmProviderCatalog.IsDecisions(item.type)) model.roles = new List<string> { LlmSlotNames.Jev };
+                if (LlmProviderCatalog.IsTts(item.type)) model.roles = new List<string> { LlmSlotNames.Speech };
             }
             if (item.models.Count == 0 && !string.IsNullOrWhiteSpace(item.model))
                 EnsureModel(item, item.model, LlmSlotNames.Chat);
             if (item.timeout <= 0) item.timeout = 120;
             item.transientRetries = Math.Max(0, Math.Min(2, item.transientRetries));
             if (item.proxy == null) item.proxy = string.Empty;
+            if (LlmProviderCatalog.IsDecisions(item.type))
+            {
+                if (string.IsNullOrWhiteSpace(item.decisionMode)) item.decisionMode = "direct";
+                item.transientRetries = 0;
+            }
+            if (LlmProviderCatalog.IsTts(item.type))
+            {
+                item.voice = string.IsNullOrWhiteSpace(item.voice) ? "character" : item.voice;
+                item.transientRetries = 0;
+                item.thinkingEnabled = false;
+            }
         }
 
         private static bool IsLocalOllama(LlmProviderRecord item)
@@ -597,6 +744,8 @@ namespace TraceSoul2.Host
             }
             if (!string.IsNullOrWhiteSpace(extraRole) && !LlmProviderCatalog.HasRole(existing, extraRole))
                 existing.roles.Add(NormalizeSlot(extraRole));
+            if (LlmProviderCatalog.IsDecisions(item.type)) existing.roles = new List<string> { LlmSlotNames.Jev };
+            if (LlmProviderCatalog.IsTts(item.type)) existing.roles = new List<string> { LlmSlotNames.Speech };
             return existing;
         }
 
@@ -674,6 +823,9 @@ namespace TraceSoul2.Host
                 baseUrl = value.baseUrl,
                 model = value.model,
                 apiKey = value.apiKey,
+                voice = value.voice,
+                decisionMode = value.decisionMode,
+                relayKey = value.relayKey,
                 temperature = value.temperature,
                 topP = value.topP,
                 maxTokens = value.maxTokens,
@@ -750,6 +902,7 @@ namespace TraceSoul2.Host
         private sealed class FileData
         {
             public string currentId { get; set; }
+            public bool localVoiceImported { get; set; }
             [System.Text.Json.Serialization.JsonIgnore(Condition = System.Text.Json.Serialization.JsonIgnoreCondition.WhenWritingNull)]
             public LlmSlotRef thinking { get; set; }
             public LlmSlotRef jev { get; set; }
@@ -783,6 +936,11 @@ namespace TraceSoul2.Host
         public string baseUrl { get; set; }
         public string model { get; set; }
         public string apiKey { get; set; }
+        public string voice { get; set; }
+        public string decisionMode { get; set; }
+        public string relayKey { get; set; }
+        [System.Text.Json.Serialization.JsonIgnore]
+        public bool clearRelayKey { get; set; }
         public float temperature { get; set; }
         public float topP { get; set; }
         public int maxTokens { get; set; }

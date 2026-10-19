@@ -1,6 +1,7 @@
 using System.Collections.Concurrent;
 using System.Text.Json;
 using TraceSoul2.Data;
+using TraceSoul2.Plugins;
 
 namespace TraceSoul2.ExternalPlugins.RealtimeCall;
 
@@ -35,8 +36,29 @@ public sealed class CallDialogueHub
     private readonly Dictionary<string, Binding> bindings = new(StringComparer.Ordinal);
     private readonly Dictionary<string, Output> outputs = new(StringComparer.Ordinal);
     private bool stopped;
+    private readonly string speakerId;
+    private readonly bool privateCall;
 
-    public CallDialogueHub(RealtimeSessionRegistry registry) => this.registry = registry;
+    public CallDialogueHub(RealtimeSessionRegistry registry, string speakerId = "", bool privateCall = false)
+    {
+        this.registry = registry;
+        this.speakerId = speakerId;
+        this.privateCall = privateCall;
+    }
+    public bool CanSpeak(TraceTurnContext turn)
+    {
+        if (turn?.Environment == null || turn.Environment.PlatformId != "realtime.call" ||
+            turn.Environment.Visibility != "private" || !privateCall) return false;
+        var session = registry.FindActive(turn.ConversationId);
+        return session != null && session.SessionId == turn.Environment.SessionId &&
+            turn.Environment.SpeakerId == speakerId;
+    }
+
+    private EnvironmentObservationData Observation(string sessionId) => new()
+    {
+        PlatformId = "realtime.call", SessionId = sessionId, SessionType = "private",
+        SpeakerId = speakerId, ExclusivePair = privateCall, DirectAddress = true
+    };
     public int ActiveSessions { get { lock (gate) return stopped ? 0 : bindings.Count; } }
     public bool HasPendingInbound => !inbound.IsEmpty;
     public bool HasActive(string conversationId)
@@ -78,6 +100,7 @@ public sealed class CallDialogueHub
             Role = "user", Content = "[实时通话] " + text,
             Realm = TraceRealmValues.SharedScene, EvidenceType = EvidenceTypeValues.DialogueExplicit,
             Organ = BodyOrganValues.Voice, Wake = KernelWakeValues.Dialogue, Breaking = true,
+            Environment = Observation(sessionId),
             PayloadJson = JsonSerializer.Serialize(new { session_id = sessionId, generation, kind = "final_transcript" }),
             OccurredUnixMs = DateTimeOffset.UtcNow.ToUnixTimeMilliseconds()
         };
@@ -148,7 +171,11 @@ public sealed class CallDialogueHub
     {
         ArchivePartial(owner, sessionId);
         var session = registry.Interrupt(owner, sessionId, generation);
-        lock (gate) if (bindings.TryGetValue(sessionId, out var binding)) binding.Generation = session.Generation;
+        lock (gate)
+        {
+            RemoveOutputs(sessionId);
+            if (bindings.TryGetValue(sessionId, out var binding)) binding.Generation = session.Generation;
+        }
         return session;
     }
 
@@ -156,7 +183,7 @@ public sealed class CallDialogueHub
     {
         ArchivePartial(owner, sessionId);
         var session = registry.End(owner, sessionId);
-        lock (gate) bindings.Remove(sessionId);
+        lock (gate) { bindings.Remove(sessionId); RemoveOutputs(sessionId); }
         return session;
     }
 
@@ -167,7 +194,7 @@ public sealed class CallDialogueHub
         foreach (var sessionId in sessionIds) ArchivePartial(owner, sessionId);
         lock (gate)
         {
-            foreach (var sessionId in sessionIds) bindings.Remove(sessionId);
+            foreach (var sessionId in sessionIds) { bindings.Remove(sessionId); RemoveOutputs(sessionId); }
         }
         registry.Disconnect(owner);
     }
@@ -198,6 +225,7 @@ public sealed class CallDialogueHub
         {
             if (!outputs.TryGetValue(outputId, out output) || output.Archived) return;
             output.Archived = true;
+            outputs.Remove(outputId);
         }
         var text = output.Text;
         if (!receipt.Completed)
@@ -214,6 +242,7 @@ public sealed class CallDialogueHub
             ExternalEventId = output.OutputId + ":played", Role = "assistant", Content = text,
             Realm = TraceRealmValues.Unclassified, EvidenceType = EvidenceTypeValues.AssPerformed,
             Organ = BodyOrganValues.Voice,
+            Environment = Observation(output.SessionId),
             PayloadJson = JsonSerializer.Serialize(new
             {
                 session_id = output.SessionId, generation = output.Generation, output_id = output.OutputId,
@@ -221,6 +250,12 @@ public sealed class CallDialogueHub
             }),
             OccurredUnixMs = DateTimeOffset.UtcNow.ToUnixTimeMilliseconds()
         });
+    }
+
+    private void RemoveOutputs(string sessionId)
+    {
+        foreach (var key in outputs.Where(x => x.Value.SessionId == sessionId).Select(x => x.Key).ToArray())
+            outputs.Remove(key);
     }
 
     private static string CleanText(string value, int max)

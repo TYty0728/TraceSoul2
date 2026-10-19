@@ -16,7 +16,7 @@ permissions:
 jobs:
   docker-update-check:
     runs-on: ubuntu-latest
-    timeout-minutes: 20
+    timeout-minutes: 35
     steps:
       - uses: actions/checkout@v4
         with:
@@ -38,3 +38,5 @@ jobs:
         run: ./scripts/Publish-Release.ps1 -Runtime linux-x64
       - name: Upgrade a live Docker Host and verify data preservation
         run: python3 scripts/tests/test-docker-bootstrap.py
+      - name: Build source Docker image and verify fresh headless startup
+        run: python3 scripts/tests/test-docker-headless.py

@@ -103,6 +103,10 @@ public sealed class RealtimeSessionRegistry
             if (string.IsNullOrWhiteSpace(outputId) || outputId.Length > 128 || durationMs is < 0 or > 600_000)
                 throw new CallProtocolException("invalid_output");
             if (session.Outputs.ContainsKey(outputId)) return false;
+            // 长通话回收已完成/已打断的回执；近期请求重放由连接缓存处理。
+            if (session.Outputs.Count >= 256)
+                foreach (var key in session.Outputs.Where(x => x.Value.Completed || x.Value.Interrupted)
+                             .Take(128).Select(x => x.Key).ToArray()) session.Outputs.Remove(key);
             if (session.Outputs.Count >= 256) throw new CallProtocolException("output_capacity_reached");
             session.Outputs.Add(outputId, new RealtimePlaybackReceiptData
             {
