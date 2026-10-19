@@ -1,5 +1,7 @@
 # 项目知识库
 
+2026-10-19发布续检：0.1.48源码7e03d8f的主分支Docker检查39254553655通过，已创建不可变v0.1.48标签。首次Release的Docker、完整.NET/Prompt/Migration和页面检查通过，Python音色测试因CI漏装运行依赖soundfile失败；仅补齐发布工作流依赖，从main重新dispatch同一标签，不改版本源码或移动标签。正式Release及三平台公开资产尚未生成，待重跑确认。
+
 2026-10-19发布检查修订：0.1.47/2703e21已推送但未创建正式Release；真实Docker升级保留数据通过，新增源码镜像检查因测试未带正式Compose的TRACESOUL2_TRUST_CONTAINER_PROXY=1而拒绝请求。补齐该参数、失败诊断，并改用printf生成插件清单避免引号歧义。保留失败标签，不改写已推送历史；正式补丁改0.1.48，先等主分支Docker检查通过再创建新标签。
 
 2026-10-19用户授权将当前全部修改集成发布0.1.47（PluginApi1.15.0），不再沿用此前WXXZ暂不发布的阶段限制，但不自动部署服务器。集成统一Moment/WebUI、Decisions、私有千问、语音/名字/声纹、共用表情/显示和提名修复；新增Docker远端桥显式HTTPS+独立Bearer、九官方插件首次初始化与源码镜像无硬件启动CI。Release全解决方案、完整ChatCheck/Prompt、实际Migration、Core/Updater/UpdateCheck、15项页面及95项Python通过；477源码文件发布检查与暂存diff通过，无运行密钥/录音/声纹/图库/数据库。待推送及GitHub实际Docker/三平台发布结果，见[0.1.47](../RELEASES.md)、[容器连接](../DOCKER.md)。
