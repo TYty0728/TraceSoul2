@@ -97,7 +97,8 @@ def run():
                 repaired=Path(state['sources']['pluginsData'])
                 config=json.loads((repaired/'config.json').read_text(encoding='utf-8'))
                 assert config['api_key']=='synthetic-preserved' and config['reference_path']==str(repaired/'reference.wav')
-                assert Path(state['pathRepairs'][0]['originalBackup'])==misplaced, 'original was renamed'
+                assert Path(state['pathRepairs'][0]['originalBackup']).samefile(misplaced), 'original directory identity changed'
+                assert Path(state['pathRepairs'][0]['source']).samefile(misplaced), 'source directory identity changed'
                 assert state['pathRepairs'][0]['copyVerifiedUtc'] and len(state['pathRepairs'][0]['sourceFingerprint'])==64
                 assert hashlib.sha256((misplaced/'config.json').read_bytes()).hexdigest()==original_hash, 'original configuration changed'
                 assert state['settings']['keepCount']==1 and state['settings']['intervalHours']==168 and not state['protection']['active']
@@ -180,4 +181,18 @@ def run():
 
 
 if __name__ == '__main__':
-    run()
+    if os.name=='nt':
+        # Windows runners use 8.3 aliases for TEMP; .NET may expand them to full names.
+        # Exercise that spelling difference locally as well, comparing directory identity.
+        import ctypes
+        with tempfile.TemporaryDirectory(prefix='tracesoul-windows-paths-') as parent:
+            buffer=ctypes.create_unicode_buffer(32768)
+            length=ctypes.windll.kernel32.GetShortPathNameW(parent,buffer,len(buffer))
+            previous=tempfile.tempdir
+            tempfile.tempdir=buffer.value if length else parent
+            try:
+                run()
+            finally:
+                tempfile.tempdir=previous
+    else:
+        run()
