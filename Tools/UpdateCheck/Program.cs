@@ -34,6 +34,7 @@ internal static class Program
         try
         {
             await ServiceCheck(root);
+            await ArchiveHandoffFailureCheck(root);
             var file = Path.Combine(root, "api.zip");
             using (var http = new HttpClient(new Handler((request, _) =>
             {
@@ -150,11 +151,11 @@ internal static class Program
             PluginsDirectory = Path.Combine(root, "plugins"), UpdateRepository = "test/repo", Urls = "http://localhost"
         }, new HttpClient(new AsyncHandler(_ => gate.Task)));
         var ready = false;
-        var submitted = JsonSerializer.SerializeToElement(service.StartInstall(() => ready = true));
+        var submitted = JsonSerializer.SerializeToElement(service.StartInstall(() => ready = true, (_,_) => Task.CompletedTask));
         Require(submitted.GetProperty("started").GetBoolean() && !gate.Task.IsCompleted, "POST must return before remote download completes");
         var active = JsonSerializer.SerializeToElement(service.Status());
         Require(active.GetProperty("install").GetProperty("inProgress").GetBoolean(), "Background job must be visible");
-        await Expect<InvalidOperationException>(() => { service.StartInstall(() => {}); return Task.CompletedTask; });
+        await Expect<InvalidOperationException>(() => { service.StartInstall(() => {}, (_,_) => Task.CompletedTask); return Task.CompletedTask; });
         gate.SetResult(new HttpResponseMessage(HttpStatusCode.ServiceUnavailable));
         for (var i = 0; i < 100; i++)
         {
@@ -168,6 +169,53 @@ internal static class Program
             await Task.Delay(10);
         }
         throw new Exception("Background failure was not reported");
+    }
+
+    private static async Task ArchiveHandoffFailureCheck(string root)
+    {
+        var application=Path.Combine(root,"installed-app");Directory.CreateDirectory(application);
+        File.WriteAllText(Path.Combine(application,"tracesoul2.install.json"),"old-install-marker");
+        File.WriteAllText(Path.Combine(application,"TraceSoul2.Host.dll"),"old-host-must-remain");
+        var runtime=(OperatingSystem.IsWindows()?"win-":"linux-")+(System.Runtime.InteropServices.RuntimeInformation.ProcessArchitecture==System.Runtime.InteropServices.Architecture.Arm64?"arm64":"x64");
+        var name="tracesoul2-"+runtime+"-v9.0.0.zip";
+        using var buffer=new MemoryStream();
+        using(var zip=new System.IO.Compression.ZipArchive(buffer,System.IO.Compression.ZipArchiveMode.Create,true))
+        {
+            void Entry(string path,string value){using var writer=new StreamWriter(zip.CreateEntry(path).Open());writer.Write(value);}
+            Entry("TraceSoul2.Host.dll","synthetic-new-host");
+            Entry("TraceSoul2.Updater.dll","never-execute-this-synthetic-runner");
+            Entry("tracesoul2.install.json",JsonSerializer.Serialize(new{product="TraceSoul2",version="9.0.0",runtime}));
+        }
+        var package=buffer.ToArray();var sha=Encoding.ASCII.GetBytes(Convert.ToHexString(System.Security.Cryptography.SHA256.HashData(package))+"  "+name+"\n");
+        var release=new{tag_name="v9.0.0",assets=new[]{
+            new{id=1,name,size=package.Length,url="https://api.github.com/repos/test/repo/releases/assets/1",browser_download_url="https://github.com/test/repo/releases/download/v9.0.0/"+name},
+            new{id=2,name=name+".sha256",size=sha.Length,url="https://api.github.com/repos/test/repo/releases/assets/2",browser_download_url="https://github.com/test/repo/releases/download/v9.0.0/"+name+".sha256"}}};
+        using var client=new HttpClient(new Handler((request,_)=>new HttpResponseMessage(HttpStatusCode.OK){Content=
+            request.RequestUri.AbsolutePath.EndsWith("/latest")?new StringContent(JsonSerializer.Serialize(release),Encoding.UTF8,"application/json"):
+            new ByteArrayContent(request.RequestUri.AbsolutePath.EndsWith("/1")?package:sha)}));
+        using var service=new UpdateService(new TraceHomeLayout{Root=root,UpdatesDirectory=Path.Combine(root,"guarded-updates"),PluginsDirectory=Path.Combine(root,"plugins"),UpdateRepository="test/repo",Urls="http://localhost"},client,application);
+        await Expect<ArgumentNullException>(()=>{service.StartInstall(()=>{},null);return Task.CompletedTask;});
+        var reached=new TaskCompletionSource<bool>(TaskCreationOptions.RunContinuationsAsynchronously);
+        var releaseArchive=new TaskCompletionSource<bool>(TaskCreationOptions.RunContinuationsAsynchronously);var shutdown=false;
+        service.StartInstall(()=>shutdown=true,async(version,token)=>{Require(version=="9.0.0","Archive must bind the selected update version");reached.SetResult(true);await releaseArchive.Task;throw new IOException("simulated archive failure");});
+        try
+        {
+            await reached.Task.WaitAsync(TimeSpan.FromSeconds(10));
+            Require(!shutdown&&JsonSerializer.SerializeToElement(service.Status()).GetProperty("install").GetProperty("phase").GetString()=="archiving","Updater must wait for archive validation before handoff");
+            releaseArchive.SetResult(true);
+            for(var i=0;i<200;i++)
+            {
+                var state=JsonSerializer.SerializeToElement(service.Status()).GetProperty("install");
+                if(state.GetProperty("phase").GetString()=="failed")
+                {
+                    Require(!shutdown&&File.ReadAllText(Path.Combine(application,"TraceSoul2.Host.dll"))=="old-host-must-remain","Failed archive must preserve installed app and never stop Host");
+                    Console.WriteLine("Update handoff checks passed: validated package waits for archive; failed archive prevents runner and shutdown.");return;
+                }
+                await Task.Delay(10);
+            }
+            throw new Exception("Archive failure was not propagated");
+        }
+        finally{releaseArchive.TrySetResult(true);}
     }
 
     private static async Task LiveCheck()

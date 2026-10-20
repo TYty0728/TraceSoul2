@@ -1,0 +1,60 @@
+const assert = require('node:assert/strict');
+const fs = require('node:fs');
+const vm = require('node:vm');
+const path = require('node:path');
+const html = fs.readFileSync(path.join(__dirname, '../../Tools/Host/wwwroot/index.html'), 'utf8');
+const nodes = new Map();
+const node = () => ({value:'',textContent:'',checked:false,disabled:false,dataset:{},children:[],appendChild(c){this.children.push(c);}});
+const $ = id => {if(!nodes.has(id))nodes.set(id,node());return nodes.get(id);};
+let state = {settings:{enabled:false,directory:'archives',intervalHours:168,keepCount:1,extras:{}},
+  directory:'/private/archives',busy:false,phase:'idle',packages:[],sources:{home:'<script>private</script>'}};
+const writes=[];
+let error=false, timer=null;
+const sandbox = {$,document:{createElement:node},Date,Number,Object,Error,encodeURIComponent,
+  setTimeout:fn=>{timer=fn;return 1;},clearTimeout:()=>{},
+  api:async(url,method,body)=>{
+    writes.push({url,method,body});
+    if(error)throw Error('offline');
+    if(url==='/backups')return state;
+    if(url.endsWith('/verify'))return {fileCount:4,hostVersion:'0.0.0'};
+    return {};
+  }};
+vm.createContext(sandbox);
+vm.runInContext(html.slice(html.indexOf('  /* Backup archive controls.'), html.indexOf('  /* End backup archive controls.')),sandbox);
+(async()=>{
+  await sandbox.loadBackups();
+  assert.equal($('backupEnabled').checked,false);
+  assert.equal($('backupKeep').value,1);
+  assert.equal($('backupInterval').value,168);
+  assert.equal(writes.length,1,'读取不启用计划、不生成存档');
+  assert.equal($('backupSources').children[0].textContent,'家目录：<script>private</script>','来源只用文本节点');
+  $('backupDirectory').value='/mnt/private'; $('backupEnabled').checked=true;
+  $('backupExtras').value='voice=/mnt/voice\ncards=/mnt/cards';
+  await sandbox.saveBackups();
+  const save=writes.find(w=>w.method==='PUT');
+  assert.equal(save.body.intervalHours,168);
+  assert.equal(save.body.directory,'/mnt/private'); assert.equal(save.body.extras.voice,'/mnt/voice');
+  const count=writes.length;
+  $('backupExtras').value='voice=/a\nVOICE=/b'; await sandbox.saveBackups();
+  assert.equal(writes.length,count,'重名附加目录不提交');
+  state={...state,busy:true,phase:'snapshot'};
+  await sandbox.loadBackups();
+  assert.equal($('backupSave').disabled,true); assert.equal($('backupCreate').disabled,true); assert.ok(timer);
+  $('backupDirectory').value='unsaved-input'; await sandbox.loadBackups();
+  assert.equal($('backupDirectory').value,'unsaved-input','状态轮询保留未保存输入');
+  error=true; await sandbox.createBackup();
+  assert.match($('backupState').textContent,/结果未确认/);
+  error=false; await sandbox.verifyBackup('archive-20261020T010203Z-123456abcdef',node());
+  assert.match($('backupVerifyResult').textContent,/校验通过/);
+  state={...state,busy:false,protection:{active:true,currentVersion:'2.0.0',fromVersion:'1.0.0',packageId:'protected-id'}};
+  await sandbox.loadBackups();
+  assert.equal($('backupCreate').disabled,true);assert.equal($('backupConfirmVersion').hidden,false);
+  assert.match($('backupState').textContent,/保护中/);
+  const beforeConfirm=writes.length;
+  await sandbox.confirmBackupVersion();
+  assert.equal(writes[beforeConfirm].url,'/backups/confirm-version');
+  assert.equal(writes[beforeConfirm].body.version,'2.0.0');assert.equal(writes[beforeConfirm].body.packageId,'protected-id');
+  assert.ok(html.includes('data-section="backups"')); assert.ok(html.includes('backups: loadBackups'));
+  for(const source of html.matchAll(/<script(?:\s[^>]*)?>([\s\S]*?)<\/script>/g))new vm.Script(source[1]);
+  console.log('Backup UI checks passed: explicit save/create, source text, duplicate validation, polling/drafts and failed-request status.');
+})().catch(e=>{console.error(e);process.exitCode=1;});

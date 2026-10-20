@@ -689,6 +689,7 @@
       <div class="nav-group">维护</div>
       <button class="nav-item" data-section="log" onclick="showSection('log')"><span class="ic">📜</span>日志</button>
       <button class="nav-item" data-section="update" onclick="showSection('update')"><span class="ic">⬆️</span>系统更新</button>
+      <button class="nav-item" data-section="backups" onclick="showSection('backups')"><span class="ic">📦</span>备份与恢复</button>
       <div class="foot">数据目录切换在顶部；切换后宿主自动重启（约 2 秒）。</div>
     </aside>
 
@@ -1402,14 +1403,55 @@
             <div id="updateProgressDetail" class="update-progress-detail">等待服务器返回进度</div>
           </div>
           <p class="muted">更新包必须同时带有 SHA-256 文件。安装时旧应用和被升级的官方插件都会保留可回滚备份；角色数据、插件配置与生成文件不动。日常 Git 提交不会出现在这里，只有创建正式 Release 才会提示更新。</p>
+          <p class="muted">安装前会生成并锁定一份完整资料存档，校验失败就停止更新。更新后请到「备份与恢复」核对角色、设置和插件，再确认解除保护，恢复定时轮换。</p>
         </div>
         <div class="box">
           <h2>可迁移目录</h2>
-          <p class="muted">复制家目录即可迁移角色和设置；插件目录独立维护，可单独复制、替换或挂载。</p>
+          <p class="muted">完整迁移需要同时保存角色、插件和独立插件数据目录。可在「备份与恢复」生成完整存档；不要在线只复制数据库主文件。</p>
           <div><label>家目录</label><code id="updateHomeDir">—</code></div>
           <div style="margin-top:10px"><label>当前角色目录</label><code id="updateSoulDir">—</code></div>
           <div style="margin-top:10px"><label>插件目录</label><code id="updatePluginDir">—</code></div>
           <div style="margin-top:10px"><label>插件数据目录</label><code id="updatePluginDataDir">—</code></div>
+        </div>
+      </section>
+
+      <section id="sec-backups" class="panel-section">
+        <div class="section-head"><h1>备份与恢复</h1><span class="muted">保存 Soul、设置、插件和资源，下载到自己的空间</span></div>
+        <div class="box">
+          <h2>存档计划</h2>
+          <p class="muted">定时任务由服务器执行，关闭网页后仍然运行。文件存到服务器目录；下载按钮可另存到你的电脑。</p>
+          <label><input id="backupEnabled" type="checkbox" style="width:auto"> 启用定时存档</label>
+          <label for="backupDirectory">服务器存档目录</label><input id="backupDirectory" placeholder="archives（相对于家目录），或填写绝对路径" />
+          <p id="backupResolvedDirectory" class="muted"></p>
+          <p class="muted">更换存档目录后，旧存档保留在原位置。请使用专用目录；它不会随系统缓存清理。</p>
+          <div class="row">
+            <div><label for="backupInterval">间隔（小时，168 = 每周一次）</label><input id="backupInterval" type="number" min="1" max="720" value="168" /></div>
+            <div><label for="backupKeep">保留数量</label><input id="backupKeep" type="number" min="1" max="1" value="1" readonly /></div>
+          </div>
+          <p class="muted">只保留 1 份已验证存档。新包完成加密、解密和数据库校验后才替换旧包；失败保留旧包。网页更新前自动存档并锁定，确认新版本正常后才允许继续替换。</p>
+          <label for="backupExtras">附加资料目录（每行：名称=服务器绝对路径）</label>
+          <textarea id="backupExtras" rows="3" placeholder="例如把独立语音服务的 voices 和 lab/cards 目录分别加入"></textarea>
+          <p class="muted">角色、插件和插件数据自动包含。独立语音参考、设备配对等资料可在这里加入；模型权重和依赖环境通常不需要存档。</p>
+          <div class="row">
+            <button id="backupSave" onclick="saveBackups()">保存计划</button>
+            <button id="backupCreate" class="primary" onclick="createBackup()">立即存档</button>
+            <button onclick="loadBackups(true)">刷新</button>
+          </div>
+          <p id="backupState" class="muted" role="status">尚未读取存档状态。</p>
+          <p id="backupProtection" role="status"></p>
+          <button id="backupConfirmVersion" onclick="confirmBackupVersion()" hidden>确认当前版本正常，解除存档保护</button>
+        </div>
+        <div class="box">
+          <h2>恢复密钥</h2>
+          <p>存档已加密。请把恢复密钥另存到自己保管的位置；换服务器恢复时，存档和密钥两者都需要。</p>
+          <a href="/backups/recovery-key" download="tracesoul-recovery.key">下载恢复密钥</a>
+          <p class="muted">密钥不会装进存档包。自动存档保存到服务器；电脑自动拉取和百度网盘上传尚未接入。</p>
+        </div>
+        <div class="box"><h2>已有存档</h2><div id="backupPackages" class="muted">尚未读取。</div><p id="backupVerifyResult" role="status"></p></div>
+        <div class="box"><h2>资料来源</h2><div id="backupSources" style="overflow-wrap:anywhere"></div>
+          <p class="muted">每次启动先检查路径，明确放错位置的资料先复制到持久目录并校验，旧目录原样保留；确认新位置运行与恢复正常后，再单独处理旧目录清理。</p>
+          <div id="backupPathRepairs" style="overflow-wrap:anywhere"></div>
+          <p class="muted">包内统一为 Data、Plugins、plugins_data、Extras；恢复校验会检查文件和数据库，不覆盖当前资料。</p>
         </div>
       </section>
 
@@ -1859,7 +1901,7 @@
   const sectionLoaders = {
     chat: loadChat, game: loadGameSession, live: loadLive, identity: loadIdentity, memory: loadMemory,
     brain: loadBrain, platform: loadPlatform, plugins: loadPlugins,
-    update: loadUpdate, log: null
+    update: loadUpdate, backups: loadBackups, log: null
   };
   const sectionLoaded = {};
   async function showSection(id) {
@@ -1868,6 +1910,9 @@
     document.querySelectorAll(".nav-item")
       .forEach(n => n.classList.toggle("active", n.dataset.section === id));
     if(typeof setCompanionVisible==='function')setCompanionVisible(id==='platform');
+    if(id==='backups' && sectionLoaded[id]) {
+      try { await loadBackups(); } catch(e) { $('backupState').textContent='状态读取失败：'+e.message; }
+    }
     if (!sectionLoaded[id] && sectionLoaders[id]) {
       sectionLoaded[id] = true;
       try { await sectionLoaders[id](); }
@@ -4473,6 +4518,97 @@
       else sessionStorage.removeItem("updateExpectedVersion");
     } catch (e) {}
   }
+  /* Backup archive controls. All displayed paths and package labels are text nodes. */
+  let backupPoll = null;
+  let backupProtection = null;
+  async function loadBackups(resetForm = false) {
+    const state = await api('/backups');
+    if (resetForm || !$('backupDirectory').dataset.loaded) {
+      $('backupEnabled').checked = state.settings.enabled;
+      $('backupDirectory').value = state.settings.directory;
+      $('backupInterval').value = state.settings.intervalHours;
+      $('backupKeep').value = state.settings.keepCount;
+      $('backupExtras').value = Object.entries(state.settings.extras || {}).map(([name,path])=>name+'='+path).join('\n');
+      $('backupDirectory').dataset.loaded = '1';
+    }
+    $('backupResolvedDirectory').textContent = '实际保存位置：'+state.directory+'/packages';
+    backupProtection = state.protection || null;
+    const protectedArchive = !!backupProtection?.active;
+    const phases = {snapshot:'正在收集资料',packing:'正在打包和校验',encrypting:'正在加密',verifying:'正在验证加密存档可恢复性',completed:'最近一次存档成功',failed:'最近一次存档失败',idle:'尚未执行'};
+    $('backupState').textContent = (state.error || phases[state.phase] || state.phase) +
+      (state.settings.lastResult ? ' · '+state.settings.lastResult : '') +
+      (protectedArchive ? ' · 更新保护中，暂停替换唯一存档' : state.nextUtc ? ' · 下次计划：'+new Date(state.nextUtc).toLocaleString() : ' · 定时未启用');
+    $('backupCreate').disabled = state.busy || protectedArchive; $('backupSave').disabled = state.busy;
+    $('backupConfirmVersion').hidden = !protectedArchive;
+    $('backupConfirmVersion').disabled = state.busy;
+    $('backupProtection').textContent = protectedArchive ? '保留版本 '+backupProtection.fromVersion+' 的存档；当前版本 '+backupProtection.currentVersion+'。请核对角色、设置和插件正常后再解除保护。解除时保留原包，到下一份校验成功才替换。' : '';
+    const sources = $('backupSources'); sources.textContent = '';
+    const names = {home:'家目录',souls:'角色目录',currentSoul:'当前角色',plugins:'插件程序',pluginsData:'插件数据'};
+    for(const [name,path] of Object.entries(state.sources || {})) {
+      const line=document.createElement('p'); line.textContent=(names[name]||name)+'：'+path; sources.appendChild(line);
+    }
+    const repairs=$('backupPathRepairs'); repairs.textContent='';
+    if(!(state.pathRepairs||[]).length)repairs.textContent='目录检查：没有需要自动迁移的记录。';
+    for(const move of state.pathRepairs||[]) {
+      const line=document.createElement('p'); line.textContent='已复制并校验 '+move.kind+'：'+move.source+' → '+move.destination+'；旧目录保留：'+move.originalBackup+'；清理待确认'; repairs.appendChild(line);
+    }
+    const list=$('backupPackages'); list.textContent='';
+    for(const item of state.packages || []) {
+      const row=document.createElement('div'); row.className='row';
+      const label=document.createElement('span'); label.textContent=new Date(item.createdUtc).toLocaleString()+' · '+(item.bytes/1048576).toFixed(2)+' MB · '+item.fileCount+' 个文件';
+      row.appendChild(label);
+      if(/^archive-[0-9]{8}T[0-9]{6}Z-[a-f0-9]{12}$/.test(item.id)) {
+        const link=document.createElement('a'); link.textContent='下载'; link.href='/backups/'+encodeURIComponent(item.id)+'/download'; link.download=item.id+'.tsbackup'; row.appendChild(link);
+        const check=document.createElement('button'); check.textContent='校验可恢复性'; check.disabled=state.busy;
+        check.onclick=()=>verifyBackup(item.id,check); row.appendChild(check);
+      }
+      list.appendChild(row);
+    }
+    if(!(state.packages || []).length)list.textContent='还没有存档。';
+    if(backupPoll)clearTimeout(backupPoll);
+    if(state.busy)backupPoll=setTimeout(()=>loadBackups().catch(e=>{$('backupState').textContent='状态读取失败：'+e.message+'。服务器任务可能仍在执行，请刷新核对。';}),1500);
+    return state;
+  }
+  async function saveBackups() {
+    try {
+      const extras=Object.create(null);
+      for(const line of $('backupExtras').value.split('\n').map(s=>s.trim()).filter(Boolean)) {
+        const split=line.indexOf('=');
+        if(split<1)throw Error('附加目录请按 名称=绝对路径 填写');
+        const name=line.slice(0,split).trim();
+        if(Object.keys(extras).some(key=>key.toLowerCase()===name.toLowerCase()))throw Error('附加资料名称重复');
+        extras[name]=line.slice(split+1).trim();
+      }
+      await api('/backups/settings','PUT',{enabled:$('backupEnabled').checked,directory:$('backupDirectory').value.trim(),
+        intervalHours:Number($('backupInterval').value),keepCount:Number($('backupKeep').value),extras});
+      await loadBackups(true);
+    } catch(e){$('backupState').textContent='保存失败或结果未确认：'+e.message;}
+  }
+  async function createBackup() {
+    $('backupCreate').disabled=true;
+    try {await api('/backups/create','POST'); await loadBackups();}
+    catch(e){$('backupState').textContent='启动结果未确认：'+e.message+'。请刷新核对后再操作。';$('backupCreate').disabled=false;}
+  }
+  async function verifyBackup(id,button) {
+    button.disabled=true;
+    try {
+      const result=await api('/backups/'+encodeURIComponent(id)+'/verify','POST');
+      $('backupVerifyResult').textContent='校验通过：'+result.fileCount+'个文件，版本 '+result.hostVersion+'。'+
+        (result.versionMatches===false?'当前程序版本为 '+result.currentHostVersion+'，恢复启动前需核对兼容性。':'')+'当前资料未改变。';
+    } catch(e){$('backupVerifyResult').textContent='校验失败：'+e.message;}
+    finally {button.disabled=false;}
+  }
+  async function confirmBackupVersion() {
+    if(!backupProtection?.active)return;
+    $('backupConfirmVersion').disabled=true;
+    try {
+      await api('/backups/confirm-version','POST',{version:backupProtection.currentVersion,packageId:backupProtection.packageId});
+      await loadBackups();
+    } catch(e){$('backupProtection').textContent='解除保护失败或结果未确认：'+e.message+'。原存档请保留，刷新后核对。';}
+    finally {$('backupConfirmVersion').disabled=false;}
+  }
+  /* End backup archive controls. */
+
   async function loadUpdate() {
     const pair = await Promise.all([api("/updates"), api("/status")]);
     updateData = pair[0];
@@ -4511,7 +4647,7 @@
     if (progress.version) detail.push("目标 v" + progress.version);
     const phases = { checking: "检查版本", preparing: "检查目录", connecting: "连接下载源", downloading: "下载",
       retrying: "自动重试", downloaded: "下载完成", verifying: "校验", extracting: "解压",
-      validating: "验证安装包", staging: "准备替换", handoff: "启动更新器", restarting: "等待新版上线", failed: "失败" };
+      validating: "验证安装包", staging: "准备替换", archiving: "校验并保护更新前存档", handoff: "启动更新器", restarting: "等待新版上线", failed: "失败" };
     if (progress.phase) detail.push("阶段：" + (phases[progress.phase] || progress.phase));
     if (size) detail.push(size);
     $("updateProgressDetail").textContent = detail.join(" · ") || "等待服务器返回进度";

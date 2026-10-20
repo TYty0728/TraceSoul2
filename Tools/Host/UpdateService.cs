@@ -30,6 +30,7 @@ namespace TraceSoul2.Host
         private readonly TraceHomeLayout home;
         private readonly HttpClient http;
         private readonly ReleaseDownloader downloader;
+        private readonly string applicationRoot;
         private readonly object stateGate = new object();
         private ReleaseInfo lastRelease;
         private string lastError = string.Empty;
@@ -40,11 +41,12 @@ namespace TraceSoul2.Host
 
         public UpdateService(TraceHomeLayout home) : this(home, ReleaseDownloader.CreateClient(TraceHome.HostVersion())) { }
 
-        internal UpdateService(TraceHomeLayout home, HttpClient client)
+        internal UpdateService(TraceHomeLayout home, HttpClient client, string applicationDirectory = null)
         {
             this.home = home ?? throw new ArgumentNullException(nameof(home));
             http = client ?? throw new ArgumentNullException(nameof(client));
             downloader = new ReleaseDownloader(http);
+            applicationRoot = Path.TrimEndingDirectorySeparator(Path.GetFullPath(applicationDirectory ?? AppContext.BaseDirectory));
         }
 
         public object Status()
@@ -101,14 +103,15 @@ namespace TraceSoul2.Host
             }
         }
 
-        public object StartInstall(Action onReady)
+        public object StartInstall(Action onReady, Func<string, CancellationToken, Task> archiveBeforeHandoff)
         {
+            if (archiveBeforeHandoff == null) throw new ArgumentNullException(nameof(archiveBeforeHandoff));
             BeginInstallProgress();
             _ = Task.Run(async () =>
             {
                 try
                 {
-                    await InstallAsync(CancellationToken.None);
+                    await InstallAsync(CancellationToken.None, archiveBeforeHandoff);
                     onReady();
                 }
                 catch (Exception exception) { FailInstallProgress(exception.Message); }
@@ -116,7 +119,7 @@ namespace TraceSoul2.Host
             return new { started = true, message = "已开始后台安装；页面会持续显示进度，刷新页面不会中止下载。" };
         }
 
-        private async Task InstallAsync(CancellationToken cancellationToken)
+        private async Task InstallAsync(CancellationToken cancellationToken, Func<string, CancellationToken, Task> archiveBeforeHandoff)
         {
             var repository = NormalizeRepository(home.UpdateRepository, allowEmpty: false);
             SetInstallProgress("checking", 2, "正在读取最新正式 Release…");
@@ -126,8 +129,7 @@ namespace TraceSoul2.Host
                 throw new InvalidOperationException("当前已经是最新正式版 v" + TraceHome.HostVersion() + "。");
             SetInstallProgress("preparing", 4, "正在检查本机安装目录…", version: release.Version);
 
-            var installRoot = Path.GetFullPath(AppContext.BaseDirectory)
-                .TrimEnd(Path.DirectorySeparatorChar, Path.AltDirectorySeparatorChar);
+            var installRoot = applicationRoot;
             ValidateInstalledApplication(installRoot);
 
             var runId = Guid.NewGuid().ToString("N");
@@ -183,6 +185,9 @@ namespace TraceSoul2.Host
             if (!File.Exists(runnerExe) && !File.Exists(runnerDll))
                 throw new InvalidOperationException("更新包缺少外置更新器。");
 
+            SetInstallProgress("archiving", 95, "正在生成并校验更新前存档；失败将停止更新…");
+            await archiveBeforeHandoff(release.Version, cancellationToken);
+
             var startInfo = new ProcessStartInfo
             {
                 FileName = File.Exists(runnerExe) ? runnerExe : "dotnet",
@@ -219,7 +224,7 @@ namespace TraceSoul2.Host
                 runtime = CurrentRuntimeIdentifier(),
                 repository = home.UpdateRepository ?? string.Empty,
                 configured = !string.IsNullOrWhiteSpace(home.UpdateRepository),
-                installable = File.Exists(Path.Combine(AppContext.BaseDirectory, "tracesoul2.install.json")),
+                installable = File.Exists(Path.Combine(applicationRoot, "tracesoul2.install.json")),
                 checkedAtUtc = checkedAt?.ToString("O") ?? string.Empty,
                 error = error ?? string.Empty,
                 install = new

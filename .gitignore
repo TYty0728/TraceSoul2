@@ -39,6 +39,16 @@ TestResults/
 **/wake.json
 **/plugins-uninstalled/
 **/updates/
+**/archives/
+**/archive-settings.json
+*.tsbackup
+*.tsbackup.json
+**/runtime-paths.json
+**/.tracesoul-home-paths.json
+**/.path-repair-configs/
+**/*.tracesoul-moved-*/
+**/*.tracesoul-stage-*/
+**/*.tracesoul-empty-*/
 
 # Secrets and machine-local configuration
 .env

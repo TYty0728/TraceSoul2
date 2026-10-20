@@ -28,6 +28,19 @@ namespace TraceSoul2.Host
         public bool IsAvailable => !string.IsNullOrWhiteSpace(migrateDll);
         public string MigrateDll => migrateDll;
 
+        // A snapshot waits for the current batch and prevents another batch from starting.
+        public async Task<IDisposable> HoldForArchiveAsync(CancellationToken token)
+        {
+            await buildGate.WaitAsync(token);
+            return new ArchiveLease(buildGate);
+        }
+        private sealed class ArchiveLease : IDisposable
+        {
+            private SemaphoreSlim semaphore;
+            public ArchiveLease(SemaphoreSlim semaphore) { this.semaphore = semaphore; }
+            public void Dispose() { Interlocked.Exchange(ref semaphore, null)?.Release(); }
+        }
+
         public DailyBuildPlan Inspect(string dayKey, bool includeBusy = true)
         {
             var now = DateTimeOffset.Now;

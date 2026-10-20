@@ -5,7 +5,7 @@
     <Nullable>disable</Nullable>
     <RootNamespace>TraceSoul2.Host</RootNamespace>
     <!-- 本地验证输出可能放在项目下；不能再被 SDK 当作下一次构建的 None/Content 输入递归收集。 -->
-    <DefaultItemExcludes>$(DefaultItemExcludes);artifacts/**</DefaultItemExcludes>
+    <DefaultItemExcludes>$(DefaultItemExcludes);artifacts/**;archives/**;**/*.tsbackup;**/*.tsbackup.json;archive-settings.json;archive-recovery.key;**/runtime-paths.json;**/.tracesoul-home-paths.json;**/.path-repair-configs/**;**/*.tracesoul-moved-*/**;**/*.tracesoul-stage-*/**</DefaultItemExcludes>
   </PropertyGroup>
   <Import Project="../KernelSources.props" />
   <ItemGroup>

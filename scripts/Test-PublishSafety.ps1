@@ -19,9 +19,9 @@ $forbiddenNames = @(
     'llm-providers.json', 'onebot.json', 'home.json', 'debug-mode.json',
     'bodies.json', 'memory-nerve.json', 'emoji_index.json',
     'owner-voiceprint.json', 'voiceprint.json', 'local-voice-client.json',
-    'access.json', 'speech.json', 'wake.json'
+    'access.json', 'speech.json', 'wake.json', 'archive-settings.json', 'runtime-paths.json', '.tracesoul-home-paths.json'
 )
-$forbiddenExtensions = @('.sqlite', '.sqlite3', '.db', '.pem', '.pfx', '.p12', '.key')
+$forbiddenExtensions = @('.sqlite', '.sqlite3', '.db', '.pem', '.pfx', '.p12', '.key', '.tsbackup')
 $credentialPatterns = [ordered]@{
     'OpenAI-style key' = '(?i)\bsk-[A-Za-z0-9_-]{16,}'
     'GitHub token' = '\bgh[pousr]_[A-Za-z0-9]{20,}'
@@ -48,7 +48,8 @@ foreach ($filePath in $files) {
         $findings.Add([pscustomobject]@{ File=$filePath; Line=0; Kind='hardcoded speech service default' })
     }
     if ($relative -match '(^|/)(plugins_data|plugin-data|souls)(/|$)' -or
-        $item.Name -like 'wifi-client*.json') {
+        $item.Name -like 'wifi-client*.json' -or $item.Name -like '*.tsbackup.json' -or
+        $relative -match '(\.path-repair-configs/|\.tracesoul-(moved|stage)-)') {
         $findings.Add([pscustomobject]@{ File=$filePath; Line=0; Kind='private runtime directory or device pairing' })
     }
     if ($forbiddenNames -contains $item.Name.ToLowerInvariant() -and

@@ -26,7 +26,10 @@ class PublishPrivacyChecks(unittest.TestCase):
             marker='private-fixture-marker-not-for-log'
             cases={name:marker for name in ['plugins_data/sticker/example.png','souls/example/profile.json',
                 'plugin-data/example.json','emoji_index.json','owner-voiceprint.json','local-voice-client.json',
-                'access.json','speech.json','wake.json','wifi-client-backup.json']}
+                'access.json','speech.json','wake.json','wifi-client-backup.json',
+                'archive-settings.json','example.tsbackup','example.tsbackup.json','archive-recovery.key',
+                'runtime-paths.json','.tracesoul-home-paths.json','.path-repair-configs/test/config.json.before',
+                'plugin-data.tracesoul-moved-test/config.json']}
             cases['ExternalPlugins/QqTts/plugin.json']=json.dumps({'api_url':'https://relay.example/v1/audio/speech','api_key':''})
             cases['ExternalPlugins/QqTts/QqTtsPlugin.cs']='private string configApiUrl = "https://relay.example/v1/audio/speech";'
             for name,body in cases.items():

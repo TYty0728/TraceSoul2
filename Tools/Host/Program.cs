@@ -29,11 +29,25 @@ using TraceSoul2.Plugins.Builtin;
 
 SQLitePCL.Batteries_V2.Init();
 
+// Offline recovery must run before resolving home or creating any live services.
+if (args.Length > 0 && args[0] == "--archive-extract")
+{
+    if (args.Length != 4) { Console.Error.WriteLine("用法：--archive-extract <存档.tsbackup> <恢复密钥.key> <尚不存在的目标目录>"); Environment.ExitCode = 2; return; }
+    try
+    {
+        var manifest = BackupArchiveFormat.Extract(args[1], args[2], args[3], CancellationToken.None);
+        Console.WriteLine("离线恢复完成：" + manifest.Files.Count + "个文件；请先核对版本、插件与平台设置，再手动启动。");
+    }
+    catch { Console.Error.WriteLine("离线恢复失败：请检查密钥、存档完整性、目录权限和目标是否尚不存在。"); Environment.ExitCode = 1; }
+    return;
+}
+
 // 分支切换自重启：等旧进程释放端口后再绑定。
 var restartDelay = Environment.GetEnvironmentVariable("TRACESOUL2_RESTART_DELAY");
 if (int.TryParse(restartDelay, out var delayMs) && delayMs > 0)
     Thread.Sleep(delayMs);
 
+RuntimePathRepair.Check(TraceHome.DefaultRoot(), AppContext.BaseDirectory);
 var home = TraceHome.Resolve();
 var dataDir = home.SoulDirectory;
 var trustContainerProxy = string.Equals(
@@ -143,6 +157,12 @@ builder.Services.AddHostedService<FailureNotificationWorker>();
 builder.Services.AddHostedService<WxxzDeviceControlWorker>();
 builder.Services.AddSingleton<DailyPipelineWorker>();
 builder.Services.AddHostedService(sp => sp.GetRequiredService<DailyPipelineWorker>());
+builder.Services.AddSingleton(sp => new BackupArchiveService(home, async (action, token) =>
+{
+    using (await sp.GetRequiredService<DailyPipelineWorker>().HoldForArchiveAsync(token))
+        await sp.GetRequiredService<SoulRuntime>().ExclusiveAsync(() => { action(); return true; }, token);
+}));
+builder.Services.AddHostedService<BackupArchiveWorker>();
 
 var app = builder.Build();
 app.Use(async (context, next) =>
@@ -237,6 +257,7 @@ app.Use(async (context, next) =>
 
 app.MapGet("/status", (SoulRuntime runtime) => Results.Json(runtime.Status()));
 app.MapGet("/live-state", (SoulRuntime runtime) => Results.Json(runtime.LiveState()));
+app.MapBackups();
 
 // 正式版更新：GitHub Release → SHA-256 校验 → 外置 runner 替换应用目录。
 app.MapGet("/updates", (UpdateService updates) => Results.Json(updates.Status()));
@@ -247,7 +268,7 @@ app.MapPut("/updates/config", (UpdateService updates, UpdateConfigWrite body) =>
 app.MapPost("/updates/check", async (UpdateService updates, CancellationToken token) =>
     Results.Json(await updates.CheckAsync(token)));
 
-app.MapPost("/updates/install", (UpdateService updates) =>
+app.MapPost("/updates/install", (UpdateService updates, BackupArchiveService backups) =>
 {
     // Return immediately. Slow downloads live in the service, not an HTTP request.
     var result = updates.StartInstall(() =>
@@ -257,7 +278,7 @@ app.MapPost("/updates/install", (UpdateService updates) =>
             await Task.Delay(800);
             app.Lifetime.StopApplication();
         });
-    });
+    }, backups.PrepareForUpdateAsync);
     return Results.Json(result);
 });
 

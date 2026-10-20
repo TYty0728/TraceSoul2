@@ -27,9 +27,9 @@ git lfs pull
 
 ```powershell
 .\scripts\Export-DockerRuntime.ps1 `
-  -SourceHome 'D:\TraceSoul2' `
-  -SourcePlugins 'D:\AISoftWare\TraceSoul2\plugins' `
-  -SourcePluginsData 'D:\AISoftWare\TraceSoul2\plugins_data'
+  -SourceHome 'C:\SoulData' `
+  -SourcePlugins 'C:\SoulPlugins' `
+  -SourcePluginsData 'C:\SoulPluginData'
 ```
 
 脚本会复制角色、数据库、插件和插件数据，把导出副本的插件路径改为相对目录，并清空只适用于 Windows 的 `napcat_path`。`runtime/` 已被 Git 忽略，绝不能提交。
@@ -142,6 +142,8 @@ python3 scripts/update-server.py --root /home/ubuntu/TraceSoul2 --version 0.1.7
 `Plugins/` 中的 `qq-tts`、`qq-imagegen`、`qq-qzone`、`qq-status`、`qq-sticker`、`game-session`、`media-understanding`、`realtime-call`、`tavily` 官方包会随正式版本升级，但对应 `plugins_data/<包名>/` 配置和生成文件保持原样。旧 `App` 与旧官方插件包会作为隐藏备份目录保留在 `runtime/`，确认新版稳定后再人工清理。
 
 ## 6. 整目录带回本地
+
+在线定时存档使用WebUI「备份与恢复」：默认每周一次（168小时）、固定保留1份，写入宿主机`runtime/Data/archives/packages/`，可改为另一个已挂载且运行用户可写的专用目录。新包落盘并完成解密/文件/数据库校验后才清理旧包，失败保留旧包。WebUI更新交接前强制存档并锁定，更新失败或连续纠错不覆盖该恢复点；确认新版本正常后在备份页解除保护，再恢复轮换。下载加密成品时请另行保存恢复密钥；完整范围、自定义目录和离线恢复命令见[定时存档](BACKUP_ARCHIVE.md)。定时默认关闭，尚未部署服务器，电脑自动拉取和百度上传尚未接入。
 
 停止容器后复制整个 `runtime/`。在另一台 Linux 或安装了 Docker Desktop 的电脑上，把它放回项目根目录并再次运行 `scripts/docker-up.sh` 即可。SQLite 的 `-wal`、`-shm` 文件必须和主数据库一起复制，不能在线漏拷。
 

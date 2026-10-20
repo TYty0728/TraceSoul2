@@ -20,6 +20,8 @@ internal static partial class Program
     private static void Main(string[] args)
     {
         SQLitePCL.Batteries_V2.Init();
+        if (args.Contains("--runtime-paths")) { RunRuntimePathRepairChecks(); return; }
+        if (args.Contains("--backups")) { RunBackupArchiveChecksAsync().GetAwaiter().GetResult(); return; }
         if(args.Contains("--expressions")){RunExpressionChecksAsync().GetAwaiter().GetResult();return;}
         if(args.Length==4&&args[0]=="--expression-probe"){RunExpressionProbeAsync(args[1],args[2],args[3]).GetAwaiter().GetResult();return;}
         if (args.Contains("--moment-semantics")) { RunMomentSemanticsChecksAsync().GetAwaiter().GetResult(); return; }
@@ -70,6 +72,8 @@ internal static partial class Program
         if (args.Contains("--wxxz")) { RunWxxzChecksAsync().GetAwaiter().GetResult(); return; }
         if (args.Contains("--wxxz-board")) { RunWxxzChecksAsync(true).GetAwaiter().GetResult(); return; }
         RunWxxzChecksAsync().GetAwaiter().GetResult();
+        RunBackupArchiveChecksAsync().GetAwaiter().GetResult();
+        RunRuntimePathRepairChecks();
         RunMomentSemanticsChecksAsync().GetAwaiter().GetResult();
         RunExpressionChecksAsync().GetAwaiter().GetResult();
         RunDecisionsChecksAsync().GetAwaiter().GetResult();
@@ -2734,9 +2738,9 @@ internal static partial class Program
                 type == "private" && id == "10002",
             "应从最近一条带会话载荷的 Moment 找回 QQ 会话");
         Require(OneBotPlatformAdapter.IsStickerAsset(
-                    @"D:\AISoftWare\TraceSoul2\plugins\qq-sticker\emojis\Xun\a.png") &&
+                    @"Z:\fixture\plugins\qq-sticker\emojis\example\a.png") &&
                 !OneBotPlatformAdapter.IsStickerAsset(
-                    @"D:\AISoftWare\TraceSoul2\plugins\qq-imagegen\output\a.png"),
+                    @"Z:\fixture\plugins\qq-imagegen\output\a.png"),
             "自定义图片表情应与普通图片分开识别，以便追加到文字末尾");
     }
 
