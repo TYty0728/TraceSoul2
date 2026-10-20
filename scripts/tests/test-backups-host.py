@@ -1,12 +1,13 @@
 """Real temporary Host: authenticated archives and offline recovery; no models or real data."""
 import http.cookiejar
 import hashlib
+import base64
 import json
 import os
 from pathlib import Path
-import re
 import shutil
 import socket
+import sqlite3
 import subprocess
 import sys
 import tempfile
@@ -52,6 +53,19 @@ def run():
         original_hash=hashlib.sha256((misplaced/'config.json').read_bytes()).hexdigest()
         env = {k:v for k,v in os.environ.items() if not k.startswith('TRACESOUL2_')}
         (root/'home').mkdir()
+        # A disposable pre-seeded account avoids localized console parsing and printing generated credentials.
+        password='Initial-archive-fixture-2026!'
+        salt=os.urandom(16)
+        auth=dict(version=1,username='admin',algorithm='PBKDF2-SHA256',iterations=600000,
+            salt=base64.b64encode(salt).decode(),
+            passwordHash=base64.b64encode(hashlib.pbkdf2_hmac('sha256',password.encode(),salt,600000)).decode(),
+            sessionStamp=os.urandom(16).hex(),mustChangePassword=True,updatedAtUtc='2026-10-20T00:00:00Z')
+        (root/'home'/'control-auth.json').write_text(json.dumps(auth),encoding='utf-8')
+        (root/'home'/'soul').mkdir()
+        (root/'plugins').mkdir()
+        with sqlite3.connect(root/'home'/'soul'/'tracesoul2-brainframe.sqlite3') as db:
+            db.execute('PRAGMA user_version=0')
+        db.close()
         env.update(TRACESOUL2_HOME=str(root/'home'), TRACESOUL2_DATA=str(root/'home'/'soul'),
             TRACESOUL2_PLUGINS=str(root/'plugins'), TRACESOUL2_PLUGINS_DATA=str(misplaced), TRACESOUL2_URLS=base)
         logfile = root/'host.log'
@@ -59,24 +73,19 @@ def run():
             process = subprocess.Popen(['dotnet',str(assembly)],env=env,stdout=output,stderr=subprocess.STDOUT,
                 creationflags=subprocess.CREATE_NO_WINDOW if os.name == 'nt' else 0)
             try:
-                password = None
+                ready = False
                 deadline = time.monotonic()+45
                 while time.monotonic() < deadline:
-                    raw_log = logfile.read_bytes()
-                    for encoding in ('utf-8','gb18030'):
-                        match = re.search(r'初始密码：([^\r\n]+)',raw_log.decode(encoding,errors='replace'))
-                        if match:
-                            password=match.group(1).strip()
-                            break
-                    if password:
-                        try:
-                            api('/auth/status')
-                            break
-                        except (OSError,AssertionError):
-                            pass
-                    assert process.poll() is None, 'temporary Host exited'
+                    try:
+                        api('/auth/status')
+                        ready = True
+                        break
+                    except (OSError,AssertionError):
+                        pass
+                    if process.poll() is not None:
+                        raise AssertionError('temporary Host exited: '+logfile.read_text(encoding='utf-8',errors='replace')[-4000:])
                     time.sleep(.15)
-                assert password, 'temporary Host did not initialize'
+                assert ready, 'temporary Host did not become ready'
                 api('/backups',expect=401)
                 api('/backups/recovery-key',expect=401)
                 api('/auth/login','POST',{'username':'admin','password':password})
