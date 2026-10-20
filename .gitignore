@@ -32,6 +32,11 @@ TestResults/
 **/memory-nerve.json
 **/debug-mode.json
 **/plugin-data/
+**/plugins_data/
+**/souls/
+**/emoji_index.json
+**/speech.json
+**/wake.json
 **/plugins-uninstalled/
 **/updates/
 
@@ -63,3 +68,7 @@ _llmdump/
 .release/
 *.zip
 *.sha256
+# Device Wi-Fi credentials and certificates are private runtime data.
+wifi-client.json
+wifi-client.*.json
+**/wifi-client*.json

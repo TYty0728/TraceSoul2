@@ -43,7 +43,7 @@ namespace TraceSoul2.ExternalPlugins
 
         private string providerId = string.Empty;
         private string configApiKey = string.Empty;
-        private string configApiUrl = "";
+        private string configApiUrl = string.Empty;
         private string configModel = "voice-3.2-fs";
         private string apiKey = string.Empty;
         private string apiUrl = string.Empty;
@@ -67,7 +67,7 @@ namespace TraceSoul2.ExternalPlugins
         {
             Id = PluginId,
             DisplayName = "QQ 语音（情感 TTS）",
-            Version = "2.0.2",
+            Version = "2.0.3",
             Author = "TraceSoul2",
             Role = PluginRoleValues.Organ,
             PlatformId = BodyIds.Qq,

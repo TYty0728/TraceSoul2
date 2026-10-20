@@ -77,6 +77,16 @@ internal static partial class Program
             }));
             Require(qqSource.Type == MomentTypes.Message && qqSource.SourcePlatform == "qq" && qqSource.Content == "原始QQ文字",
                 "QQ使用类型与平台元数据，不再把平台标签混入新正文");
+            var qqMoment=new MomentRecord {Id="qq-label-check",ConversationId="qq-label-check",Role="测试者",
+                Type=qqSource.Type,SourcePlatform=qqSource.SourcePlatform,Content=qqSource.Content,
+                EvidenceType=EvidenceTypeValues.DialogueExplicit,CreatedUnixMs=1000};
+            var qqTurn=new TraceTurnContext("qq-label-check",qqMoment,new List<MomentRecord>{qqMoment},12,true,services);
+            var trigger=RuntimeContextLogic.Trigger(qqTurn);
+            Require(trigger.Contains("本轮类型：我收到消息；来源平台：QQ")&&
+                MomentTypes.ForPrompt(qqMoment).StartsWith("【我收到消息】\n"),"当前主模型Prompt同时提供类型和平台，正文标签只由可信字段生成");
+            var qqHistory=CommonContextPackLogic.BuildRecentChatHistory(qqTurn);
+            Require(qqHistory.Single().content.Contains(" · QQ · ")&&qqHistory.Single().content.Contains("【我收到消息】"),
+                "历史Prompt也同时保留QQ平台与消息类型");
             var png = "data:image/png;base64,iVBORw0KGgoAAAANSUhEUgAAAAEAAAABCAYAAAAfFcSJAAAADUlEQVR42mP8z8BQDwAEhQGAhKmMIQAAAABJRU5ErkJggg==";
             var source = new PluginEventData { PluginId = "builtin.dialogue", ExternalEventId = "image-message", Role = "测试者",
                 Type = MomentTypes.Message, SourcePlatform = "qq", Content = "请看看图片", EvidenceType = EvidenceTypeValues.DialogueExplicit,

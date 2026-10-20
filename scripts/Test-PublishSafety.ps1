@@ -17,7 +17,9 @@ if ((Test-Path -LiteralPath (Join-Path $repoRoot '.git')) -and -not $IncludeUntr
 
 $forbiddenNames = @(
     'llm-providers.json', 'onebot.json', 'home.json', 'debug-mode.json',
-    'bodies.json', 'memory-nerve.json'
+    'bodies.json', 'memory-nerve.json', 'emoji_index.json',
+    'owner-voiceprint.json', 'voiceprint.json', 'local-voice-client.json',
+    'access.json', 'speech.json', 'wake.json'
 )
 $forbiddenExtensions = @('.sqlite', '.sqlite3', '.db', '.pem', '.pfx', '.p12', '.key')
 $credentialPatterns = [ordered]@{
@@ -33,6 +35,22 @@ $findings = [Collections.Generic.List[object]]::new()
 foreach ($filePath in $files) {
     if (-not (Test-Path -LiteralPath $filePath) -or [IO.Path]::GetFullPath($filePath) -eq $selfPath) { continue }
     $item = Get-Item -LiteralPath $filePath -Force
+    $relative = [IO.Path]::GetRelativePath($repoRoot, $item.FullName).Replace('\', '/')
+    if ($relative -eq 'ExternalPlugins/QqTts/plugin.json') {
+        $defaults = Get-Content -LiteralPath $filePath -Raw | ConvertFrom-Json
+        if (-not [string]::IsNullOrWhiteSpace([string]$defaults.api_url) -or
+            -not [string]::IsNullOrWhiteSpace([string]$defaults.api_key)) {
+            $findings.Add([pscustomobject]@{ File=$filePath; Line=0; Kind='nonempty private speech default' })
+        }
+    }
+    if ($relative -eq 'ExternalPlugins/QqTts/QqTtsPlugin.cs' -and
+        [regex]::IsMatch([IO.File]::ReadAllText($filePath), 'configApiUrl\s*=\s*"https?://')) {
+        $findings.Add([pscustomobject]@{ File=$filePath; Line=0; Kind='hardcoded speech service default' })
+    }
+    if ($relative -match '(^|/)(plugins_data|plugin-data|souls)(/|$)' -or
+        $item.Name -like 'wifi-client*.json') {
+        $findings.Add([pscustomobject]@{ File=$filePath; Line=0; Kind='private runtime directory or device pairing' })
+    }
     if ($forbiddenNames -contains $item.Name.ToLowerInvariant() -and
         $item.Name -ne 'llm-providers.example.json') {
         $findings.Add([pscustomobject]@{ File=$filePath; Line=0; Kind='runtime configuration' })

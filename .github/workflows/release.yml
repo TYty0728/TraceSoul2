@@ -61,6 +61,7 @@ jobs:
           dotnet Tools/Updater/bin/Release/net8.0/TraceSoul2.Updater.dll --self-test
           dotnet Tools/UpdateCheck/bin/Release/net8.0/UpdateCheck.dll
           python -m unittest discover -s scripts/tests -p test_update_server.py
+          python -m unittest discover -s scripts/tests -p test_publish_privacy.py
           node scripts/tests/test-update-ui.cjs
           node scripts/tests/test-daily-build-ui.cjs
           node scripts/tests/test-provider-slots-ui.cjs

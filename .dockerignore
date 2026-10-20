@@ -34,3 +34,8 @@ _llmdump
 .env.*
 Tools/SensoryBoard/firmware/build
 Tools/SensoryBoard/firmware/managed_components
+**/wifi-client*.json
+**/souls
+**/emoji_index.json
+**/speech.json
+**/wake.json
