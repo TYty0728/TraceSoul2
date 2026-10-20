@@ -47,6 +47,9 @@ namespace TraceSoul2.Host
         private WxxzDisplay.Ticket displayTurn;
         public Func<WxxzVoiceMonitor.Snapshot> MonitorStatus { get; set; }
         public Func<string,bool> ManagedAdmissionAllowed {get;set;}
+        public Func<WxxzDeviceControl.Snapshot> DeviceControlStatus {get;set;}
+        public bool HasCall=>CallId!=null;
+        public string ActiveCallId=>CallId;
         private bool BackgroundBusy => MonitorStatus?.Invoke().active == true;
         private string activeCheckId;
         public string SessionId => session;
@@ -112,7 +115,7 @@ namespace TraceSoul2.Host
             privateSession = exclusive, delivery, voice = VoiceDescription, speech = speech?.Public(), input = "板载麦克风听写 / 管理员手动文字",
             voiceprint = voiceprint.Status(), callId = CallId, wake = attention.Configuration(), attention = attention.State(),
             monitor = MonitorStatus?.Invoke(), diagnostics = Diagnostics.Snapshot(), wakeAudio = WakeAudioStatus(), companionDisplay,
-            displayState = DisplayState() };
+            displayState = DisplayState(), deviceControl=DeviceControlStatus?.Invoke() };
         public WxxzDisplay.Snapshot DisplayState()
         {
             bool wake;lock(callSync)wake=currentCall?.WakeMode==true;
@@ -238,9 +241,17 @@ namespace TraceSoul2.Host
                     receipts.GetArrayLength() == 0 || receipts.EnumerateArray().Any(x => !Valid(x, "done")))
                     throw new InvalidOperationException("WXXZ 未收到完整播放完成回执；未重发。");
             }
-            else if (!json.RootElement.TryGetProperty("receipt", out var receipt) || !Valid(receipt, path == "api/status" ? "ready" : "done"))
+            else if (!json.RootElement.TryGetProperty("receipt", out var receipt) || !Valid(receipt, path is "api/status" or "api/device/control" ? "ready" : "done"))
                 throw new InvalidOperationException("WXXZ 未收到有效板端回执；未重发。");
             return json.RootElement.Clone();
+        }
+        public async Task<WxxzDeviceControl.Receipt> ExchangeDeviceControlAsync(WxxzDeviceControl.Request body,CancellationToken token)
+        {
+            var result=await Request("api/device/control",body,token);
+            var receipt=result.GetProperty("receipt");
+            return new(receipt.GetProperty("controller").GetString(),receipt.GetProperty("boot").GetString(),
+                receipt.GetProperty("sequence").GetInt64(),receipt.GetProperty("action").GetString(),
+                receipt.GetProperty("local_mic_paused").GetBoolean());
         }
 
         public async Task<object> ListenAsync(string expectedSession, CancellationToken token)
@@ -326,8 +337,11 @@ namespace TraceSoul2.Host
         {
             ValidateCallStart(expectedSession,wakeMode,background);
             var status = await Request("api/status", new { }, token);
-            if (!status.GetProperty("receipt").TryGetProperty("firmware", out var version) || version.GetString() != "0.3.0")
-                throw new InvalidOperationException("实时通话需要0.3.0感官固件，请先更新开发板。");
+            if (!status.GetProperty("receipt").TryGetProperty("firmware", out var version) ||
+                !SupportsRealtimeFirmware(version.GetString()))
+                throw new InvalidOperationException("实时通话需要兼容的0.3/0.4感官固件，请先更新开发板。");
+            if(status.GetProperty("receipt").TryGetProperty("local_mic_paused",out var paused)&&paused.ValueKind==JsonValueKind.True)
+                throw new InvalidOperationException("开发板麦克风已在本机暂停，请在板端允许采音或点击开始对话。");
             token.ThrowIfCancellationRequested();
             lock (callSync)
             {
@@ -339,6 +353,9 @@ namespace TraceSoul2.Host
             captureId = capturedText = capturedRawText = capturedCallId = null;
             return Status();
         }
+
+        internal static bool SupportsRealtimeFirmware(string value)=>Version.TryParse(value,out var version)&&
+            version.Major==0&&(version.Minor==3||version.Minor==4)&&version.Build>=0;
 
         public async Task<object> StopCallAsync(string expectedCall, CancellationToken token)
         {

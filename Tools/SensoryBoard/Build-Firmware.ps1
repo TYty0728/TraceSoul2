@@ -16,6 +16,6 @@ $toolBins = Get-ChildItem -LiteralPath (Join-Path $env:IDF_TOOLS_PATH 'tools') -
 $env:PATH = "$env:IDF_PYTHON_ENV_PATH/Scripts;" + ($toolBins -join ';') + ';' + $env:PATH
 Push-Location (Join-Path $PSScriptRoot 'firmware')
 try {
-    & $python (Join-Path $env:IDF_PATH 'tools/idf.py') -B $BuildDirectory build
+    & $python (Join-Path $env:IDF_PATH 'tools/idf.py') -B $BuildDirectory -D "SDKCONFIG=$BuildDirectory/sdkconfig" build
     if ($LASTEXITCODE -ne 0) { throw 'Firmware build failed' }
 } finally { Pop-Location }

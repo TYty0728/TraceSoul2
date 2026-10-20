@@ -20,6 +20,8 @@ internal static partial class Program
         public List<string> Paths = new();
         public bool FailText, FailVoice;
         public bool Companion, MissingDisplayReceipt;
+        public string Firmware="0.3.0";
+        public bool LocalMicPaused;
         public Action<string> Observe;
         public readonly List<string> Authorizations=new();
         public readonly List<System.Text.Json.JsonElement> Bodies=new();
@@ -46,8 +48,15 @@ internal static partial class Program
                 Pending.TrySetResult(Utterance());
                 return Task.FromResult(new HttpResponseMessage(HttpStatusCode.OK) { Content = new StringContent("{\"ok\":true}") });
             }
+            if(path=="/api/device/control")
+            {
+                var body=Bodies.Last();
+                return Task.FromResult(new HttpResponseMessage(HttpStatusCode.OK){Content=new StringContent(System.Text.Json.JsonSerializer.Serialize(new
+                {ok=true,receipt=new {protocol=1,status="ready",controller=body.GetProperty("controller").GetString(),boot=new string('b',32),
+                    sequence=body.GetProperty("ack").GetInt64(),action="",local_mic_paused=LocalMicPaused}}))});
+            }
             var fail = path == "/api/text" ? FailText : path == "/api/speak" && FailVoice;
-            var receipt = "{\"protocol\":1,\"firmware\":\"0.3.0\",\"status\":\"" + (path == "/api/status" ? "ready" : "done") + "\"}";
+            var receipt = "{\"protocol\":1,\"firmware\":"+System.Text.Json.JsonSerializer.Serialize(Firmware)+",\"local_mic_paused\":"+(LocalMicPaused?"true":"false")+",\"status\":\"" + (path == "/api/status" ? "ready" : "done") + "\"}";
             if (path == "/api/listen")
                 return Task.FromResult(new HttpResponseMessage(HttpStatusCode.OK) { Content = new StringContent("{\"ok\":true,\"receipt\":" + receipt + ",\"text\":\"本地听写样本\"}") });
             return Task.FromResult(new HttpResponseMessage(fail ? HttpStatusCode.ServiceUnavailable : HttpStatusCode.OK)
@@ -58,7 +67,7 @@ internal static partial class Program
     }
     private static async Task RunWxxzChecksAsync(bool hardware = false)
     {
-        if (!hardware) { await CheckWxxzDisplayAsync(); await CheckWxxzMonitorAsync(); await CheckWxxzAudioInterlockAsync(); CheckWxxzAttention(); await CheckWxxzWakeAsync(); CheckWxxzVoiceprint(); await CheckWxxzCallLifecycleAsync(); await CheckWxxzSpeechAsync(); }
+        if (!hardware) { await CheckWxxzDeviceControlAsync(); await CheckWxxzDisplayAsync(); await CheckWxxzMonitorAsync(); await CheckWxxzAudioInterlockAsync(); CheckWxxzAttention(); await CheckWxxzWakeAsync(); CheckWxxzVoiceprint(); await CheckWxxzCallLifecycleAsync(); await CheckWxxzSpeechAsync(); }
         using var store = new SqliteMemoryManager(":memory:");
         store.SavePairIdentity("测试者", "测试同伴", "测试者");
         var services = new TracePluginServices(store, new HierarchicalVectorRouterLogic(new FakeEncoder()));
@@ -380,6 +389,12 @@ internal static partial class Program
             transport.UtteranceVoice = Evidence(1);
             async Task<string> Start() => System.Text.Json.JsonSerializer.SerializeToElement(
                 await board.StartCallAsync(board.SessionId, CancellationToken.None)).GetProperty("callId").GetString();
+            transport.Firmware="0.4.3";transport.LocalMicPaused=true;
+            var device=await board.ExchangeDeviceControlAsync(new(new string('a',32),4,false,"paused",true,null),CancellationToken.None);
+            Require(device.sequence==4&&device.localMicPaused&&device.controller==new string('a',32),"Host读取并核验真实控制同步回执契约");
+            try{await Start();throw new Exception("paused board started");}
+            catch(InvalidOperationException e){Require(e.Message.Contains("本机暂停"),"0.4.3板端暂停时在主逻辑层拒绝开始，不采音");}
+            transport.LocalMicPaused=false;
             var callId = await Start();
             try {board.ConfigureSpeech(new WxxzSpeech.Settings {engine="remote"});throw new Exception("speech changed during call");}
             catch(InvalidOperationException e){Require(e.Message.Contains("结束通话"),"服务端也拒绝在通话中切换音色");}

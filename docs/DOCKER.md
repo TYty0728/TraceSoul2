@@ -145,7 +145,7 @@ python3 scripts/update-server.py --root /home/ubuntu/TraceSoul2 --version 0.1.7
 
 停止容器后复制整个 `runtime/`。在另一台 Linux 或安装了 Docker Desktop 的电脑上，把它放回项目根目录并再次运行 `scripts/docker-up.sh` 即可。SQLite 的 `-wal`、`-shm` 文件必须和主数据库一起复制，不能在线漏拷。
 
-## 7. 0.1.48感官与语音服务
+## 7. 感官与语音服务（0.1.50）
 
 主Docker容器负责Soul、Moment、供应商请求和表情选择，不安装USB驱动、ASR模型、PyTorch或千问GPU模型。没有开发板、声纹或TTS服务时，Host正常启动，WXXZ显示未连接且不会自动监听。新镜像初始化九个官方插件；重启不覆盖已经存在的插件目录或任何plugins_data。已有runtime/App不会因重建镜像而强行升级，仍使用WebUI或上文更新脚本升级。
 
@@ -159,7 +159,7 @@ QQ和WXXZ的共用图库位于`runtime/plugins_data/qq-sticker/`，模型与语�
 
 ### 开发板桥
 
-开发板仍连接有USB的本地电脑，由`Tools/SensoryBoard/bridge.py`采音、ASR及播放。服务器不能直接使用本地电脑的COM端口。可选择受保护的HTTPS网关，或把SSH转发建立在Host所在网络命名空间的回环端口；默认地址仍为`http://127.0.0.1:5089/`。
+开发板通过USB或已配对的局域网Wi-Fi连接运行`Tools/SensoryBoard/bridge.py`的电脑，桥负责采音、ASR及播放。Wi-Fi使用设备证书校验与独立令牌，充电宝仅供电；服务器不能直接使用本地电脑的COM端口，也不能把板端5443端口当作HTTP桥。可选择受保护的HTTPS网关，或把SSH转发建立在Host所在网络命名空间的回环端口；默认地址仍为`http://127.0.0.1:5089/`。
 
 专用HTTPS入口在Compose的私密`.env`中填写：
 
@@ -171,3 +171,5 @@ TRACESOUL2_WXXZ_BRIDGE_KEY=YOUR_32_TO_256_CHARACTER_PRIVATE_TOKEN
 远端桥必须配置32～256位英文字母/数字/下划线/短横线的独立Bearer；不能填供应商Key或控制台Cookie。网关负责验证该令牌，再将固定路径转发给本地回环桥，覆盖上游Host为`127.0.0.1:5089`并清除跨站Origin，不接受任意目标URL。桥自身仍仅监听回环并保留来源校验，本版本不自动部署网关或创建隧道。没有网关时不要把URL改成公网IP，不要开放裸5089端口。
 
 配置后重新创建Host容器，再明确连接/开始监听；Host重启不会自动采音。本机密钥、声纹档案和音色参考目录需要备份，均不进入镜像构建上下文或Git。状态预览可在无硬件时演示，但不代表实体屏幕动画已接入。
+
+0.1.50新增的板端触屏通话还需0.4.3固件与新版桥；在已登录WebUI勾选「允许开发板触屏开始／结束对话」后才轮询设备，Host重启会撤销授权，不因容器启动自动访问USB/Wi-Fi或开始通话。若网关按路径放行，除原媒体接口外还需放行固定的`POST /api/device/control`并沿用同一私有Bearer校验。连接桥的Python环境需安装更新后的`Tools/SensoryBoard/requirements.txt`（新增cryptography），主Docker镜像无须安装该依赖或ESP-IDF。固件与桥独立安装，WebUI更新Host不会自动刷写开发板；触屏通话仍待实物验收，见[操作与边界](WXXZ_TOUCH_CALL.md)。

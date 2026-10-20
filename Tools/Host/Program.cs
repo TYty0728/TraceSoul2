@@ -140,6 +140,7 @@ builder.Services.AddAuthorization(options =>
 });
 builder.Services.AddHostedService<BackgroundMomentWorker>();
 builder.Services.AddHostedService<FailureNotificationWorker>();
+builder.Services.AddHostedService<WxxzDeviceControlWorker>();
 builder.Services.AddSingleton<DailyPipelineWorker>();
 builder.Services.AddHostedService(sp => sp.GetRequiredService<DailyPipelineWorker>());
 
@@ -527,6 +528,11 @@ app.MapPost("/moments", async (SoulRuntime runtime, MomentWrite body, Cancellati
 
 // Dashboard-authenticated, same-origin simulator. No device-supplied routing/owner claims.
 app.MapGet("/wxxz", (SoulRuntime runtime) => Results.Json(runtime.Wxxz.Status()));
+app.MapPut("/wxxz/device/control",async(SoulRuntime runtime,WxxzDeviceControlWrite body,CancellationToken token)=>
+{
+    await runtime.WxxzDevice.ConfigureAsync(body.enabled,token);
+    return Results.Json(runtime.Wxxz.Status());
+});
 app.MapGet("/expressions", (SoulRuntime runtime) => Results.Json(runtime.Expressions.Catalog()));
 app.MapPost("/expressions/reload", async (SoulRuntime runtime,CancellationToken token) =>
     Results.Json(await runtime.ExclusiveAsync(()=>runtime.ReloadExpressions(),token)));
@@ -1467,6 +1473,7 @@ internal sealed class ProviderWrite
 
 internal sealed class DecisionTestWrite { public string model { get; set; } }
 internal sealed class SpeechTestWrite { public string text { get; set; } }
+internal sealed class WxxzDeviceControlWrite { public bool enabled { get; set; } }
 internal sealed class ExpressionSemanticsWrite { public string[] tags { get; set; } }
 
 internal sealed class ModelWrite

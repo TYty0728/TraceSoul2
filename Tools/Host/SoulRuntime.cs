@@ -53,6 +53,7 @@ namespace TraceSoul2.Host
         public LlmProviderStore Providers { get; private set; }
         public WxxzPlatform Wxxz { get; private set; }
         public WxxzVoiceMonitor WxxzMonitor { get; private set; }
+        public WxxzDeviceControl WxxzDevice { get; private set; }
         public int HistoryWindowMax { get; private set; }
         public int HistoryWindowAlign { get; private set; }
         public int HistoryWindowMin { get; private set; }
@@ -127,6 +128,13 @@ namespace TraceSoul2.Host
                 (phase,code,reason)=>Wxxz.Diagnostics.Add(phase,code,reason));
             Wxxz.MonitorStatus=()=>WxxzMonitor.Status();
             Wxxz.ManagedAdmissionAllowed=call=>WxxzMonitor.AdmissionAllowed(call);
+            WxxzDevice=new WxxzDeviceControl(Wxxz.ExchangeDeviceControlAsync,DeviceWxxzActionAsync,()=>
+            {
+                var monitor=WxxzMonitor.Status();
+                return(monitor.active?monitor.state=="running":Wxxz.HasCall,Wxxz.DisplayState().state,
+                    Plugins.GetPlugins().Any(x=>x.Id==WxxzPlatform.Id&&x.Enabled));
+            });
+            Wxxz.DeviceControlStatus=()=>WxxzDevice.Status();
             externalPlugins = new ExternalPluginLoader(PluginsDirectory, PluginsDataDirectory);
             externalPlugins.ScanAndLoad(Plugins, Emit);
             // 记忆神经已改造成新事件结构（event_indexes/event_entries），只读召回，强制启用
@@ -645,6 +653,11 @@ namespace TraceSoul2.Host
             {
                 if(!Plugins.GetPlugins().Any(x=>x.Id==WxxzPlatform.Id && x.Enabled)) throw new InvalidOperationException("WXXZ 插件未启用。");
                 var result=JsonSerializer.SerializeToElement(await Wxxz.StartCallAsync(session,token,wake,background:true));
+                if(WxxzDevice.Starting)
+                {
+                    try{await WxxzDevice.ConfirmStartAsync(token);}
+                    catch{await Wxxz.StopCallAsync(result.GetProperty("callId").GetString(),CancellationToken.None);throw;}
+                }
                 return result.GetProperty("callId").GetString();
             }
             finally {gate.Release();}
@@ -675,6 +688,20 @@ namespace TraceSoul2.Host
         {
             await WxxzMonitor.StartAsync(session,wake,token);
             return Wxxz.Status();
+        }
+        private async Task DeviceWxxzActionAsync(string action,CancellationToken token)
+        {
+            if(action=="stop")
+            {
+                await WxxzMonitor.StopAsync();
+                if(Wxxz.HasCall)await Wxxz.StopCallAsync(Wxxz.ActiveCallId,token);
+                return;
+            }
+            if(action!="start")throw new InvalidOperationException("未知设备操作。");
+            if(WxxzMonitor.IsActive||Wxxz.HasCall)throw new InvalidOperationException("现有通话尚未收尾，请稍后重新开始。");
+            // A physical start uses a public scene unless the administrator already opened a private one.
+            if(Wxxz.SessionId==null)await StartWxxzAsync(false,token);
+            await StartWxxzMonitorAsync(Wxxz.SessionId,false,token);
         }
         public async Task<object> StopWxxzMonitorAsync(string expectedId)
         {
@@ -1276,6 +1303,7 @@ namespace TraceSoul2.Host
         {
             if (disposed) return;
             disposed = true;
+            WxxzDevice?.Dispose();
             WxxzMonitor?.Dispose();
             try { deferredTurns.Writer.TryComplete(); } catch { /* ignored */ }
             try { maintenanceTurns.Writer.TryComplete(); } catch { /* ignored */ }

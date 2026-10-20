@@ -54,12 +54,14 @@
     <Compile Include="WxxzDisplayChecks.cs" />
     <Compile Include="../Host/WxxzDiagnostics.cs" Link="WxxzDiagnostics.cs" />
     <Compile Include="../Host/WxxzVoiceMonitor.cs" Link="WxxzVoiceMonitor.cs" />
+    <Compile Include="../Host/WxxzDeviceControl.cs" Link="WxxzDeviceControl.cs" />
     <Compile Include="../Host/WxxzVoiceprint.cs" Link="WxxzVoiceprint.cs" />
     <Compile Include="../Host/WxxzSpeech.cs" Link="WxxzSpeech.cs" />
     <Compile Include="../Host/QwenTtsProvider.cs" Link="QwenTtsProvider.cs" />
     <Compile Include="QwenTtsChecks.cs" />
     <Compile Include="MomentSemanticsChecks.cs" />
     <Compile Include="WxxzChecks.cs" />
+    <Compile Include="WxxzDeviceControlChecks.cs" />
     <Compile Include="WxxzAttentionChecks.cs" />
     <Compile Include="WxxzMonitorChecks.cs" />
     <Compile Include="../Host/LlmProviderCatalog.cs" Link="LlmProviderCatalog.cs" />

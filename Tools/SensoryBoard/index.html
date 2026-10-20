@@ -4,8 +4,20 @@
 <style>
 *{box-sizing:border-box}body{margin:0;background:#101824;color:#ecf3fa;font:16px/1.6 system-ui,sans-serif}main{max-width:1000px;margin:40px auto;padding:24px}h1{font-size:28px;margin:0}p{color:#a8bacd}.grid{display:grid;grid-template-columns:1fr 320px;gap:32px;margin-top:24px}.card{background:#1b293b;border:1px solid #33455a;border-radius:16px;padding:22px;margin-bottom:18px}textarea{width:100%;height:150px;padding:12px;border:1px solid #526277;border-radius:8px;background:#101824;color:inherit;font:inherit}button{background:#83e2c8;color:#102620;border:0;border-radius:8px;padding:10px 18px;font-weight:700;cursor:pointer;margin-top:12px}button:disabled{opacity:.45}input{max-width:100%}#preview{width:320px;height:480px;border:1px solid #496274;border-radius:12px;object-fit:contain;background:#080e16}#status{white-space:pre-wrap;overflow-wrap:anywhere;font-size:14px}small{color:#a8bacd}@media(max-width:760px){.grid{grid-template-columns:1fr}main{margin:8px auto}.screen{margin:auto}}
 </style>
-<main><h1>TraceSoul · 感官终端</h1><p>通过 USB 发送文字、图片和短音频。完成状态来自开发板的执行回执。</p>
+<main><h1>TraceSoul · 感官终端</h1><p>通过 USB 或已配对的 Wi-Fi 发送文字、图片和声音。完成状态来自开发板的执行回执。</p>
 <button id="connect">检查连接</button><span id="busy" role="status" aria-live="polite"></span>
+<details class="card"><summary>Wi-Fi 配网与连接</summary>
+<p>首次配网请保持电脑USB连接。使用2.4GHz、WPA2/WPA3网络；电脑与板子需局域网互通。密码只交给本机服务并写入板子。</p>
+<label for="wifiSsid">Wi-Fi 名称</label><input id="wifiSsid" autocomplete="off" maxlength="32">
+<label for="wifiPassword">Wi-Fi 密码</label><input id="wifiPassword" type="password" autocomplete="off" maxlength="63">
+<p><button id="wifiSetup">保存 Wi-Fi 并重启开发板</button></p>
+<p><button id="wifiCheck">检查 Wi-Fi 状态</button> <button id="wifiUse">切换到 Wi-Fi 控制</button> <button id="wifiUsb">切回 USB</button></p>
+<div id="wifiStatus" role="status" aria-live="polite">尚未读取连接方式。</div>
+<p>Wi-Fi连接只解决开发板与控制桥通信；目标TraceSoul实例／角色配对尚未接入，不会根据网络自动选择Soul。</p>
+<p><small>先等Wi-Fi连接成功，再切换并测试屏幕／声音，之后换充电宝供电。无线连接校验USB配对的设备证书和密钥，不会降级到明文。连接方式保存在本机，重启桥后沿用。</small></p>
+</details>
+<details class="card"><summary>触屏硬件诊断</summary><p>需要0.4.1固件。开始后在实体板上点四角和中心，确认绿色标记跟随手指，再检查坐标；这里只验证输入，不启动对话。</p>
+<button id="touchTest">开始触屏测试</button> <button id="touchCheck">检查触摸状态</button> <button id="touchStop">结束触屏测试</button><div id="touchStatus" role="status" aria-live="polite">尚未测试。</div></details>
 <div class="grid"><section>
 <div class="card"><label for="text">屏幕文字</label><textarea id="text" maxlength="500">你好！
 我是 TraceSoul。
@@ -26,4 +38,16 @@ async function send(path,body){
 async function file(id,op){const f=$(id).files[0];if(!f){$('status').textContent='请先选择文件';return;}if(f.size>4*1024*1024){$('status').textContent='文件不能超过 4 MB';return;}
  const reader=new FileReader();reader.onload=()=>send(op,{data:reader.result.split(',')[1]});reader.readAsDataURL(f);}
 $('connect').onclick=()=>send('status',{});$('sendText').onclick=()=>send('text',{text:$('text').value});$('sendImage').onclick=()=>file('picture','image');$('sendAudio').onclick=()=>file('audio','audio');$('chime').onclick=()=>send('chime',{});
+async function wifiAction(path,body){
+ document.querySelectorAll('button').forEach(b=>b.disabled=true);$('wifiStatus').textContent='正在处理，请等待设备回执…';
+ try{const r=await fetch('/api/'+path,{method:'POST',headers:{'Content-Type':'application/json'},body:JSON.stringify(body)});const data=await r.json();if(!r.ok||!data.ok)throw Error(data.error||'未确认完成');
+ if(data.wifi){const w=data.wifi;$('wifiStatus').textContent=w.message||`连接方式：${w.mode==='wifi'?'Wi-Fi（TLS加密）':'USB'}；已配对：${w.paired?'是':'否'}${w.host?'；设备地址：'+w.host:''}`;}
+ else{const x=data.receipt;const reasons={2:'认证超时',15:'四次握手超时',200:'信标超时',201:'未找到接入点',202:'认证失败',203:'关联失败',204:'握手超时',210:'没有兼容的安全模式',211:'安全模式未达到要求',212:'信号低于要求'};$('wifiStatus').textContent=`固件：${x.firmware}；Wi-Fi：${x.wifi_connected?'已连接':'尚未连接'}${x.wifi_connected?'；地址：'+x.wifi_ip:''}${x.wifi_stage?'；阶段：'+x.wifi_stage:''}${x.wifi_error?'；初始化错误：'+x.wifi_error:''}${x.wifi_reason?'；断线原因：'+(reasons[x.wifi_reason]||'未知原因')+'（'+x.wifi_reason+'）':''}`;}
+ }catch(e){$('wifiStatus').textContent='未确认完成：'+e.message;}finally{document.querySelectorAll('button').forEach(b=>b.disabled=false);}
+}
+$('wifiSetup').onclick=async()=>{try{await wifiAction('wifi/setup',{ssid:$('wifiSsid').value,password:$('wifiPassword').value});}finally{$('wifiPassword').value='';}};
+$('wifiCheck').onclick=()=>wifiAction('status',{});$('wifiUse').onclick=()=>wifiAction('wifi/mode',{mode:'wifi'});$('wifiUsb').onclick=()=>wifiAction('wifi/mode',{mode:'usb'});
+fetch('/api/wifi/state').then(r=>r.json()).then(d=>{if(d.ok){const w=d.wifi;$('wifiStatus').textContent=`当前连接方式：${w.mode==='wifi'?'Wi-Fi（TLS加密）':'USB'}；${w.paired?'已配对':'首次需要通过USB配网'}`;}}).catch(()=>{$('wifiStatus').textContent='连接方式读取失败，请检查服务。';});
+async function touchAction(path){document.querySelectorAll('button').forEach(b=>b.disabled=true);try{const r=await fetch('/api/'+path,{method:'POST',headers:{'Content-Type':'application/json'},body:'{}'});const d=await r.json();if(!r.ok||!d.ok)throw Error(d.error||'未确认完成');const x=d.receipt;$('touchStatus').textContent=`触摸芯片：${x.touch_ready?'可读取':'尚未就绪'}；累计按下：${x.touch_count??'未知'}；最近坐标：${x.touch_x??'?'}，${x.touch_y??'?'}；测试：${x.touch_test?'开启':'关闭'}`;if(d.preview)$('preview').src='data:image/png;base64,'+d.preview;}catch(e){$('touchStatus').textContent='未确认完成：'+e.message;}finally{document.querySelectorAll('button').forEach(b=>b.disabled=false);}}
+$('touchTest').onclick=()=>touchAction('touch/test');$('touchCheck').onclick=()=>touchAction('status');$('touchStop').onclick=()=>touchAction('touch/stop');
 </script></html>

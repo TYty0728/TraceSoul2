@@ -1066,6 +1066,11 @@
           <button id="wxxzListen" onclick="listenWxxz()">录音 8 秒并听写</button>
           <div class="muted">点击后对板子说话。听写只填入下方输入框，核对后再点「发送一个 Moment」。静音或识别失败不自动提交。</div>
           <span id="wxxzState" class="muted">WXXZ 尚未连接</span>
+          <div class="device-detail"><h3>开发板触屏通话</h3>
+            <label><input type="checkbox" id="wxxzDeviceAllowed" onchange="setWxxzDeviceControl(this.checked)" /> 允许开发板触屏开始／结束对话</label>
+            <p class="muted">授权本身不采音。之后在板上点击「开始对话」，沿用本人声纹核验和当前声音配置；不自动设为私密现场。关闭网页仍可操作，Host重启后需重新授权。</p>
+            <div id="wxxzDeviceState" class="muted" role="status">尚未授权。</div>
+          </div>
           <details><summary>WXXZ 设备回执</summary><pre id="wxxzReceipt">暂无回执。这里是驱动执行结果，不能代替现场确认画面与声音。</pre></details>
 
           <div class="device-detail" oninput="wxxzWakeDirty=true">
@@ -2354,6 +2359,13 @@
     finally { sending=false; $('wxxzListen').disabled=false; $('sendBtn').disabled=false; }
   }
   function renderWxxzStatus(status) {
+    if(status.deviceControl){
+      const device=status.deviceControl;
+      $('wxxzDeviceAllowed').checked=!!device.enabled;
+      $('wxxzDeviceState').textContent=!device.enabled?'尚未授权；板端不会自行开始对话。':
+        device.error?'设备控制或通话失败；请检查连接、固件和声纹，再在板端重新点击开始。':
+        device.online?'开发板触屏已就绪；点击板上的开始对话才采音。':'已授权，等待开发板连接（需0.4.3固件和新版连接桥）。';
+    }
     if(typeof receiveCompanionStatus==='function')receiveCompanionStatus(status);
     if('sessionId' in status) wxxzSession=status.sessionId;
     renderWxxzMonitor(status.monitor,status.diagnostics,status.callId);
@@ -2388,6 +2400,12 @@
       ensureWxxzMonitorPolling();
       if (status.wake?.enabled && status.voiceprint?.enrolled) void startWxxzCall(true);
     } catch (e) { $('wxxzState').textContent = '连接失败：' + e.message; }
+  }
+  async function setWxxzDeviceControl(enabled){
+    $('wxxzDeviceAllowed').disabled=true;
+    try{renderWxxzStatus(await api('/wxxz/device/control','PUT',{enabled}));ensureWxxzMonitorPolling();}
+    catch(e){$('wxxzDeviceAllowed').checked=!enabled;$('wxxzDeviceState').textContent='设置失败：'+e.message;}
+    finally{$('wxxzDeviceAllowed').disabled=false;}
   }
   async function disconnectWxxz() {
     if (sending || wxxzCallId) return;

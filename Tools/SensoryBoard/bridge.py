@@ -1,5 +1,6 @@
 """Local-only USB output bridge for the Waveshare sensory terminal."""
 import argparse
+import functools
 import base64
 import io
 import hashlib
@@ -86,7 +87,7 @@ def text_frame(text, font_path):
         raise ValueError('文字超过一屏，请缩短后发送')
     for i, line in enumerate(lines):
         draw.text((24, 84 + i * (size + 10)), line, font=font, fill='#f0f5fa')
-    draw.text((24, 446), 'USB 已连接 · 内容来自电脑',
+    draw.text((24, 446), '感官终端 · 内容来自控制端',
               font=ImageFont.truetype(font_path, 15), fill='#91a8bd')
     return image
 
@@ -99,6 +100,19 @@ def picture_frame(data, font_path):
         fitted = ImageOps.contain(source, (288, 384))
     image = slate(font_path, 'TraceSoul · 图片')
     image.paste(fitted, ((WIDTH - fitted.width) // 2, 76 + (384 - fitted.height) // 2))
+    return image
+
+
+def touch_test_frame(font_path):
+    image=Image.new('RGB',(WIDTH,HEIGHT),'#f7f7f2')
+    draw=ImageDraw.Draw(image)
+    draw.text((20,15),'触屏测试',font=ImageFont.truetype(font_path,24),fill='#293d3c')
+    draw.text((20,48),'依次点四角和中心的圆圈',font=ImageFont.truetype(font_path,17),fill='#526b63')
+    for index,(x,y) in enumerate(((30,100),(290,100),(160,245),(30,385),(290,385)),1):
+        draw.ellipse((x-19,y-19,x+19,y+19),fill='#dce9df',outline='#5b8d79',width=2)
+        draw.text((x,y),str(index),anchor='mm',font=ImageFont.truetype(font_path,18),fill='#293d3c')
+    draw.text((20,430),'触点应出现绿色标记',font=ImageFont.truetype(font_path,18),fill='#293d3c')
+    draw.text((20,458),'仅硬件诊断，不发送对话',font=ImageFont.truetype(font_path,15),fill='#526b63')
     return image
 
 
@@ -159,10 +173,25 @@ def system_speech(text):
         return pcm
 
 
+def board_request(method):
+    @functools.wraps(method)
+    def request(self, *args, **kwargs):
+        with self.lock:
+            try:
+                return method(self, *args, **kwargs)
+            finally:
+                # One authenticated TLS session owns one complete command/stream.
+                # Idle periods and power-bank reconnects cannot reuse a stale socket.
+                if self.wifi is not None and self.wifi.status()['mode'] == 'wifi':
+                    self.close()
+    return request
+
+
 class Board:
     def __init__(self, port):
         self.port, self.connection = port, None
-        self.lock = threading.Lock()
+        self.lock = threading.RLock()
+        self.wifi = None
 
     def close(self):
         if self.connection:
@@ -171,6 +200,10 @@ class Board:
 
     def _connect(self):
         if self.connection is None:
+            if self.wifi is not None and self.wifi.status()['mode'] == 'wifi':
+                from wifi_link import WifiLink
+                self.connection = WifiLink(self.wifi.profile)
+                return
             link = serial.Serial(port=None, baudrate=921600, timeout=0.2, write_timeout=5)
             link.dtr = False
             link.rts = False
@@ -197,6 +230,7 @@ class Board:
             return result
         raise TimeoutError('等待开发板回执超时；本次结果未知，不会自动重播')
 
+    @board_request
     def transact(self, op, payload=b''):
         with self.lock:
             try:
@@ -216,6 +250,30 @@ class Board:
                 self.close()
                 raise
 
+    @board_request
+    def device_control(self, request):
+        controller=request.get('controller')
+        ack=request.get('ack')
+        phase=request.get('phase')
+        if (not isinstance(controller,str) or not re.fullmatch('[a-f0-9]{32}',controller)
+                or isinstance(ack,bool) or not isinstance(ack,int) or not 0<=ack<=0xffffffff
+                or phase not in ('standby','focused','listening','thinking','speaking','paused','offline','error')
+                or type(request.get('active')) is not bool or type(request.get('allowed')) is not bool
+                or request.get('error') not in (None,'control_or_call_failed')):
+            raise ValueError('无效的触屏控制同步参数')
+        with self.lock:
+            try:
+                self._connect()
+                command_id=secrets.randbelow(0x7ffffffe)+1
+                self.connection.write(json.dumps(dict(id=command_id,op='control',controller=controller,ack=ack,
+                    active=request['active'],allowed=request['allowed'],phase=phase,
+                    failed=bool(request.get('error')))).encode()+b'\n')
+                return self._reply(command_id,'ready')
+            except Exception:
+                self.close()
+                raise
+
+    @board_request
     def record(self, duration_ms=8000):
         if isinstance(duration_ms, bool) or not isinstance(duration_ms, int) or not 1000 <= duration_ms <= 10000:
             raise ValueError('录音时长必须为 1000～10000 毫秒')
@@ -249,6 +307,7 @@ class Board:
                 self.close()
                 raise
 
+    @board_request
     def listen(self, utterance, cancelled):
         with self.lock:
             try:
@@ -342,10 +401,13 @@ def make_handler(board, font_path, asr=None, vad=None, speaker=None):
             if self.path == '/display':
                 return self.respond(200, Path(__file__).with_name('display-preview.html').read_bytes(), 'text/html; charset=utf-8')
             if self.path == '/api/health':
-                return self.respond(200, {'service': 'tracesoul-sensory-usb' if board is not None else 'tracesoul-display-preview', 'version': '0.3.0',
+                return self.respond(200, {'service': 'tracesoul-sensory-usb' if board is not None else 'tracesoul-display-preview', 'version': '0.4.0',
                                          'display_version': 1, 'preview_only': board is None,
                                          'asr_ready': asr is not None, 'vad_ready': vad is not None,
                                          'speaker_ready': speaker is not None})
+            if self.path == '/api/wifi/state' and board is not None:
+                settings = getattr(board, 'wifi', None)
+                return self.respond(200, {'ok': True, 'wifi': settings.status() if settings else {'mode':'usb','paired':False,'host':''}})
             return self.respond(404, {'error': 'not_found'})
 
         def do_POST(self):
@@ -365,9 +427,27 @@ def make_handler(board, font_path, asr=None, vad=None, speaker=None):
                     return self.respond(200, {'ok':True, 'preview':preview(image), 'display':layout})
                 if board is None:
                     return self.respond(409, {'ok':False, 'error':'此进程仅预览画面，未连接开发板，不能采音或播放'})
+                if self.path=='/api/device/control':
+                    return self.respond(200,{'ok':True,'receipt':board.device_control(request)})
+                if self.path in ('/api/wifi/setup', '/api/wifi/mode'):
+                    settings = getattr(board, 'wifi', None)
+                    if settings is None:
+                        raise ValueError('启动桥时需要指定 --connection-config 私密配置文件')
+                    if self.path == '/api/wifi/setup':
+                        result = settings.setup(board, request.get('ssid'), request.get('password'))
+                    else:
+                        result = settings.switch(board, request.get('mode'))
+                    return self.respond(200, {'ok':True, 'wifi':result})
                 image = None
                 layout = None
-                if self.path == '/api/display':
+                if self.path == '/api/touch/test':
+                    board.transact('touch_stop')
+                    image=touch_test_frame(font_path)
+                    board.transact('frame',rgb565(image))
+                    result=board.transact('touch_test')
+                elif self.path == '/api/touch/stop':
+                    result=board.transact('touch_stop')
+                elif self.path == '/api/display':
                     image, layout = display.render(request)
                     result = board.transact('frame', rgb565(image))
                     layout['preview_only'] = False
@@ -526,13 +606,17 @@ def main():
     parser.add_argument('--preview-only', action='store_true', help='No USB object, recording, playback or ASR models')
     parser.add_argument('--http-port', type=int, default=5089)
     parser.add_argument('--font')
+    parser.add_argument('--connection-config', help='Private USB/Wi-Fi pairing profile outside the repository')
     parser.add_argument('--asr-model-directory', help='Optional local SenseVoice int8 directory')
     args = parser.parse_args()
     if not args.preview_only and not args.port:
         parser.error('--port is required unless --preview-only is set')
-    if args.preview_only and (args.port or args.asr_model_directory):
+    if args.preview_only and (args.port or args.asr_model_directory or args.connection_config):
         parser.error('preview-only cannot use a serial port or ASR models')
     board = None if args.preview_only else Board(args.port)
+    if board is not None and args.connection_config:
+        from wifi_link import WifiSettings
+        board.wifi = WifiSettings(args.connection_config)
     asr = vad = speaker = None
     if args.asr_model_directory:
         from local_asr import LocalAsr

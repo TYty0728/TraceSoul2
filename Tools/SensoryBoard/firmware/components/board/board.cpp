@@ -2,6 +2,8 @@
 // See THIRD_PARTY.md and the accompanying upstream driver licenses.
 #include "board.h"
 #include <cstring>
+#include <cstdio>
+#include <atomic>
 #include "driver/i2c_master.h"
 #include "driver/spi_master.h"
 #include "driver/ledc.h"
@@ -29,6 +31,63 @@ static esp_lcd_panel_handle_t panel;
 static SemaphoreHandle_t transferred;
 static uint8_t *stripe;
 static i2c_master_dev_handle_t expander;
+static i2c_master_dev_handle_t touch;
+static SemaphoreHandle_t lcd_lock;
+static portMUX_TYPE touch_lock=portMUX_INITIALIZER_UNLOCKED;
+static bool touch_ready=false, touch_down=false, touch_testing=false;
+static uint16_t touch_x=0, touch_y=0;
+static uint32_t touch_count=0;
+static std::atomic<bool> mic_paused{false};
+static std::atomic<unsigned> mic_epoch{0};
+static unsigned recording_epoch=0;
+static std::atomic<unsigned> playback_epoch{0};
+static std::atomic<bool> playback_blocked{false};
+void board_stop_playback(){playback_blocked.store(true);playback_epoch.fetch_add(1);}
+void board_allow_playback(){playback_blocked.store(false);}
+void board_mic_pause(bool paused){mic_paused.store(paused);if(paused)mic_epoch.fetch_add(1);}
+bool board_mic_paused(){return mic_paused.load();}
+void board_brightness(unsigned percent){
+    ledc_set_duty(LEDC_LOW_SPEED_MODE,LEDC_CHANNEL_0,(percent>100?100:percent)*1023/100);
+    ledc_update_duty(LEDC_LOW_SPEED_MODE,LEDC_CHANNEL_0);
+}
+BoardTouch board_touch_snapshot(){
+    portENTER_CRITICAL(&touch_lock);
+    BoardTouch result={touch_ready,touch_down,touch_testing,touch_x,touch_y,touch_count};
+    portEXIT_CRITICAL(&touch_lock);
+    return result;
+}
+static void poll_touch(void *) {
+    bool previously_down=false;
+    while(true) {
+        uint8_t reg=0x02, data[5]={};
+        esp_err_t err=i2c_master_transmit_receive(touch,&reg,1,data,sizeof(data),100);
+        bool down=err==ESP_OK && (data[0]&15)>0 && (data[0]&15)<=2;
+        uint16_t x=((data[1]&15)<<8)|data[2], y=((data[3]&15)<<8)|data[4];
+        bool marker=false;
+        portENTER_CRITICAL(&touch_lock);
+        touch_ready=err==ESP_OK; touch_down=down;
+        if(down){touch_x=x;touch_y=y;if(!previously_down)touch_count++;}
+        marker=down && touch_testing && x<320 && y<480;
+        portEXIT_CRITICAL(&touch_lock);
+        if(marker && xSemaphoreTake(lcd_lock,pdMS_TO_TICKS(50))==pdTRUE){
+            int left=x>4?x-4:0,top=y>4?y-4:0,right=x<315?x+5:320,bottom=y<475?y+5:480;
+            for(int i=0;i<(right-left)*(bottom-top);i++){stripe[2*i]=0x07;stripe[2*i+1]=0xe0;}
+            if(esp_lcd_panel_draw_bitmap(panel,left,top,right,bottom,stripe)==ESP_OK)xSemaphoreTake(transferred,pdMS_TO_TICKS(500));
+            xSemaphoreGive(lcd_lock);
+        }
+        previously_down=down;
+        vTaskDelay(pdMS_TO_TICKS(40));
+    }
+}
+void board_touch_status(char *out,size_t size){
+    portENTER_CRITICAL(&touch_lock);
+    bool ready=touch_ready,down=touch_down,testing=touch_testing;
+    uint16_t x=touch_x,y=touch_y;uint32_t count=touch_count;
+    portEXIT_CRITICAL(&touch_lock);
+    snprintf(out,size,"\"touch_ready\":%s,\"touch_down\":%s,\"touch_test\":%s,\"touch_x\":%u,\"touch_y\":%u,\"touch_count\":%lu",
+        ready?"true":"false",down?"true":"false",testing?"true":"false",x,y,(unsigned long)count);
+}
+void board_touch_test(bool enabled){portENTER_CRITICAL(&touch_lock);touch_testing=enabled;portEXIT_CRITICAL(&touch_lock);}
 static esp_err_t amplifier(bool enabled) {
     uint8_t reg = 1, value;
     esp_err_t err = i2c_master_transmit_receive(expander, &reg, 1, &value, 1, 1000);
@@ -110,24 +169,31 @@ void board_init() {
     ESP_ERROR_CHECK(ledc_channel_config(&light));
     esp_es8311_port_init(bus);
     ESP_ERROR_CHECK(esp_codec_dev_set_out_vol(output_dev, 45));
+    lcd_lock=xSemaphoreCreateMutex();assert(lcd_lock);
+    i2c_device_config_t touch_cfg={};touch_cfg.device_address=0x38;touch_cfg.dev_addr_length=I2C_ADDR_BIT_LEN_7;touch_cfg.scl_speed_hz=400000;
+    if(i2c_master_bus_add_device(bus,&touch_cfg,&touch)==ESP_OK)xTaskCreate(poll_touch,"touch-input",4096,nullptr,3,nullptr);
 }
 
 esp_err_t board_frame(const uint8_t *rgb565) {
+    if(xSemaphoreTake(lcd_lock,pdMS_TO_TICKS(2000))!=pdTRUE)return ESP_ERR_TIMEOUT;
     for (int y = 0; y < 480; y += 20) {
         memcpy(stripe, rgb565 + y * 320 * 2, 320 * 20 * 2);
         esp_err_t err = esp_lcd_panel_draw_bitmap(panel, 0, y, 320, y + 20, stripe);
-        if (err != ESP_OK) return err;
-        if (!xSemaphoreTake(transferred, pdMS_TO_TICKS(2000))) return ESP_ERR_TIMEOUT;
+        if (err != ESP_OK) {xSemaphoreGive(lcd_lock);return err;}
+        if (!xSemaphoreTake(transferred, pdMS_TO_TICKS(2000))) {xSemaphoreGive(lcd_lock);return ESP_ERR_TIMEOUT;}
     }
-    return ESP_OK;
+    xSemaphoreGive(lcd_lock);return ESP_OK;
 }
 
 esp_err_t board_audio(const uint8_t *pcm, size_t size) {
+    if(playback_blocked.load())return ESP_ERR_INVALID_STATE;
+    unsigned epoch=playback_epoch.load();
     esp_err_t err = amplifier(true);
     if (err != ESP_OK) return err;
     vTaskDelay(pdMS_TO_TICKS(20));
     // Micro-slices bound write latency and feed the scheduler; 48kHz mono PCM16.
     for (size_t offset = 0; offset < size; offset += 4096) {
+        if(playback_blocked.load()||epoch!=playback_epoch.load()){amplifier(false);return ESP_ERR_INVALID_STATE;}
         size_t n = size - offset < 4096 ? size - offset : 4096;
         if (esp_codec_dev_write(output_dev, (void *)(pcm + offset), n) != ESP_CODEC_DEV_OK) {
             amplifier(false);
@@ -141,6 +207,8 @@ esp_err_t board_audio(const uint8_t *pcm, size_t size) {
 }
 
 esp_err_t board_record_begin(uint8_t *pcm) {
+    if(board_mic_paused())return ESP_ERR_INVALID_STATE;
+    recording_epoch=mic_epoch.load();
     esp_err_t err = amplifier(false);
     if (err != ESP_OK) return err;
     if (esp_codec_dev_set_in_gain(input_dev, 30.0) != ESP_CODEC_DEV_OK) return ESP_FAIL;
@@ -151,16 +219,20 @@ esp_err_t board_record_begin(uint8_t *pcm) {
 }
 
 esp_err_t board_record_read(uint8_t *pcm, size_t size) {
-    return esp_codec_dev_read(input_dev, pcm, size) == ESP_CODEC_DEV_OK ? ESP_OK : ESP_FAIL;
+    if(board_mic_paused()||recording_epoch!=mic_epoch.load())return ESP_ERR_INVALID_STATE;
+    int result=esp_codec_dev_read(input_dev, pcm, size);
+    if(board_mic_paused()||recording_epoch!=mic_epoch.load())return ESP_ERR_INVALID_STATE;
+    return result == ESP_CODEC_DEV_OK ? ESP_OK : ESP_FAIL;
 }
 
 esp_err_t board_record(uint8_t *pcm, size_t size) {
     esp_err_t err = board_record_begin(pcm);
     if (err != ESP_OK) return err;
     for (size_t offset = 0; offset < size; offset += 4096) {
+        if(board_mic_paused()||recording_epoch!=mic_epoch.load())return ESP_ERR_INVALID_STATE;
         size_t n = size - offset < 4096 ? size - offset : 4096;
         if (esp_codec_dev_read(input_dev, pcm + offset, n) != ESP_CODEC_DEV_OK) return ESP_FAIL;
         vTaskDelay(1);
     }
-    return ESP_OK;
+    return board_mic_paused()||recording_epoch!=mic_epoch.load()?ESP_ERR_INVALID_STATE:ESP_OK;
 }

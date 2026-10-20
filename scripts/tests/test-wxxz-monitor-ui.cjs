@@ -15,6 +15,9 @@ const sandbox={$,sending:false,crypto:{randomUUID:()=> 'request'},setInterval:()
   api:async(url,method,body)=>{
     writes.push({url,method,body});
     if(url==='/wxxz'){if(failRead)throw new Error('offline');return state;}
+    if(url==='/wxxz/device/control'){
+      state={...state,deviceControl:{enabled:body.enabled,online:false,error:null}};return state;
+    }
     if(url==='/wxxz/monitor/start')return state;
     if(url==='/wxxz/monitor/stop'){
       if(failStop)throw new Error('offline');
@@ -67,5 +70,15 @@ vm.runInContext(html.slice(html.indexOf('  let wxxzSession ='),html.indexOf('  /
   failRead=true;await sandbox.pollWxxzMonitor();
   assert.match($('wxxzMonitorState').textContent,/断线不等于监听已停止/);
   assert.equal(writes.some(x=>['/wxxz/call/listen','/wxxz/moments'].includes(x.url)),false,'网页既不采音也不代提交语音');
+  const startsBefore=writes.filter(x=>x.url==='/wxxz/monitor/start').length;
+  await sandbox.setWxxzDeviceControl(true);
+  assert.equal(writes.at(-1).url,'/wxxz/device/control');
+  assert.equal(writes.at(-1).method,'PUT');
+  assert.equal($('wxxzDeviceAllowed').checked,true);
+  assert.match($('wxxzDeviceState').textContent,/等待开发板/);
+  assert.equal(writes.filter(x=>x.url==='/wxxz/monitor/start').length,startsBefore,'触屏授权本身不开始采音');
+  await sandbox.setWxxzDeviceControl(false);
+  assert.equal($('wxxzDeviceAllowed').checked,false);
+  assert.match($('wxxzDeviceState').textContent,/尚未授权/);
   console.log('WXXZ monitor UI checks passed: read-only reattach, persistent listening, explicit stop/unknown outcome, sandbox, escaped diagnostics and draft preservation.');
 })().catch(e=>{console.error(e);process.exit(1);});

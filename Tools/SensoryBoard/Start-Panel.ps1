@@ -20,12 +20,13 @@ if (Get-NetTCPConnection -LocalPort $HttpPort -State Listen -ErrorAction Silentl
     throw "Port $HttpPort is already in use by another service"
 }
 $pythonPath = (Get-Command $Python -ErrorAction Stop).Source
-& $pythonPath -c 'import serial; from PIL import Image'
+& $pythonPath -c 'import serial, cryptography; from PIL import Image'
 if ($LASTEXITCODE -ne 0) { throw 'Install requirements.txt into the selected Python environment first' }
 New-Item -ItemType Directory -Path $RuntimeDirectory -Force | Out-Null
 $runtimePath = (Resolve-Path -LiteralPath $RuntimeDirectory).Path
 $scriptPath = Join-Path $PSScriptRoot 'bridge.py'
 $bridgeArguments = @('-u', ('"{0}"' -f $scriptPath), '--port', $Port, '--http-port', $HttpPort)
+$bridgeArguments += @('--connection-config', ('"{0}"' -f (Join-Path $runtimePath 'wifi-client.json')))
 $asrDirectory = Join-Path $runtimePath 'asr/sensevoice-int8'
 if (Test-Path -LiteralPath (Join-Path $asrDirectory 'ready.json')) {
     $bridgeArguments += @('--asr-model-directory', ('"{0}"' -f $asrDirectory))
