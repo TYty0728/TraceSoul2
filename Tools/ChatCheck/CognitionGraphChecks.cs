@@ -8,6 +8,7 @@ using TraceSoul2.Logic;
 using TraceSoul2.Manager;
 using TraceSoul2.Plugins;
 using TraceSoul2.Plugins.Builtin;
+using TraceSoul2.Util;
 
 internal static partial class Program
 {
@@ -18,6 +19,7 @@ internal static partial class Program
         RunCognitionReviewBgeChecks(Path.GetDirectoryName(assembly.Location));
         RunDayCardReviewChecks(assembly);
         RunDayReviewRecoveryChecks(assembly);
+        RunDailyCoreProgressChecks(assembly);
         RunReviewSelectionMigrationChecks(assembly);
         var prompts = assembly.GetType("TraceSoul2.Migrate.ReplayPrompts", true);
         var outputType = prompts.GetNestedType("CognitionFormationOutputData");
@@ -142,6 +144,35 @@ internal static partial class Program
                 Require(recreate.Id == first.Id && recreate.Status == "weakened" && recreate.Confidence == weakened.Confidence,
                     "重复create不能绕过反证复活为新的高置信节点");
                 var second = store.CommitCognitions(m2.Id, new[] { Create("青穹杯也能用来喝热水，要考虑此刻的实际需求。", m2.Id) }).Single();
+                var selfLink = new BrainCognitionWriteData { operation = "link", target_id = second.Id,
+                    related_id = second.Id, relation = "related_to", evidence_moment_ids = new() { m3.Id } };
+                var secondBefore = TraceJson.ToJson(store.GetCognitionNodes(100).Single(x => x.Id == second.Id));
+                var proofBefore = TraceJson.ToJson(store.GetCognitionEvidence(new[] { second.Id }));
+                Require(CognitionFormationLogic.ValidationError(new[] { selfLink }, new[] { m3 }, new[] { second },
+                    Array.Empty<LifeTagRecord>()) == null, "有效自身关联无需整批模型纠正");
+                var kept = store.CommitCognitions(m3.Id, new[] { selfLink, Create("同批独立的有效理解", m3.Id) });
+                Require(kept.Count == 1 && kept[0].Summary == "同批独立的有效理解" &&
+                    TraceJson.ToJson(store.GetCognitionNodes(100).Single(x => x.Id == second.Id)) == secondBefore &&
+                    TraceJson.ToJson(store.GetCognitionEvidence(new[] { second.Id })) == proofBefore &&
+                    store.GetCognitionEdges(new[] { second.Id }).Count == 0,
+                    "自身关联不改节点、证据或边，同批其他有效写入保留");
+                selfLink.relation = "invented";
+                Require(CognitionFormationLogic.ValidationError(new[] { selfLink }, new[] { m3 }, new[] { second },
+                    Array.Empty<LifeTagRecord>())?.Contains(".relation") == true, "自身关联仍严格校验关系类型");
+                selfLink.relation = "related_to";
+                selfLink.evidence_moment_ids = new() { "missing" };
+                try { store.CommitCognitions(m3.Id, new[] { selfLink }); throw new Exception("Expected invalid self-link evidence"); }
+                catch (InvalidOperationException) { }
+                var atomicBefore = store.CountCognitions();
+                try
+                {
+                    store.CommitCognitionsWithCheckpoint(m3.Id, new[] { Create("事务回滚测试理解", m3.Id) },
+                        "test", "cognition-rollback", () => { }, _ => throw new InvalidOperationException("injected interruption"));
+                    throw new Exception("Expected checkpoint rollback");
+                }
+                catch (InvalidOperationException) { }
+                Require(store.CountCognitions() == atomicBefore && string.IsNullOrEmpty(store.LoadPluginDocument("test", "cognition-rollback")),
+                    "认知写入和检查点失败时共同回滚，不残留增强或伪完成");
                 store.CommitCognitions(m2.Id, new[] { new BrainCognitionWriteData { operation = "link", target_id = first.Id,
                     related_id = second.Id, relation = "contradicts", evidence_moment_ids = new List<string> { m2.Id } } });
                 var services = new TracePluginServices(store, new HierarchicalVectorRouterLogic(new FakeEncoder()));

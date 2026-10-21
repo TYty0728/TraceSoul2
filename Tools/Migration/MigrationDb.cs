@@ -607,6 +607,38 @@ namespace TraceSoul2.Migrate
 
         // ---------- 第四层：多维索引与追加条目 ----------
 
+        // Event writes, tag activation and their recovery document share the brain transaction.
+        public void CommitCoreProgress(Action write)
+        {
+            lock (brainWriteGate)
+                brain.RunInTransaction(() =>
+                {
+                    brain.Execute("UPDATE plugin_documents SET UpdatedUnixMs=UpdatedUnixMs WHERE 0");
+                    write();
+                });
+        }
+
+        public void SaveProgressDocument(string pluginId, string key, string json)
+        {
+            lock (brainWriteGate)
+                brain.InsertOrReplace(new PluginDocumentRecord { Id = pluginId + ":" + key,
+                    PluginId = pluginId, DocumentKey = key, Json = json,
+                    UpdatedUnixMs = DateTimeOffset.UtcNow.ToUnixTimeMilliseconds() });
+        }
+
+        public List<LifeTagRecord> GetActiveLifeTagsForCommit()
+        {
+            lock (brainWriteGate)
+                return brain.Table<LifeTagRecord>().Where(x => x.Status == "active").ToList();
+        }
+
+        public bool HasEventEntriesFrom(IEnumerable<string> momentIds)
+        {
+            var ids = momentIds.ToHashSet(StringComparer.Ordinal);
+            lock (brainWriteGate)
+                return brain.Table<EventEntryRecord>().Any(x => ids.Contains(x.SourceMomentId));
+        }
+
         public void SaveEventIndex(EventIndexRecord index)
         {
             lock (brainWriteGate)

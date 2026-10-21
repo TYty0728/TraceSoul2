@@ -424,6 +424,21 @@ namespace TraceSoul2.Manager
             return changed;
         }
 
+        public List<CognitionSliceRecord> CommitCognitionsWithCheckpoint(string triggerMomentId,
+            IEnumerable<BrainCognitionWriteData> mutations, string pluginId, string key,
+            Action validate, Func<List<CognitionSliceRecord>, string> checkpoint)
+        {
+            List<CognitionSliceRecord> changed = null;
+            connection.RunInTransaction(() =>
+            {
+                connection.Execute("UPDATE plugin_documents SET UpdatedUnixMs=UpdatedUnixMs WHERE 0");
+                validate();
+                changed = CommitCognitions(triggerMomentId, mutations);
+                SavePluginDocument(pluginId, key, checkpoint(changed));
+            });
+            return changed;
+        }
+
         public void SaveTurnReview(TurnReviewRecord review)
         {
             if (review == null) throw new ArgumentNullException("review");

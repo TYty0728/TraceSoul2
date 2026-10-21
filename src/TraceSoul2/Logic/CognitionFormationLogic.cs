@@ -90,7 +90,8 @@ namespace TraceSoul2.Logic
                 if ((w.exceptions?.Length ?? 0) > 300) return path + ".exceptions 当前" + w.exceptions.Length + "字，最多300字；请重新写短。";
                 if (w.operation == "link")
                 {
-                    if (w.target_id == w.related_id) return path + ".related_id 不能与 target_id 相同，不能关联自身。";
+                    // An otherwise valid self-link has no effect; the store ignores it without
+                    // discarding independent changes from the same response.
                     if (!nodes.Contains(w.related_id ?? "")) return path + ".related_id 必须从本次展示的现有认知中复制完整ID。";
                     if (!new[] { "related_to", "abstracts", "exemplifies", "contradicts" }.Contains(w.relation))
                         return path + ".relation 必须为 related_to/abstracts/exemplifies/contradicts。";

@@ -54,7 +54,7 @@ namespace TraceSoul2.Migrate
         private static string SourceStamp(MigrationContext context, IEnumerable<string> ids)
         {
             var wanted = ids.ToHashSet(StringComparer.Ordinal);
-            var sources = context.Store.GetEvidenceMoments(wanted);
+            var sources = wanted.Chunk(256).SelectMany(context.Store.GetEvidenceMoments).ToList();
             if (sources.Count != wanted.Count)
                 throw new InvalidOperationException("复盘检查点的原始来源已缺失，不能继续提交。");
             return Digest(new { Pair = context.RequirePair(), Sources = sources.OrderBy(x => x.Id, StringComparer.Ordinal)

@@ -42,6 +42,7 @@
     <Compile Include="RuntimePresentationChecks.cs" />
     <Compile Include="DayOverviewChecks.cs" />
     <Compile Include="DayCardReviewChecks.cs" />
+    <Compile Include="DailyCoreProgressChecks.cs" />
     <Compile Include="AgentContractChecks.cs" />
     <Compile Include="AgentPromptChecks.cs" />
     <Compile Include="HistoryPresentationChecks.cs" />

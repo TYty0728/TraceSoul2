@@ -101,6 +101,7 @@ namespace TraceSoul2.Migrate
             }
             var pair = context.RequirePair();
             var llm = context.RequireLlm();
+            var progress = moments.Count > 0 ? OpenCoreProgress(context, dayKey, moments, previousCore) : null;
             context.Migration.SetReviewStage("当下切片夜间整理");
             var daySummaryPending = false;
             try { await RuntimeSliceLogic.ReviewDayAsync(context.Store, llm, MigrationContext.ConversationId, dayKey); }
@@ -139,6 +140,19 @@ namespace TraceSoul2.Migrate
             foreach (var chunk in chunks)
             {
                 context.Migration.SetReviewStage("事件观察（第 " + (observationCalls + 1) + " 批）");
+                var observationKey = ProgressKey(dayKey, progress.Generation, "observation", chunk.Select(x => x.Id).ToList());
+                var savedObservation = context.Store.LoadPluginDocument(CoreProgressDocuments, observationKey);
+                var observation = string.IsNullOrEmpty(savedObservation) ? new ObservationProgress()
+                    : TraceJson.FromJson<ObservationProgress>(savedObservation);
+                if (RestoreObservation(context, progress, observation, dayIndexes, dayEntries, evidenceByEntry, chunk))
+                {
+                    observationCalls++;
+                    continue;
+                }
+                var observationContext = ObservationContextStamp(context);
+                if (observation.Output != null && observation.ContextStamp != observationContext)
+                    throw new InvalidOperationException("事件草稿引用的标签或索引已修订，不能直接提交旧草稿。");
+                observation.ContextStamp = observationContext;
                 var chunkText = string.Join("\n", chunk.Select(x => FormatMoment(x, pair)));
                 var route = router.Route(chunkText);
                 var conceptIds = route.Concepts.Select(x => x.Node.Id).ToList();
@@ -158,104 +172,116 @@ namespace TraceSoul2.Migrate
                     new DeepSeekMessageData("system", prompt),
                     new DeepSeekMessageData("user", CorePrompts.Migration.ObserveUser)
                 };
-                var output = await DeepSeekStructuredOutputLogic.CompleteAsync<ReplayPrompts.DayEventOutputData>(
-                    llm, messages,
-                    x => x != null && !string.IsNullOrWhiteSpace(x.perception_summary) && EventProseError(x) == null,
-                    "事件观察输出缺少 perception_summary。", CancellationToken.None,
-                    validationError: EventProseError);
-                observationCalls += 1;
+                var output = await CompleteObservationAsync(context, llm, progress, observationKey, observation, messages);
+                observationCalls++;
+                var batchIndexes = new List<EventIndexRecord>();
+                var batchEntries = new List<EventEntryRecord>();
+                context.Migration.CommitCoreProgress(() =>
+                {
+                    EnsureCoreProgress(context, progress);
+                    if (ObservationContextStamp(context) != observationContext)
+                        throw new InvalidOperationException("事件生成期间标签或索引已修订，旧输出不能提交。");
+                    // 复用旧路的 Tag 创建/激活通道：只带 Tag 信息，不带事实。
+                    var tagOutput = new MemoryObservationOutputData
+                    {
+                        perception_summary = output.perception_summary ?? string.Empty,
+                        fact_decision = output.event_decision ?? string.Empty,
+                        selected_tag_ids = output.selected_tag_ids ?? new List<string>(),
+                        new_tags = output.new_tags ?? new List<NewLifeTagWriteData>(),
+                        fact_writes = new List<SensoryFactWriteData>(),
+                        fact_wakes = new List<SensoryFactWakeData>()
+                    };
+                    var tagAliases = BuildTagAliases(activeTags);
+                    RepairSelectedTagIds(tagOutput, tagAliases);
+                    context.Migration.CreateAndActivateTags(
+                        tagOutput, chunk[chunk.Count - 1], conceptIds, pair);
+
+                    var tagByLabel = context.Migration.GetActiveLifeTagsForCommit()
+                        .GroupBy(x => x.Label)
+                        .ToDictionary(x => x.Key, x => x.First().Id, StringComparer.Ordinal);
+                    var aliasToIndex = new Dictionary<string, EventIndexRecord>(StringComparer.Ordinal);
+                    foreach (var candidate in indexCandidates) aliasToIndex[candidate.Id] = candidate;
+
+                    var now = DateTimeOffset.UtcNow.ToUnixTimeMilliseconds();
+                    foreach (var write in output.event_writes ?? new List<ReplayPrompts.EventWriteItemData>())
+                    {
+                        if (write == null || string.IsNullOrWhiteSpace(write.event_summary)) continue;
+                        var tagIds = ResolveTagIds(write.tag_ids, write.new_tag_names, tagAliases, tagByLabel);
+                        if (tagIds.Count == 0)
+                        {
+                            Console.WriteLine("  [警告] 事件「" + Limit(write.event_summary, 20) + "」无有效 Tag，丢弃。");
+                            continue;
+                        }
+                        var index = new EventIndexRecord
+                        {
+                            Id = Guid.NewGuid().ToString("N"),
+                            TagIds = string.Join(",", tagIds),
+                            TimeLabel = periodLabel,
+                            DayKindLabel = dayKindLabel,
+                            TimeUnixMs = anchor.ToUnixTimeMilliseconds(),
+                            PlaceLabel = Limit(write.place, 20),
+                            PersonLabel = Limit(write.person, 20),
+                            EventSummary = (write.event_summary ?? string.Empty).Trim(),
+                            MoodLabel = Limit(write.mood, 12),
+                            FirstMomentId = chunk[0].Id,
+                            Status = "active",
+                            CreatedUnixMs = now,
+                            UpdatedUnixMs = now
+                        };
+                        context.Migration.SaveEventIndex(index);
+                        dayIndexes.Add(index);
+                        batchIndexes.Add(index);
+                        var entry = new EventEntryRecord
+                        {
+                            Id = Guid.NewGuid().ToString("N"),
+                            IndexId = index.Id,
+                            Summary = (write.entry_summary ?? string.Empty).Trim(),
+                            Detail = string.Empty,
+                            SourceMomentId = chunk[chunk.Count - 1].Id,
+                            Realm = NormalizeRealm(write.realm),
+                            CreatedUnixMs = now
+                        };
+                        context.Migration.AppendEventEntry(entry);
+                        dayEntries.Add(entry);
+                        batchEntries.Add(entry);
+                        evidenceByEntry[entry.Id] = chunk;
+                    }
+
+                    foreach (var append in output.event_appends ?? new List<ReplayPrompts.EventAppendItemData>())
+                    {
+                        if (append == null || string.IsNullOrWhiteSpace(append.entry_summary)) continue;
+                        var target = ResolveIndexAlias(append.index_alias, aliasToIndex);
+                        if (target == null)
+                        {
+                            Console.WriteLine("  [警告] 追加目标索引无法解析：" + Limit(append.index_alias, 20) + "。");
+                            continue;
+                        }
+                        var entry = new EventEntryRecord
+                        {
+                            Id = Guid.NewGuid().ToString("N"),
+                            IndexId = target.Id,
+                            Summary = (append.entry_summary ?? string.Empty).Trim(),
+                            Detail = string.Empty,
+                            SourceMomentId = chunk[chunk.Count - 1].Id,
+                            Realm = NormalizeRealm(null),
+                            CreatedUnixMs = now
+                        };
+                        context.Migration.AppendEventEntry(entry);
+                        dayEntries.Add(entry);
+                        batchEntries.Add(entry);
+                        evidenceByEntry[entry.Id] = chunk;
+                        if (!dayIndexes.Any(x => x.Id == target.Id)) dayIndexes.Add(target);
+                        if (!batchIndexes.Any(x => x.Id == target.Id)) batchIndexes.Add(target);
+                    }
+                    observation.IndexIds = batchIndexes.Select(x => x.Id).ToList();
+                    observation.EntryIds = batchEntries.Select(x => x.Id).ToList();
+                    observation.RecordsStamp = ObservationRecordsStamp(batchIndexes, batchEntries);
+                    observation.Applied = true;
+                    context.Migration.SaveProgressDocument(CoreProgressDocuments, observationKey, TraceJson.ToJson(observation));
+                });
                 Console.WriteLine("  块" + observationCalls + " 观察：" + Limit(output.perception_summary, 80));
                 LogCall(context, dayKey, "event_observation", observationCalls,
                     Limit(output.perception_summary, 80), TraceJson.ToJson(output));
-
-                // 复用旧路的 Tag 创建/激活通道：只带 Tag 信息，不带事实。
-                var tagOutput = new MemoryObservationOutputData
-                {
-                    perception_summary = output.perception_summary ?? string.Empty,
-                    fact_decision = output.event_decision ?? string.Empty,
-                    selected_tag_ids = output.selected_tag_ids ?? new List<string>(),
-                    new_tags = output.new_tags ?? new List<NewLifeTagWriteData>(),
-                    fact_writes = new List<SensoryFactWriteData>(),
-                    fact_wakes = new List<SensoryFactWakeData>()
-                };
-                var tagAliases = BuildTagAliases(activeTags);
-                RepairSelectedTagIds(tagOutput, tagAliases);
-                context.Migration.CreateAndActivateTags(
-                    tagOutput, chunk[chunk.Count - 1], conceptIds, pair);
-
-                var tagByLabel = context.Store.GetActiveLifeTags()
-                    .GroupBy(x => x.Label)
-                    .ToDictionary(x => x.Key, x => x.First().Id, StringComparer.Ordinal);
-                var aliasToIndex = new Dictionary<string, EventIndexRecord>(StringComparer.Ordinal);
-                foreach (var candidate in indexCandidates) aliasToIndex[candidate.Id] = candidate;
-
-                var now = DateTimeOffset.UtcNow.ToUnixTimeMilliseconds();
-                foreach (var write in output.event_writes ?? new List<ReplayPrompts.EventWriteItemData>())
-                {
-                    if (write == null || string.IsNullOrWhiteSpace(write.event_summary)) continue;
-                    var tagIds = ResolveTagIds(write.tag_ids, write.new_tag_names, tagAliases, tagByLabel);
-                    if (tagIds.Count == 0)
-                    {
-                        Console.WriteLine("  [警告] 事件「" + Limit(write.event_summary, 20) + "」无有效 Tag，丢弃。");
-                        continue;
-                    }
-                    var index = new EventIndexRecord
-                    {
-                        Id = Guid.NewGuid().ToString("N"),
-                        TagIds = string.Join(",", tagIds),
-                        TimeLabel = periodLabel,
-                        DayKindLabel = dayKindLabel,
-                        TimeUnixMs = anchor.ToUnixTimeMilliseconds(),
-                        PlaceLabel = Limit(write.place, 20),
-                        PersonLabel = Limit(write.person, 20),
-                        EventSummary = (write.event_summary ?? string.Empty).Trim(),
-                        MoodLabel = Limit(write.mood, 12),
-                        FirstMomentId = chunk[0].Id,
-                        Status = "active",
-                        CreatedUnixMs = now,
-                        UpdatedUnixMs = now
-                    };
-                    context.Migration.SaveEventIndex(index);
-                    dayIndexes.Add(index);
-                    var entry = new EventEntryRecord
-                    {
-                        Id = Guid.NewGuid().ToString("N"),
-                        IndexId = index.Id,
-                        Summary = (write.entry_summary ?? string.Empty).Trim(),
-                        Detail = string.Empty,
-                        SourceMomentId = chunk[chunk.Count - 1].Id,
-                        Realm = NormalizeRealm(write.realm),
-                        CreatedUnixMs = now
-                    };
-                    context.Migration.AppendEventEntry(entry);
-                    dayEntries.Add(entry);
-                    evidenceByEntry[entry.Id] = chunk;
-                }
-
-                foreach (var append in output.event_appends ?? new List<ReplayPrompts.EventAppendItemData>())
-                {
-                    if (append == null || string.IsNullOrWhiteSpace(append.entry_summary)) continue;
-                    var target = ResolveIndexAlias(append.index_alias, aliasToIndex);
-                    if (target == null)
-                    {
-                        Console.WriteLine("  [警告] 追加目标索引无法解析：" + Limit(append.index_alias, 20) + "。");
-                        continue;
-                    }
-                    var entry = new EventEntryRecord
-                    {
-                        Id = Guid.NewGuid().ToString("N"),
-                        IndexId = target.Id,
-                        Summary = (append.entry_summary ?? string.Empty).Trim(),
-                        Detail = string.Empty,
-                        SourceMomentId = chunk[chunk.Count - 1].Id,
-                        Realm = NormalizeRealm(null),
-                        CreatedUnixMs = now
-                    };
-                    context.Migration.AppendEventEntry(entry);
-                    dayEntries.Add(entry);
-                    evidenceByEntry[entry.Id] = chunk;
-                    if (!dayIndexes.Any(x => x.Id == target.Id)) dayIndexes.Add(target);
-                }
             }
 
             // ---------- 细节浸染：助手第一人称（4 路并行） ----------
@@ -276,6 +302,10 @@ namespace TraceSoul2.Migrate
                 var indexLine = index == null ? string.Empty
                     : index.TimeLabel + "（" + index.DayKindLabel + "）·" + index.PlaceLabel + "·"
                       + index.PersonLabel + "·" + index.EventSummary + "·" + index.MoodLabel;
+                var detailKey = ProgressKey(dayKey, progress.Generation, "detail", entry.Id);
+                var detailStamp = Digest(new { Source = SourceStamp(context, evidence.Select(x => x.Id)),
+                    indexLine, entry.Summary, personalityCard, userProfileCard });
+                if (RestoreDetail(context, progress, detailKey, detailStamp, entry)) return;
                 var prompt = ReplayPrompts.BuildDetailPrompt(
                     pair, personalityCard, userProfileCard, evidence, indexLine, entry.Summary, 0, 200);
                 var messages = new List<DeepSeekMessageData>
@@ -287,7 +317,19 @@ namespace TraceSoul2.Migrate
                     llm, messages, x => x != null && !string.IsNullOrWhiteSpace(x.detail),
                     "细节输出缺少 detail。", detailToken);
                 entry.Detail = (detailOutput.detail ?? string.Empty).Trim();
-                context.Migration.UpdateEventEntryDetail(entry.Id, entry.Detail);
+                context.Migration.CommitCoreProgress(() =>
+                {
+                    EnsureCoreProgress(context, progress);
+                    var currentCards = context.Store.LoadIdentityCards(MigrationContext.ConversationId);
+                    if (personalityCard != IdentityCardLogic.ResolveBody(IdentityCardSlotValues.Personality,
+                            Card(currentCards, IdentityCardSlotValues.Personality).Body, pair) ||
+                        userProfileCard != IdentityCardLogic.ResolveBody(IdentityCardSlotValues.UserProfile,
+                            Card(currentCards, IdentityCardSlotValues.UserProfile).Body, pair))
+                        throw new InvalidOperationException("细节生成期间身份档案已修订，旧输出不能提交。");
+                    context.Migration.UpdateEventEntryDetail(entry.Id, entry.Detail);
+                    context.Migration.SaveProgressDocument(CoreProgressDocuments, detailKey,
+                        TraceJson.ToJson(new CompletedProgress { Stamp = detailStamp, BodyStamp = Digest(entry.Detail) }));
+                });
                 var n = Interlocked.Increment(ref detailCalls);
                 Console.WriteLine("  细节「" + Limit(entry.Summary, 20) + "」：" + Limit(entry.Detail, 60));
                 LogCall(context, dayKey, "detail", n,
@@ -308,8 +350,8 @@ namespace TraceSoul2.Migrate
 
             // ---------- 认知形成：跑完事件构筑后，直接用当天新增事件提炼第一人称理解 ----------
             context.Migration.SetReviewStage("认知形成");
-            await RunCognitionFormationAsync(
-                context, pair, llm, dayKey, dayIndexes, dayEntries, moments);
+            await RunCognitionFormationWithRecoveryAsync(
+                context, pair, llm, dayKey, dayIndexes, dayEntries, moments, progress);
 
             var core = SaveCoreCheckpoint(context, dayKey, moments, dayIndexes, dayEntries, previousCore);
             core.DaySummaryPending = daySummaryPending;
@@ -519,14 +561,15 @@ namespace TraceSoul2.Migrate
         }
 
         /// <summary>认知形成：用当天新增事件提炼第一人称理解，写认知切片（最多 3 条，挂生命标签）。</summary>
-        private static async Task<List<CognitionSliceRecord>> RunCognitionFormationAsync(
-            MigrationContext context,
-            PairIdentity pair,
-            ILlmClient llm,
-            string dayKey,
-            List<EventIndexRecord> dayIndexes,
-            List<EventEntryRecord> dayEntries,
-            List<MomentRecord> sourceMoments = null)
+        private static Task<List<CognitionSliceRecord>> RunCognitionFormationAsync(
+            MigrationContext context, PairIdentity pair, ILlmClient llm, string dayKey,
+            List<EventIndexRecord> dayIndexes, List<EventEntryRecord> dayEntries, List<MomentRecord> sourceMoments = null)
+            => RunCognitionFormationWithRecoveryAsync(context, pair, llm, dayKey, dayIndexes, dayEntries, sourceMoments, null);
+
+        private static async Task<List<CognitionSliceRecord>> RunCognitionFormationWithRecoveryAsync(
+            MigrationContext context, PairIdentity pair, ILlmClient llm, string dayKey,
+            List<EventIndexRecord> dayIndexes, List<EventEntryRecord> dayEntries, List<MomentRecord> sourceMoments,
+            CoreProgressSource progress)
         {
             var sources = sourceMoments ?? context.Store.GetEvidenceMoments(
                 dayEntries.Select(x => x.SourceMomentId).Concat(dayIndexes.Select(x => x.FirstMomentId)));
@@ -535,9 +578,15 @@ namespace TraceSoul2.Migrate
             var batchIndex = 0;
             foreach (var evidence in batches)
             {
+                batchIndex++;
+                var cognitionKey = progress == null ? null
+                    : ProgressKey(dayKey, progress.Generation, "cognition", evidence.Select(x => x.Id).ToList());
+                var cognitionStamp = progress == null ? null : SourceStamp(context, evidence.Select(x => x.Id));
+                if (progress != null && RestoreCognition(context, progress, cognitionKey, cognitionStamp)) continue;
                 var evidenceContext = RuntimeSliceLogic.EvidenceContext(context.Store, evidence);
                 var activeCognitions = CognitionReviewRecallLogic.Select(context.Store, evidence,
                     context.RequireCognitionEncoder, context.Vectors, evidenceContext);
+                var candidateStamp = Digest(activeCognitions.OrderBy(x => x.Id, StringComparer.Ordinal));
                 var activeTags = context.Store.GetActiveLifeTags().OrderByDescending(x => x.ActivationCount)
                     .ThenBy(x => x.Label, StringComparer.Ordinal).Take(60).ToList();
                 var cardsNow = context.Store.LoadIdentityCards(MigrationContext.ConversationId);
@@ -557,9 +606,20 @@ namespace TraceSoul2.Migrate
                 var output = await DeepSeekStructuredOutputLogic.CompleteAsync<ReplayPrompts.CognitionFormationOutputData>(
                     llm, messages, null, "认知复盘必须输出包含 cognitions 数组的JSON对象。", CancellationToken.None,
                     validationError: x => CognitionFormationLogic.ValidationError(x.cognitions, evidence, activeCognitions, activeTags));
-                var changed = context.Store.CommitCognitions(evidence[^1].Id, output.cognitions);
+                var changed = progress == null ? context.Store.CommitCognitions(evidence[^1].Id, output.cognitions)
+                    : context.Store.CommitCognitionsWithCheckpoint(evidence[^1].Id, output.cognitions,
+                        CoreProgressDocuments, cognitionKey, () =>
+                        {
+                            EnsureCoreProgress(context, progress);
+                            var ids = activeCognitions.Select(x => x.Id).ToHashSet(StringComparer.Ordinal);
+                            if (candidateStamp != Digest(context.Store.GetCognitionReviewCandidates(
+                                evidence[0].ConversationId ?? "", evidence[0].MemoryVisibility == "public")
+                                .Where(x => ids.Contains(x.Id)).OrderBy(x => x.Id, StringComparer.Ordinal)))
+                                throw new InvalidOperationException("认知生成期间候选已修订，旧输出不能提交。");
+                        },
+                        _ => TraceJson.ToJson(new CompletedProgress { Stamp = cognitionStamp }));
                 allChanged.AddRange(changed);
-                LogCall(context, dayKey, "cognition_formation", ++batchIndex,
+                LogCall(context, dayKey, "cognition_formation", batchIndex,
                     "认知：" + changed.Count + " 条", TraceJson.ToJson(output));
             }
             Console.WriteLine("  认知形成：" + batches.Count + " 批，" + allChanged.Count + " 条变更。");

@@ -104,12 +104,14 @@ namespace TraceSoul2.Manager
             if (op == "link")
             {
                 var other = string.IsNullOrWhiteSpace(write.related_id) ? null : connection.Find<CognitionSliceRecord>(write.related_id);
-                if (other == null || !PuzzleDomains.Live(other.Status) || other.Id == target.Id ||
+                if (other == null || !PuzzleDomains.Live(other.Status) ||
                     !new[] { "related_to", "abstracts", "exemplifies", "contradicts" }.Contains(write.relation))
                     throw new InvalidOperationException("认知关联目标或关系无效。");
                 if ((other.ContextConversationId ?? contextId) != contextId ||
                     (other.MemoryVisibility == "public" ? "public" : "private") != visibility)
                     throw new InvalidOperationException("关联不能引入另一环境的认知。");
+                // No edge, evidence, revision or weight change for a relation to itself.
+                if (other.Id == target.Id) return null;
                 SaveCognitionEdge(target.Id, other.Id, write.relation, now);
                 // 关联的依据不等于节点内容再次被证明。
                 AddGraphEvidence(target.Id, evidence, "link:" + write.relation + ":" + other.Id);
