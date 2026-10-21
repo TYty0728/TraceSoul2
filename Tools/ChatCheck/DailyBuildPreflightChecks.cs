@@ -40,6 +40,15 @@ internal static partial class Program
         var slicesOnly = DailyBuildPreflight.Plan("2026-09-17", "2026-09-20", Array.Empty<string>(), states,
             Array.Empty<DailyBuildAttempt>(), pendingSlices: new[] { "2026-09-17" });
         Require(slicesOnly.Days.SequenceEqual(new[] { "2026-09-17" }), "没有新聊天也要补齐待复盘切片，完成日的迟到切片不会丢失");
+        var derived = new[] { new DailyReviewState { DayKey = "2026-09-19", Status = "pending", Error = "当天回望待整理" } };
+        var automatic = DailyBuildPreflight.Plan("2026-09-20", "2026-09-20", Array.Empty<string>(), derived,
+            Array.Empty<DailyBuildAttempt>(), pendingSlices: new[] { "2026-09-19" }, includePendingReviews: false);
+        Require(automatic.HistoricalFailures.Count == 0 && automatic.PendingReviews.Count == 1 &&
+            automatic.Days.SequenceEqual(new[] { "2026-09-20" }),
+            "待整理正文不变成历史致命错误，未完成切片也不触发自动反复付费，下一日可继续");
+        var manual = DailyBuildPreflight.Plan("2026-09-20", "2026-09-20", Array.Empty<string>(), derived,
+            Array.Empty<DailyBuildAttempt>());
+        Require(manual.Days.SequenceEqual(new[] { "2026-09-19", "2026-09-20" }), "显式启动仍列出并续做待整理日期，不冒充全部成功");
         try
         {
             DailyBuildPreflight.Plan("2026-09-21", "2026-09-20", Array.Empty<string>(), states, Array.Empty<DailyBuildAttempt>());

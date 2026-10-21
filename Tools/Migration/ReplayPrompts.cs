@@ -62,6 +62,8 @@ namespace TraceSoul2.Migrate
         {
             [System.Text.Json.Serialization.JsonIgnore]
             public long SubjectRevision;
+            [System.Text.Json.Serialization.JsonIgnore]
+            public List<string> PendingParts = new();
             public string summary;
             // Omission is not an explicit decision to leave cards unchanged.
             public List<CardUpdateData> cards;

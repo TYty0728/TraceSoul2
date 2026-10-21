@@ -835,7 +835,7 @@
           <div id="dailyPreflight" class="muted">点击检查，先查看历史未完成日期和错误。</div>
           <button onclick="showSection('brain')">修改复盘模型与温度</button>
           <button id="dailyStart" class="primary" onclick="startDailyPlan()" disabled>检查后执行</button>
-          <p class="muted">检查不调用模型；开始后先补旧日，全部成功才继续目标日。任一天失败即停止。已有部分记忆不会被清空。</p>
+          <p class="muted">检查不调用模型；开始后按日期处理，结构或来源错误会停止队列。正文篇幅待整理时保留合格结果和原件，明确显示部分完成；不会自动反复重试，手动开始只续做未完成项。</p>
           <h3>错误保护</h3>
           <p class="muted">对话和模型错误仅报告，不暂停后续聊天。表情包对不上是正常结果，不记错误也不记警告。同一未处理报告只通知一次。日构建失败仍停止自动补跑，处理后恢复并重新检查历史，再点击开始构建。</p>
           <button onclick="loadFailures()">刷新保护状态</button>
@@ -3346,13 +3346,15 @@
       if (plan.busy) line("日构建队列正在执行；可稍后重新检查进度。");
       for (const item of plan.historicalFailures)
         line(`待处理 ${item.day}｜${item.stage}｜${item.reason}`);
+      for (const item of plan.pendingReviews || [])
+        line(`${item.day}｜事件与认知已完成，回望或身份正文待整理｜${item.reason}。开始后只续做未完成项。`);
       for (const reason of plan.blockers) line("暂不能执行：" + reason);
       if (plan.days.length) line("执行顺序：" + plan.days.join(" → "));
       else if (!plan.blockers.length) line("目标日期及之前的日构建均已完成，无需重复构建。");
       if (plan.recentAttempts.length) {
         line("最近构建记录（旧错误不会因再次尝试而清除）：");
         for (const item of plan.recentAttempts.slice(0, 8))
-          line(`${item.day}｜${item.status}｜${item.stage}｜${item.reason}`);
+          line(`${item.day}｜${item.status === "pending" ? "部分完成，待整理" : item.status}｜${item.stage}｜${item.reason}`);
       }
       button.textContent = plan.historicalFailures.length ? "处理历史未完成日期，再构建目标日" : "按以上顺序开始构建";
       button.disabled = !plan.ready;

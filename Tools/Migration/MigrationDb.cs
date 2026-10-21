@@ -84,6 +84,17 @@ namespace TraceSoul2.Migrate
             DailyBuildHistory.Finish(connection, activeReviewAttempt, "done", null);
         }
 
+        public void MarkDayPending(string dayKey, IReadOnlyCollection<string> parts)
+        {
+            var reason = "事件与认知已完成；待整理：" + string.Join("、", parts.Select(x => x switch {
+                "day_summary" => "当天回望",
+                "self" => "我是谁", "other" => "对方是谁", "relation" => "我们的关系",
+                "expression_habit" => "表达习惯", "inner_narrative" => "当天感受", _ => "身份摘要" }));
+            connection.InsertOrReplace(new ReviewStateRecord { DayKey = dayKey, Status = "pending",
+                Error = reason, UpdatedUnixMs = DateTimeOffset.UtcNow.ToUnixTimeMilliseconds() });
+            DailyBuildHistory.Finish(connection, activeReviewAttempt, "pending", reason);
+        }
+
         public List<string> GetDoneDayKeys()
         {
             return connection.Table<ReviewStateRecord>()

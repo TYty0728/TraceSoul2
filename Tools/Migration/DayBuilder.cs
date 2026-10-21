@@ -22,7 +22,7 @@ namespace TraceSoul2.Migrate
     /// → 当下切片整理、细节浸染与有依据的认知修订 → 身份摘要按依据更新（允许不变）。
     /// 时间维度由 TimeLanguage 确定性翻译。当天结束后排日榜，并按周一、月初、年初晋升周、月、年、永久榜。
     /// </summary>
-    public static class DayBuilder
+    public static partial class DayBuilder
     {
         public static async Task<int> RunAsync(MigrationContext context, string[] args)
         {
@@ -31,17 +31,32 @@ namespace TraceSoul2.Migrate
                 throw new InvalidOperationException("需要 --day yyyy-MM-dd。");
             if (context.Migration.IsDayCompleted(dayKey))
             {
+                var lateSummaryPending = false;
                 if (context.Store.GetRuntimeSlices(MigrationContext.ConversationId, dayKey, true).Count > 0 ||
                     context.Store.HasPendingRuntimeDaySummary(MigrationContext.ConversationId, dayKey))
-                    await RuntimeSliceLogic.ReviewDayAsync(context.Store, context.RequireLlm(), MigrationContext.ConversationId, dayKey);
+                {
+                    try { await RuntimeSliceLogic.ReviewDayAsync(context.Store, context.RequireLlm(), MigrationContext.ConversationId, dayKey); }
+                    catch (ReviewProsePendingException) { lateSummaryPending = true; }
+                }
                 var finishedDay = DateTime.ParseExact(dayKey, "yyyy-MM-dd", CultureInfo.InvariantCulture);
                 var finishedRange = DateRange.Parse(new[] { "--from", dayKey, "--to", dayKey });
                 if (context.Store.GetPublicMomentsInRange(finishedRange.DayStartMs(finishedDay), finishedRange.DayEndMs(finishedDay)).Count > 0)
                     await PublicExperienceLogic.BuildAsync(context.Store, context.RequireLlm(), finishedRange.DayStartMs(finishedDay), finishedRange.DayEndMs(finishedDay),
                         encoderFactory: context.RequireCognitionEncoder, cache: context.Vectors);
                 // 完成标记早于临时样本清理：即使上次进程恰好在两者之间退出，也能在这里补清理。
-                context.Store.RetireDayRuntimeSamples(MigrationContext.ConversationId, dayKey);
-                Console.WriteLine("日终复盘已完成，跳过重复构筑：" + dayKey);
+                if (lateSummaryPending)
+                {
+                    // The existing done marker is authoritative for core work, including pre-checkpoint versions.
+                    var sources = context.Migration.GetUnbuiltMomentsInRange(finishedRange.DayStartMs(finishedDay), finishedRange.DayEndMs(finishedDay));
+                    var lateCore = SaveCoreCheckpoint(context, dayKey, sources, new(), new());
+                    lateCore.Ranked = lateCore.ReviewDone = lateCore.DaySummaryPending = true;
+                    WriteCoreCheckpoint(context, dayKey, lateCore);
+                    context.Migration.SaveReviewState(new ReviewStateRecord { DayKey = dayKey, Status = "running", Error = "" });
+                    context.Migration.SetReviewStage("迟到回望待整理");
+                    context.Migration.MarkDayPending(dayKey, new[] { "day_summary" });
+                }
+                else context.Store.RetireDayRuntimeSamples(MigrationContext.ConversationId, dayKey);
+                Console.WriteLine((lateSummaryPending ? "核心已完成，迟到回望待整理：" : "日终复盘已完成，跳过重复构筑：") + dayKey);
                 return 0;
             }
             context.Migration.SaveReviewState(new ReviewStateRecord
@@ -52,6 +67,9 @@ namespace TraceSoul2.Migrate
             });
             try
             {
+                var checkpoint = LoadCoreCheckpoint(context, dayKey);
+                if (checkpoint != null && CanResumeCore(context, dayKey, checkpoint))
+                    return await FinishCheckpointAsync(context, dayKey, checkpoint);
                 return await RunCoreAsync(context, args, dayKey);
             }
             catch (Exception exception)
@@ -75,14 +93,22 @@ namespace TraceSoul2.Migrate
             var range = DateRange.Parse(new[] { "--from", dayKey, "--to", dayKey });
             var moments = context.Migration.GetUnbuiltMomentsInRange(
                 range.DayStartMs(day), range.DayEndMs(day));
+            var previousCore = LoadCoreCheckpoint(context, dayKey);
+            if (previousCore != null)
+            {
+                ValidateCoreSources(context, previousCore);
+                moments.RemoveAll(x => previousCore.MomentIds.Contains(x.Id));
+            }
             var pair = context.RequirePair();
             var llm = context.RequireLlm();
             context.Migration.SetReviewStage("当下切片夜间整理");
-            await RuntimeSliceLogic.ReviewDayAsync(context.Store, llm, MigrationContext.ConversationId, dayKey);
+            var daySummaryPending = false;
+            try { await RuntimeSliceLogic.ReviewDayAsync(context.Store, llm, MigrationContext.ConversationId, dayKey); }
+            catch (ReviewProsePendingException) { daySummaryPending = true; }
             context.Migration.SetReviewStage("公开经历按环境整理");
             var publicCount = await PublicExperienceLogic.BuildAsync(context.Store, llm, range.DayStartMs(day), range.DayEndMs(day),
                 encoderFactory: context.RequireCognitionEncoder, cache: context.Vectors);
-            if (moments.Count == 0 && publicCount > 0)
+            if (moments.Count == 0 && publicCount > 0 && !daySummaryPending && previousCore == null)
             {
                 context.Migration.MarkDayCompleted(dayKey);
                 return 0;
@@ -90,7 +116,10 @@ namespace TraceSoul2.Migrate
             if (moments.Count == 0)
             {
                 MigrationLive.Start(context);
-                return await EmptyDayCycleAsync(context, pair, llm, dayKey);
+                var emptyCore = previousCore ?? SaveCoreCheckpoint(context, dayKey, new(), new(), new());
+                emptyCore.DaySummaryPending = daySummaryPending;
+                WriteCoreCheckpoint(context, dayKey, emptyCore);
+                return await FinishCheckpointAsync(context, dayKey, emptyCore, retryDaySummary: false);
             }
             MigrationLive.Start(context);
             var router = new HierarchicalVectorRouterLogic(new BagOfCharsVectorEncoder());
@@ -282,62 +311,74 @@ namespace TraceSoul2.Migrate
             await RunCognitionFormationAsync(
                 context, pair, llm, dayKey, dayIndexes, dayEntries, moments);
 
+            var core = SaveCoreCheckpoint(context, dayKey, moments, dayIndexes, dayEntries, previousCore);
+            core.DaySummaryPending = daySummaryPending;
+            WriteCoreCheckpoint(context, dayKey, core);
+            return await FinishCheckpointAsync(context, dayKey, core, retryDaySummary: false);
+        }
+
+        private static async Task<int> FinishCheckpointAsync(MigrationContext context, string dayKey, DayCoreCheckpoint core, bool retryDaySummary = true)
+        {
+            ValidateCoreSources(context, core);
+            var pair = context.RequirePair();
+            var llm = context.RequireLlm();
+            if (core.DaySummaryPending && retryDaySummary)
+            {
+                context.Migration.SetReviewStage("续做当天回望");
+                try
+                {
+                    await RuntimeSliceLogic.ReviewDayAsync(context.Store, llm, MigrationContext.ConversationId, dayKey);
+                    core.DaySummaryPending = false;
+                }
+                catch (ReviewProsePendingException) { }
+                WriteCoreCheckpoint(context, dayKey, core);
+            }
+            var day = DateTime.ParseExact(dayKey, "yyyy-MM-dd", CultureInfo.InvariantCulture);
+            var range = DateRange.Parse(new[] { "--from", dayKey, "--to", dayKey });
+            var dayIndexes = context.Migration.GetActiveEventIndexes().Where(x => core.IndexIds.Contains(x.Id)).ToList();
+            var dayEntries = context.Migration.GetEntriesByIndexIds(core.IndexIds).Where(x => core.EntryIds.Contains(x.Id)).ToList();
+            if (dayIndexes.Count != core.IndexIds.Count || dayEntries.Count != core.EntryIds.Count)
+                throw new InvalidOperationException("复盘检查点的事件或细节已变化，请检查来源后继续。");
+            var lastMomentId = core.MomentIds.LastOrDefault() ?? string.Empty;
+            var userProfileCard = IdentityCardLogic.ResolveBody(IdentityCardSlotValues.UserProfile,
+                Card(context.Store.LoadIdentityCards(MigrationContext.ConversationId), IdentityCardSlotValues.UserProfile).Body, pair);
+
             // ---------- 日终身份摘要复盘 + 内心全字段同步 ----------
             context.Migration.SetReviewStage("身份复盘与内心同步");
             var cardsNow = context.Store.LoadIdentityCards(MigrationContext.ConversationId);
-            var reviewOutput = await RunDayReviewAsync(
-                context, pair, llm, dayKey, cardsNow, userProfileCard, dayIndexes, dayEntries);
-            var changed = ApplyReviewOutput(context, pair, reviewOutput, cardsNow, lastMomentId, false);
+            var reviewOutput = core.ReviewDone ? new ReplayPrompts.DayCardReviewOutputData { cards = new() }
+                : await RunDayReviewAsync(context, pair, llm, dayKey, cardsNow, userProfileCard, dayIndexes, dayEntries);
+            var changed = ApplyReviewOutput(context, pair, reviewOutput, cardsNow, lastMomentId, core.EmptyDay);
+            UpdateReviewCheckpoint(context, dayKey);
+            core.ReviewDone = reviewOutput.PendingParts.Count == 0;
+            WriteCoreCheckpoint(context, dayKey, core);
+            if (core.DaySummaryPending) reviewOutput.PendingParts.Add("day_summary");
             Console.WriteLine();
             Console.WriteLine("身份摘要与内心变化：" + (changed.Count == 0 ? "（无变化）" : string.Join("；", changed)));
 
             // ---------- 当天排序：日榜（事件/认知各持榜单）+ 周/月/年/永久晋升 ----------
             context.Migration.SetReviewStage("日榜排序与长期晋升");
-            var dayCognitions = context.Migration.GetCognitionsCreatedInRange(
-                range.DayStartMs(day), range.DayEndMs(day));
-            await RankDayLadderAsync(context, pair, llm, dayKey, dayIndexes, dayCognitions);
-            await DayLadderLogic.PromoteAsync(context, pair, dayKey, llm);
+            if (!core.Ranked)
+            {
+                var dayCognitions = context.Migration.GetCognitionsCreatedInRange(range.DayStartMs(day), range.DayEndMs(day));
+                await RankDayLadderAsync(context, pair, llm, dayKey, dayIndexes, dayCognitions);
+                await DayLadderLogic.PromoteAsync(context, pair, dayKey, llm);
+                core.Ranked = true;
+                WriteCoreCheckpoint(context, dayKey, core);
+            }
 
             // ---------- 标记当天 Moment 已归档（实时归档已标记的不会重复） ----------
             context.Migration.SetReviewStage("归档收尾");
-            var markedBuilt = context.Migration.MarkMomentsBuiltByRange(
-                range.DayStartMs(day), range.DayEndMs(day));
+            if (!CanResumeCore(context, dayKey, core))
+                throw new InvalidOperationException("复盘期间出现新来源，已保存当前阶段，需继续处理新增来源。");
+            var markedBuilt = context.Migration.MarkMomentsBuiltByRange(range.DayStartMs(day), range.DayEndMs(day));
             if (markedBuilt > 0) Console.WriteLine("  已标记 " + markedBuilt + " 条 Moment 为已归档（built）。");
-            context.Migration.MarkDayCompleted(dayKey);
-            context.Store.RetireDayRuntimeSamples(MigrationContext.ConversationId, dayKey);
+            if (reviewOutput.PendingParts.Count == 0) context.Migration.MarkDayCompleted(dayKey);
+            else context.Migration.MarkDayPending(dayKey, reviewOutput.PendingParts);
+            if (!core.DaySummaryPending) context.Store.RetireDayRuntimeSamples(MigrationContext.ConversationId, dayKey);
 
             var cardsAfter = context.Store.LoadIdentityCards(MigrationContext.ConversationId);
             PrintCards("构筑后身份摘要", cardsAfter, pair);
-            PrintDayResult(dayKey, moments, dayIndexes, dayEntries, observationCalls, detailCalls, context);
-            return 0;
-        }
-
-        /// <summary>空天仍是真实的一天：短卡保持原样，内心写下这一天的时间感；手上没结束的事不清掉。</summary>
-        private static async Task<int> EmptyDayCycleAsync(
-            MigrationContext context, PairIdentity pair, ILlmClient llm, string dayKey)
-        {
-            Console.WriteLine("空天循环：" + dayKey + " 没有 Moment——仍复盘这一天的时间感。");
-            context.Migration.SetReviewStage("空天身份复盘");
-            var cardsNow = context.Store.LoadIdentityCards(MigrationContext.ConversationId);
-            var profile = Card(cardsNow, IdentityCardSlotValues.UserProfile);
-            var userProfileCard = IdentityCardLogic.ResolveBody(
-                IdentityCardSlotValues.UserProfile, profile.Body, pair);
-            var reviewOutput = await RunDayReviewAsync(
-                context, pair, llm, dayKey, cardsNow, userProfileCard,
-                new List<EventIndexRecord>(), new List<EventEntryRecord>());
-            var changed = ApplyReviewOutput(context, pair, reviewOutput, cardsNow, string.Empty, true);
-            Console.WriteLine("身份摘要与内心变化：" + (changed.Count == 0 ? "（无变化）" : string.Join("；", changed)));
-            var day = DateTime.ParseExact(dayKey, "yyyy-MM-dd", CultureInfo.InvariantCulture);
-            context.Migration.SetReviewStage("空天日榜排序与长期晋升");
-            var range = DateRange.Parse(new[] { "--from", dayKey, "--to", dayKey });
-            var dayCognitions = context.Migration.GetCognitionsCreatedInRange(
-                range.DayStartMs(day), range.DayEndMs(day));
-            await RankDayLadderAsync(
-                context, pair, llm, dayKey, new List<EventIndexRecord>(), dayCognitions);
-            await DayLadderLogic.PromoteAsync(context, pair, dayKey, llm);
-            context.Migration.MarkDayCompleted(dayKey);
-            context.Store.RetireDayRuntimeSamples(MigrationContext.ConversationId, dayKey);
-            PrintCards("空天复盘后身份摘要", context.Store.LoadIdentityCards(MigrationContext.ConversationId), pair);
             return 0;
         }
 
@@ -352,6 +393,11 @@ namespace TraceSoul2.Migrate
             List<EventEntryRecord> dayEntries)
         {
             var graphNodes = context.Store.GetCognitionNodes(5000);
+            var restored = LoadReviewCheckpoint(context, dayKey, cardsNow, graphNodes);
+            if (restored != null)
+                return await RepairReviewAsync(context, llm, dayKey, cardsNow, restored);
+            var reviewStamp = ReviewStamp(context, dayKey, cardsNow, graphNodes);
+            var storedCardsStamp = Digest(context.Store.LoadIdentityCards(MigrationContext.ConversationId));
             string CurrentBody(string slot)
             {
                 var card = Card(cardsNow, slot);
@@ -392,12 +438,15 @@ namespace TraceSoul2.Migrate
                 validationError: x =>
                 {
                     preservedSlots.UnionWith(DayCardReviewContract.PreserveUnavailableCards(x, cardsNow, identityNodes));
-                    return DayCardReviewContract.ValidationError(x, cardsNow, identityNodes);
+                    return DayCardReviewContract.StructuralError(x, cardsNow, identityNodes);
                 });
             if (preservedSlots.Count > 0)
                 Console.WriteLine("  程序保留本次范围外的身份卡原文：" + string.Join("、", preservedSlots.OrderBy(x => x)));
             foreach (var card in output.cards) card.body = pair.RewriteRecordedText(card.body.Trim());
             output.SubjectRevision = subjectRevision;
+            output = await RepairReviewAsync(context, llm, dayKey, cardsNow,
+                new ReviewCheckpoint { Output = output, Evidence = identityNodes, SubjectRevision = subjectRevision,
+                    Stamp = reviewStamp, StoredCardsStamp = storedCardsStamp });
             LogCall(context, dayKey, "card_review", 0,
                 "身份摘要复盘：" + Limit(output.summary, 60), TraceJson.ToJson(output));
             return output;

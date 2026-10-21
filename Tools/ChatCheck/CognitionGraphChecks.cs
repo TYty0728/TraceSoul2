@@ -17,6 +17,7 @@ internal static partial class Program
         var assembly = System.Reflection.Assembly.LoadFrom(Path.GetFullPath(assemblyPath));
         RunCognitionReviewBgeChecks(Path.GetDirectoryName(assembly.Location));
         RunDayCardReviewChecks(assembly);
+        RunDayReviewRecoveryChecks(assembly);
         RunReviewSelectionMigrationChecks(assembly);
         var prompts = assembly.GetType("TraceSoul2.Migrate.ReplayPrompts", true);
         var outputType = prompts.GetNestedType("CognitionFormationOutputData");

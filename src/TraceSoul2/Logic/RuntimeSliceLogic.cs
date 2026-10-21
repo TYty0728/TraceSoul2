@@ -140,7 +140,7 @@ namespace TraceSoul2.Logic
                 {
                     var shortened = await CondenseOnceAsync(llm, day, text, token);
                     if (shortened.Length == 0 || shortened.Length > DaySummaryAccept)
-                        throw new InvalidOperationException("当天回望合并后有" + text.Length + "字，精简一次后仍有" + shortened.Length + "字，超过1000字。不截断，已写各段保留。");
+                        throw new ReviewProsePendingException("当天回望合并后有" + text.Length + "字，精简一次后仍有" + shortened.Length + "字，超过1000字。不截断，已写各段保留。");
                     text = shortened;
                 }
                 store.CommitRuntimeDaySummary(notes.Select(x => x.Id), text);

@@ -41,7 +41,7 @@ namespace TraceSoul2.Host
             public void Dispose() { Interlocked.Exchange(ref semaphore, null)?.Release(); }
         }
 
-        public DailyBuildPlan Inspect(string dayKey, bool includeBusy = true)
+        public DailyBuildPlan Inspect(string dayKey, bool includeBusy = true, bool includePendingReviews = true)
         {
             var now = DateTimeOffset.Now;
             var closed = MemoryDayLogic.ClosedDayKey(now);
@@ -55,7 +55,8 @@ namespace TraceSoul2.Host
                     runtime.Store.GetUnbuiltMemoryDayKeysBefore(MemoryDayLogic.CurrentStart(now).ToUnixTimeMilliseconds()),
                     DailyBuildHistory.ReadStates(HistoryPath), DailyBuildHistory.ReadAttempts(HistoryPath, target),
                     runtime.Store.GetUnbuiltPublicMemoryDayKeysBefore(MemoryDayLogic.CurrentStart(now).ToUnixTimeMilliseconds()),
-                    runtime.Store.GetUnreviewedRuntimeDayKeysBefore(MemoryDayLogic.CurrentStart(now).ToUnixTimeMilliseconds()));
+                    runtime.Store.GetUnreviewedRuntimeDayKeysBefore(MemoryDayLogic.CurrentStart(now).ToUnixTimeMilliseconds()),
+                    includePendingReviews);
             }
             catch (Exception)
             {
@@ -93,7 +94,7 @@ namespace TraceSoul2.Host
                 {
                     if (buildGate.CurrentCount > 0)
                     {
-                        var plan = Inspect(null);
+                        var plan = Inspect(null, includePendingReviews: false);
                         // 旧版遗留 failed/running 也不能一启动就重复收费。
                         if (plan.HistoricalFailures.Count > 0)
                         {
@@ -108,7 +109,7 @@ namespace TraceSoul2.Host
                         }
                         else if (plan.Ready && buildGate.Wait(0))
                         {
-                            await RunReservedPlanAsync(plan.Day, stoppingToken);
+                            await RunReservedPlanAsync(plan.Day, stoppingToken, includePendingReviews: false);
                             historyReported = false;
                         }
                         else if (plan.Blockers.Count > 0)
@@ -149,17 +150,19 @@ namespace TraceSoul2.Host
             if (plan.Days.Count == 0) throw new InvalidOperationException("目标日期及之前的日构建已完成，无需重复执行。");
         }
 
-        private async Task RunReservedPlanAsync(string target, CancellationToken token)
+        private async Task RunReservedPlanAsync(string target, CancellationToken token, bool includePendingReviews = true)
         {
             try
             {
                 // 服务端在真正启动前再检查一次，前端页面不能绕过旧日和暂停检查。
-                var plan = Inspect(target, false);
+                var plan = Inspect(target, false, includePendingReviews);
                 RequireReady(plan);
                 runtime.Emit("日构建检查通过，执行顺序：" + string.Join(" → ", plan.Days));
                 var succeeded = await DailyBuildPreflight.RunInOrderAsync(plan.Days,
                     day => RunDayBuildAsync(day, token));
-                runtime.Emit(succeeded ? "历史待补与目标日构建均已完成。" : "日构建队列已停止；旧日未完成，不会执行后续日期。");
+                var pending = DailyBuildHistory.ReadStates(HistoryPath).Count(x => x.Status == "pending");
+                runtime.Emit(succeeded ? pending > 0 ? "事件与认知已处理，仍有" + pending + "天回望或身份正文待整理；可手动续做。"
+                    : "历史待补与目标日构建均已完成。" : "日构建队列已停止；旧日未完成，不会执行后续日期。");
             }
             catch (OperationCanceledException) when (token.IsCancellationRequested) { }
             catch (Exception error)
@@ -207,13 +210,18 @@ namespace TraceSoul2.Host
                 }
                 var state = DailyBuildHistory.ReadStates(HistoryPath).FirstOrDefault(x => x.DayKey == dayKey);
                 runtime.Emit("日构建结束（exit " + process.ExitCode + "）：" + dayKey);
-                if (process.ExitCode != 0 || state?.Status != "done")
+                if (process.ExitCode != 0 || state == null || (state.Status != "done" && state.Status != "pending"))
                 {
                     runtime.Providers.Protection.FailAttempt("daily",
                         new InvalidOperationException(state?.Error ?? "子进程未确认完成"));
                     return -1;
                 }
                 runtime.Providers.Protection.CompleteAttempt("daily");
+                if (state.Status == "pending")
+                {
+                    runtime.Emit(dayKey + "：" + state.Error + "。已保存检查点，不自动重试。");
+                    return 0;
+                }
             }
             catch (Exception error)
             {

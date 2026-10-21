@@ -10,6 +10,7 @@ using TraceSoul2.Manager;
 using TraceSoul2.Logic;
 using TraceSoul2.Util;
 using TraceSoul2.Plugins;
+using TraceSoul2.Host;
 
 internal static partial class Program
 {
@@ -140,15 +141,15 @@ internal static partial class Program
                 "更换为更长称呼不截断已保存摘要或末尾条件");
             store.SavePairIdentity("本人", "同伴", "称呼");
             var longOutput = Output(Card("relation", new string('长', 745), "r1", "r2"), Card("expression_habit", "保持这张原文", "h1"));
-            var repairedOutput = Output(Card("relation", "收成这一份关系", "r1", "r2"), Card("expression_habit", "保持这张原文", "h1"));
+            var repairedOutput = "{\"items\":[{\"id\":\"relation\",\"body\":\"收成这一份关系\"}]}";
             var fitting = new AgentSequenceLlm(longOutput, repairedOutput);
             args[2] = fitting;
             var fitTask = (Task)run.Invoke(null, args);
             fitTask.GetAwaiter().GetResult();
             using var fitJson = JsonDocument.Parse(JsonSerializer.Serialize(fitTask.GetType().GetProperty("Result").GetValue(fitTask), outputType, json));
             var fitCards = fitJson.RootElement.GetProperty("cards");
-            Require(fitting.Requests.Count == 2 && fitting.Messages[1].Last().content.Contains("超过600") &&
-                fitting.Messages[1].Last().content.Contains("重新写下") && !fitting.Requests[1].Contains("凝练得更简洁") &&
+            Require(fitting.Requests.Count == 2 && fitting.Messages[1][0].content.Contains("复盘未完成正文") &&
+                fitting.Messages[1].Last().content.Contains("max_chars") && !fitting.Requests[1].Contains("保持这张原文") &&
                 fitCards.GetArrayLength() == 2 && fitCards[0].GetProperty("body").GetString() == "收成这一份关系" &&
                 fitCards[1].GetProperty("body").GetString() == "保持这张原文",
                 "超出篇幅时按原任务重写完整摘要，不另起压缩，也不丢掉同批有效卡");
@@ -163,13 +164,22 @@ internal static partial class Program
                 JsonSerializer.Serialize(unchanged, outputType, json) == beforeCards,
                 "超长摘要不在校验里删卡或截断，也不另调模型压缩");
             var stillLong = Output(Card("relation", new string('长', 1201), "r1", "r2"), Card("expression_habit", "保持这张原文", "h1"));
-            var fittingFailure = new AgentSequenceLlm(stillLong, stillLong);
+            var fittingFailure = new AgentSequenceLlm(stillLong,
+                TraceJson.ToJson(new { items = new[] { new { id = "relation", body = new string('长', 1201) } } }));
             args[2] = fittingFailure;
-            rejected = false;
-            try { ((Task)run.Invoke(null, args)).GetAwaiter().GetResult(); }
-            catch (InvalidOperationException ex) { rejected = ex.Message.Contains("超过600") && ex.Message.Contains("纠正后错误"); }
-            Require(rejected && fittingFailure.Requests.Count == 2 && !fittingFailure.Requests[1].Contains("凝练得更简洁"),
-                "连续两次超出篇幅就停止，不截断保存，也不另起压缩");
+            var pendingTask = (Task)run.Invoke(null, args);
+            pendingTask.GetAwaiter().GetResult();
+            var pendingResult = pendingTask.GetType().GetProperty("Result").GetValue(pendingTask);
+            Require(((List<string>)outputType.GetField("PendingParts").GetValue(pendingResult)).SequenceEqual(new[] { "relation" }) &&
+                ((System.Collections.IList)outputType.GetField("cards").GetValue(pendingResult)).Count == 1 && fittingFailure.Requests.Count == 2,
+                "单卡持续超限保存待整理状态，其他合格卡保留，不截断或整批重试");
+            var resume = new AgentSequenceLlm(repairedOutput);
+            args[2] = resume;
+            var resumeTask = (Task)run.Invoke(null, args);
+            resumeTask.GetAwaiter().GetResult();
+            Require(resume.Requests.Count == 1 && resume.Messages[0][0].content.Contains("复盘未完成正文") &&
+                !resume.Requests[0].Contains(new string('长', 1201)),
+                "续做只请求待整理正文，合格字段和引用从检查点恢复，超长草稿不回传");
             var broken = Parse("{\"cards\":null}");
             rejected = false;
             try { ((Task)fitMethod.Invoke(null, new object[] { new AgentSequenceLlm(), broken, cards, nodes, System.Threading.CancellationToken.None })).GetAwaiter().GetResult(); }
@@ -178,6 +188,146 @@ internal static partial class Program
         }
         finally { context?.Dispose(); Directory.Delete(dir, true); }
         Console.WriteLine("Day card review checks passed: slot grouping, precise repair, multiple evidence, explicit empty, pinned/length/source guards and actual Migration entry.");
+    }
+
+    private static void RunDayReviewRecoveryChecks(Assembly assembly)
+    {
+        var directory = Path.Combine(Path.GetTempPath(), "daily-recovery-" + Guid.NewGuid().ToString("N"));
+        Directory.CreateDirectory(directory);
+        var path = Path.Combine(directory, "brain.db");
+        var history = Path.Combine(directory, "migration.db");
+        var contextType = assembly.GetType("TraceSoul2.Migrate.MigrationContext", true);
+        var storeType = assembly.GetType("TraceSoul2.Manager.SqliteMemoryManager", true);
+        var builder = assembly.GetType("TraceSoul2.Migrate.DayBuilder", true);
+        MethodInfo Method(string name) => builder.GetMethod(name, BindingFlags.Static | BindingFlags.NonPublic);
+        IDisposable context = null;
+        object actualStore = null;
+        IMemoryStore store = null;
+        void Open()
+        {
+            context = (IDisposable)Activator.CreateInstance(contextType);
+            actualStore = Activator.CreateInstance(storeType, path);
+            contextType.GetProperty("Store").SetValue(context, actualStore);
+            contextType.GetProperty("Migration").SetValue(context, Activator.CreateInstance(
+                assembly.GetType("TraceSoul2.Migrate.MigrationDb", true), history, path));
+            store = (IMemoryStore)actualStore;
+            store.SavePairIdentity("本人", "同伴", "称呼");
+            store.LoadIdentityCards("tracesoul2");
+        }
+        List<MomentRecord> Seed(string day, int count = 1)
+        {
+            var start = MemoryDayLogic.StartOf(day).ToUnixTimeMilliseconds();
+            var sources = Enumerable.Range(0, count).Select(i => new MomentRecord { Id = day + "-" + i,
+                ConversationId = "tracesoul2", Role = "user", Content = "完整测试来源", CreatedUnixMs = start + i }).ToList();
+            foreach (var source in sources) store.SaveMoment(source);
+            return sources;
+        }
+        void Checkpoint(string day, List<MomentRecord> sources, bool summaryPending = false, bool reviewDone = false)
+        {
+            var core = Method("SaveCoreCheckpoint").Invoke(null, new object[] { context, day, sources,
+                new List<EventIndexRecord>(), new List<EventEntryRecord>(), null });
+            core.GetType().GetField("Ranked").SetValue(core, true);
+            core.GetType().GetField("ReviewDone").SetValue(core, reviewDone);
+            core.GetType().GetField("DaySummaryPending").SetValue(core, summaryPending);
+            Method("WriteCoreCheckpoint").Invoke(null, new object[] { context, day, core });
+        }
+        void Run(string day, ILlmClient llm)
+        {
+            contextType.GetProperty("Llm").SetValue(context, llm);
+            ((Task)builder.GetMethod("RunAsync").Invoke(null, new object[] { context, new[] { "--day", day } })).GetAwaiter().GetResult();
+        }
+        string Output(string reference, string body, string habit = "合格的表达理解") => TraceJson.ToJson(new {
+            cards = new[] { new { slot = "relation", body, cognition_ids = new[] { reference } },
+                new { slot = "expression_habit", body = habit, cognition_ids = new[] { "h" } } } });
+        string Repair(string body) => TraceJson.ToJson(new { items = new[] { new { id = "relation", body } } });
+        try
+        {
+            Open();
+            const string day = "2020-08-20";
+            var sources = Seed(day);
+            using (var db = new SQLite.SQLiteConnection(path))
+                foreach (var item in new[] { ("r", "relation"), ("h", "expression_habit") })
+                {
+                    db.Insert(new CognitionSliceRecord { Id = item.Item1, IdentitySlot = item.Item2, Status = "active",
+                        Summary = "当前有效理解", ContextConversationId = "tracesoul2", MemoryVisibility = "private" });
+                    db.Insert(new CognitionEvidenceRecord { Id = "e-" + item.Item1, CognitionId = item.Item1,
+                        MomentId = sources[0].Id, Relation = "support", Weight = 1 });
+                }
+            Checkpoint(day, sources);
+            var first = new AgentSequenceLlm(Output("r", new string('长', 745)), Repair(new string('长', 745)));
+            Run(day, first);
+            var savedHabit = store.LoadIdentityCards("tracesoul2").Single(x => x.Slot == "expression_habit");
+            Require(first.Requests.Count == 2 && savedHabit.Body == "合格的表达理解" &&
+                DailyBuildHistory.ReadStates(history).Single().Status == "pending",
+                "真实日构建只将超限单卡列为待整理，合格卡已提交，日状态不能假报完成");
+            store.SaveMoment(new MomentRecord { Id = "late-public", ConversationId = "tracesoul2:environment:test",
+                Role = "user", Content = "公开测试来源", MemoryVisibility = "public",
+                CreatedUnixMs = MemoryDayLogic.StartOf(day).ToUnixTimeMilliseconds() + 50 });
+            var cachedCore = Method("LoadCoreCheckpoint").Invoke(null, new object[] { context, day });
+            Require(!(bool)Method("CanResumeCore").Invoke(null, new object[] { context, day, cachedCore }),
+                "私密核心检查点不能略过新到的公开经历，避免待整理队列反复触发却永远不处理公开来源");
+            using (var db = new SQLite.SQLiteConnection(path)) db.Execute("UPDATE moments SET MemoryStatus='built' WHERE Id='late-public'");
+            context.Dispose(); context = null;
+            Open();
+            var resumed = new AgentSequenceLlm(Repair("来源保持完整的关系理解"));
+            Run(day, resumed);
+            Require(resumed.Requests.Count == 1 && resumed.Messages[0][0].content.Contains("复盘未完成正文") &&
+                DailyBuildHistory.ReadStates(history).Single().Status == "done" &&
+                store.LoadIdentityCards("tracesoul2").Single(x => x.Slot == "relation").Body == "来源保持完整的关系理解" &&
+                store.LoadIdentityCards("tracesoul2").Single(x => x.Slot == "expression_habit").Revision == savedHabit.Revision,
+                "重启后仅续做待整理卡，已完成的事件/认知/排序不重跑，合格卡不重复提交");
+
+            const string invalidDay = "2020-08-21";
+            Checkpoint(invalidDay, Seed(invalidDay));
+            var invalid = Output("h", new string('长', 745), "不应写入的表达");
+            var rejected = false;
+            try { Run(invalidDay, new AgentSequenceLlm(invalid, invalid)); }
+            catch (InvalidOperationException) { rejected = true; }
+            Require(rejected && store.LoadIdentityCards("tracesoul2").Single(x => x.Slot == "expression_habit").Body == savedHabit.Body &&
+                DailyBuildHistory.ReadStates(history).Single(x => x.DayKey == invalidDay).Status == "failed",
+                "超限不能掩盖跨组引用错误，初始结构校验失败不部分写卡，仍记录真正失败");
+
+            var changedDuringCall = new SelectionProbeLlm { Reply = _ => {
+                store.SaveIdentityCard("tracesoul2", "relation", "刚刚保存的新内容", "");
+                return Output("r", "不应覆盖新卡"); } };
+            rejected = false;
+            try { Run(invalidDay, changedDuringCall); } catch (InvalidOperationException) { rejected = true; }
+            Require(rejected && store.LoadIdentityCards("tracesoul2").Single(x => x.Slot == "relation").Body == "刚刚保存的新内容",
+                "生成期间身份卡被外部修订时拒绝旧结果，不能让检查点覆盖较新内容");
+            var changedEvidence = new SelectionProbeLlm { Reply = _ => {
+                using var db = new SQLite.SQLiteConnection(path);
+                db.Execute("UPDATE cognition_slices SET Revision=Revision+1, Summary=? WHERE Id=?", "已被反证修订的认识", "r");
+                return Output("r", "根据旧认识写出的正文"); } };
+            rejected = false;
+            try { Run(invalidDay, changedEvidence); } catch (InvalidOperationException) { rejected = true; }
+            Require(rejected && changedEvidence.Requests.Count == 1 &&
+                store.LoadIdentityCards("tracesoul2").Single(x => x.Slot == "relation").Body == "刚刚保存的新内容",
+                "生成期间认知版本发生变化时不提交旧正文，也不把旧文绑定到新版本依据");
+
+            const string summaryDay = "2020-08-22";
+            var summarySources = Seed(summaryDay, 13);
+            foreach (var source in summarySources)
+                storeType.GetMethod("AppendRuntimeSlice").Invoke(actualStore, new object[] { new RuntimeSliceRecord {
+                    RootConversationId = "tracesoul2", ContextConversationId = "tracesoul2", MomentId = source.Id,
+                    SnapshotJson = "{\"inner\":\"测试感受\"}" } });
+            Checkpoint(summaryDay, summarySources, summaryPending: true, reviewDone: true);
+            var nomination = "{\"events\":[{\"summary\":\"当天的变化\",\"source_ids\":[\"s1\"]}]}";
+            var excessive = TraceJson.ToJson(new { summary = new string('长', 1001) });
+            var longSummary = new AgentSequenceLlm(nomination, excessive, excessive);
+            Run(summaryDay, longSummary);
+            Require(DailyBuildHistory.ReadStates(history).Single(x => x.DayKey == summaryDay).Status == "pending" &&
+                ((List<RuntimeSliceRecord>)storeType.GetMethod("GetRuntimeSlices").Invoke(actualStore,
+                    new object[] { "tracesoul2", summaryDay, true })).Count == 13,
+                "回望超限使用明确待整理状态，不阻断已完成核心，也不把未整理切片清掉或伪装完成");
+            context.Dispose(); context = null;
+            Open();
+            var summaryResume = new AgentSequenceLlm("{\"summary\":\"符合预算的完整回望。\"}");
+            Run(summaryDay, summaryResume);
+            Require(summaryResume.Requests.Count == 1 && DailyBuildHistory.ReadStates(history).Single(x => x.DayKey == summaryDay).Status == "done",
+                "回望恢复复用提名检查点，已经完成的身份卡和核心不再调用模型");
+        }
+        finally { context?.Dispose(); Directory.Delete(directory, true); }
+        Console.WriteLine("Day review recovery checks passed: partial commit, process restart, pending states, strict references, stale cards and day summaries.");
     }
 
     private static void RunOct3ReviewReplay(string assemblyPath, string directory)

@@ -96,6 +96,7 @@ namespace TraceSoul2.Host
         public List<string> Days { get; set; } = new List<string>();
         public List<DailyBuildIssue> HistoricalFailures { get; set; } = new List<DailyBuildIssue>();
         public List<DailyBuildIssue> RecentAttempts { get; set; } = new List<DailyBuildIssue>();
+        public List<DailyBuildIssue> PendingReviews { get; set; } = new List<DailyBuildIssue>();
         public List<string> Blockers { get; set; } = new List<string>();
         public string ProviderId { get; set; }
         public string Model { get; set; }
@@ -112,7 +113,7 @@ namespace TraceSoul2.Host
 
         public static DailyBuildPlan Plan(string target, string closedDay, IEnumerable<string> unbuilt,
             IEnumerable<DailyReviewState> states, IEnumerable<DailyBuildAttempt> attempts, IEnumerable<string> pendingPublic = null,
-            IEnumerable<string> pendingSlices = null)
+            IEnumerable<string> pendingSlices = null, bool includePendingReviews = true)
         {
             if (!ValidDay(target) || string.CompareOrdinal(target, closedDay) > 0)
                 throw new ArgumentException("请选择已结束的记忆日（yyyy-MM-dd），最晚为 " + closedDay + "。");
@@ -121,7 +122,10 @@ namespace TraceSoul2.Host
             if (rows.Any(x => !ValidDay(x.DayKey))) result.Blockers.Add("历史构建记录包含异常日期，请先检查迁移数据库。");
             rows = rows.Where(x => ValidDay(x.DayKey) && string.CompareOrdinal(x.DayKey, target) <= 0).ToList();
             var done = rows.Where(x => x.Status == "done").Select(x => x.DayKey).ToHashSet(StringComparer.Ordinal);
-            var unfinished = rows.Where(x => x.Status != "done").ToList();
+            var unfinished = rows.Where(x => x.Status != "done" && x.Status != "pending").ToList();
+            var pending = rows.Where(x => x.Status == "pending").ToList();
+            result.PendingReviews = pending.Select(x => new DailyBuildIssue { Day = x.DayKey,
+                Status = "pending", Stage = "回望或身份正文待整理", Reason = x.Error }).ToList();
             var history = attempts.OrderByDescending(x => x.StartedUnixMs).ToList();
             result.HistoricalFailures = unfinished.Select(x => new DailyBuildIssue
             {
@@ -132,12 +136,18 @@ namespace TraceSoul2.Host
             result.RecentAttempts = history.Select(x => new DailyBuildIssue
             {
                 Day = x.DayKey, Status = x.Status, Stage = x.Stage,
-                Reason = x.Status == "done" ? "完成" : x.Status == "running" || x.Status == "interrupted"
+                Reason = x.Status == "done" ? "完成" : x.Status == "pending" ? x.Error : x.Status == "running" || x.Status == "interrupted"
                     ? "未正常结束或仍在运行" : FailureProtection.SafeReason(new InvalidOperationException(x.Error))
             }).ToList();
-            var publicDays = (pendingPublic ?? Array.Empty<string>()).Concat(pendingSlices ?? Array.Empty<string>()).ToHashSet(StringComparer.Ordinal);
-            result.Days = unbuilt.Concat(publicDays).Concat(unfinished.Select(x => x.DayKey)).Append(target)
-                .Where(x => ValidDay(x) && string.CompareOrdinal(x, target) <= 0 && (!done.Contains(x) || publicDays.Contains(x)))
+            var publicOnly = (pendingPublic ?? Array.Empty<string>()).ToHashSet(StringComparer.Ordinal);
+            var publicDays = publicOnly.Concat(pendingSlices ?? Array.Empty<string>()).ToHashSet(StringComparer.Ordinal);
+            var unbuiltDays = unbuilt.ToHashSet(StringComparer.Ordinal);
+            var pendingDays = pending.Select(x => x.DayKey).ToHashSet(StringComparer.Ordinal);
+            result.Days = unbuiltDays.Concat(publicDays).Concat(unfinished.Select(x => x.DayKey))
+                .Concat(includePendingReviews ? pendingDays : Array.Empty<string>()).Append(target)
+                .Where(x => ValidDay(x) && string.CompareOrdinal(x, target) <= 0 &&
+                    (!done.Contains(x) || publicDays.Contains(x)) &&
+                    (includePendingReviews || !pendingDays.Contains(x) || publicOnly.Contains(x) || unbuiltDays.Contains(x)))
                 .Distinct(StringComparer.Ordinal).OrderBy(x => x, StringComparer.Ordinal).ToList();
             return result;
         }

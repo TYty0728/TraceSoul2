@@ -98,7 +98,12 @@ internal static partial class Program
                         MomentId = id, SnapshotJson = TraceJson.ToJson(new { today = "原始事件标记" + i, inner = "变化" + i }) });
                 }
             }
-            var longDraft = "不要回传的超长草稿" + new string('长', 113); // 122字，复现现场边界。
+            Seed("nomination-small-over", "nomination-small-over", 13);
+            var modestDirectory = TraceJson.ToJson(new { events = new[] { new { summary = new string('长', 122), source_ids = new[] { "s1" } } } });
+            var modest = new AgentSequenceLlm(modestDirectory, "{\"summary\":\"完整回望。\"}");
+            Require(await RuntimeSliceLogic.ReviewDayAsync(store, modest, "nomination-small-over", day) == 13 && modest.Requests.Count == 2,
+                "单项122字但整批目录在预算内，无须额外重写或失败暂停");
+            var longDraft = "不要回传的超长草稿" + new string('长', 713); // 722字，超出整批目录预算。
             string Nominations(int count, params int[] longItems) => TraceJson.ToJson(new {
                 events = Enumerable.Range(1, count).Select(i => new {
                     summary = longItems.Contains(i) ? longDraft : "已合格事件目录" + i,
@@ -109,7 +114,7 @@ internal static partial class Program
             Seed("nomination-repair", "nomination-repair", 24);
             var nominationRepair = new AgentSequenceLlm(Nominations(8, 6), Nominations(6, 6), Rewrite("e6"),
                 "{\"summary\":\"少数重要事件的当天回望。\"}");
-            Require(longDraft.Length == 122 &&
+            Require(longDraft.Length == 722 &&
                 await RuntimeSliceLogic.ReviewDayAsync(store, nominationRepair, "nomination-repair", day) == 24 &&
                 nominationRepair.Requests.Count == 4 && nominationRepair.Requests[1].Contains("1～6项") &&
                 !nominationRepair.Requests[1].Contains(longDraft) &&
@@ -122,14 +127,14 @@ internal static partial class Program
                 nominationRepair.Requests[3].Contains("重写后的必要变化e6") &&
                 !nominationRepair.Requests[3].Contains(longDraft) &&
                 store.GetRuntimeDaySummaries("nomination-repair", day).Count == 1,
-                "8件纠正为6件后122字条目只单独重写一次，合格目录与来源保留，完整原件不截断");
+                "8件纠正为6件后只重写超出整批预算的目录，合格描述与来源保留，完整原件不截断");
 
             Seed("nomination-resume", "nomination-resume", 13);
             var tooLong = TraceJson.ToJson(new { summaries = new[] { new { id = "e1", summary = longDraft } } });
             var shortFailure = new AgentSequenceLlm(Nominations(2, 1), tooLong);
             var failed = false;
             try { await RuntimeSliceLogic.ReviewDayAsync(store, shortFailure, "nomination-resume", day); }
-            catch (InvalidOperationException error) { failed = error.Message.Contains("122字") && error.Message.Contains("检查点"); }
+            catch (InvalidOperationException error) { failed = error.Message.Contains("720字") && error.Message.Contains("检查点"); }
             Require(failed && shortFailure.Requests.Count == 2 &&
                 store.GetRuntimeSlices("nomination-resume", day, true).Count == 13 &&
                 store.GetRuntimeDayReviews("nomination-resume", day).Count == 0,

@@ -13,6 +13,12 @@ using TraceSoul2.Util;
 
 namespace TraceSoul2.Logic
 {
+    /// <summary>来源与结构已通过，但派生阅读正文尚未满足预算；不得当作完成。</summary>
+    public sealed class ReviewProsePendingException : InvalidOperationException
+    {
+        public ReviewProsePendingException(string message) : base(message) { }
+    }
+
     public static class DeepSeekStructuredOutputLogic
     {
         public static async Task<T> CompleteAsync<T>(
@@ -24,7 +30,8 @@ namespace TraceSoul2.Logic
             string promptCacheKey = null,
             Func<T, string> validationError = null,
             Action<T, IReadOnlyCollection<string>> onParsed = null,
-            bool includeInvalidResponse = true)
+            bool includeInvalidResponse = true,
+            Func<T, Exception> typedValidationError = null)
             where T : class
         {
             var raw = await client.CompleteJsonAsync(messages, cancellationToken, promptCacheKey);
@@ -33,6 +40,8 @@ namespace TraceSoul2.Logic
             try
             {
                 parsed = Parse<T>(raw, onParsed);
+                var typed = parsed == null ? null : typedValidationError?.Invoke(parsed);
+                if (typed != null) throw typed;
                 var detail = parsed == null ? null : validationError?.Invoke(parsed);
                 if (parsed != null && string.IsNullOrEmpty(detail) && (validator == null || validator(parsed))) return parsed;
                 throw new InvalidOperationException(string.IsNullOrEmpty(detail) ? missingMessage : detail);
@@ -60,12 +69,16 @@ namespace TraceSoul2.Logic
             try
             {
                 parsed = Parse<T>(repairedRaw, onParsed);
+                var typed = parsed == null ? null : typedValidationError?.Invoke(parsed);
+                if (typed != null) throw typed;
                 var detail = parsed == null ? null : validationError?.Invoke(parsed);
                 if (parsed != null && string.IsNullOrEmpty(detail) && (validator == null || validator(parsed))) return parsed;
                 throw new InvalidOperationException(string.IsNullOrEmpty(detail) ? missingMessage : detail);
             }
             catch (Exception secondError)
             {
+                if (secondError is ReviewProsePendingException)
+                    throw new ReviewProsePendingException("阅读正文有待整理：" + DescribeFailure(secondError, typeof(T)));
                 throw new InvalidOperationException(
                     "语言模型连续两次返回不可用的结构化输出。首次错误：" + DescribeFailure(firstError, typeof(T)) +
                     "；纠正后错误：" + DescribeFailure(secondError, typeof(T)),
@@ -80,6 +93,7 @@ namespace TraceSoul2.Logic
 
         private static bool IsLengthOverrun(Exception error)
         {
+            if (error is ReviewProsePendingException) return true;
             var message = error?.Message ?? "";
             if (!message.Contains("字")) return false;
             return (message.Contains("当前") && message.Contains("最多")) || message.Contains("超过");
