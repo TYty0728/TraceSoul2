@@ -55,8 +55,8 @@ namespace TraceSoul2.Plugins.Builtin
             {
                 var runtime = SubjectRuntimeLogic.View(context);
                 var mood = (runtime.Mood ?? string.Empty).Trim();
-                var life = context.Services.LifeState == null
-                    ? null : context.Services.LifeState.Load(context.ConversationId);
+                var life = context.Services.LifeState == null || EnvironmentLogic.IsPublic(context)
+                    ? null : context.Services.LifeState.Load(LifeStateLogic.Scope(context));
                 var doing = LifeStateLogic.FormatDoing(life);
                 if (doing.Length == 0) doing = OneLine(runtime.OngoingActivity);
                 return Task.FromResult(new TraceContextBlockData

@@ -127,6 +127,24 @@ namespace TraceSoul2.Manager
                 .ToList();
         }
 
+        public List<MomentRecord> GetOtherPrivatePlatformDialogue(string root, string platform, long from, long through)
+        {
+            var prefix = root + ":environment:";
+            var pair = LoadPairIdentity();
+            return connection.Query<MomentRecord>(
+                "SELECT * FROM moments WHERE MemoryVisibility='private' AND CreatedUnixMs>=? AND CreatedUnixMs<=? " +
+                "AND SourcePlatform IN ('qq','wxxz') AND SourcePlatform!=? " +
+                "AND (ConversationId=? OR substr(ConversationId,1,?)=?) " +
+                "AND (MemoryStatus IS NULL OR MemoryStatus!='operational') ORDER BY CreatedUnixMs DESC LIMIT 128",
+                from, through, platform, root, prefix.Length, prefix)
+                .Where(m => pair.IsHumanMoment(m.Role) || pair.IsCompanionMoment(m.Role))
+                .Where(m => { var e = EnvironmentLogic.FromMoment(m);
+                    return e?.RootConversationId == root && e.Visibility == "private" && e.SessionType == "private" &&
+                        e.SpeakerIsOwner && e.AudienceConfirmed &&
+                        MomentTypes.Platform(e.PlatformId) == m.SourcePlatform && EnvironmentLogic.CanDeliver(this, e); })
+                .Take(6).OrderBy(m => m.CreatedUnixMs).ToList();
+        }
+
         public List<TurnReviewRecord> GetRecentTurnReviews(string conversationId, int take)
         {
             if (take <= 0) return new List<TurnReviewRecord>();

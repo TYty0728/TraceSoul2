@@ -72,9 +72,87 @@ internal static partial class Program
                 (Companion&&path=="/api/speak"&&!MissingDisplayReceipt?",\"display_complete\":true,\"display_pages\":1,\"display_receipts\":["+receipt+"]":"")+"}", Encoding.UTF8, "application/json") });
         }
     }
+    private static async Task CheckSourceReplyAndSharedLifeAsync()
+    {
+        const string root = "same-subject-platforms";
+        var directory = System.IO.Path.Combine(System.IO.Path.GetTempPath(), "tracesoul-shared-platforms-" + Guid.NewGuid().ToString("N"));
+        System.IO.Directory.CreateDirectory(directory);
+        try
+        {
+            using var store = new SqliteMemoryManager(":memory:");
+            store.SavePairIdentity("测试者", "同伴", "测试者");
+            EnvironmentLogic.SaveSettings(store, new EnvironmentSettings { OwnerAccounts = new() {
+                new() { PlatformId = "builtin.onebot", UserId = "owner" } } });
+            var services = new TracePluginServices(store, new HierarchicalVectorRouterLogic(new FakeEncoder())) {
+                DataDirectory = directory, LifeState = new JsonLifeStateStore(directory) };
+            using var manager = new TracePluginManager(store, services);
+            manager.RegisterExternal(new DialogueTracePlugin());
+            var qq = new AutomaticPhotoProbe { Active = true }; manager.RegisterExternal(qq);
+            var transport = new WxxzMockBridge();
+            using var board = new WxxzPlatform(transport); manager.RegisterExternal(board);
+            await board.StartAsync(true, default);
+            PluginEventData Qq(string text) => new() { PluginId = "builtin.onebot", Role = "测试者", Content = text,
+                ExternalEventId = Guid.NewGuid().ToString("N"), Type = MomentTypes.Message, SourcePlatform = "qq",
+                Wake = KernelWakeValues.Dialogue, Environment = new() { PlatformId = "builtin.onebot", AccountId = "test",
+                    SessionId = "owner", SessionType = "private", SpeakerId = "owner", SpeakerName = "测试者",
+                    ExclusivePair = true, DirectAddress = true } };
+
+            await new KernelLogic(store, new AgentSequenceLlm("{\"step\":\"finish\",\"reply\":\"QQ回复_已交付\",\"activity\":\"整理照片\",\"inner\":\"记得刚才聊过的事情\"}"), manager)
+                .ProcessPluginEventAsync(root, Qq("QQ片段_共享记忆"));
+            Require(qq.Texts == 1 && transport.Paths.SequenceEqual(new[] { "/api/status" }), "QQ输入只走QQ，开发板在线也不分流");
+            var input = board.Receive(board.SessionId, Guid.NewGuid().ToString(), "开发板片段_共享记忆", "测试者", root);
+            var llm = new AgentSequenceLlm("{\"step\":\"finish\",\"reply\":\"开发板回复_已交付\",\"activity\":\"泡茶\"}");
+            await new KernelLogic(store, llm, manager).ProcessPluginEventAsync(root, input);
+            Require(qq.Texts == 1 && transport.Paths.Count(x => x == "/api/text") == 1 && transport.Paths.Count(x => x == "/api/speak") == 1,
+                "开发板输入只走同会话屏幕与语音，不向QQ发文字或图片");
+            Require(llm.Requests.Single().Contains("整理照片") && llm.Requests.Single().Contains("QQ片段_共享记忆") &&
+                llm.Requests.Single().Contains("其他平台的近期交流"), "开发板读取同一主体活动和已确认的QQ近期经历，标注来源");
+            Require(services.LifeState.Load(root).activity == "泡茶", "开发板活动写回同一主体，未写成另一套会话生活");
+            var back = new AgentSequenceLlm("{\"step\":\"finish\",\"reply\":\"又在QQ接着聊。\"}");
+            await new KernelLogic(store, back, manager).ProcessPluginEventAsync(root, Qq("接着刚才聊"));
+            Require(qq.Texts == 2 && back.Requests.Single().Contains("开发板片段_共享记忆") && back.Requests.Single().Contains("开发板回复_已交付") &&
+                back.Requests.Single().Contains("泡茶"), "切回QQ仍知道开发板做过什么，回复自动回QQ");
+
+            var descriptors = manager.GetEnabledCatalog().Where(x => MouthLogic.OrganOf(x) == BodyOrganValues.Text).ToList();
+            TraceTurnContext Bare(string plugin) => new(root, new MomentRecord { Role = "测试者", SourcePluginId = plugin }, new(), 0, true, services);
+            MouthLogic.SaveRouting(directory, "home", "wxxz", Array.Empty<MouthRankEntry>());
+            Require(MouthLogic.BodyOf(MouthLogic.RouteEffector(BodyOrganValues.Text, descriptors, Bare("builtin.onebot"))) == BodyIds.Qq,
+                "缺少环境快照的旧入口也按本轮QQ来源选择，不跟随激活身体");
+            MouthLogic.SaveRouting(directory, "home", BodyIds.Qq, Array.Empty<MouthRankEntry>());
+            Require(MouthLogic.BodyOf(MouthLogic.RouteEffector(BodyOrganValues.Text, descriptors, Bare("wxxz"))) == "wxxz",
+                "开发板来源不会被QQ激活状态抢走");
+
+            var environment = EnvironmentLogic.Resolve(store, root, input);
+            var turn = new TraceTurnContext(environment.ContextConversationId, new MomentRecord { Role = "测试者" }, new(), 0, true, services, environment);
+            Require(!RuntimeContextLogic.CurrentState(turn).Contains("其他平台的近期交流") &&
+                !RuntimeContextLogic.CurrentState(turn).Contains("仍重要的事"), "相机仅读取当前状态，主流程仍保留跨平台经历与长期记忆");
+            var untrusted = new EnvironmentSnapshotData { RootConversationId = root, ContextConversationId = root,
+                PlatformId = "builtin.onebot", Visibility = "public", SpeakerIsOwner = true, AudienceConfirmed = true };
+            store.SaveMoment(new MomentRecord { Id = "untrusted", ConversationId = root, Role = "测试者", SourcePlatform = "qq",
+                Content = "PUBLIC_RECORD_MUST_NOT_BECOME_PRIVATE", MemoryVisibility = "private", EnvironmentJson = TraceSoul2.Util.TraceJson.ToJson(untrusted),
+                CreatedUnixMs = DateTimeOffset.UtcNow.ToUnixTimeMilliseconds() });
+            Require(!RuntimeContextLogic.State(turn).Contains("PUBLIC_RECORD_MUST_NOT_BECOME_PRIVATE"),
+                "跨平台视图同时核对真实环境，单独伪造private标记不能混入本人交流");
+            var publicTurn = new TraceTurnContext(root + ":environment:public", new MomentRecord { Role = "测试者" }, new(), 0, true, services,
+                new EnvironmentSnapshotData { RootConversationId = root, ContextConversationId = root + ":environment:public",
+                    PlatformId = "wxxz", Visibility = "public", AudienceConfirmed = true });
+            Require(!RuntimeContextLogic.State(publicTurn).Contains("其他平台的近期交流") && !RuntimeContextLogic.State(publicTurn).Contains("泡茶"),
+                "公开现场不读取跨平台私人原文或主体私密活动");
+            var settings = EnvironmentLogic.Settings(store);
+            settings.OwnerAccounts = settings.OwnerAccounts.Where(x => x.PlatformId != "builtin.onebot").ToList();
+            EnvironmentLogic.SaveSettings(store, settings);
+            Require(!RuntimeContextLogic.State(turn).Contains("QQ片段_共享记忆"), "来源本人绑定被撤销后，不再注入该平台的私密近期原文");
+            board.Shutdown();
+            Require(MouthLogic.RouteEffector(BodyOrganValues.Text, descriptors, Bare("wxxz")) == null,
+                "开发板离线时不把该轮回复改投QQ");
+            Console.WriteLine("Source-bound reply checks passed: QQ/WXXZ/QQ, shared activity and confirmed private experiences, independent delivery and public isolation.");
+        }
+        finally { System.IO.Directory.Delete(directory, true); }
+    }
+
     private static async Task RunWxxzChecksAsync(bool hardware = false)
     {
-        if (!hardware) { await CheckWxxzDeviceControlAsync(); await CheckWxxzDisplayAsync(); await CheckWxxzMonitorAsync(); await CheckWxxzAudioInterlockAsync(); CheckWxxzAttention(); await CheckWxxzWakeAsync(); CheckWxxzVoiceprint(); await CheckWxxzCallLifecycleAsync(); await CheckWxxzSpeechAsync(); }
+        if (!hardware) { await CheckSourceReplyAndSharedLifeAsync(); await CheckWxxzDeviceControlAsync(); await CheckWxxzDisplayAsync(); await CheckWxxzMonitorAsync(); await CheckWxxzAudioInterlockAsync(); CheckWxxzAttention(); await CheckWxxzWakeAsync(); CheckWxxzVoiceprint(); await CheckWxxzCallLifecycleAsync(); await CheckWxxzSpeechAsync(); }
         using var store = new SqliteMemoryManager(":memory:");
         store.SavePairIdentity("测试者", "测试同伴", "测试者");
         var services = new TracePluginServices(store, new HierarchicalVectorRouterLogic(new FakeEncoder()));

@@ -72,7 +72,7 @@ namespace TraceSoul2.ExternalPlugins
         {
             Id = PluginId,
             DisplayName = "QQ 相机与生图",
-            Version = "2.3.2",
+            Version = "2.3.3",
             Author = "TraceSoul2",
             Role = PluginRoleValues.Organ,
             PlatformId = BodyIds.Qq,
@@ -515,7 +515,11 @@ namespace TraceSoul2.ExternalPlugins
             TraceTurnContext context, CancellationToken cancellationToken)
         {
             var llm = ResolvePlannerLlm(context);
-            if (llm == null) return null;
+            if (llm == null)
+            {
+                RecordAtmosphere(context, "unavailable", "画面规划模型不可用。");
+                return null;
+            }
             var messages = new List<DeepSeekMessageData> {
                 new("system", QqImageGenPrompts.AtmospherePlanSystem),
                 new("user", snapshot + "\n【已经确定并发出的文字】\n" + reply +
@@ -525,22 +529,46 @@ namespace TraceSoul2.ExternalPlugins
             {
                 var raw = await llm.CompleteTextAsync(messages, cancellationToken);
                 var text = CleanPlan(raw);
-                if (ReadLabeledLine(text, "分享").Trim() != "是")
+                var share = ReadLabeledLine(text, "分享").Trim();
+                var restriction = ReadLabeledLine(text, "限制").Trim();
+                var reason = ReadLabeledLine(text, "依据").Trim();
+                if ((share != "是" && share != "否") || reason.Length == 0 ||
+                    (share == "是" ? restriction != "none" :
+                        restriction is not ("declined" or "quiet" or "focus" or "repeated")))
                 {
-                    context.Services.LogTiming(context.TraceId, "TA的相机 配图判断：保留文字");
+                    RecordAtmosphere(context, "invalid", "分享、限制或具体依据缺失或不一致。");
+                    return null;
+                }
+                if (share == "否")
+                {
+                    RecordAtmosphere(context, "skipped", reason, restriction);
                     return null;
                 }
                 var plan = ParseScenePlan(text, string.Empty);
-                if (plan.Scene.Length < 12) return null;
-                context.Services.LogTiming(context.TraceId, "TA的相机 配图判断：分享", detail: "mode=" + plan.Mode);
+                if (ReadLabeledBlock(text, "画面").Length < 12)
+                {
+                    RecordAtmosphere(context, "invalid", "分享为是但缺少完整画面。");
+                    return null;
+                }
+                RecordAtmosphere(context, "share", reason, restriction, plan.Mode);
                 return plan;
             }
             catch (OperationCanceledException) when (cancellationToken.IsCancellationRequested) { throw; }
             catch (Exception error)
             {
-                context.Services.LogTiming(context.TraceId, "TA的相机 配图判断失败，本次略过", detail: error.GetType().Name);
+                RecordAtmosphere(context, "failed", error.GetType().Name);
                 return null;
             }
+        }
+
+        private static void RecordAtmosphere(TraceTurnContext context, string result, string reason,
+            string restriction = "", string mode = "")
+        {
+            context.Services.Storage.SavePluginDocument(PluginId, "sharing-outcome:" + context.ConversationId,
+                JsonSerializer.Serialize(new { result, restriction, reason = TruncateForLog(reason, 300), mode,
+                    updated_unix_ms = DateTimeOffset.UtcNow.ToUnixTimeMilliseconds() }));
+            context.Services.LogTiming(context.TraceId, "TA的相机 配图判断：" + result,
+                detail: "restriction=" + restriction + "｜mode=" + mode + "｜" + TruncateForLog(reason, 200));
         }
 
         private async Task<ScenePlanResult> PlanSceneAsync(
@@ -671,7 +699,11 @@ namespace TraceSoul2.ExternalPlugins
             var services = context == null ? null : context.Services;
             if (services != null && services.LifeState != null)
             {
-                var life = services.LifeState.Load(context.ConversationId);
+                var environment = context.Environment;
+                var scope = environment?.Visibility == "private" && environment.SpeakerIsOwner &&
+                    environment.AudienceConfirmed && !string.IsNullOrWhiteSpace(environment.RootConversationId)
+                    ? environment.RootConversationId : context.ConversationId;
+                var life = services.LifeState.Load(scope);
                 if (life != null) activity = life.FormatDoing();
             }
             var storage = services == null ? null : services.Storage;

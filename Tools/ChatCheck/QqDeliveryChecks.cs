@@ -151,7 +151,7 @@ internal static partial class Program
                         "真实相机目录须保留分享边界");
                     Require(agent.Requests.Single().Contains("【相机此刻】"), "真实相机动态回执须进入 Agent");
                     Require(!agent.Requests.Single().Contains("旧心智流程"), "不能带入旧 image 根协议");
-                    var semantic = new AgentSequenceLlm("分享：否");
+                    var semantic = new AgentSequenceLlm("分享：否\n限制：declined\n依据：对方当前明确不收图片。");
                     services.Llm = semantic;
                     var candidate = services.AutomaticImageProviders.Single()(turn, "在听呢。", "当前有效约定：不收图片。");
                     Require(candidate?.capability_id == "qq.imagegen.generate" &&
@@ -165,11 +165,21 @@ internal static partial class Program
                         !CameraSharingContext.TryReserve(turn, 6, 6), "一次判断消耗程序门槛，略过或失败后不逐轮重试");
                     var planMethod = typeof(QqImageGenPlugin).GetMethod("PlanAtmosphereAsync",
                         System.Reflection.BindingFlags.NonPublic | System.Reflection.BindingFlags.Instance);
-                    services.Llm = new AgentSequenceLlm("分享：是\n种类：自拍\n参考：无\n画面：角色在窗边带着温和笑意的自然近景，午后的光落在脸侧。");
+                    services.Llm = new AgentSequenceLlm("分享：是\n限制：none\n依据：普通日常适合自然分享。\n种类：自拍\n参考：无\n画面：角色在窗边带着温和笑意的自然近景，午后的光落在脸侧。");
                     var planning = (Task)planMethod.Invoke(camera, new object[] { "在听呢。", "日常分享", turn, System.Threading.CancellationToken.None });
                     planning.GetAwaiter().GetResult();
                     Require(planning.GetType().GetProperty("Result").GetValue(planning) != null,
                         "一次语义判断同时产生可用镜头规划，不需要主模型重新选择actions");
+                    foreach (var reply in new[] { "分享：否", "分享：否\n限制：none\n依据：没有新事件。",
+                        "分享：是\n限制：none\n依据：日常分享。" })
+                    {
+                        var malformed = new AgentSequenceLlm(reply); services.Llm = malformed;
+                        var check = (Task)planMethod.Invoke(camera, new object[] { "在听呢。", "日常分享", turn, System.Threading.CancellationToken.None });
+                        check.GetAwaiter().GetResult();
+                        Require(check.GetType().GetProperty("Result").GetValue(check) == null && malformed.Requests.Count == 1 &&
+                            store.LoadPluginDocument("qq.imagegen", "sharing-outcome:" + turn.ConversationId).Contains("invalid"),
+                            "缺少依据、没有具体限制或缺少画面的输出单独记为无效，不冒充合理略过或强制出图");
+                    }
                     services.Providers = null;
                     var unavailable = new AgentSequenceLlm("{\"step\":\"finish\",\"reply\":\"在听呢。\"}");
                     new AgentLoopLogic(unavailable).RunAsync(turn, "", () => manager.GetAvailableActionCatalog(turn),

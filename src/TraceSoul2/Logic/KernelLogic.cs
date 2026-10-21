@@ -712,7 +712,7 @@ namespace TraceSoul2.Logic
                     {
                         // 在对话锁内取得当时状态/约定，异步生成沿用快照。
                         var candidate = provider(turn, final.reply,
-                            RuntimeContextLogic.State(turn) + GoalMemoryLogic.BuildContext(turn));
+                            RuntimeContextLogic.CurrentState(turn) + GoalMemoryLogic.BuildContext(turn));
                         if (candidate == null) continue;
                         var descriptor = available.FirstOrDefault(x => x.Id == candidate.capability_id &&
                             MouthLogic.OrganOf(x) == BodyOrganValues.Image && MouthLogic.BodyOf(x) == BodyIds.Qq);
@@ -1383,7 +1383,7 @@ namespace TraceSoul2.Logic
             var location = mind.LocationValue();
             var activity = (mind.activity ?? string.Empty).Trim();
             if (location.Length == 0 && activity.Length == 0) return;
-            turn.Services.LifeState.Update(turn.ConversationId, new LifeStatePatchData
+            turn.Services.LifeState.Update(LifeStateLogic.Scope(turn), new LifeStatePatchData
             {
                 location = location.Length == 0 ? null : location,
                 activity = activity.Length == 0 ? null : activity,

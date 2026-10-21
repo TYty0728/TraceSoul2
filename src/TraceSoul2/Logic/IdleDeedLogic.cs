@@ -119,9 +119,9 @@ namespace TraceSoul2.Logic
                 .AppendLine(inner.Length == 0 ? CorePrompts.IdleDeed.Empty : inner);
 
             var doing = string.Empty;
-            if (turn.Services.LifeState != null)
+            if (turn.Services.LifeState != null && !EnvironmentLogic.IsPublic(turn))
             {
-                var life = turn.Services.LifeState.Load(turn.ConversationId);
+                var life = turn.Services.LifeState.Load(LifeStateLogic.Scope(turn));
                 doing = LifeStateLogic.FormatDoing(life);
             }
             if (doing.Length == 0 && runtime != null)

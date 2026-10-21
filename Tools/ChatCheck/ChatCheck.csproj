@@ -26,6 +26,7 @@
     <Compile Include="../Host/BackupArchiveFormat.cs" Link="BackupArchiveFormat.cs" />
     <Compile Include="../Host/BackupArchiveService.cs" Link="BackupArchiveService.cs" />
     <Compile Include="../Host/TraceHome.cs" Link="TraceHome.cs" />
+    <Compile Include="../Host/LifeStateStore.cs" Link="LifeStateStore.cs" />
     <Compile Include="../Host/RuntimePathRepair.cs" Link="RuntimePathRepair.cs" />
     <Compile Include="ExpressionChecks.cs" />
     <Compile Include="../Host/ExpressionLibrary.cs" Link="ExpressionLibrary.cs" />

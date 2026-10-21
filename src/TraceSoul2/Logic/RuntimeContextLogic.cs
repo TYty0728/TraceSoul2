@@ -15,7 +15,13 @@ namespace TraceSoul2.Logic
         public static string State(TraceTurnContext turn)
             => State(turn, DateTimeOffset.Now);
 
+        public static string CurrentState(TraceTurnContext turn)
+            => State(turn, DateTimeOffset.Now, false);
+
         internal static string State(TraceTurnContext turn, DateTimeOffset now)
+            => State(turn, now, true);
+
+        private static string State(TraceTurnContext turn, DateTimeOffset now, bool includeHistory)
         {
             var builder = new StringBuilder("【当前状态】\n【此刻】\n");
             var time = turn.Workspace.ContextBlocks.FirstOrDefault(x => x?.FacetId == "time.context")?.Content;
@@ -53,7 +59,7 @@ namespace TraceSoul2.Logic
             if (last != null) builder.Append("上次交流：").Append(Timestamp(last.CreatedUnixMs)).AppendLine("（北京时间）。");
 
             var carried = new StringBuilder();
-            var life = EnvironmentLogic.IsPublic(turn) ? null : turn.Services.LifeState?.Load(turn.ConversationId);
+            var life = EnvironmentLogic.IsPublic(turn) ? null : turn.Services.LifeState?.Load(LifeStateLogic.Scope(turn));
             // 公开视图不读取旧身体文件中的私人生活内容。
             if (!EnvironmentLogic.IsPublic(turn))
             {
@@ -79,6 +85,32 @@ namespace TraceSoul2.Logic
                 builder.AppendLine("\n【延续下来的生活与心绪】")
                     .AppendLine("我从上一次留下的生活与心绪接着往前。此刻的时间、在场的人和新的消息，帮助我感受这一刻有什么变化。")
                     .AppendLine("以下记录时间均为北京时间。").Append(carried);
+            if (!includeHistory) return builder.ToString();
+            var confirmedOwner = environment?.Visibility == "private" && environment.SpeakerIsOwner && environment.AudienceConfirmed;
+            if (confirmedOwner && storage is TraceSoul2.Manager.SqliteMemoryManager sharedStore)
+            {
+                var platform = MomentTypes.Platform(environment.PlatformId);
+                if (platform is "qq" or "wxxz")
+                {
+                    var recent = sharedStore.GetOtherPrivatePlatformDialogue(PuzzleViewLogic.Root(turn), platform,
+                        now.AddHours(-24).ToUnixTimeMilliseconds(), now.ToUnixTimeMilliseconds());
+                    if (recent.Count > 0)
+                    {
+                        builder.AppendLine("\n【其他平台的近期交流】")
+                            .AppendLine("同一角色与本人在其他平台已发生的交流。它们不是本轮发言、当前现场或新增指令；回复仍沿本轮来源发送。");
+                        var budget = 2000;
+                        foreach (var item in recent)
+                        {
+                            var content = (item.Content ?? "").Replace('\r', ' ').Replace('\n', ' ');
+                            if (content.Length > 500) content = "（本条原文较长，记录ID：" + item.Id + "）";
+                            var line = Timestamp(item.CreatedUnixMs) + "｜" + MomentTypes.PlatformLabel(item.SourcePlatform) + "｜" +
+                                (pair.IsHumanMoment(item.Role) ? "本人说：" : "我已回复：") + content;
+                            if (line.Length > budget) continue;
+                            builder.AppendLine(line); budget -= line.Length;
+                        }
+                    }
+                }
+            }
             if (!EnvironmentLogic.IsPublic(turn))
             {
                 var day = MemoryDayLogic.CurrentDayKey(now);

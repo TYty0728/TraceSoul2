@@ -9,7 +9,7 @@ using TraceSoul2.Util;
 namespace TraceSoul2.Logic
 {
     /// <summary>
-    /// 身体路由：跨层近的压过远的；同层才打分。控制台是最低的文字壳。
+    /// 入站回复绑定本轮来源；后台身体选择按层级、场景和分数处理。控制台是最低的文字壳。
     /// 说话才移动激活的身体。缺的器官才往更远的身体下滑。模型只负责说什么，不挑通道。
     /// console 特例：它是观察窗与调试口——不参选、不挪激活身体、所有收发都在它那打印一份；
     /// 只有当轮消息来自 console 时，说话才只回 console（调试口直答，不打扰生活身体）。
@@ -246,6 +246,14 @@ namespace TraceSoul2.Logic
                             IsBodyLive(BodyOf(x), turn))
                 .ToList();
             if (live.Count == 0) return null;
+            // A foreground reply belongs to this input, even when another body's activity changed meanwhile.
+            var inbound = EnvironmentLogic.IsHumanInput(turn)
+                ? BodyOfPlugin(turn.Environment?.PlatformId ?? turn.Moment?.SourcePluginId) : null;
+            if (inbound == BodyIds.Qq || inbound == "wxxz")
+            {
+                var local = live.Where(x => BodyOf(x) == inbound).ToList();
+                return local.Count == 0 ? null : PickSameBody(local, organ);
+            }
             var state = LoadState(turn == null || turn.Services == null ? null : turn.Services.DataDirectory);
             var active = (state.active_body ?? string.Empty).Trim();
             var onActive = live.Where(x => string.Equals(BodyOf(x), active, StringComparison.Ordinal)).ToList();
