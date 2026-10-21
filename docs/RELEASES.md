@@ -8,7 +8,9 @@
 - 开发板固件源码更新至0.4.6，已标记的共用图在授权有效、本机空闲且麦克风暂停时每12秒轻蹦两下，仅局部刷新；采音、通话、菜单、故障或离线时静止。正式Host更新不自动刷板或更新独立Python桥。
 - 增加仅当前进程有效的`TRACESOUL2_PAUSE_AUTOMATIC_WORK=1`联调开关，可暂停自动日构建、后台活动及启动整理，不改持久计划或角色设置；默认行为保持原样。
 
-产品0.1.54，QQ表情3.1.2，PluginApi1.16.0新增共享`ExpressionSelection.ReadHighest`。本地Release全解决方案（24项既有相机测试类型冲突警告）、完整ChatCheck/Prompt/实际Migration、CoreCheck/更新器、真实临时Host存档/启动、全部页面及111项Python检查通过；固件源码/产物与此前已构建的0.4.6摘要一致。正式CI与公开安装包验收结果待补记。实物图像自然度、长时稳定性及真实QQ收件仍需使用观察；本次不部署服务器、不启用自动采集或恢复日构建。
+产品0.1.54，QQ表情3.1.2，PluginApi1.16.0新增共享`ExpressionSelection.ReadHighest`。本地Release全解决方案（24项既有相机测试类型冲突警告）、完整ChatCheck/Prompt/实际Migration、CoreCheck/更新器、真实临时Host存档/启动、全部页面及111项Python检查通过；固件源码/产物与此前已构建的0.4.6摘要一致。实物图像自然度、长时稳定性及真实QQ收件仍需使用观察；本次不部署服务器、不启用自动采集或恢复日构建。
+
+发布确认：[v0.1.54](https://github.com/TYty0728/TraceSoul2/releases/tag/v0.1.54)／源码8658619已公开，[发布CI39536090425](https://github.com/TYty0728/TraceSoul2/actions/runs/39536090425)完整回归、真实Docker升级/数据保留、源码镜像启动与三平台打包全部通过。匿名latest=v0.1.54，三ZIP及SDK1.16.0公开HEAD200，公开SHA-256与GitHub digest一致；范围读取实际三包确认Host/QQ使用共享最高分选择、插件版本3.1.2，身份模板与发布标签源码一致，无运行配置、数据库、声纹、私钥或图片，QQ语音默认地址/密钥为空。本机Windows候选完整CRC与内容检查通过，未完整下载三份正式ZIP；未部署服务器、启动真实Host或向真人发验收消息。win-x64 `a8760bf1aff7a7866e88b2493e4c7b618ca7aded2251e9f071e506d2e3a89244`；linux-x64 `061e9a26402e8cdc22ad19e1cc41b4ad126df983ed29d3a76a84a6359a9afdee`；linux-arm64 `7f0026d91104f9b1220860b37ab549433195c1e84ef33aa8dd63d6a803445301`。
 
 ## 0.1.53（2026-10-20）
 

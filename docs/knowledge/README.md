@@ -1,6 +1,6 @@
 # 项目知识库
 
-2026-10-21 0.1.54准备发布：用户授权改版本并推送Git，集成两端最高分选图及已完成的开发板停止/提示/0.4.6本地动效修正，PluginApi1.16.0/QQ3.1.2。Release全解决方案、完整ChatCheck/Prompt/实际Migration、CoreCheck/更新器、真实临时Host、全部页面与111项Python通过，固件源码/产物摘要匹配已验证0.4.6。GitHub CI/公开资产验收待完成，未部署服务器或启动真实服务。见[版本记录](../RELEASES.md)。
+2026-10-21 0.1.54正式发布：用户授权改版本并推送Git，源码8658619/v0.1.54已公开，集成两端最高分选图及已完成的开发板停止/提示/0.4.6动效修正，PluginApi1.16.0/QQ3.1.2。Release全解决方案、完整ChatCheck/Prompt/实际Migration、CoreCheck/更新器、真实临时Host、全部页面与111项Python通过；[发布CI39536090425](https://github.com/TYty0728/TraceSoul2/actions/runs/39536090425)两项Docker检查、完整回归及三平台打包全通过。匿名latest=v0.1.54，三ZIP/SDK公开可访问、SHA与GitHub digest一致，范围读包确认新选择器及通用身份模板，无运行资料。原本地入口也已备份构建为0.1.54，未启动真实Host、部署服务器或恢复日构建，未完整下载三正式ZIP。见[版本记录](../RELEASES.md)。
 
 2026-10-21 两端表情直接取最高分：用户明确开发板与QQ都按评分取最高，无需通用图补位。共用全库评分及`ExpressionSelection.ReadHighest`取图，低分/零分/用途缺图均选择最高分可用图片，失效按本轮分数顺位；实体准备/说话同图，网页投影使用实际ID，真正评分失败不以待机图伪装。待机也取消硬准入，仅按状态标签评分，负分仍取最高。Host/QQ构建、完整ChatCheck/Prompt、两端零分/失效同图及页面检查通过；此前实际BGE12条公开样句全选图。本地入口/更新暂存与QQ3.1.2/PluginApi1.16.0已备份同步，Host未运行，实物与真实QQ待验收。见[共用表情库](../SHARED_EXPRESSION_LIBRARY.md)。
 
