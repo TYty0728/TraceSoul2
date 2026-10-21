@@ -84,6 +84,7 @@ namespace TraceSoul2.Host
 
         protected override async Task ExecuteAsync(CancellationToken stoppingToken)
         {
+            if (runtime.AutomaticWorkPaused) return;
             var historyReported = false;
             var lastBlocked = "";
             while (!stoppingToken.IsCancellationRequested)

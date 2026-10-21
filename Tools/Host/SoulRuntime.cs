@@ -45,6 +45,9 @@ namespace TraceSoul2.Host
         private bool disposed;
 
         public string ConversationId { get { return DefaultConversationId; } }
+        // Process-only control for local hardware sessions; persistent schedules and role settings stay intact.
+        public bool AutomaticWorkPaused { get; } = string.Equals(
+            Environment.GetEnvironmentVariable("TRACESOUL2_PAUSE_AUTOMATIC_WORK"), "1", StringComparison.Ordinal);
         public string DataDirectory { get; private set; }
         public string PluginsDirectory { get; private set; }
         public string PluginsDataDirectory { get; private set; }
@@ -143,8 +146,12 @@ namespace TraceSoul2.Host
             NerveSettings = MemoryNerveSettings.Load(Path.Combine(DataDirectory, "memory-nerve.json"));
             TryWireMemoryEngine(services);
             RebuildOntology();
-            QueueStartupOverview();
-            QueueStartupReading();
+            if (!AutomaticWorkPaused)
+            {
+                QueueStartupOverview();
+                QueueStartupReading();
+            }
+            else Emit("本次进程暂停自动日构建、后台活动和启动整理，手动对话与开发板仍可使用。");
             deferredWorker = Task.Run(() => RunDeferredTurnLoopAsync(deferredTurns.Reader, deferredCts.Token));
             maintenanceWorker = Task.Run(() => RunDeferredTurnLoopAsync(maintenanceTurns.Reader, deferredCts.Token));
             Emit("host 已启动");
@@ -450,6 +457,7 @@ namespace TraceSoul2.Host
                 assname = pair.Assname,
                 callName = pair.CallName,
                 hostTime = DateTimeOffset.Now.ToString("O"),
+                automaticWorkPaused = AutomaticWorkPaused,
                 llm = current == null ? null : new
                 {
                     current.id,
@@ -812,6 +820,7 @@ namespace TraceSoul2.Host
 
         public async Task PollBackgroundAsync(CancellationToken cancellationToken)
         {
+            if (AutomaticWorkPaused) return;
             if (!Store.LoadPairIdentity().IsComplete) return;
             var rawClient = Providers.CreateCurrentClient();
             if (rawClient == null)

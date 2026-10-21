@@ -12,6 +12,7 @@ from pathlib import Path
 import secrets
 import struct
 import subprocess
+import sys
 import tempfile
 import threading
 import time
@@ -187,6 +188,13 @@ def board_request(method):
     return request
 
 
+class BoardCommandError(RuntimeError):
+    def __init__(self, receipt):
+        self.receipt = receipt
+        self.code = receipt.get('error', 'unknown')
+        super().__init__('开发板返回：' + str(self.code))
+
+
 class Board:
     def __init__(self, port):
         self.port, self.connection = port, None
@@ -224,19 +232,22 @@ class Board:
             if not isinstance(result, dict) or result.get('id') != command_id or result.get('protocol') != 1:
                 continue
             if result.get('status') == 'error':
-                raise RuntimeError('开发板返回：' + str(result.get('error', 'unknown')))
+                raise BoardCommandError(result)
             if result.get('status') != status or (received is not None and result.get('received') != received):
                 raise RuntimeError('开发板回执顺序或字节数不匹配')
             return result
         raise TimeoutError('等待开发板回执超时；本次结果未知，不会自动重播')
 
     @board_request
-    def transact(self, op, payload=b''):
+    def transact(self, op, payload=b'', *, artwork=False):
+        if type(artwork) is not bool or (artwork and op != 'frame'):
+            raise ValueError('图片动效标志只用于显示帧')
         with self.lock:
             try:
                 self._connect()
                 command_id = secrets.randbelow(0x7FFFFFFE) + 1
                 header = {'id': command_id, 'op': op, 'size': len(payload), 'checksum': checksum(payload)}
+                if artwork: header['artwork'] = True
                 self.connection.write(json.dumps(header).encode() + b'\n')
                 result = self._reply(command_id, 'ready')
                 for offset in range(0, len(payload), CHUNK):
@@ -308,12 +319,14 @@ class Board:
                 raise
 
     @board_request
-    def listen(self, utterance, cancelled):
+    def listen(self, utterance, cancelled, notice=''):
+        if notice not in ('', 'speaker_unconfirmed', 'no_speech'):
+            raise ValueError('无效的采音提示')
         with self.lock:
             try:
                 self._connect()
                 command_id = secrets.randbelow(0x7FFFFFFE) + 1
-                self.connection.write(json.dumps({'id': command_id, 'op': 'listen'}).encode() + b'\n')
+                self.connection.write(json.dumps({'id': command_id, 'op': 'listen', 'notice': notice}).encode() + b'\n')
                 self._reply(command_id, 'ready')
                 total = 0
                 deadline = time.monotonic() + 25
@@ -335,10 +348,19 @@ class Board:
                     else:
                         utterance.feed(block)
                     stop = utterance.reason is not None
-                    self.connection.write(json.dumps({'id': command_id, 'ack': total, 'stop': stop}).encode() + b'\n')
+                    self.connection.write(json.dumps({'id': command_id, 'ack': total, 'stop': stop,
+                        'speech': getattr(utterance, 'started_at', None) is not None}).encode() + b'\n')
                     if stop:
                         return self._reply(command_id, 'done', total, timeout=3)
                 raise TimeoutError('麦克风流超限；未提交')
+            except BoardCommandError as error:
+                self.close()
+                if error.code != 'local_mic_paused':
+                    raise
+                # A physical stop may arrive before the Host can cancel this stream.
+                cancelled.set()
+                utterance.reason = 'cancelled'
+                return error.receipt
             except Exception:
                 self.close()
                 raise
@@ -357,8 +379,9 @@ class Board:
                 if len(self.data) >= duration_ms * 96:
                     self.reason = 'capture_complete'
         capture = Capture()
-        receipt = self.listen(capture, cancelled or threading.Event())
-        return bytes(capture.data[:duration_ms * 96]), receipt
+        event = cancelled or threading.Event()
+        receipt = self.listen(capture, event)
+        return b'' if event.is_set() else bytes(capture.data[:duration_ms * 96]), receipt
 
 
 def preview(image):
@@ -449,7 +472,7 @@ def make_handler(board, font_path, asr=None, vad=None, speaker=None):
                     result=board.transact('touch_stop')
                 elif self.path == '/api/display':
                     image, layout = display.render(request)
-                    result = board.transact('frame', rgb565(image))
+                    result = board.transact('frame', rgb565(image), **({'artwork':True} if layout['artwork'] else {}))
                     layout['preview_only'] = False
                 elif self.path == '/api/status':
                     result = board.transact('hello')
@@ -497,7 +520,9 @@ def make_handler(board, font_path, asr=None, vad=None, speaker=None):
                             def update_progress(recorded_ms):
                                 with capture_lock:
                                     capture_progress[listen_id] = {'phase': 'recording', 'recorded_ms': recorded_ms}
+                            capture_started = time.monotonic()
                             pcm, receipt = board.record_stream(8000, event, on_progress=update_progress)
+                            capture_elapsed_ms = round((time.monotonic() - capture_started) * 1000)
                             with capture_lock:
                                 capture_progress[listen_id] = {'phase': 'processing', 'recorded_ms': len(pcm) // 96}
                             voiced, segments = vad.analyze(pcm) if not event.is_set() else (b'', [])
@@ -505,6 +530,7 @@ def make_handler(board, font_path, asr=None, vad=None, speaker=None):
                             import numpy as np
                             samples = np.frombuffer(pcm, dtype='<i2').astype(np.float32)
                             quality = {'recorded_ms': len(pcm) // 96, 'speech_ms': len(voiced) // 32,
+                                       'capture_elapsed_ms': capture_elapsed_ms,
                                        'rms': round(float(np.sqrt(np.mean(samples * samples))), 2) if len(samples) else 0,
                                        'peak': int(np.max(np.abs(samples))) if len(samples) else 0,
                                        'segments': segments, 'capture_id': receipt.get('id'),
@@ -520,7 +546,12 @@ def make_handler(board, font_path, asr=None, vad=None, speaker=None):
                                 quality['window_to_clip_min'] = round(float(np.min(vectors @ np.asarray(voice['embedding']))), 4)
                             return self.respond(200, {'ok': True, 'receipt': receipt, 'voice': voice, 'quality': quality})
                         utterance = vad.create()
-                        receipt = board.listen(utterance, event)
+                        capture_started = time.monotonic()
+                        notice = request.get('notice', '')
+                        if notice not in ('', 'speaker_unconfirmed', 'no_speech'):
+                            raise ValueError('无效的采音提示')
+                        receipt = board.listen(utterance, event, notice=notice)
+                        capture_elapsed_ms = round((time.monotonic() - capture_started) * 1000)
                         voice = None
                         result = {'text': '', 'status': utterance.reason}
                         if utterance.reason == 'speech_end' and not event.is_set():
@@ -531,6 +562,10 @@ def make_handler(board, font_path, asr=None, vad=None, speaker=None):
                         if event.is_set():
                             result = {'text': '', 'status': 'cancelled'}
                             voice = None
+                        mode = board.wifi.status()['mode'] if getattr(board, 'wifi', None) else 'usb'
+                        print(json.dumps(dict(event='utterance_metrics', transport=mode,
+                            recorded_ms=utterance.frames * 32, speech_ms=len(utterance.pcm) // 32,
+                            capture_elapsed_ms=capture_elapsed_ms, status=result.get('status'))), flush=True)
                         return self.respond(200, dict(ok=True, receipt=receipt, voice=voice,
                             started_ms=utterance.started_at * 32 if utterance.started_at is not None else None,
                             recorded_ms=utterance.frames * 32, **result))
@@ -571,7 +606,8 @@ def make_handler(board, font_path, asr=None, vad=None, speaker=None):
                         # This is approximate page timing, not word-level forced alignment.
                         samples=len(pcm)//2
                         for page,frame in enumerate(pages):
-                            display_receipts.append(board.transact('frame',rgb565(frame)))
+                            display_receipts.append(board.transact('frame',rgb565(frame),
+                                **({'artwork':True} if layout['artwork'] else {})))
                             first=(samples*page//len(pages))*2;last=(samples*(page+1)//len(pages))*2
                             for offset in range(first,last,48000*2*8):
                                 receipts.append(board.transact('audio',pcm[offset:min(last,offset+48000*2*8)]))
@@ -596,6 +632,12 @@ def make_handler(board, font_path, asr=None, vad=None, speaker=None):
             except (ValueError, KeyError, TypeError, wave.Error, Image.DecompressionBombError) as error:
                 self.respond(400, {'ok': False, 'error': str(error)})
             except Exception as error:
+                if self.path in ('/api/utterance', '/api/voice/sample'):
+                    code = error.code if isinstance(error, BoardCommandError) else type(error).__name__
+                    if not isinstance(code, str) or not re.fullmatch('[A-Za-z_]{1,64}', code):
+                        code = 'unknown_error'
+                    print(json.dumps(dict(event='capture_error', kind=type(error).__name__, code=code)),
+                          file=sys.stderr, flush=True)
                 self.respond(503, {'ok': False, 'error': str(error)})
     return Handler
 

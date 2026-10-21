@@ -40,7 +40,7 @@ namespace TraceSoul2.Host
         private object lastWakePreparation, lastWakeUse;
         private string VoiceDescription => speech?.Description ?? "Windows 系统测试音色";
         private readonly object callSync = new();
-        private sealed class VoiceCall { public string Id, Session, ListenId; public bool WakeMode, Background; }
+        private sealed class VoiceCall { public string Id, Session, ListenId, Notice=""; public bool WakeMode, Background; }
         private VoiceCall currentCall;
         public readonly WxxzDiagnostics Diagnostics = new();
         private readonly WxxzDisplay displayState = new();
@@ -165,6 +165,15 @@ namespace TraceSoul2.Host
         }
         private string CallId { get { lock (callSync) return currentCall?.Id; } }
 
+        private Dictionary<string,object> DisplayFields(string state,string text,(string id,ExpressionImage image)? artwork,bool trace=false)
+        {
+            var fields=new Dictionary<string,object>{["state"]=state,["name"]=services.Storage.LoadPairIdentity().Assname??"Soul",["subtitle"]=text};
+            if(artwork.HasValue)fields["image"]=Convert.ToBase64String(artwork.Value.image.bytes);
+            if(trace)Diagnostics.Add("display",artwork.HasValue?"reply_expression":"reply_artwork_unavailable",
+                artwork.HasValue?"实体屏幕使用本轮评分最高的可用表情。":"本轮评分或图片不可用，保留字幕与声音，不另选状态图。");
+            return fields;
+        }
+
         public object ConfigureSpeech(WxxzSpeech.Settings settings)
         {
             if (CallId != null || BackgroundBusy) throw new InvalidOperationException("请先结束通话后切换音色。");
@@ -235,6 +244,15 @@ namespace TraceSoul2.Host
             bool Valid(JsonElement receipt, string status) => receipt.ValueKind == JsonValueKind.Object &&
                 receipt.TryGetProperty("protocol", out var protocol) && protocol.GetInt32() == 1 &&
                 receipt.TryGetProperty("status", out var state) && state.GetString() == status;
+            // A physical stop can precede the Host's cancellation request. This is
+            // an acknowledged cancellation, not a completed recording or usable speech.
+            if (path == "api/utterance" && json.RootElement.TryGetProperty("status", out var outcome) && outcome.GetString() == "cancelled" &&
+                json.RootElement.TryGetProperty("text", out var text) && text.ValueKind == JsonValueKind.String && text.GetString() == "" &&
+                json.RootElement.TryGetProperty("voice", out var voice) && voice.ValueKind == JsonValueKind.Null &&
+                json.RootElement.TryGetProperty("receipt", out var stopped) && Valid(stopped, "error") &&
+                stopped.TryGetProperty("error", out var code) && code.GetString() == "local_mic_paused" &&
+                stopped.TryGetProperty("local_mic_paused", out var paused) && paused.ValueKind == JsonValueKind.True)
+                return json.RootElement.Clone();
             if (path == "api/speak")
             {
                 if (!json.RootElement.TryGetProperty("receipts", out var receipts) || receipts.ValueKind != JsonValueKind.Array ||
@@ -395,11 +413,15 @@ namespace TraceSoul2.Host
                 await bodyAudio.WaitAsync(token);
                 try
                 {
+                string notice;
                 lock(callSync)
+                {
                     if(currentCall?.Id!=expectedCall) return new CallCapture(expectedSession,expectedCall,attention.Now,default);
+                    notice=currentCall.Notice;
+                }
                 var started = attention.Now;
                 displayState.Capture(expectedSession,expectedCall,listenId,true);
-                var result = await Request("api/utterance", new { listen_id = listenId }, token);
+                var result = await Request("api/utterance", new { listen_id = listenId, notice }, token);
                 return new CallCapture(expectedSession,expectedCall,started,result);
                 }
                 finally {bodyAudio.Release();}
@@ -430,6 +452,9 @@ namespace TraceSoul2.Host
                 var text = result.GetProperty("text").GetString()?.Trim() ?? "";
                 var state = result.GetProperty("status").GetString();
                 var matched = voiceprint.Match(result.GetProperty("voice"));
+                lock(callSync)if(currentCall?.Id==expectedCall)
+                    currentCall.Notice=text.Length==0?(state=="no_speech"?"no_speech":"")
+                        :!matched.matched?"speaker_unconfirmed":"";
                 if (text.Length == 0)
                 {
                     Diagnostics.Add("decision",state,"无可用听写，本次不进入Moment。",score:matched.score,voiceConfirmed:matched.matched);
@@ -573,11 +598,12 @@ namespace TraceSoul2.Host
                 if (text.Length == 0 || text.Length > 500) throw new InvalidOperationException("WXXZ 回复须为 1～500 字；本次未发送。");
                 var outputId = Guid.NewGuid().ToString("N");
                 var expression=context.Workspace.ExpressionMatch;
+                var artwork=ExpressionSelection.ReadHighest(context.Services.Expressions,expression,token);
                 // Keep the input's call identity: an already admitted reply may finish after stop,
                 // but must not paint a newer call (or look like a new manual output).
                 var turn=owner.displayTurn;
                 var displayTicket=owner.displayState.Prepare(turn?.Session??owner.session,turn?.Call,text,
-                    expression?.status=="matched"?expression.selectedId:null);
+                    artwork?.id);
                 owner.delivery = new { outputId, display = "pending", audio = "pending" };
                 // Display must finish before creating an assistant Moment. Voice has its own receipt.
                 JsonElement shown;
@@ -585,20 +611,9 @@ namespace TraceSoul2.Host
                 // runtime gate even if the browser disconnects. Do not release/rebind mid-playback.
                 object display=null;
                 if(owner.companionDisplay)
-                {
-                    string image=null;
-                    var match=context.Workspace.ExpressionMatch;
-                    if(match?.status=="matched"&&!string.IsNullOrEmpty(match.selectedId))
-                    {
-                        try {image=Convert.ToBase64String(context.Services.Expressions.ReadImage(match.selectedId).bytes);}
-                        catch {owner.Diagnostics.Add("display","image_unavailable","本轮表情图片不可用，保留状态画面。");}
-                    }
-                    var fields=new Dictionary<string,object>{["name"]=context.Services.Storage.LoadPairIdentity().Assname??"Soul",["subtitle"]=text};
-                    if(image!=null)fields["image"]=image;
-                    display=fields;
-                }
+                    display=owner.DisplayFields("speaking",text,artwork,trace:true);
                 try { shown = owner.companionDisplay
-                    ?await owner.Request("api/display",new {state="thinking",name=context.Services.Storage.LoadPairIdentity().Assname??"Soul",subtitle=""},CancellationToken.None)
+                    ?await owner.Request("api/display",owner.DisplayFields("thinking","",artwork),CancellationToken.None)
                     :await owner.Request("api/text", new { text }, CancellationToken.None); }
                 catch { owner.displayState.Finished(displayTicket,false);owner.delivery = new { outputId, display = "failed_or_unknown", audio = "not_started" }; throw; }
                 var audioStatus = "completed";

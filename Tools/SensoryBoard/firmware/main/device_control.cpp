@@ -74,6 +74,6 @@ void device_control_receipt(char *out,size_t size,uint32_t id){
     memcpy(controller,owner,sizeof(controller));memcpy(identity,boot,sizeof(identity));event=sequence;
     current_action=event>acknowledged?action:0;
     portEXIT_CRITICAL(&lock);
-    snprintf(out,size,"{\"protocol\":1,\"firmware\":\"0.4.3\",\"id\":%lu,\"status\":\"ready\",\"controller\":\"%s\",\"boot\":\"%s\",\"sequence\":%lu,\"action\":\"%s\",\"local_mic_paused\":%s}\n",
+    snprintf(out,size,"{\"protocol\":1,\"firmware\":\"0.4.6\",\"id\":%lu,\"status\":\"ready\",\"controller\":\"%s\",\"boot\":\"%s\",\"sequence\":%lu,\"action\":\"%s\",\"local_mic_paused\":%s}\n",
         (unsigned long)id,controller,identity,(unsigned long)event,current_action==1?"start":current_action==2?"stop":"",board_mic_paused()?"true":"false");
 }

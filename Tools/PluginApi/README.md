@@ -1,6 +1,10 @@
 # TraceSoul2.PluginApi
 
-TraceSoul2 运行时插件的契约（源码 **1.13.0**，产品 **0.1.34**）。正式资产状态见 [版本说明](../../docs/RELEASES.md)。
+TraceSoul2 运行时插件的契约（源码 **1.16.0**）。正式资产状态见 [版本说明](../../docs/RELEASES.md)。
+
+## 1.16 起
+
+新增 `ExpressionSelection.ReadHighest`：开发板与QQ交付共同读取本轮评分，按分数降序/资产ID同分排序，验证原图并在失效时顺位选择；返回实际选中ID与图片，供实体输出和网页投影保持一致。它不重新评分、不取默认图、不发送消息，取消会立即终止。`IExpressionLibrary`无需新增实现方法；Host与QQ表情插件需一起重建和载入。
 
 ## 1.13 起
 

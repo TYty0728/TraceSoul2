@@ -174,16 +174,19 @@ void board_init() {
     if(i2c_master_bus_add_device(bus,&touch_cfg,&touch)==ESP_OK)xTaskCreate(poll_touch,"touch-input",4096,nullptr,3,nullptr);
 }
 
-esp_err_t board_frame(const uint8_t *rgb565) {
+esp_err_t board_frame_region(const uint8_t *rgb565,int top,int rows) {
+    if(!rgb565||top<0||rows<=0||top+rows>480)return ESP_ERR_INVALID_ARG;
     if(xSemaphoreTake(lcd_lock,pdMS_TO_TICKS(2000))!=pdTRUE)return ESP_ERR_TIMEOUT;
-    for (int y = 0; y < 480; y += 20) {
-        memcpy(stripe, rgb565 + y * 320 * 2, 320 * 20 * 2);
-        esp_err_t err = esp_lcd_panel_draw_bitmap(panel, 0, y, 320, y + 20, stripe);
+    for (int y = top; y < top+rows; y += 20) {
+        int height=top+rows-y<20?top+rows-y:20;
+        memcpy(stripe, rgb565 + y * 320 * 2, 320 * height * 2);
+        esp_err_t err = esp_lcd_panel_draw_bitmap(panel, 0, y, 320, y + height, stripe);
         if (err != ESP_OK) {xSemaphoreGive(lcd_lock);return err;}
         if (!xSemaphoreTake(transferred, pdMS_TO_TICKS(2000))) {xSemaphoreGive(lcd_lock);return ESP_ERR_TIMEOUT;}
     }
     xSemaphoreGive(lcd_lock);return ESP_OK;
 }
+esp_err_t board_frame(const uint8_t *rgb565) {return board_frame_region(rgb565,0,480);}
 
 esp_err_t board_audio(const uint8_t *pcm, size_t size) {
     if(playback_blocked.load())return ESP_ERR_INVALID_STATE;

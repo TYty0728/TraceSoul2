@@ -18,6 +18,7 @@ class StreamLink:
     def write(self, data):
         value = json.loads(data)
         if value.get('op') == 'listen':
+            self.listen_header=value
             self.id = value['id']; self.lines.append(dict(id=self.id, protocol=1, status='ready')); self.next()
         else:
             assert value['ack'] == self.total
@@ -28,6 +29,24 @@ class StreamLink:
     def read(self, size):
         result = self.data[self.offset:self.offset+size]; self.offset += len(result); return result
     def close(self): self.closed = True
+
+
+class DeviceErrorLink(StreamLink):
+    def __init__(self, code='local_mic_paused', before_ready=False):
+        super().__init__()
+        self.code, self.before_ready = code, before_ready
+
+    def write(self, data):
+        value = json.loads(data)
+        if value.get('op') == 'listen' and not self.before_ready:
+            return super().write(data)
+        if value.get('op') == 'listen':
+            self.id = value['id']
+        else:
+            assert value['ack'] == self.total
+            self.acks.append(value)
+        self.lines.append(dict(id=self.id, protocol=1, status='error', error=self.code, received=self.total,
+                               local_mic_paused=self.code == 'local_mic_paused'))
 
 
 class Utterance:
@@ -42,6 +61,17 @@ class Utterance:
 
 
 class StreamChecks(unittest.TestCase):
+    def test_listen_notice_is_bounded_and_speech_ack_clears_it(self):
+        class Speaking(Utterance):
+            def feed(self, block):
+                super().feed(block)
+                self.started_at=0
+        board=bridge.Board('fake');board.connection=link=StreamLink()
+        board.listen(Speaking(),threading.Event(),notice='speaker_unconfirmed')
+        self.assertEqual(link.listen_header['notice'],'speaker_unconfirmed')
+        self.assertTrue(all(ack['speech'] for ack in link.acks))
+        for invalid in ('arbitrary text',None,False,[] ):
+            with self.assertRaises(ValueError):board.listen(Utterance(),threading.Event(),notice=invalid)
     def test_fixed_capture_is_complete_and_bounded(self):
         for duration, chunks in ((8000, 250), (15000, 469)):
             board = bridge.Board('fake'); board.connection = link = StreamLink()
@@ -98,9 +128,56 @@ class StreamChecks(unittest.TestCase):
         with self.assertRaisesRegex(RuntimeError, '校验'): board.listen(Utterance(), threading.Event())
         self.assertTrue(link.closed); self.assertEqual(link.acks, [])
 
+    def test_physical_stop_before_ready_or_during_stream_is_cancelled(self):
+        for before_ready in (True, False):
+            board = bridge.Board('fake'); board.connection = link = DeviceErrorLink(before_ready=before_ready)
+            event, utterance = threading.Event(), Utterance()
+            receipt = board.listen(utterance, event)
+            self.assertTrue(event.is_set())
+            self.assertEqual(utterance.reason, 'cancelled')
+            self.assertEqual(utterance.count, 0 if before_ready else 1)
+            self.assertEqual(receipt['error'], 'local_mic_paused')
+            self.assertTrue(link.closed)
+            self.assertIsNone(board.connection)
+
+    def test_physical_stop_discards_partial_fixed_capture(self):
+        board = bridge.Board('fake'); board.connection = link = DeviceErrorLink()
+        event = threading.Event()
+        pcm, receipt = board.record_stream(cancelled=event)
+        self.assertEqual(pcm, b'')
+        self.assertTrue(event.is_set())
+        self.assertEqual(receipt['error'], 'local_mic_paused')
+
+    def test_other_device_error_is_not_hidden_as_cancellation(self):
+        board = bridge.Board('fake'); board.connection = link = DeviceErrorLink('microphone_stream_failed')
+        event = threading.Event()
+        with self.assertRaisesRegex(bridge.BoardCommandError, 'microphone_stream_failed'):
+            board.listen(Utterance(), event)
+        self.assertFalse(event.is_set())
+        self.assertTrue(link.closed)
+
+    def test_physical_stop_returns_cancelled_http_without_asr_or_speaker(self):
+        board = bridge.Board('fake'); board.connection = DeviceErrorLink()
+        class UnusedModels:
+            def transcribe(self, *_): raise AssertionError('Stopped audio reached ASR')
+            def evidence(self, *_): raise AssertionError('Stopped audio reached speaker model')
+        models = UnusedModels()
+        handler = bridge.make_handler(board, 'unused', models, SimpleNamespace(create=Utterance), models)
+        server = ThreadingHTTPServer(('127.0.0.1', 0), handler)
+        worker = threading.Thread(target=server.serve_forever, daemon=True); worker.start()
+        try:
+            request = urllib.request.Request(f'http://127.0.0.1:{server.server_port}/api/utterance',
+                data=json.dumps({'listen_id':'c'*32}).encode(), headers={'Content-Type':'application/json'})
+            with urllib.request.build_opener(urllib.request.ProxyHandler({})).open(request, timeout=3) as response:
+                result = json.load(response)
+            self.assertEqual(result['status'], 'cancelled')
+            self.assertEqual(result['text'], '')
+            self.assertIsNone(result['voice'])
+        finally: server.shutdown(); server.server_close(); worker.join(2)
+
     def test_stop_before_register_is_not_lost(self):
         class FakeBoard:
-            def listen(self, utterance, event):
+            def listen(self, utterance, event, notice=''):
                 assert event.is_set()
                 utterance.reason = 'cancelled'
                 return {'protocol': 1, 'status': 'done', 'received': 3072}
@@ -124,7 +201,7 @@ class StreamChecks(unittest.TestCase):
 
     def test_short_name_reaches_asr_without_speaker_evidence(self):
         class FakeBoard:
-            def listen(self, utterance, event):
+            def listen(self, utterance, event, notice=''):
                 utterance.reason='speech_end'; utterance.pcm=b'\x10\0'*8000
                 utterance.started_at=20; utterance.frames=65
                 return {'protocol':1,'status':'done'}

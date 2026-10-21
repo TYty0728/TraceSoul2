@@ -27,11 +27,18 @@ internal static partial class Program
         public readonly List<System.Text.Json.JsonElement> Bodies=new();
         public string UtteranceVoice;
         public string UtteranceText = "自动对话样本";
+        public string UtteranceStatus = "transcribed";
+        public string UtteranceDeviceError;
+        public string CancelledText = "";
         public bool BlockUtterance;
         public readonly TaskCompletionSource<bool> TextObserved = new(TaskCreationOptions.RunContinuationsAsynchronously);
         public readonly TaskCompletionSource<HttpResponseMessage> Pending = new(TaskCreationOptions.RunContinuationsAsynchronously);
-        private HttpResponseMessage Utterance() => new(HttpStatusCode.OK) { Content = new StringContent(
-            "{\"ok\":true,\"receipt\":{\"protocol\":1,\"status\":\"done\"},\"status\":\"transcribed\",\"text\":" + System.Text.Json.JsonSerializer.Serialize(UtteranceText) + ",\"voice\":" + UtteranceVoice + "}") };
+        private HttpResponseMessage Utterance() => UtteranceDeviceError != null
+            ? new(HttpStatusCode.OK) { Content = new StringContent(System.Text.Json.JsonSerializer.Serialize(new {
+                ok=true, status="cancelled", text=CancelledText, voice=(object)null,
+                receipt=new {protocol=1,status="error",error=UtteranceDeviceError,local_mic_paused=LocalMicPaused} })) }
+            : new(HttpStatusCode.OK) { Content = new StringContent(
+            "{\"ok\":true,\"receipt\":{\"protocol\":1,\"status\":\"done\"},\"status\":"+System.Text.Json.JsonSerializer.Serialize(UtteranceStatus)+",\"text\":" + System.Text.Json.JsonSerializer.Serialize(UtteranceText) + ",\"voice\":" + UtteranceVoice + "}") };
         protected override Task<HttpResponseMessage> SendAsync(HttpRequestMessage request, CancellationToken token)
         {
             var path = request.RequestUri.AbsolutePath;
@@ -402,9 +409,30 @@ internal static partial class Program
             Require(unknown.GetProperty("text").GetString() == "" && unknown.GetProperty("status").GetString() == "speaker_unconfirmed", "未知声音不取得准入文字或凭据");
             transport.UtteranceVoice = Evidence(0);
             var heard = System.Text.Json.JsonSerializer.SerializeToElement(await board.ListenCallAsync(board.SessionId, callId, CancellationToken.None));
+            Require(transport.Bodies.Last().GetProperty("notice").GetString()=="speaker_unconfirmed","下一次真实采音携带上一句未通过提示，仍要求本人核验");
+            transport.UtteranceText="";transport.UtteranceStatus="no_speech";
+            await board.ListenCallAsync(board.SessionId,callId,CancellationToken.None);
+            Require(transport.Bodies.Last().GetProperty("notice").GetString()=="","本人核验通过后清除旧未通过提示");
+            transport.UtteranceText="自动对话样本";transport.UtteranceStatus="transcribed";
+            await board.ListenCallAsync(board.SessionId,callId,CancellationToken.None);
+            Require(transport.Bodies.Last().GetProperty("notice").GetString()=="no_speech","未检测到语音使用独立提示，不冒充声纹失败");
             await board.StopCallAsync(callId, CancellationToken.None);
             try { board.Receive(board.SessionId, Guid.NewGuid().ToString(), heard.GetProperty("text").GetString(), "测试者", "call-test", heard.GetProperty("captureId").GetString()); throw new Exception("stopped capture accepted"); }
             catch (InvalidOperationException) { }
+            callId = await Start();
+            transport.LocalMicPaused=true; transport.UtteranceDeviceError="local_mic_paused";
+            var physicalStop=System.Text.Json.JsonSerializer.SerializeToElement(await board.ListenCallAsync(board.SessionId,callId,CancellationToken.None));
+            Require(physicalStop.GetProperty("status").GetString()=="cancelled"&&!physicalStop.TryGetProperty("captureId",out _),
+                "Host接受真实板端暂停取消回执，不生成准入凭据");
+            foreach(var invalid in new[]{(code:"microphone_stream_failed",paused:true,text:""),
+                (code:"local_mic_paused",paused:false,text:""),(code:"local_mic_paused",paused:true,text:"残留文字")})
+            {
+                transport.UtteranceDeviceError=invalid.code;transport.LocalMicPaused=invalid.paused;transport.CancelledText=invalid.text;
+                try{await board.ListenCallAsync(board.SessionId,callId,CancellationToken.None);throw new Exception("invalid cancellation accepted");}
+                catch(InvalidOperationException error){Require(error.Message.Contains("有效板端回执"),"其他设备错误或带文字的伪取消仍拒绝");}
+            }
+            await board.StopCallAsync(callId,CancellationToken.None);
+            transport.LocalMicPaused=false;transport.UtteranceDeviceError=null;transport.CancelledText="";
             callId = await Start(); transport.BlockUtterance = true;
             var listening = board.ListenCallAsync(board.SessionId, callId, CancellationToken.None);
             await board.StopCallAsync(callId, CancellationToken.None);

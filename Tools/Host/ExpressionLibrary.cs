@@ -78,19 +78,18 @@ public sealed class ExpressionLibrary : IExpressionLibrary
                 }
         }
         if(tags.Count is <1 or >128)throw new InvalidOperationException("情绪标签数量应为1～128。");
-        string[] personas={"_default","default"};threshold=0.55;topTags=Math.Min(4,tags.Count);semanticThreshold=0.60;
+        // Retain zero-valued DTO fields for older clients; legacy thresholds no
+        // longer control scoring or selection.
+        string[] personas={"_default","default"};threshold=0;topTags=Math.Min(4,tags.Count);semanticThreshold=0;
         var config=Path.Combine(dataRoot,"config.json");
         if(File.Exists(config))
         {
             using var doc=JsonFile(config,65536);var root=doc.RootElement;
             if(root.TryGetProperty("personas",out var p)&&p.ValueKind==JsonValueKind.Array)
                 personas=p.EnumerateArray().Select(v=>v.GetString()).ToArray();
-            if(root.TryGetProperty("threshold",out var cut))threshold=cut.GetDouble();
             if(root.TryGetProperty("top_tag_count",out var n))topTags=n.GetInt32();
-            if(root.TryGetProperty("semantic_threshold",out var semanticCut))semanticThreshold=semanticCut.GetDouble();
         }
-        if(!double.IsFinite(threshold)||threshold<0||threshold>1||topTags<1||topTags>tags.Count||!double.IsFinite(semanticThreshold)||semanticThreshold<0||semanticThreshold>1)
-            throw new InvalidOperationException("表情阈值或参与匹配的标签数量无效。");
+        if(topTags<1||topTags>tags.Count)throw new InvalidOperationException("参与匹配的标签数量无效。");
         var byName=new Dictionary<string,Asset>(StringComparer.OrdinalIgnoreCase);
         // Package defaults first, then persistent library. Persona order intentionally overrides duplicate filenames.
         foreach(var root in new[]{packageRoot,dataRoot}.Distinct(StringComparer.OrdinalIgnoreCase))
@@ -245,6 +244,7 @@ public sealed class ExpressionLibrary : IExpressionLibrary
         if(n<1||n>tags.Count)throw new ArgumentException("参与匹配的标签数量超出词表范围。");
         var result=new ExpressionMatch{status="skipped",reason="no_match",revision=revision,threshold=threshold,topTags=n,semanticThreshold=semanticThreshold};
         if(string.IsNullOrWhiteSpace(query.text)&&string.IsNullOrWhiteSpace(query.mood)){result.reason="empty_expression";return result;}
+        if(assets.Count==0){result.reason="empty_library";return result;}
         var encoder=embedding();
         if(encoder==null){result.reason="embedding_unavailable";return result;}
         await scoring.WaitAsync(token);
@@ -259,11 +259,10 @@ public sealed class ExpressionLibrary : IExpressionLibrary
                     var denied=semanticExclusions[i].Select(v=>Cos(vector,v)).DefaultIfEmpty(0).Max();
                     return new SemanticTagScore{tag=s.Name,similarity=similarity,exclusionScore=denied,excluded=denied>similarity,score=denied>similarity?0:similarity};})
                     .OrderByDescending(s=>s.score).ThenBy(s=>s.tag,StringComparer.Ordinal).ToList();
-            var bestSemantic=result.semanticTags.FirstOrDefault()?.score??0;
-            var active=result.semanticTags.Where(s=>s.score>=semanticThreshold&&s.score>=bestSemantic-0.04).Take(3).Select(s=>s.tag).ToHashSet(StringComparer.Ordinal);
-            // A wholly unannotated legacy library keeps its existing emotion-only behavior.
-            if(!assets.Any(a=>a.Semantics.Length>0))active.Clear();
-            result.semanticMode=active.Count>0?"intent":"emotion";
+            // Score every asset continuously. Neither a low score nor a missing
+            // purpose annotation removes an image from the ranking.
+            var combined=result.semanticTags.Count>0&&assets.Any(a=>a.Semantics.Length>0);
+            result.semanticMode=combined?"combined":"emotion";
             if(!string.IsNullOrWhiteSpace(query.mood)&&!string.IsNullOrWhiteSpace(query.text))
             {
                 var mood=await encoder.EmbedAsync(query.mood,token);
@@ -271,27 +270,27 @@ public sealed class ExpressionLibrary : IExpressionLibrary
             }
             result.tags=Profile(vector,anchors).OrderByDescending(t=>t.score).ThenBy(t=>t.tag,StringComparer.Ordinal).ToList();
             var selected=result.tags.Where(t=>t.score>0).Take(n).ToList();
-            if(active.Count==0&&(selected.Count==0||selected.Max(t=>t.similarity)<0.35)){result.reason="weak_emotion_signal";return result;}
             var q=tags.Select(t=>(float)(selected.FirstOrDefault(s=>s.tag==t.Name)?.score??0)).ToArray();
             for(var i=0;i<assets.Count;i++)
             {
                 var weights=profiles[i].Select(t=>(float)t.score).ToArray();
                 var emotionScore=weights.Any(v=>v>0)&&q.Any(v=>v>0)?Math.Max(0,Cos(q,weights)):0;
                 var relevant=result.semanticTags.Where(s=>assets[i].Semantics.Contains(s.tag,StringComparer.Ordinal));
-                var semanticScore=relevant.Select(s=>s.score).DefaultIfEmpty(0).Max();
-                var eligible=active.Count>0?assets[i].Semantics.Any(active.Contains):!RequiresSemantic(assets[i]);
-                var score=eligible?(active.Count>0?0.75*semanticScore+0.25*emotionScore:emotionScore):0;
-                result.candidates.Add(new(){id=assets[i].Id,name=assets[i].Name,score=score,emotionScore=emotionScore,semanticScore=semanticScore,eligible=eligible,
-                    reason=eligible?(active.Count>0?"semantic_fit":"emotion_fallback"):(active.Count>0?"different_intent":"requires_semantic_intent")});
+                var semanticScore=relevant.Select(s=>s.excluded?-Math.Max(0,s.exclusionScore-s.similarity):s.score).DefaultIfEmpty(0).Max();
+                var score=combined?0.75*semanticScore+0.25*emotionScore:emotionScore;
+                result.candidates.Add(new(){id=assets[i].Id,name=assets[i].Name,score=score,emotionScore=emotionScore,semanticScore=semanticScore,eligible=true,
+                    reason=combined?"combined_score":"emotion_score"});
             }
-            result.candidates=result.candidates.OrderByDescending(a=>a.eligible).ThenByDescending(a=>a.score).ThenBy(a=>a.id,StringComparer.Ordinal).ToList();
-            var best=result.candidates.FirstOrDefault();
-            if(best?.eligible==true&&(active.Count>0?best.semanticScore>=semanticThreshold:best.emotionScore>=threshold))
+            result.candidates=result.candidates.OrderByDescending(a=>a.score).ThenBy(a=>a.id,StringComparer.Ordinal).ToList();
+            foreach(var candidate in result.candidates)
             {
-                ReadImage(best.id);result.selectedId=best.id;result.status="matched";result.reason=active.Count>0?"semantic_intent_match":"highest_tag_score";
+                token.ThrowIfCancellationRequested();
+                try {ReadImage(candidate.id);}
+                catch(Exception error) when(error is IOException or UnauthorizedAccessException or InvalidOperationException or ArgumentException)
+                {candidate.eligible=false;candidate.reason="image_unavailable";continue;}
+                result.selectedId=candidate.id;result.status="matched";result.reason="highest_available_score";break;
             }
-            else if(assets.Count==0)result.reason="empty_library";
-            else if(active.Count>0&&!result.candidates.Any(c=>c.eligible))result.reason="semantic_no_asset";
+            if(result.selectedId==null)result.reason="images_unavailable";
             return result;
         }
         finally {scoring.Release();}

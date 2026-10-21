@@ -67,6 +67,12 @@ assert.equal(sandbox.api,undefined,'整个显示模块没有网络命令入口')
   assert.equal($('companionImage').src,'/expressions/assets/'+image,'真实本轮回复图优先于待机图');
   sandbox.companionPreviewSelected(sleep);
   assert.equal($('companionImage').src,'/expressions/assets/'+image,'图库手选不能替换真实回复图');
+  sandbox.receiveCompanionStatus({...status,displayState:{...status.displayState,state:'speaking',phase:'speaking',expressionId:null}});
+  assert.equal($('companionImage').hidden,true,'真正无本轮评分图时不把待机图当作回复图');
+  assert.match($('companionArtworkSource').textContent,/未改用待机图/);
+  sandbox.receiveCompanionCatalog({assets:[library.assets[0]]});
+  sandbox.receiveCompanionStatus({displayState:{version:1,state:'standby',name:'测试同伴'}});
+  assert.equal($('companionImage').src,'/expressions/assets/'+sleep,'待机仅有专用图或负分时也选最高分，不因准入过滤落空');
   let resolve;const delayed=new Promise(r=>resolve=r);
   sandbox.api=async(url,method)=>{requests.push({url,method});return delayed;};
   const loading=sandbox.refreshCompanionArtwork();

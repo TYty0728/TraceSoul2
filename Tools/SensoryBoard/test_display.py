@@ -104,6 +104,17 @@ class DisplayChecks(unittest.TestCase):
         frame,_=self.display.render(dict(image=base64.b64encode(transparent.getvalue()).decode()))
         self.assertEqual(frame.getpixel((160,150)),(247,247,242))
 
+    def test_only_actual_shared_artwork_opts_into_native_motion(self):
+        class Board:
+            def __init__(self):self.metadata=[]
+            def transact(self,op,data,**metadata):
+                self.metadata.append(metadata);return {'status':'done','protocol':1}
+        board=Board();url=self.service(board)
+        output=io.BytesIO();Image.new('RGB',(80,80),'red').save(output,format='PNG')
+        self.post(url,'/api/display',dict(image=base64.b64encode(output.getvalue()).decode()))
+        self.post(url,'/api/display',{})
+        self.assertEqual(board.metadata,[{'artwork':True},{}])
+
     def test_speech_pages_share_original_pcm_no_omission_and_validate_before_device(self):
         class Board:
             def __init__(self):self.calls=[]

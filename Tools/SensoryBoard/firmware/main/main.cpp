@@ -33,8 +33,8 @@ static uint32_t checksum(const uint8_t *p, size_t n) {
 }
 static void reply(TerminalLink &link, uint32_t id, const char *status, size_t received = 0, const char *error = "") {
     char line[1000];
-    char state[360],touch_state[180],ui_state[110]; network_status(state,sizeof(state));board_touch_status(touch_state,sizeof(touch_state));native_ui_status(ui_state,sizeof(ui_state));
-    int n = snprintf(line, sizeof(line), "{\"protocol\":1,\"firmware\":\"0.4.3\",\"id\":%lu,\"status\":\"%s\",\"received\":%u,\"frames\":%lu,\"plays\":%lu,\"uptime_ms\":%llu,\"error\":\"%s\",\"local_mic_paused\":%s,%s,%s,%s}\n",
+    char state[360],touch_state[180],ui_state[220]; network_status(state,sizeof(state));board_touch_status(touch_state,sizeof(touch_state));native_ui_status(ui_state,sizeof(ui_state));
+    int n = snprintf(line, sizeof(line), "{\"protocol\":1,\"firmware\":\"0.4.6\",\"id\":%lu,\"status\":\"%s\",\"received\":%u,\"frames\":%lu,\"plays\":%lu,\"uptime_ms\":%llu,\"error\":\"%s\",\"local_mic_paused\":%s,%s,%s,%s}\n",
         (unsigned long)id, status, (unsigned)received, (unsigned long)frames, (unsigned long)plays,
         (unsigned long long)(esp_timer_get_time() / 1000), error, board_mic_paused()?"true":"false", state, touch_state,ui_state);
     if(n<0||n>=(int)sizeof(line)){link.closed=true;return;}
@@ -113,8 +113,10 @@ static bool stream_microphone(TerminalLink &link, uint32_t id, uint8_t *pcm, siz
         bool valid = ack && uint_field(ack, "id", &ack_id) && ack_id == id &&
             uint_field(ack, "ack", &total) && total == *received && cJSON_IsBool(stop);
         bool stopped = cJSON_IsTrue(stop);
+        bool speech = cJSON_IsTrue(cJSON_GetObjectItemCaseSensitive(ack,"speech"));
         cJSON_Delete(ack);
         if (!valid) return false;
+        if(speech)native_ui_speech();
         if (stopped) return true;
     }
     return false; // A limit is not a successful final utterance.
@@ -178,11 +180,24 @@ void terminal_run(TerminalLink &link) {
         if (!link.tls && !strcmp(op->valuestring,"reboot")) { cJSON_Delete(json); reply(link,id,"ready"); vTaskDelay(pdMS_TO_TICKS(200)); esp_restart(); }
         if (hello) { cJSON_Delete(json); reply(link, id, "ready"); continue; }
         if (!strcmp(op->valuestring, "listen")) {
+            auto *notice=cJSON_GetObjectItemCaseSensitive(json,"notice");
+            bool valid_notice=!notice||(cJSON_IsString(notice)&&(!strcmp(notice->valuestring,"")||
+                !strcmp(notice->valuestring,"speaker_unconfirmed")||!strcmp(notice->valuestring,"no_speech")));
+            unsigned notice_index=cJSON_IsString(notice)&&!strcmp(notice->valuestring,"speaker_unconfirmed")?1:
+                cJSON_IsString(notice)&&!strcmp(notice->valuestring,"no_speech")?2:0;
             cJSON_Delete(json);
+            if(!valid_notice){reply(link,id,"error",0,"bad_listen_notice");continue;}
             if(board_mic_paused()){reply(link,id,"error",0,"local_mic_paused");continue;}
             size_t received = 0;
-            if (!stream_microphone(link, id, payload, &received)) {
-                drain(link); reply(link, id, "error", received, "microphone_stream_failed"); continue;
+            native_ui_capture(true,notice_index);
+            bool complete=stream_microphone(link, id, payload, &received);
+            native_ui_capture(false);
+            if (!complete) {
+                // A local stop has no pending payload to recover. Reply before any
+                // blocking TLS drain so the bridge can observe the cancellation.
+                if(board_mic_paused()) reply(link, id, "error", received, "local_mic_paused");
+                else {drain(link); reply(link, id, "error", received, "microphone_stream_failed");}
+                continue;
             }
             reply(link, id, "done", received);
             continue;
@@ -195,13 +210,19 @@ void terminal_run(TerminalLink &link) {
             if(board_mic_paused()){reply(link,id,"error",0,"local_mic_paused");continue;}
             size = duration_ms * 96; // PCM16 mono, 48 kHz.
             reply(link, id, "ready");
-            if (board_record(payload, size) != ESP_OK) { reply(link, id, "error", 0, "record_failed"); continue; }
+            native_ui_capture(true);
+            esp_err_t captured=board_record(payload,size);
+            native_ui_capture(false);
+            if (captured != ESP_OK) { reply(link, id, "error", 0, "record_failed"); continue; }
             if (!send_recording(link, id, payload, size)) { drain(link); reply(link, id, "error", 0, "record_transfer_failed"); continue; }
             reply(link, id, "done", size);
             continue;
         }
         bool valid = uint_field(json, "size", &size) && uint_field(json, "checksum", &expected) &&
             ((setup && size > 0 && size <= 7000) || (frame && size == FRAME_BYTES) || (audio && size > 0 && size <= MAX_PAYLOAD && size % 2 == 0));
+        auto *art=cJSON_GetObjectItemCaseSensitive(json,"artwork");
+        bool artwork=frame&&cJSON_IsTrue(art);
+        if(art&&(!frame||!cJSON_IsBool(art)))valid=false;
         cJSON_Delete(json);
         if (!valid) { reply(link, id, "error", 0, "bad_payload_spec"); continue; }
         reply(link, id, "ready");
@@ -219,7 +240,7 @@ void terminal_run(TerminalLink &link) {
             memset(payload,0,size);
             reply(link,id,saved?"done":"error",received,saved?"":"wifi_config_invalid"); continue;
         }
-        esp_err_t err = frame ? native_ui_frame(payload) : board_audio(payload, size);
+        esp_err_t err = frame ? native_ui_frame(payload,artwork) : board_audio(payload, size);
         if (err != ESP_OK) { reply(link, id, "error", received, "output_failed"); continue; }
         if (frame) frames++; else plays++;
         reply(link, id, "done", received);

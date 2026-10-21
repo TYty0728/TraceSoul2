@@ -92,6 +92,13 @@ class BridgeChecks(unittest.TestCase):
         self.assertEqual(link.header['checksum'], bridge.checksum(data))
         self.assertEqual(receipt['status'], 'done')
 
+    def test_artwork_flag_is_explicit_and_never_applies_to_audio(self):
+        board=bridge.Board('fake');board.connection=link=Link()
+        board.transact('frame',b'\0'*307200,artwork=True)
+        self.assertIs(link.header['artwork'],True)
+        for operation,flag in (('audio',True),('frame',1)):
+            with self.assertRaises(ValueError):board.transact(operation,b'',artwork=flag)
+
     def test_wrong_ack_closes_without_resending(self):
         board = bridge.Board('fake')
         board.connection = link = Link(fail_at=1)

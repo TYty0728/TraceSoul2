@@ -32,6 +32,8 @@ LABELS = {
     'call_error': '通话失败，请检查电脑端',
     'listening': '正在听你说话', 'thinking': '正在处理你的话',
     'speaking': '正在回复', 'call_ready': '通话已开始',
+    'owner_unconfirmed': '这句未确认是本人', 'speak_more': '请自然多说一点',
+    'no_speech': '刚才没有检测到语音', 'try_speaking': '继续听，请再说一句',
 }
 
 

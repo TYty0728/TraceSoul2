@@ -17,6 +17,15 @@ internal static partial class Program
         {try{WxxzPlatform.BridgeAddress(bad,bridgeKey);throw new Exception("unsafe bridge accepted");}catch(InvalidOperationException){}}
         try{WxxzPlatform.BridgeAddress("https://body.example.com/",null);throw new Exception("missing bridge credential accepted");}catch(InvalidOperationException){}
         var now=DateTimeOffset.UtcNow;
+        var calmId=new string('a',64);var thoughtId=new string('b',64);var sleepId=new string('c',64);
+        var artwork=new ExpressionCatalog{assets=new(){
+            new(){id=calmId,legacyTags=new[]{"平静","温和"}},
+            new(){id=thoughtId,requiresSemanticMatch=true,semanticTags=new[]{"提问"}},
+            new(){id=sleepId,requiresSemanticMatch=true,semanticTags=new[]{"睡觉"},legacyTags=new[]{"平静","安宁","温和"}}}};
+        Require(WxxzArtwork.Select(artwork,"thinking")==thoughtId&&WxxzArtwork.Select(artwork,"speaking")==calmId,
+            "状态图复用共用标签评分，思考选提问，普通状态为用途不符降分后优先通用图");
+        Require(WxxzArtwork.Select(new ExpressionCatalog{assets=new(){artwork.assets[2]}},"speaking")==sleepId&&
+            WxxzArtwork.Select(null,"thinking")==null,"状态图也只按评分取最高，只有专用图或负分时不落空，空库才无图");
         var attention=new WxxzAttention(null,()=>"测试同伴",()=>now);
         var display=new WxxzDisplay();
         WxxzDisplay.Snapshot Read(WxxzVoiceMonitor.Snapshot monitor=null,bool wake=true)=>display.Read("测试同伴",attention.State(),monitor,wake);

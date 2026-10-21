@@ -1,6 +1,7 @@
 #include "board.h"
 #include "native_ui.h"
 #include "native_labels.h"
+#include "native_motion.h"
 #include "terminal.h"
 #include "device_control.h"
 #include "cJSON.h"
@@ -18,6 +19,8 @@ static constexpr uint16_t background=0xf7be, ink=0x2967, muted=0x6b8c, card=0xff
 static uint8_t *canvas, *last_frame;
 static SemaphoreHandle_t output_mutex;
 static std::atomic<bool> menu{false}, has_frame{false};
+static std::atomic<bool> artwork_frame{false},capturing{false},hop_active{false};
+static std::atomic<unsigned> capture_notice{0},hop_frames{0};
 static std::atomic<unsigned> brightness{60};
 static std::atomic<int64_t> last_command{0};
 void native_ui_command(){last_command.store(esp_timer_get_time());}
@@ -30,8 +33,8 @@ static void save_preferences(){
     nvs_close(handle);
 }
 void native_ui_status(char *out,size_t size){
-    snprintf(out,size,"\"native_menu_open\":%s,\"native_has_frame\":%s,\"brightness\":%u",
-        menu.load()?"true":"false",has_frame.load()?"true":"false",brightness.load());
+    snprintf(out,size,"\"native_menu_open\":%s,\"native_has_frame\":%s,\"brightness\":%u,\"native_hop_frames\":%u,\"native_hop_active\":%s,\"native_notice\":%u",
+        menu.load()?"true":"false",has_frame.load()?"true":"false",brightness.load(),hop_frames.load(),hop_active.load()?"true":"false",capture_notice.load());
 }
 static void pixel(int x,int y,uint16_t color){
     if(x<0||x>=320||y<0||y>=480)return;
@@ -64,13 +67,17 @@ static const NativeLabel &call_label(){
     if(board_mic_paused())return label_paused;
     if(!state.online)return label_authorise;
     if(!state.active)return label_waiting;
+    if(capturing)return capture_notice==1?label_owner_unconfirmed:capture_notice==2?label_no_speech:label_listening;
     return state.phase==2?label_listening:state.phase==3?label_thinking:state.phase==4?label_speaking:label_call_ready;
 }
 static void remote_overlay(){
     settings_icon();call_button();
     auto state=device_control_state();
     if(board_mic_paused()||state.active||state.starting||state.stopping||state.failed){
-        rectangle(16,244,288,64,background);center(call_label(),262);
+        rectangle(16,244,288,64,background);
+        if(capturing&&capture_notice&&!board_mic_paused()){
+            center(call_label(),249);center(capture_notice==1?label_speak_more:label_try_speaking,277,muted);
+        }else center(call_label(),262);
     }
 }
 // Only Wi-Fi readiness is known here; it never implies a live Soul session.
@@ -118,16 +125,39 @@ static void render(int network,bool recent){
     board_frame(canvas);
 }
 // Called with the same output lock as the protocol, so a menu cannot tear a frame.
-esp_err_t native_ui_frame(const uint8_t *pixels){
+esp_err_t native_ui_frame(const uint8_t *pixels,bool artwork){
     if(!canvas||!last_frame)return board_frame(pixels);
-    memcpy(last_frame,pixels,bytes);has_frame=true;
+    memcpy(last_frame,pixels,bytes);has_frame=true;artwork_frame=artwork;hop_active=false;
     if(menu)return ESP_OK; // Keep receiving the latest subtitle behind the settings page.
     memcpy(canvas,pixels,bytes);remote_overlay();return board_frame(canvas);
+}
+// The protocol already owns output_mutex. Notices are local pixels, not extra network frames.
+void native_ui_capture(bool recording,unsigned notice){
+    capturing=recording;capture_notice=recording?notice:0;hop_active=false;
+    if(!menu&&has_frame){memcpy(canvas,last_frame,bytes);remote_overlay();board_frame(canvas);}
+}
+void native_ui_speech(){
+    if(capture_notice.exchange(0)&&!menu&&has_frame){memcpy(canvas,last_frame,bytes);remote_overlay();board_frame(canvas);}
+}
+static esp_err_t render_hop(NativePose pose){
+    // Only the artwork band moves. Header, controls, status and subtitle stay fixed.
+    constexpr int top=64,bottom=244;
+    for(int y=top;y<bottom;y++)for(int x=0;x<320;x++){
+        int source_x=160+(x-160)*1000/pose.sx;
+        int source_y=240+(y-240-pose.lift)*1000/pose.sy;
+        size_t source=(source_x>=0&&source_x<320&&source_y>=top&&source_y<bottom)
+            ?(source_y*320+source_x)*2:top*320*2;
+        size_t target=(y*320+x)*2;canvas[target]=last_frame[source];canvas[target+1]=last_frame[source+1];
+    }
+    auto result=board_frame_region(canvas,top,bottom-top);
+    if(result==ESP_OK)hop_frames++;
+    return result;
 }
 static void run(void *){
     uint32_t seen=board_touch_snapshot().count;
     int previous_network=-1;bool previous_recent=false,dirty=true;
     unsigned previous_call=UINT32_MAX;
+    bool idle_before=false;int64_t idle_since=0;NativePose previous_pose;
     while(true){
         device_control_tick();
         BoardTouch touch=board_touch_snapshot();
@@ -150,6 +180,11 @@ static void run(void *){
             }
         }
         auto control=device_control_state();
+        bool idle=!menu&&has_frame&&artwork_frame&&!capturing&&control.online&&!control.active&&
+            !control.starting&&!control.stopping&&!control.failed&&board_mic_paused();
+        int64_t now=esp_timer_get_time();if(idle&&!idle_before)idle_since=now;
+        NativePose pose=idle?native_hop_pose((now-idle_since)/1000):NativePose{};
+        hop_active=idle&&!native_pose_equal(pose,{});idle_before=idle;
         unsigned call=(unsigned)control.online|((unsigned)control.active<<1)|((unsigned)control.starting<<2)|
             ((unsigned)control.stopping<<3)|((unsigned)control.failed<<4)|(control.phase<<5);
         if(call!=previous_call){dirty=true;previous_call=call;}
@@ -157,10 +192,13 @@ static void run(void *){
         bool recent=command>0&&esp_timer_get_time()-command<30000000;
         if((menu||!has_frame)&&(net!=previous_network||recent!=previous_recent))dirty=true;
         if(xSemaphoreTake(output_mutex,0)==pdTRUE){
-            if(dirty){render(net,recent);dirty=false;previous_network=net;previous_recent=recent;}
+            if(dirty){render(net,recent);dirty=false;previous_network=net;previous_recent=recent;previous_pose={};}
+            if(!native_pose_equal(pose,previous_pose)){
+                if(render_hop(pose)==ESP_OK)previous_pose=pose;
+            }
             xSemaphoreGive(output_mutex);
         }
-        vTaskDelay(pdMS_TO_TICKS(100));
+        vTaskDelay(pdMS_TO_TICKS(idle&&((now-idle_since)/1000)%12000>=10080?40:100));
     }
 }
 void native_ui_init(SemaphoreHandle_t lock){

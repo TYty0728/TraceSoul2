@@ -94,6 +94,17 @@ internal static partial class Program
             await monitor.WaitAsync(CancellationToken.None).WaitAsync(TimeSpan.FromSeconds(3));
             Require(!monitor.IsActive && replies==1 && monitor.Status().state=="stopped","停止后迟到的verified也不再提交");
         }
+        var physicalStops=0;var physicalReplies=0;
+        using(var monitor=new WxxzVoiceMonitor((s,w,t)=>Task.FromResult("physical-stop-call"),
+            (s,c,t,life)=>Task.FromResult(MonitorHeard("cancelled")),
+            (s,c,text,capture,life)=>{physicalReplies++;return Task.FromResult(true);},
+            c=>{physicalStops++;return Task.CompletedTask;},(p,c,r)=>{}))
+        {
+            await monitor.StartAsync("session",false,CancellationToken.None);
+            await monitor.WaitAsync(CancellationToken.None).WaitAsync(TimeSpan.FromSeconds(3));
+            Require(monitor.Status().state=="stopped"&&monitor.Status().errorCode==null&&
+                physicalReplies==0&&physicalStops==1,"物理停止先于Host取消到达，正常结束且不提交残留语音");
+        }
         var entered=new TaskCompletionSource<bool>(TaskCreationOptions.RunContinuationsAsynchronously);
         var release=new TaskCompletionSource<bool>(TaskCreationOptions.RunContinuationsAsynchronously);
         using(var monitor=new WxxzVoiceMonitor((s,w,t)=>Task.FromResult("call"),
