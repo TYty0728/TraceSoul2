@@ -1,11 +1,13 @@
 """Real isolated Host, mock inference only; production souls and providers are never opened."""
+import base64
+import hashlib
 import http.cookiejar
 from http.server import BaseHTTPRequestHandler, ThreadingHTTPServer
 import json
 import os
 from pathlib import Path
-import re
 import socket
+import sqlite3
 import subprocess
 import tempfile
 import threading
@@ -62,6 +64,20 @@ def main():
     try:
         with tempfile.TemporaryDirectory(prefix='tracesoul-fallback-host-') as folder:
             root = Path(folder)
+            # Use a disposable fixture account; console encoding varies across Windows runners.
+            password = 'Initial-fallback-fixture-2026!'
+            salt = os.urandom(16)
+            auth = dict(version=1, username='admin', algorithm='PBKDF2-SHA256', iterations=600000,
+                salt=base64.b64encode(salt).decode(),
+                passwordHash=base64.b64encode(hashlib.pbkdf2_hmac('sha256', password.encode(), salt, 600000)).decode(),
+                sessionStamp=os.urandom(16).hex(), mustChangePassword=True, updatedAtUtc='2026-10-23T00:00:00Z')
+            (root/'control-auth.json').write_text(json.dumps(auth), encoding='utf-8')
+            (root/'soul').mkdir()
+            (root/'plugins').mkdir()
+            (root/'plugin-data').mkdir()
+            with sqlite3.connect(root/'soul'/'tracesoul2-brainframe.sqlite3') as db:
+                db.execute('PRAGMA user_version=0')
+            db.close()
             env = {k: v for k, v in os.environ.items() if not k.startswith('TRACESOUL2_')}
             env.update(TRACESOUL2_HOME=str(root), TRACESOUL2_DATA=str(root/'soul'),
                 TRACESOUL2_PLUGINS=str(root/'plugins'), TRACESOUL2_PLUGINS_DATA=str(root/'plugin-data'),
@@ -72,21 +88,17 @@ def main():
                     creationflags=subprocess.CREATE_NO_WINDOW if os.name == 'nt' else 0)
                 try:
                     deadline = time.monotonic() + 45
-                    password = None
+                    ready = False
                     while time.monotonic() < deadline:
-                        raw = logfile.read_bytes()
-                        match = next((m for encoding in ('utf-8', 'gb18030')
-                            if (m := re.search(r'初始密码：([^\r\n]+)', raw.decode(encoding, errors='replace')))), None)
-                        if match:
-                            password = match.group(1).strip()
-                            try:
-                                api('/auth/status')
-                                break
-                            except OSError:
-                                pass
-                        assert process.poll() is None, 'Temporary Host exited'
+                        try:
+                            api('/auth/status')
+                            ready = True
+                            break
+                        except OSError:
+                            pass
+                        assert process.poll() is None, 'Temporary Host exited: ' + logfile.read_text(encoding='utf-8', errors='replace')[-3000:].replace(password, '[fixture password]')
                         time.sleep(0.15)
-                    assert password
+                    assert ready, 'Temporary Host did not become ready'
                     api('/providers/main-fallbacks', expected=401)
                     api('/auth/login', 'POST', {'username': 'admin', 'password': password})
                     api('/auth/account', 'PUT', {'currentPassword': password, 'username': 'testadmin',
