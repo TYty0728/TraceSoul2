@@ -8,6 +8,8 @@
 
 产品0.1.59，PluginApi1.16.0及官方插件版本保持原样。本地Release全解决方案（24项既有相机测试类型冲突警告）、完整ChatCheck/Prompt、实际Migration、恢复预检/错误分类专项、日构建页面与510文件发布安全检查通过。未调用真实模型、部署本版到服务器或自动续做付费复盘。
 
+发布确认：[v0.1.59](https://github.com/TYty0728/TraceSoul2/releases/tag/v0.1.59)／源码b4fce3a已公开，[发布CI39730198727](https://github.com/TYty0728/TraceSoul2/actions/runs/39730198727)完整回归、Docker升级/数据保留、源码镜像启动与三平台打包全部通过；main集成CI39730195592也通过。匿名latest=v0.1.59，三ZIP与SDK1.16.0公开HEAD200，SHA-256与GitHub digest一致；范围读取三包确认版本、恢复预检及旧版进度提示、既有快照隔离和通用模板，无运行资料。未完整下载三包、部署本版或解除日构建暂停。win-x64 `f33aea6fa9aae3dacdb1ad79d208a3d2c9c1fcda0718dbc64661f7c4c510e944`；linux-x64 `aa064ea92118a1376cde8eb2e72f96acc3d09067f9fcd2872d8ececeba0fef51`；linux-arm64 `c654d3587faf3f1335dd1af6df377ceb4c93db0a4a8b2a55ada19c36214cd006`。
+
 ## 0.1.58（2026-10-22）
 
 - 修复Linux存档采集的文件锁缺陷：活Host直接用文件流读取并关闭SQLite源文件，会解除同进程持有的POSIX锁；后续另一数据库进程退出可能删除仍在使用的WAL/SHM，造成并发写入失去协调。该机制已在实际Linux环境的合成临时库复现，与现场日志文件已删除但进程仍持有句柄的异常一致；不将既有数据损伤仅归因于磁盘空间。
