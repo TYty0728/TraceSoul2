@@ -137,53 +137,77 @@ namespace TraceSoul2.Migrate
             var error = DayCardReviewContract.StructuralError(state.Output, cards, state.Evidence);
             if (error != null) throw new InvalidOperationException(error);
             state.StoredCardsStamp ??= Digest(context.Store.LoadIdentityCards(MigrationContext.ConversationId));
-            if ((state.Output.inner_narrative?.Trim().Length ?? 0) > 120 &&
-                SubjectRuntimeLogic.Read(context.Store, MigrationContext.ConversationId).Revision != state.SubjectRevision)
+            void ValidateSources()
             {
+                if (state.Stamp != ReviewStamp(context, day, cards, context.Store.GetCognitionNodes(5000)) ||
+                    state.StoredCardsStamp != Digest(context.Store.LoadIdentityCards(MigrationContext.ConversationId)))
+                    throw new InvalidOperationException("生成期间认知来源或身份卡已修订，旧草稿不提交；已保存检查点供重新核对。");
+            }
+            bool RetireStaleInner()
+            {
+                if ((state.Output.inner_narrative?.Trim().Length ?? 0) <= 120 ||
+                    SubjectRuntimeLogic.Read(context.Store, MigrationContext.ConversationId).Revision == state.SubjectRevision)
+                    return false;
                 state.Output.inner_narrative = state.Output.inner_mood = state.Output.inner_relationship_lens = state.Output.inner_ongoing_activity = "";
                 state.Output.inner_attention = new();
                 state.Output.summary += "；旧内心草稿已被较新当下替代";
+                return true;
             }
+            ValidateSources();
+            RetireStaleInner();
             var targets = LongParts(state.Output);
             void Save() => context.Store.SavePluginDocument(RecoveryDocuments, "identity:" + day, TraceJson.ToJson(state));
-            if (targets.Count > 0)
+            // A previous version's multi-field draft is also resumed one field at a time.
+            if (targets.Count > 0) Save();
+            foreach (var id in targets)
             {
-                // Save all validated fields before the sole, narrowly scoped repair request.
-                Save();
-                var boundIds = state.Output.cards.Where(x => targets.Contains(x.slot))
+                ValidateSources();
+                if (id == "inner_narrative" && RetireStaleInner()) { Save(); continue; }
+                var boundIds = state.Output.cards.Where(x => x.slot == id)
                     .SelectMany(x => x.cognition_ids).ToHashSet(StringComparer.Ordinal);
                 var evidence = state.Evidence.Where(x => boundIds.Contains(x.Id)).ToList();
                 var request = new {
-                    targets = targets.Select(id => new { id,
+                    targets = new[] { new { id,
                         target_chars = id == "inner_narrative" ? 80 : IdentityCardSlotValues.BodyTarget(id),
                         max_chars = id == "inner_narrative" ? 120 : IdentityCardSlotValues.BodyLimit(id),
-                        current = id == "inner_narrative" ? "" : cards.FirstOrDefault(x => x.Slot == id)?.Body }),
+                        current = id == "inner_narrative" ? "" : cards.FirstOrDefault(x => x.Slot == id)?.Body } },
                     cognitions = evidence,
-                    dayReview = targets.Contains("inner_narrative")
-                        ? context.Store.GetRuntimeDaySummaries(MigrationContext.ConversationId, day).Select(x => x.Summary).ToList() : new List<string>() };
+                    dayReview = id == "inner_narrative"
+                        ? context.Store.GetRuntimeDaySummaries(MigrationContext.ConversationId, day)
+                            .Where(x => x.MemoryVisibility != "public" && x.ContextConversationId == MigrationContext.ConversationId)
+                            .Select(x => x.Summary).ToList() : new List<string>(),
+                    output_example = new { items = new[] { new { id, body = "完整正文" } } } };
                 var raw = await llm.CompleteJsonAsync(new List<DeepSeekMessageData> {
-                    new("system", "【复盘未完成正文】只为targets列出的id重新写完整正文。原草稿超过篇幅，不回传草稿。" +
+                    new("system", "【复盘未完成正文】本次只有一个任务：为targets中唯一的id重新写完整正文。原草稿超过篇幅，不回传草稿。" +
                         "身份正文根据对应认知综合当前认识，承接仍有效的旧理解；篇幅见target_chars/max_chars。" +
                         "inner_narrative写当天留下的感受。其他已完成字段由程序保留，来源引用由程序保持。" +
-                        "每个id恰好一项，不添加其他id；只输出JSON {\"items\":[{\"id\":\"relation\",\"body\":\"完整正文\"}]}。"),
+                        "严格按output_example结构输出JSON，items恰好一项，id照抄本次目标，body写完整正文，不添加其他id。"),
                     new("user", TraceJson.ToJson(request)) }, CancellationToken.None);
+                ValidateSources();
+                if (id == "inner_narrative" && RetireStaleInner()) { Save(); continue; }
                 var repaired = DeepSeekStructuredOutputLogic.Read<ProseRepairs>(raw);
-                if (repaired?.items == null || repaired.items.Count != targets.Count ||
-                    repaired.items.Any(x => x == null || !targets.Contains(x.id) || string.IsNullOrWhiteSpace(x.body)) ||
-                    repaired.items.Select(x => x.id).Distinct().Count() != targets.Count)
-                    throw new InvalidOperationException("正文修复必须完整且唯一地对应待整理字段；已保存合格结果检查点。");
-                foreach (var item in repaired.items)
+                // An omitted/empty body is still pending, never an accepted empty replacement.
+                // Wrong targets, duplicates and malformed JSON remain errors, not guessed repairs.
+                if (repaired?.items == null || repaired.items.Count == 0)
                 {
-                    var body = context.RequirePair().RewriteRecordedText(item.body.Trim());
-                    if (item.id == "inner_narrative") state.Output.inner_narrative = body;
-                    else state.Output.cards.Single(x => x.slot == item.id).body = body;
+                    Console.WriteLine("  正文待整理：" + id + "（本次未返回正文，已保留进度）");
+                    continue;
                 }
+                if (repaired.items.Count != 1 || repaired.items[0] == null || repaired.items[0].id != id)
+                    throw new InvalidOperationException("正文修复必须唯一对应本次待整理字段；已保存此前合格结果检查点。");
+                if (string.IsNullOrWhiteSpace(repaired.items[0].body))
+                {
+                    Console.WriteLine("  正文待整理：" + id + "（本次正文为空，已保留进度）");
+                    continue;
+                }
+                var body = context.RequirePair().RewriteRecordedText(repaired.items[0].body.Trim());
+                if (id == "inner_narrative") state.Output.inner_narrative = body;
+                else state.Output.cards.Single(x => x.slot == id).body = body;
+                // Persist before the next request, including on a later transport/validation failure.
                 Save();
             }
             var pending = LongParts(state.Output);
-            if (state.Stamp != ReviewStamp(context, day, cards, context.Store.GetCognitionNodes(5000)) ||
-                state.StoredCardsStamp != Digest(context.Store.LoadIdentityCards(MigrationContext.ConversationId)))
-                throw new InvalidOperationException("生成期间认知来源或身份卡已修订，旧草稿不提交；已保存检查点供重新核对。");
+            ValidateSources();
             var result = TraceJson.FromJson<ReplayPrompts.DayCardReviewOutputData>(TraceJson.ToJson(state.Output));
             result.SubjectRevision = state.SubjectRevision;
             result.PendingParts = pending;
