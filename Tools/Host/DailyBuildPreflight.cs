@@ -3,6 +3,7 @@ using System.Collections.Generic;
 using System.Globalization;
 using System.IO;
 using System.Linq;
+using System.Text.Json;
 using SQLite;
 
 namespace TraceSoul2.Host
@@ -108,6 +109,45 @@ namespace TraceSoul2.Host
 
     public static class DailyBuildPreflight
     {
+        public const string LegacyRecoveryRequiredMessage = "发现旧版已写入的部分事件，但缺少来源校验检查点；已停止重复构筑，请先核对并恢复已有结果。";
+
+        // Match the migration guard before reserving a real model run. Reading
+        // uses SQLite's VFS, never raw file streams in the live Host process.
+        public static string LegacyRecoveryBlocker(string brainPath, string day)
+        {
+            if (!ValidDay(day)) throw new ArgumentException("无效的记忆日。");
+            if (!File.Exists(brainPath)) return null;
+            using var db = new SQLiteConnection(brainPath, SQLiteOpenFlags.ReadOnly);
+            db.BusyTimeout = TimeSpan.FromSeconds(5);
+            bool HasTable(string name) => db.ExecuteScalar<int>(
+                "SELECT COUNT(*) FROM sqlite_master WHERE type='table' AND name=?", name) > 0;
+            if (!HasTable("moments") || !HasTable("event_entries")) return null;
+            string Document(string plugin, string key) => !HasTable("plugin_documents") ? null : db.ExecuteScalar<string>(
+                "SELECT Json FROM plugin_documents WHERE PluginId=? AND DocumentKey=? LIMIT 1", plugin, key);
+            if (!string.IsNullOrWhiteSpace(Document("daily-core-progress-v1", "source:" + day))) return null;
+            var completed = new HashSet<string>(StringComparer.Ordinal);
+            var core = Document("daily-review-recovery-v1", "core:" + day);
+            if (!string.IsNullOrWhiteSpace(core))
+            {
+                using var json = JsonDocument.Parse(core);
+                if (!json.RootElement.TryGetProperty("MomentIds", out var ids) || ids.ValueKind != JsonValueKind.Array)
+                    throw new InvalidDataException("复盘核心检查点无法读取，请先核对来源。");
+                foreach (var id in ids.EnumerateArray()) completed.Add(id.GetString());
+            }
+            var date = DateTime.ParseExact(day, "yyyy-MM-dd", CultureInfo.InvariantCulture);
+            var start = new DateTimeOffset(date.AddHours(4), TimeSpan.FromHours(8)).ToUnixTimeMilliseconds();
+            var sources = db.QueryScalars<string>(
+                "SELECT Id FROM moments WHERE CreatedUnixMs>=? AND CreatedUnixMs<? " +
+                "AND COALESCE(MemoryVisibility,'private')!='public' " +
+                "AND (MemoryStatus IS NULL OR MemoryStatus NOT IN ('built','operational'))", start, start + 86400000)
+                .Where(id => !completed.Contains(id));
+            foreach (var batch in sources.Chunk(256))
+                if (db.ExecuteScalar<int>("SELECT COUNT(*) FROM event_entries WHERE SourceMomentId IN (" +
+                    string.Join(",", batch.Select(_ => "?")) + ")", batch.Cast<object>().ToArray()) > 0)
+                    return "旧版部分复盘结果缺少来源检查点，需先核对恢复；清除错误保护后直接重跑仍会被拦住。";
+            return null;
+        }
+
         public static bool ValidDay(string day) => DateTime.TryParseExact(day, "yyyy-MM-dd", CultureInfo.InvariantCulture,
             DateTimeStyles.None, out _);
 

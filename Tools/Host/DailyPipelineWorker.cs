@@ -57,6 +57,12 @@ namespace TraceSoul2.Host
                     runtime.Store.GetUnbuiltPublicMemoryDayKeysBefore(MemoryDayLogic.CurrentStart(now).ToUnixTimeMilliseconds()),
                     runtime.Store.GetUnreviewedRuntimeDayKeysBefore(MemoryDayLogic.CurrentStart(now).ToUnixTimeMilliseconds()),
                     includePendingReviews);
+                foreach (var day in plan.Days)
+                {
+                    var recovery = DailyBuildPreflight.LegacyRecoveryBlocker(
+                        Path.Combine(runtime.DataDirectory, "tracesoul2-brainframe.sqlite3"), day);
+                    if (recovery != null) plan.Blockers.Add(day + "：" + recovery);
+                }
             }
             catch (Exception)
             {

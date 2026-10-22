@@ -146,6 +146,15 @@ namespace TraceSoul2.Host
         public static string SafeReason(Exception error)
         {
             var message = error?.Message ?? "";
+            if (message.Contains("缺少来源校验检查点", StringComparison.Ordinal) ||
+                message.Contains("已有细节缺少来源检查点", StringComparison.Ordinal))
+                return "旧版部分复盘结果缺少来源检查点，需核对恢复后再构建";
+            if ((message.Contains("检查点", StringComparison.Ordinal) &&
+                    (message.Contains("已修订", StringComparison.Ordinal) || message.Contains("已变化", StringComparison.Ordinal) ||
+                     message.Contains("已缺失", StringComparison.Ordinal))) ||
+                message.StartsWith("部分复盘的来源集合已变化", StringComparison.Ordinal) ||
+                message.StartsWith("部分复盘的原始来源或身份已修订", StringComparison.Ordinal))
+                return "复盘来源或检查点已变化，需核对已有结果后恢复";
             var status = Regex.Match(message, @"(?:API|HTTP)\s*([45]\d\d)", RegexOptions.IgnoreCase);
             if (status.Success)
                 return status.Groups[1].Value switch
@@ -162,7 +171,9 @@ namespace TraceSoul2.Host
             if (message.Contains("字") &&
                 ((message.Contains("当前") && message.Contains("最多")) || message.Contains("超过")))
                 return "模型输出超出已写明的篇幅";
-            if (message.Contains("JSON", StringComparison.OrdinalIgnoreCase) || message.Contains("结构化输出", StringComparison.Ordinal) || message.Contains("缺少", StringComparison.Ordinal))
+            if (error is JsonException || message.Contains("JSON", StringComparison.OrdinalIgnoreCase) ||
+                message.Contains("结构化输出", StringComparison.Ordinal) ||
+                (message.Contains("输出", StringComparison.Ordinal) && message.Contains("缺少", StringComparison.Ordinal)))
                 return "模型输出格式或必填字段校验失败";
             // 不把上游正文、Key、URL、提示词或私聊内容转发给 QQ。
             return "任务执行或模型输出校验失败，详情请查看后台日志";

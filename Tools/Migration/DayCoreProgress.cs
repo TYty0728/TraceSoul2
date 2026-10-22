@@ -4,6 +4,7 @@ using System.Linq;
 using System.Threading;
 using System.Threading.Tasks;
 using TraceSoul2.Data;
+using TraceSoul2.Host;
 using TraceSoul2.Logic;
 using TraceSoul2.Manager;
 using TraceSoul2.Util;
@@ -49,7 +50,7 @@ namespace TraceSoul2.Migrate
             if (state == null)
             {
                 if (context.Migration.HasEventEntriesFrom(current))
-                    throw new InvalidOperationException("发现旧版已写入的部分事件，但缺少来源校验检查点；已停止重复构筑，请先核对并恢复已有结果。");
+                    throw new InvalidOperationException(DailyBuildPreflight.LegacyRecoveryRequiredMessage);
                 state = new CoreProgressSource { MomentIds = current,
                     Stamp = CoreSourceStamp(context, current), Generation = Guid.NewGuid().ToString("N") };
                 context.Store.SavePluginDocument(CoreProgressDocuments, key, TraceJson.ToJson(state));

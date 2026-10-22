@@ -62,6 +62,51 @@ internal static partial class Program
         try
         {
             Require(DailyBuildHistory.ReadStates(path).Count == 0 && !File.Exists(path), "预检不能创建或修改迁移库");
+            var brain = Path.Combine(root, "brain.sqlite3");
+            Require(DailyBuildPreflight.LegacyRecoveryBlocker(brain, "2026-09-18") == null && !File.Exists(brain),
+                "恢复预检不创建主库");
+            var started = new DateTimeOffset(2026, 9, 18, 4, 0, 0, TimeSpan.FromHours(8)).ToUnixTimeMilliseconds();
+            using (var db = new SQLiteConnection(brain))
+            {
+                db.Execute("CREATE TABLE moments (Id TEXT PRIMARY KEY, CreatedUnixMs INTEGER, MemoryVisibility TEXT, MemoryStatus TEXT)");
+                db.Execute("CREATE TABLE event_entries (Id TEXT PRIMARY KEY, SourceMomentId TEXT)");
+                db.Execute("CREATE TABLE plugin_documents (PluginId TEXT, DocumentKey TEXT, Json TEXT)");
+                db.Execute("INSERT INTO moments VALUES ('saved',?,'private','live')", started);
+                db.Execute("INSERT INTO event_entries VALUES ('legacy-partial','saved')");
+            }
+            var bytes = File.ReadAllBytes(brain);
+            Require(DailyBuildPreflight.LegacyRecoveryBlocker(brain, "2026-09-18")?.Contains("直接重跑仍会被拦住") == true &&
+                DailyBuildPreflight.LegacyRecoveryBlocker(brain, "2026-09-19") == null && bytes.SequenceEqual(File.ReadAllBytes(brain)),
+                "旧版部分事件在预检即阻断，日期隔离且主库字节不变");
+            using (var db = new SQLiteConnection(brain))
+                db.Execute("INSERT INTO plugin_documents VALUES ('daily-core-progress-v1','source:2026-09-18','{}')");
+            Require(DailyBuildPreflight.LegacyRecoveryBlocker(brain, "2026-09-18") == null,
+                "已有逐批进度不误当旧版数据，来源内容仍交迁移器严格核验");
+            using (var db = new SQLiteConnection(brain))
+            {
+                db.Execute("DELETE FROM plugin_documents");
+                db.Execute("INSERT INTO plugin_documents VALUES ('daily-review-recovery-v1','core:2026-09-18',?)", "{\"MomentIds\":[\"saved\"]}");
+            }
+            Require(DailyBuildPreflight.LegacyRecoveryBlocker(brain, "2026-09-18") == null,
+                "已有核心检查点覆盖的事件不误拦身份或排序续做");
+            using (var db = new SQLiteConnection(brain))
+            {
+                db.Execute("INSERT INTO moments VALUES ('late',?,'private','live')", started + 1);
+                db.Execute("INSERT INTO event_entries VALUES ('late-partial','late')");
+            }
+            Require(DailyBuildPreflight.LegacyRecoveryBlocker(brain, "2026-09-18") != null,
+                "核心之外的迟到来源已有事件却无进度仍须阻断，不能由旧核心绕过");
+            using (var db = new SQLiteConnection(brain)) db.Execute("UPDATE moments SET MemoryVisibility='public' WHERE Id='late'");
+            Require(DailyBuildPreflight.LegacyRecoveryBlocker(brain, "2026-09-18") == null,
+                "独立公开整理不误当私密日终旧版部分事件");
+            using (var db = new SQLiteConnection(brain))
+            {
+                db.Execute("UPDATE moments SET MemoryVisibility='private',MemoryStatus='built' WHERE Id='late'");
+                db.Execute("DELETE FROM plugin_documents");
+                db.Execute("UPDATE moments SET MemoryStatus='operational' WHERE Id='saved'");
+            }
+            Require(DailyBuildPreflight.LegacyRecoveryBlocker(brain, "2026-09-18") == null,
+                "已归档和操作记录不会触发未完成来源保护");
             using (var db = new SQLiteConnection(path))
             {
                 db.Execute("CREATE TABLE migration_review_state (DayKey TEXT PRIMARY KEY, Status TEXT, Error TEXT, UpdatedUnixMs INTEGER)");
