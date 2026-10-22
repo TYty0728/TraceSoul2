@@ -40,7 +40,7 @@ namespace TraceSoul2.Host
         public string HostVersion { get; set; }
     }
 
-    public sealed class BackupArchiveService : IDisposable
+    public sealed partial class BackupArchiveService : IDisposable
     {
         private readonly TraceHomeLayout home;
         private readonly string configPath;
@@ -183,7 +183,7 @@ namespace TraceSoul2.Host
             await archive.WaitAsync(token);
             lock (gate)
                 if (phase != "completed" || settings.ProtectedPackageId == null)
-                    throw new InvalidOperationException("更新前存档未通过完整校验，已停止更新并保留原存档。");
+                    throw new InvalidOperationException("更新前存档未通过完整校验，已停止更新并保留原存档。" + (error ?? string.Empty));
         }
 
         public object ConfirmVersion(string version, string packageId)
@@ -318,7 +318,9 @@ namespace TraceSoul2.Host
                     LastFailure = ex;
                     // Source files may contain credentials. Never return raw SQLite/JSON errors or contents.
                     var step = phase == "snapshot" ? "收集资料" : phase == "packing" || phase == "verifying" ? "打包校验" : "加密保存";
-                    error = ex is OperationCanceledException ? "存档已中断，已有成品保留。" : "存档失败（" + step + "）：请检查目录权限、剩余空间、数据库和正在变更的文件。";
+                    error = ex is OperationCanceledException ? "存档已中断，已有成品保留。"
+                        : ex is InvalidDataException ? "存档失败（" + step + "）：数据库或存档完整性校验未通过；原存档保留，请先检查数据。"
+                        : "存档失败（" + step + "）：请检查目录权限、剩余空间、数据库和正在变更的文件。";
                     settings.LastResult = error; phase = "failed";
                     try { WritePrivate(configPath, JsonSerializer.Serialize(settings, BackupArchiveFormat.Json)); } catch { }
                 }
@@ -426,7 +428,7 @@ namespace TraceSoul2.Host
 
         // Opening even a ReadOnly WAL connection can create WAL/SHM or modify its read marks.
         // Capture only stable bytes first; all SQLite recovery/backup operations run on that private copy.
-        public static void CopyDatabaseSnapshot(string source, string destination, CancellationToken token = default)
+        private static void CopyDatabaseSnapshotCore(string source, string destination, CancellationToken token)
         {
             RejectLinks(source); RejectLinks(destination);
             if (File.Exists(destination) || Directory.Exists(destination)) throw new IOException("数据库副本目标已存在，未覆盖。");

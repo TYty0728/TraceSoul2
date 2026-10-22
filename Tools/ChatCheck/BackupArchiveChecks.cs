@@ -14,6 +14,7 @@ internal static partial class Program
 {
     private static async Task RunBackupArchiveChecksAsync()
     {
+        RunBackupProcessLockChecks();
         var temp = Path.Combine(Path.GetTempPath(), "tracesoul-archive-" + Guid.NewGuid().ToString("N"));
         Directory.CreateDirectory(temp);
         try
@@ -244,6 +245,45 @@ internal static partial class Program
             var refused=false;try{await bad.PrepareForUpdateAsync("9.0.0",CancellationToken.None);}catch(InvalidOperationException){refused=true;}
             Require(refused,"更新前缺失主库时不能继续更新");
         }
+    }
+
+    private static void RunBackupProcessLockChecks()
+    {
+        var root = Path.Combine(Path.GetTempPath(), "backup-lock-" + Guid.NewGuid().ToString("N"));
+        Directory.CreateDirectory(root);
+        try
+        {
+            var source = Path.Combine(root, "live.sqlite3");
+            var snapshot = Path.Combine(root, "snapshot.sqlite3");
+            using (var live = new SQLiteConnection(source))
+            {
+                live.EnableWriteAheadLogging();
+                live.Execute("CREATE TABLE items (id INTEGER PRIMARY KEY, value TEXT)");
+                live.Execute("INSERT INTO items VALUES (1, 'uncheckpointed-original')");
+                Require(File.Exists(source + "-wal"), "多进程存档夹具确有活动WAL");
+                BackupArchiveService.CopyDatabaseSnapshot(source, snapshot);
+                var start = new System.Diagnostics.ProcessStartInfo("dotnet")
+                { UseShellExecute = false, RedirectStandardOutput = true, RedirectStandardError = true };
+                start.ArgumentList.Add(typeof(Program).Assembly.Location);
+                start.ArgumentList.Add("--backup-lock-peer"); start.ArgumentList.Add(source);
+                using var peer = System.Diagnostics.Process.Start(start);
+                if (!peer.WaitForExit(30000)) { peer.Kill(entireProcessTree: true); throw new Exception("Backup lock peer timed out."); }
+                Require(peer.ExitCode == 0 && File.Exists(source + "-wal") && File.Exists(source + "-shm"),
+                    "存档不能解除活连接的POSIX锁；另一进程退出后WAL/SHM仍须存在");
+                live.Execute("INSERT INTO items VALUES (2, 'after-peer')");
+                using var captured = new SQLiteConnection(snapshot);
+                Require(captured.ExecuteScalar<int>("SELECT COUNT(*) FROM items") == 1 &&
+                    captured.ExecuteScalar<string>("SELECT value FROM items WHERE id=1") == "uncheckpointed-original" &&
+                    captured.ExecuteScalar<string>("PRAGMA integrity_check") == "ok" &&
+                    live.ExecuteScalar<int>("SELECT COUNT(*) FROM items") == 2,
+                    "快照包含已提交WAL，原连接继续写入正常且不会污染副本");
+            }
+            using var reopened = new SQLiteConnection(source);
+            Require(reopened.ExecuteScalar<string>("PRAGMA integrity_check") == "ok" &&
+                reopened.ExecuteScalar<int>("SELECT COUNT(*) FROM items") == 2,
+                "原连接退出后重开仍完整保留两次提交");
+        }
+        finally { Directory.Delete(root, true); }
     }
 
     private static void MustReject(Action action, string message)

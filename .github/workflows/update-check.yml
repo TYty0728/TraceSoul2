@@ -27,6 +27,7 @@ jobs:
       - name: Test updater and download logic
         run: |
           dotnet build TraceSoul2.sln -c Release
+          dotnet Tools/ChatCheck/bin/Release/net8.0/ChatCheck.dll --backups
           dotnet Tools/Updater/bin/Release/net8.0/TraceSoul2.Updater.dll --self-test
           dotnet Tools/UpdateCheck/bin/Release/net8.0/UpdateCheck.dll
           python3 -m unittest discover -s scripts/tests -p test_update_server.py

@@ -20,6 +20,10 @@ internal static partial class Program
     private static void Main(string[] args)
     {
         SQLitePCL.Batteries_V2.Init();
+        if (TraceSoul2.Host.BackupArchiveService.TryRunSnapshotWorker(args, out var snapshotExit))
+        { Environment.ExitCode = snapshotExit; return; }
+        if (args.Length == 2 && args[0] == "--backup-lock-peer")
+        { using var peer = new SQLite.SQLiteConnection(args[1]); peer.GetTableInfo("items"); return; }
         if (args.Contains("--runtime-paths")) { RunRuntimePathRepairChecks(); return; }
         if (args.Contains("--backups")) { RunBackupArchiveChecksAsync().GetAwaiter().GetResult(); return; }
         if(args.Contains("--expressions")){RunExpressionChecksAsync().GetAwaiter().GetResult();return;}

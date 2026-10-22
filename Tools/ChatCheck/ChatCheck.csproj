@@ -25,6 +25,7 @@
     <Compile Include="RuntimePathRepairChecks.cs" />
     <Compile Include="../Host/BackupArchiveFormat.cs" Link="BackupArchiveFormat.cs" />
     <Compile Include="../Host/BackupArchiveService.cs" Link="BackupArchiveService.cs" />
+    <Compile Include="../Host/BackupDatabaseSnapshot.cs" Link="BackupDatabaseSnapshot.cs" />
     <Compile Include="../Host/TraceHome.cs" Link="TraceHome.cs" />
     <Compile Include="../Host/LifeStateStore.cs" Link="LifeStateStore.cs" />
     <Compile Include="../Host/RuntimePathRepair.cs" Link="RuntimePathRepair.cs" />

@@ -29,6 +29,9 @@ using TraceSoul2.Plugins.Builtin;
 
 SQLitePCL.Batteries_V2.Init();
 
+if (BackupArchiveService.TryRunSnapshotWorker(args, out var snapshotExit))
+{ Environment.ExitCode = snapshotExit; return; }
+
 // Offline recovery must run before resolving home or creating any live services.
 if (args.Length > 0 && args[0] == "--archive-extract")
 {
