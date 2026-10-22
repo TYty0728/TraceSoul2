@@ -878,6 +878,17 @@
           <p class="muted">只影响身份复盘和日构建，不改变聊天温度。低温度减少输出随机性；模型仍可能返回格式错误。模型有固定参数限制时遵循其协议。已在运行的构建下次启动才采用新设置。失败后请到「记忆 → 错误保护」恢复日构建，再检查并开始。</p>
         </div>
         <div class="box">
+          <h2>主模型备用顺序</h2>
+          <p class="muted">对话和主动联系按「已保存的主模型 → 二级备用 → 三级备用」尝试。建议选不同供应商，以应对接口不稳定。配置备用后，每个通道只请求一次；超时、连接失败、服务错误或空响应时切换，沿用本轮上下文。下一轮仍先尝试主模型。</p>
+          <div class="slot-grid">
+            <div><label for="fallbackSecondary">二级备用</label><select id="fallbackSecondary"></select></div>
+            <div><label for="fallbackTertiary">三级备用</label><select id="fallbackTertiary"></select></div>
+            <div><label>&nbsp;</label><button class="primary" onclick="saveMainFallbacks()">保存备用顺序</button></div>
+          </div>
+          <p id="mainFallbackStatus" class="muted">加载中…</p>
+          <p class="muted">留空可关闭备用。保存只影响之后的新轮次；复盘、JEV、识图、语音和生图仍用各自设置。已发送的回复和已执行的动作不会因切换而重做。</p>
+        </div>
+        <div class="box">
           <div class="prov-add">
             <select id="providerTemplate"></select>
             <button class="primary" onclick="addProvider()">＋ 新增供应商</button>
@@ -2688,6 +2699,7 @@
   const ROLE_KEYS = ["chat", "jev", "multimodal", "speech", "image"];
   let providerCache = [];
   let slotCache = {};
+  let mainFallbackCache = {};
   let selectedProviderId = "";
   let modelRoleFilter = "";
   let decisionTestPending = false;
@@ -2744,6 +2756,25 @@
     fillSlotSelect($("slotSpeech"), "speech", slotCache.speech, true);
     fillSlotSelect($("slotImage"), "image", slotCache.image, true);
   }
+  function renderMainFallbacks() {
+    fillSlotSelect($("fallbackSecondary"), "chat", mainFallbackCache.secondary, true);
+    fillSlotSelect($("fallbackTertiary"), "chat", mainFallbackCache.tertiary, true);
+    const primary = slotCache.chat || {};
+    $("mainFallbackStatus").textContent = "已保存的主模型：" + (primary.providerId || "未指定") +
+      " / " + (primary.model || "未指定") +
+      (mainFallbackCache.secondary?.providerId || mainFallbackCache.tertiary?.providerId
+        ? "；备用顺序已启用。" : "；尚未启用备用，沿用原通道重试设置。");
+  }
+  async function saveMainFallbacks() {
+    try {
+      mainFallbackCache = await api("/providers/main-fallbacks", "PUT", {
+        secondary: parseSlotValue($("fallbackSecondary").value),
+        tertiary: parseSlotValue($("fallbackTertiary").value)
+      });
+      renderMainFallbacks();
+      logLine("主模型备用顺序已保存，下次对话或主动联系生效");
+    } catch (e) { alert("保存备用顺序失败：" + e.message); }
+  }
   async function loadBrain() {
     const st = await api("/status");
     $("ctxMax").value = st.historyWindowMax != null ? st.historyWindowMax : (st.contextInjectionCount || 0);
@@ -2773,6 +2804,8 @@
     }).join("");
     fillProviderForm(providerCache.find(p => p.id === selectedProviderId) || cur);
     renderSlots();
+    mainFallbackCache = await api("/providers/main-fallbacks");
+    renderMainFallbacks();
     const reviewSettings = await api("/providers/review-settings");
     $("reviewTemperature").value = reviewSettings.temperature;
     $("reviewSettingsStatus").textContent = "当前复盘温度：" + reviewSettings.temperature;

@@ -766,7 +766,7 @@ namespace TraceSoul2.Host
         {
             if (string.IsNullOrWhiteSpace(text))
                 throw new InvalidOperationException("Moment 内容不能为空。");
-            var rawClient = Providers.CreateCurrentClient();
+            var rawClient = Providers.CreateCurrentClient(Emit);
             if (rawClient == null)
                 throw new InvalidOperationException(
                     "供应商「" + Providers.CurrentId + "」还没有 API Key，先在「大脑 · LLM」里填上再开口。");
@@ -822,7 +822,7 @@ namespace TraceSoul2.Host
         {
             if (AutomaticWorkPaused) return;
             if (!Store.LoadPairIdentity().IsComplete) return;
-            var rawClient = Providers.CreateCurrentClient();
+            var rawClient = Providers.CreateCurrentClient(Emit);
             if (rawClient == null)
             {
                 Providers.Protection.Report("dialogue", "对话处理", new InvalidOperationException("模型 API Key 尚未填写"));
@@ -844,7 +844,7 @@ namespace TraceSoul2.Host
                         : Math.Max(0, DateTimeOffset.UtcNow.ToUnixTimeMilliseconds() - source.OccurredUnixMs);
                     EmitTiming(source.TraceId, "后台收件箱取出",
                         detail: "queue=" + queueMs + " ms｜lock=" + lockTimer.ElapsedMilliseconds + " ms");
-                    var client = new TimedLlmClient(rawClient, source.TraceId, Emit);
+                    var client = new TimedLlmClient(Providers.CreateCurrentClient(Emit), source.TraceId, Emit);
                     var chat = new KernelLogic(Store, client, Plugins);
                     var result = await chat.ProcessPluginEventAsync(
                         string.IsNullOrWhiteSpace(source.ConversationId)
@@ -888,7 +888,7 @@ namespace TraceSoul2.Host
                 NightResidueLogic.Remember(Store, dayKey, decision.RememberStatus);
             if (!decision.ShouldSpeak) return;
 
-            var rawClient = Providers.CreateCurrentClient();
+            var rawClient = Providers.CreateCurrentClient(Emit);
             if (rawClient == null)
             {
                 Emit("夜间余温：开口槽还没有 API Key，这一次先不留。");

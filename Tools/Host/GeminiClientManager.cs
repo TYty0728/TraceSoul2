@@ -26,6 +26,7 @@ namespace TraceSoul2.Host
         };
 
         private readonly DeepSeekConfigData config;
+        private readonly bool singleAttempt;
         private LlmUsageData lastUsage;
 
         private static readonly string LlmDumpDir =
@@ -43,8 +44,11 @@ namespace TraceSoul2.Host
 
         public LlmUsageData LastUsage { get { return lastUsage; } }
 
-        public GeminiClientManager(DeepSeekConfigData config)
+        public GeminiClientManager(DeepSeekConfigData config) : this(config, false) { }
+
+        public GeminiClientManager(DeepSeekConfigData config, bool singleAttempt)
         {
+            this.singleAttempt = singleAttempt;
             this.config = config ?? throw new ArgumentNullException("config");
             if (string.IsNullOrWhiteSpace(this.config.BaseUrl))
                 this.config.BaseUrl = "https://generativelanguage.googleapis.com/";
@@ -97,7 +101,7 @@ namespace TraceSoul2.Host
         {
             RequireKey();
             var diagnostics = new List<string>();
-            var attempts = 1 + config.EmptyContentRetries;
+            var attempts = singleAttempt ? 1 : 1 + config.EmptyContentRetries;
             var temperature = config.Temperature;
             var recitationTries = 0;
             var current = messages;
@@ -120,7 +124,7 @@ namespace TraceSoul2.Host
                         throw;
                     }
                     catch (Exception exception) when (
-                        totalRequests < 3 && transientRetry < Math.Min(2, config.TransientErrorRetries) &&
+                        !singleAttempt && totalRequests < 3 && transientRetry < Math.Min(2, config.TransientErrorRetries) &&
                         DeepSeekClientManager.IsRetryableProviderException(exception))
                     {
                         transientRetry++;
@@ -138,6 +142,7 @@ namespace TraceSoul2.Host
                 }
                 if (string.Equals(result.FinishReason, "RECITATION", StringComparison.OrdinalIgnoreCase))
                 {
+                    if (singleAttempt) throw new InvalidOperationException("Gemini 返回 RECITATION，已停止本次请求。");
                     recitationTries++;
                     if (temperature >= 2f || recitationTries > 8)
                         throw new InvalidOperationException("Gemini recitation 在提高温度后仍未解除。");

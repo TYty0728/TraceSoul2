@@ -148,8 +148,11 @@ internal static partial class Program
             fitTask.GetAwaiter().GetResult();
             using var fitJson = JsonDocument.Parse(JsonSerializer.Serialize(fitTask.GetType().GetProperty("Result").GetValue(fitTask), outputType, json));
             var fitCards = fitJson.RootElement.GetProperty("cards");
+            using var repairRequest = JsonDocument.Parse(fitting.Messages[1].Last().content);
+            Require(repairRequest.RootElement.GetProperty("targets")[0].GetProperty("previous_body_chars").GetInt32() == 745,
+                "补写请求携带实际超长字数，让模型可明确缩至目标篇幅");
             Require(fitting.Requests.Count == 2 && fitting.Messages[1][0].content.Contains("复盘未完成正文") &&
-                fitting.Messages[1].Last().content.Contains("max_chars") && !fitting.Requests[1].Contains("保持这张原文") &&
+                fitting.Messages[1].Last().content.Contains("previous_body_chars") && fitting.Messages[1].Last().content.Contains("max_chars") && !fitting.Requests[1].Contains("保持这张原文") &&
                 fitCards.GetArrayLength() == 2 && fitCards[0].GetProperty("body").GetString() == "收成这一份关系" &&
                 fitCards[1].GetProperty("body").GetString() == "保持这张原文",
                 "超出篇幅时按原任务重写完整摘要，不另起压缩，也不丢掉同批有效卡");

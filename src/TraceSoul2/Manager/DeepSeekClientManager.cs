@@ -28,6 +28,7 @@ namespace TraceSoul2.Manager
         };
 
         private readonly DeepSeekConfigData config;
+        private readonly bool singleAttempt;
         private LlmUsageData lastUsage;
 
         /// <summary>按需 LLM 原文导出：设置 TRACESOUL2_LLM_DUMP_DIR 后，每次调用把请求/响应原文落盘（不含 API Key）。</summary>
@@ -56,9 +57,12 @@ namespace TraceSoul2.Manager
         /// <summary>只读快照，供 Kimi 策略包识别官网渠道。</summary>
         public DeepSeekConfigData ConfigSnapshot { get { return config; } }
 
-        public DeepSeekClientManager(DeepSeekConfigData config)
+        public DeepSeekClientManager(DeepSeekConfigData config) : this(config, false) { }
+
+        public DeepSeekClientManager(DeepSeekConfigData config, bool singleAttempt)
         {
             this.config = config ?? throw new ArgumentNullException("config");
+            this.singleAttempt = singleAttempt;
             NormalizeConfig(this.config);
         }
 
@@ -262,7 +266,7 @@ namespace TraceSoul2.Manager
             // OpenCode 等中转站还会在 json_object 上直接 500 / Internal server error，
             // 那种失败原先会整轮炸掉，这里用同一次额度再打一枪，并摘掉 response_format。
             var diagnostics = new List<string>();
-            var attempts = 1 + config.EmptyContentRetries;
+            var attempts = singleAttempt ? 1 : 1 + config.EmptyContentRetries;
             var current = messages;
             var useJsonResponseFormat = json;
             var totalRequests = 0;
@@ -288,7 +292,7 @@ namespace TraceSoul2.Manager
                         throw;
                     }
                     catch (Exception exception) when (
-                        totalRequests < 3 && transientRetry < Math.Min(2, config.TransientErrorRetries) &&
+                        !singleAttempt && totalRequests < 3 && transientRetry < Math.Min(2, config.TransientErrorRetries) &&
                         IsRetryableProviderException(exception))
                     {
                         transientRetry++;
@@ -345,7 +349,7 @@ namespace TraceSoul2.Manager
             }
             catch (InvalidOperationException exception)
             {
-                if (Math.Abs(temperature - 1f) > 0.001f &&
+                if (!singleAttempt && Math.Abs(temperature - 1f) > 0.001f &&
                     !System.Text.RegularExpressions.Regex.IsMatch(exception.Message ?? string.Empty,
                         @"(?:API|HTTP)\s*(401|402|403|404)\b", System.Text.RegularExpressions.RegexOptions.IgnoreCase) &&
                     LooksLikeUnitTemperatureOnly(exception.Message))

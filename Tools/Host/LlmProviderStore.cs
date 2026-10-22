@@ -48,6 +48,58 @@ namespace TraceSoul2.Host
             lock (gate) return data.providers.Select(Clone).ToList();
         }
 
+        public MainModelFallbackSettings MainFallbacks()
+        {
+            lock (gate) return new MainModelFallbackSettings {
+                secondary = CloneSlot(data.mainFallbacks?.secondary), tertiary = CloneSlot(data.mainFallbacks?.tertiary) };
+        }
+
+        public MainModelFallbackSettings SetMainFallbacks(MainModelFallbackSettings settings)
+        {
+            if (settings == null) throw new ArgumentException("备用模型配置不能为空。");
+            lock (gate)
+            {
+                var next = new MainModelFallbackSettings {
+                    secondary = ValidateMainFallback(settings.secondary), tertiary = ValidateMainFallback(settings.tertiary) };
+                ValidateMainRoute(FindChat(), null, next);
+                data.mainFallbacks = next;
+                SaveUnsafe();
+                return MainFallbacks();
+            }
+        }
+
+        private LlmSlotRef ValidateMainFallback(LlmSlotRef slot)
+        {
+            if (string.IsNullOrWhiteSpace(slot?.providerId)) return new LlmSlotRef();
+            var provider = Find(slot.providerId);
+            var model = string.IsNullOrWhiteSpace(slot.model) ? provider?.model : slot.model.Trim();
+            if (!CanUseMainModel(provider, model))
+                throw new ArgumentException("备用通道必须选择已配置密钥、已启用的聊天模型。");
+            return new LlmSlotRef { providerId = provider.id, model = model };
+        }
+
+        private static bool CanUseMainModel(LlmProviderRecord provider, string model)
+            => provider != null && LlmProviderCatalog.IsChat(provider.type) && !string.IsNullOrWhiteSpace(provider.apiKey) &&
+               !string.IsNullOrWhiteSpace(model) && provider.models.Any(m => m.enabled && m.id == model &&
+                   (m.roles == null || m.roles.Count == 0 || m.roles.Contains("chat") ||
+                    !m.roles.Any(r => r == "speech" || r == "image")));
+
+        private static string MainRouteKey(LlmProviderRecord provider, string model)
+            => (provider.baseUrl ?? "").Trim().TrimEnd('/').ToLowerInvariant() + "\n" + model;
+
+        private void ValidateMainRoute(LlmProviderRecord primary, string model, MainModelFallbackSettings settings)
+        {
+            var seen = new HashSet<string>(StringComparer.Ordinal);
+            if (primary != null) seen.Add(MainRouteKey(primary, string.IsNullOrWhiteSpace(model) ? primary.model : model.Trim()));
+            foreach (var slot in new[] { settings?.secondary, settings?.tertiary })
+            {
+                if (string.IsNullOrWhiteSpace(slot?.providerId)) continue;
+                var provider = Find(slot.providerId);
+                if (provider != null && !seen.Add(MainRouteKey(provider, slot.model)))
+                    throw new ArgumentException("主模型、二级和三级备用不能重复使用同一接口的同一模型，请先调整备用顺序。");
+            }
+        }
+
         public LlmProviderRecord Get(string id)
         {
             lock (gate)
@@ -162,14 +214,14 @@ namespace TraceSoul2.Host
                     if (incoming.baseUrl != null) item.baseUrl = incoming.baseUrl.Trim();
                     DecisionsClient.ValidateConfiguration(item);
                     if (string.Equals(data.currentId, id, StringComparison.OrdinalIgnoreCase) ||
-                        new[] { data.review, data.multimodal, data.image, data.speech }.Any(s =>
+                        new[] { data.review, data.multimodal, data.image, data.speech, data.mainFallbacks?.secondary, data.mainFallbacks?.tertiary }.Any(s =>
                             string.Equals(s?.providerId, id, StringComparison.OrdinalIgnoreCase)))
                         throw new InvalidOperationException("请先将该供应商从主模型及非 JEV 槽移除，再改为 Decisions 协议。");
                 }
                 if (LlmProviderCatalog.IsTts(item.type))
                 {
                     if (string.Equals(data.currentId, id, StringComparison.OrdinalIgnoreCase) ||
-                        new[] { data.jev, data.review, data.multimodal, data.image }.Any(s =>
+                        new[] { data.jev, data.review, data.multimodal, data.image, data.mainFallbacks?.secondary, data.mainFallbacks?.tertiary }.Any(s =>
                             string.Equals(s?.providerId, id, StringComparison.OrdinalIgnoreCase)))
                         throw new InvalidOperationException("请先从非语音用途槽移除此供应商，再改为TTS协议。");
                     if (string.IsNullOrWhiteSpace(item.voice)) item.voice = "character";
@@ -244,6 +296,8 @@ namespace TraceSoul2.Host
                 ClearSlotIf(data.multimodal, item.id);
                 ClearSlotIf(data.image, item.id);
                 ClearSlotIf(data.speech, item.id);
+                ClearSlotIf(data.mainFallbacks?.secondary, item.id);
+                ClearSlotIf(data.mainFallbacks?.tertiary, item.id);
                 SaveUnsafe();
                 return Clone(data.providers[0]);
             }
@@ -257,6 +311,7 @@ namespace TraceSoul2.Host
                 if (item == null) throw new InvalidOperationException("没有这个语言模型提供商：" + id);
                 if (LlmProviderCatalog.IsDecisions(item.type)) throw new InvalidOperationException("Decisions 模型只能用于 JEV，不能设为聊天主模型。");
                 if (LlmProviderCatalog.IsTts(item.type)) throw new InvalidOperationException("千问TTS只能用于语音，不能设为聊天主模型。");
+                ValidateMainRoute(item, model, data.mainFallbacks);
                 data.currentId = item.id;
                 if (!string.IsNullOrWhiteSpace(model))
                 {
@@ -375,6 +430,8 @@ namespace TraceSoul2.Host
                 DropSlotModel(data.multimodal, id, modelId);
                 DropSlotModel(data.image, id, modelId);
                 DropSlotModel(data.speech, id, modelId);
+                DropSlotModel(data.mainFallbacks?.secondary, id, modelId);
+                DropSlotModel(data.mainFallbacks?.tertiary, id, modelId);
                 SaveUnsafe();
                 return Clone(item);
             }
@@ -406,12 +463,34 @@ namespace TraceSoul2.Host
             }
         }
 
-        public ILlmClient CreateCurrentClient()
+        public ILlmClient CreateCurrentClient(Action<string> log = null)
         {
             lock (gate)
             {
-                // ThinkingEnabled controls this model's reasoning, never another provider's route.
-                return CreateClient(data.currentId, null, null);
+                var backups = new[] { data.mainFallbacks?.secondary, data.mainFallbacks?.tertiary };
+                if (!backups.Any(s => !string.IsNullOrWhiteSpace(s?.providerId)))
+                    return CreateClient(data.currentId, null, null);
+                var primary = FindChat();
+                var slots = new[] { new LlmSlotRef { providerId = primary?.id, model = primary?.model } }.Concat(backups);
+                var clients = new List<ILlmClient>();
+                var seen = new HashSet<string>(StringComparer.Ordinal);
+                foreach (var slot in slots)
+                {
+                    if (string.IsNullOrWhiteSpace(slot?.providerId)) continue;
+                    var item = Find(slot.providerId);
+                    if (!CanUseMainModel(item, slot.model))
+                    {
+                        log?.Invoke("主模型路由跳过未配置或已停用的通道：" + slot.providerId);
+                        continue;
+                    }
+                    if (!seen.Add(MainRouteKey(item, slot.model))) continue;
+                    var config = ToConfig(item, slot.model, null);
+                    clients.Add(LlmProviderCatalog.IsGeminiNative(item.type)
+                        ? new GeminiClientManager(config, singleAttempt: true)
+                        : new DeepSeekClientManager(config, singleAttempt: true));
+                }
+                // Only an exhausted route becomes a persistent error; a recovered request is successful.
+                return clients.Count == 0 ? null : new ProtectedLlmClient(new MainModelFallbackClient(clients, log), Protection);
             }
         }
 
@@ -902,6 +981,7 @@ namespace TraceSoul2.Host
         private sealed class FileData
         {
             public string currentId { get; set; }
+            public MainModelFallbackSettings mainFallbacks { get; set; }
             public bool localVoiceImported { get; set; }
             [System.Text.Json.Serialization.JsonIgnore(Condition = System.Text.Json.Serialization.JsonIgnoreCondition.WhenWritingNull)]
             public LlmSlotRef thinking { get; set; }
@@ -919,6 +999,12 @@ namespace TraceSoul2.Host
     {
         public string providerId { get; set; }
         public string model { get; set; }
+    }
+
+    public sealed class MainModelFallbackSettings
+    {
+        public LlmSlotRef secondary { get; set; }
+        public LlmSlotRef tertiary { get; set; }
     }
 
     public sealed class LlmModelEntry

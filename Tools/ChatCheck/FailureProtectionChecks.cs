@@ -17,6 +17,7 @@ internal static partial class Program
 {
     private static async Task RunFailureProtectionChecksAsync()
     {
+        await RunMainModelFallbackChecksAsync();
         var directory = Path.Combine(Path.GetTempPath(), "tracesoul-failure-check-" + Guid.NewGuid().ToString("N"));
         Directory.CreateDirectory(directory);
         try

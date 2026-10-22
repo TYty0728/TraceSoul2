@@ -20,6 +20,7 @@ internal static partial class Program
     private static void Main(string[] args)
     {
         SQLitePCL.Batteries_V2.Init();
+        if (args.Contains("--main-fallback")) { RunMainModelFallbackChecksAsync().GetAwaiter().GetResult(); return; }
         if (TraceSoul2.Host.BackupArchiveService.TryRunSnapshotWorker(args, out var snapshotExit))
         { Environment.ExitCode = snapshotExit; return; }
         if (args.Length == 2 && args[0] == "--backup-lock-peer")

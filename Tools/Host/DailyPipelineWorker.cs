@@ -226,7 +226,7 @@ namespace TraceSoul2.Host
                 if (state.Status == "pending")
                 {
                     runtime.Emit(dayKey + "：" + state.Error + "。已保存检查点，不自动重试。");
-                    return 0;
+                    // Core memories are complete. Pending prose must not suppress the independent night opportunity.
                 }
             }
             catch (Exception error)

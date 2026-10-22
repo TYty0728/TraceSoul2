@@ -69,7 +69,7 @@ namespace TraceSoul2.Host
                     : await inner.CompleteTextAsync(messages, cancellationToken, promptCacheKey);
                 var usage = FormatUsage();
                 Write("LLM#" + number + " 请求完成｜耗时 " + timer.ElapsedMilliseconds +
-                      " ms｜chars=" + (result == null ? 0 : result.Length) +
+                      " ms｜" + ProviderId + "/" + Model + "｜chars=" + (result == null ? 0 : result.Length) +
                       (string.IsNullOrWhiteSpace(usage) ? string.Empty : "｜" + usage));
                 return result;
             }

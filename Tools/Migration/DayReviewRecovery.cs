@@ -170,6 +170,8 @@ namespace TraceSoul2.Migrate
                     targets = new[] { new { id,
                         target_chars = id == "inner_narrative" ? 80 : IdentityCardSlotValues.BodyTarget(id),
                         max_chars = id == "inner_narrative" ? 120 : IdentityCardSlotValues.BodyLimit(id),
+                        previous_body_chars = id == "inner_narrative" ? state.Output.inner_narrative.Trim().Length
+                            : state.Output.cards.Single(x => x.slot == id).body.Length,
                         current = id == "inner_narrative" ? "" : cards.FirstOrDefault(x => x.Slot == id)?.Body } },
                     cognitions = evidence,
                     dayReview = id == "inner_narrative"
@@ -180,6 +182,8 @@ namespace TraceSoul2.Migrate
                 var raw = await llm.CompleteJsonAsync(new List<DeepSeekMessageData> {
                     new("system", "【复盘未完成正文】本次只有一个任务：为targets中唯一的id重新写完整正文。原草稿超过篇幅，不回传草稿。" +
                         "身份正文根据对应认知综合当前认识，承接仍有效的旧理解；篇幅见target_chars/max_chars。" +
+                        "previous_body_chars是上次未通过的实际字数。请以target_chars为写作目标，远离max_chars上限；" +
+                        "标点、空格和换行也计入长度。旧正文只供理解，不逐段保留或逐条复述认知，合并重复意思，保留关键认识及适用条件。" +
                         "inner_narrative写当天留下的感受。其他已完成字段由程序保留，来源引用由程序保持。" +
                         "严格按output_example结构输出JSON，items恰好一项，id照抄本次目标，body写完整正文，不添加其他id。"),
                     new("user", TraceJson.ToJson(request)) }, CancellationToken.None);

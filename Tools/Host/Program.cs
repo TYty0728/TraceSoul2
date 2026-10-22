@@ -625,6 +625,18 @@ app.MapGet("/providers", (SoulRuntime runtime) =>
 
 app.MapGet("/providers/slots", (SoulRuntime runtime) => Results.Json(runtime.PublicSlots()));
 
+app.MapGet("/providers/main-fallbacks", (SoulRuntime runtime) => Results.Json(runtime.Providers.MainFallbacks()));
+app.MapPut("/providers/main-fallbacks", (SoulRuntime runtime, MainModelFallbackSettings body) =>
+{
+    try
+    {
+        var settings = runtime.Providers.SetMainFallbacks(body);
+        runtime.Emit("主模型备用顺序已保存，下次对话或主动联系生效。");
+        return Results.Json(settings);
+    }
+    catch (ArgumentException error) { return Results.BadRequest(new { error = error.Message }); }
+});
+
 app.MapGet("/providers/review-settings", (SoulRuntime runtime) =>
     Results.Json(new { temperature = runtime.Providers.ReviewTemperature }));
 

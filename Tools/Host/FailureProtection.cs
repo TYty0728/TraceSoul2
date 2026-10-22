@@ -145,6 +145,7 @@ namespace TraceSoul2.Host
 
         public static string SafeReason(Exception error)
         {
+            if (error is MainModelFallbackException) return "主模型及已配置备用通道均失败，详情请查看后台日志";
             var message = error?.Message ?? "";
             if (message.Contains("缺少来源校验检查点", StringComparison.Ordinal) ||
                 message.Contains("已有细节缺少来源检查点", StringComparison.Ordinal))
@@ -176,6 +177,7 @@ namespace TraceSoul2.Host
                 (message.Contains("输出", StringComparison.Ordinal) && message.Contains("缺少", StringComparison.Ordinal)))
                 return "模型输出格式或必填字段校验失败";
             // 不把上游正文、Key、URL、提示词或私聊内容转发给 QQ。
+            if (error?.InnerException != null) return SafeReason(error.InnerException);
             return "任务执行或模型输出校验失败，详情请查看后台日志";
         }
     }
