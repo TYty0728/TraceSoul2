@@ -22,6 +22,20 @@ namespace TraceSoul2.Host
     {
         public const string DefaultConversationId = "tracesoul2";
 
+        public async Task<IdentityReorganizationLogic.Draft> ApplyIdentityReorganizationAsync(string slot, string id, CancellationToken token)
+        {
+            await gate.WaitAsync(token);
+            try
+            {
+                using var maintenanceStore = new SqliteMemoryManager(Path.Combine(DataDirectory, "tracesoul2-brainframe.sqlite3"));
+                var result = IdentityReorganizationLogic.Apply(maintenanceStore, ConversationId, slot, id);
+                RebuildOntology();
+                Emit("身份重整已写回同一主体：" + slot + "。关联日构建可继续收尾。");
+                return result;
+            }
+            finally { gate.Release(); }
+        }
+
         private readonly SemaphoreSlim gate = new SemaphoreSlim(1, 1);
         private readonly Channel<KernelLogic.DeferredTurnWork> deferredTurns =
             Channel.CreateUnbounded<KernelLogic.DeferredTurnWork>(new UnboundedChannelOptions

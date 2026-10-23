@@ -20,6 +20,7 @@ using Microsoft.AspNetCore.Mvc;
 using Microsoft.AspNetCore.Server.Kestrel.Core;
 using Microsoft.Extensions.DependencyInjection;
 using Microsoft.Extensions.Hosting;
+using TraceSoul2.Util;
 using TraceSoul2.Data;
 using TraceSoul2.Host;
 using TraceSoul2.Logic;
@@ -160,6 +161,8 @@ builder.Services.AddHostedService<FailureNotificationWorker>();
 builder.Services.AddHostedService<WxxzDeviceControlWorker>();
 builder.Services.AddSingleton<DailyPipelineWorker>();
 builder.Services.AddHostedService(sp => sp.GetRequiredService<DailyPipelineWorker>());
+builder.Services.AddSingleton<IdentityReorganizationService>();
+builder.Services.AddHostedService(sp => sp.GetRequiredService<IdentityReorganizationService>());
 builder.Services.AddSingleton(sp => new BackupArchiveService(home, async (action, token) =>
 {
     using (await sp.GetRequiredService<DailyPipelineWorker>().HoldForArchiveAsync(token))
@@ -303,6 +306,25 @@ app.MapPost("/databases/create", (DatabaseCreateRequest body) =>
     var target = databaseSwitch.Create(body.name);
     RestartHost(target);
     return Results.Json(new { switching = true, target, message = "新数据库已创建，宿主正在切换（新库没有 API Key，请在「大脑」页填写）。" });
+});
+
+app.MapGet("/identity/reorganization/{slot}", (string slot, IdentityReorganizationService service) =>
+{
+    try { return Results.Content(TraceJson.ToJson(service.Status(slot)), "application/json"); }
+    catch (ArgumentException error) { return Results.BadRequest(new { error = error.Message }); }
+});
+app.MapPost("/identity/reorganization/{slot}", (string slot, IdentityReorganizationWrite body, IdentityReorganizationService service) =>
+{
+    try { service.Start(slot, body.day, body.restart); return Results.Accepted(value: new { started = true }); }
+    catch (Exception error) when (error is ArgumentException or InvalidOperationException)
+    { return Results.BadRequest(new { error = error.Message }); }
+});
+app.MapPost("/identity/reorganization/{slot}/apply", async (string slot, IdentityReorganizationWrite body,
+    IdentityReorganizationService service, CancellationToken token) =>
+{
+    try { return Results.Content(TraceJson.ToJson(await service.ApplyAsync(slot, body.id, token)), "application/json"); }
+    catch (Exception error) when (error is ArgumentException or InvalidOperationException)
+    { return Results.Conflict(new { error = error.Message }); }
 });
 
 app.MapGet("/identity/cards", (SoulRuntime runtime) =>
@@ -1553,3 +1575,5 @@ internal sealed class IdentityPolicyWrite
     public bool shared { get; set; }
     public bool pinned { get; set; }
 }
+
+public sealed class IdentityReorganizationWrite { public string day { get; set; } public bool restart { get; set; } public string id { get; set; } }

@@ -111,6 +111,28 @@ namespace TraceSoul2.Migrate
             var json = context.Store.LoadPluginDocument(RecoveryDocuments, "identity:" + day);
             if (string.IsNullOrEmpty(json)) return null;
             var state = TraceJson.FromJson<ReviewCheckpoint>(json);
+            // Explicitly accepted reorganization can finish an overlong card without replaying the day.
+            foreach (var slot in IdentityReorganizationLogic.Slots)
+            {
+                var receipt = PuzzleViewLogic.Read<IdentityReorganizationLogic.Draft>(context.Store.LoadPluginDocument(
+                    IdentityReorganizationLogic.StoreId, "receipt:" + day + ":" + slot));
+                var card = cards.FirstOrDefault(x => x.Slot == slot);
+                var pendingCard = state.Output.cards.FirstOrDefault(x => x.slot == slot && x.body.Length > IdentityCardSlotValues.BodyLimit(slot));
+                if (receipt?.status != "applied" || receipt.root != MigrationContext.ConversationId || receipt.day != day ||
+                    receipt.recoveryHash != Digest(json) || receipt.previousReviewStamp != state.Stamp || pendingCard == null || card == null ||
+                    receipt.appliedCardStamp != PuzzleViewLogic.Stamp(card) || !IdentityProjectionLogic.Current(card, nodes) ||
+                    receipt.graphStamp != IdentityReorganizationLogic.GraphStamp(context.Store) ||
+                    receipt.cardsStamp != Digest(context.Store.LoadIdentityCards(MigrationContext.ConversationId))) continue;
+                pendingCard.body = card.Body;
+                pendingCard.cognition_ids = receipt.proposal.cognition_ids;
+                state.Evidence = state.Evidence.Concat(nodes.Where(x => receipt.proposal.cognition_ids.Contains(x.Id)))
+                    .GroupBy(x => x.Id).Select(x => x.First()).ToList();
+                if (!state.Applied.Contains(slot)) state.Applied.Add(slot);
+                state.Stamp = ReviewStamp(context, day, cards, nodes);
+                state.StoredCardsStamp = Digest(context.Store.LoadIdentityCards(MigrationContext.ConversationId));
+                context.Store.SavePluginDocument(RecoveryDocuments, "identity:" + day, TraceJson.ToJson(state));
+                break;
+            }
             if (state.Stamp != ReviewStamp(context, day, cards, nodes) ||
                 state.StoredCardsStamp != Digest(context.Store.LoadIdentityCards(MigrationContext.ConversationId)))
             {

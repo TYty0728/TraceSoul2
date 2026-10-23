@@ -470,6 +470,25 @@ internal static partial class Program
             Require(innerOnly.Requests.Count == 2 && store.LoadPluginDocument("kernel.subject", "tracesoul2").Contains("独立整理的当天感受") &&
                 DailyBuildHistory.ReadStates(history).Single(x => x.DayKey == innerDay).Status == "done",
                 "单独内心补写通过版本校验后同步，正常完成");
+
+            const string reorganizationDay = "2020-08-30";
+            using (var db = new SQLite.SQLiteConnection(path)) db.Execute("UPDATE identity_cards SET Pinned=0 WHERE Slot='relation'");
+            Checkpoint(reorganizationDay, Seed(reorganizationDay));
+            Run(reorganizationDay, new AgentSequenceLlm(
+                TraceJson.ToJson(new { cards = new[] { new { slot = "relation", body = new string('长', 745), cognition_ids = new[] { "r" } } } }),
+                Repair(new string('长', 745))));
+            Require(DailyBuildHistory.ReadStates(history).Single(x => x.DayKey == reorganizationDay).Status == "pending", "重整前复现关系正文待整理");
+            using (var reorganizationStore = new SqliteMemoryManager(path))
+            {
+                var draft = IdentityReorganizationLogic.GenerateAsync(reorganizationStore, "tracesoul2", "relation", reorganizationDay,
+                    new AgentSequenceLlm(ReorganizationAssessment("r"), ReorganizationProposal("r")), System.Threading.CancellationToken.None).GetAwaiter().GetResult();
+                IdentityReorganizationLogic.Apply(reorganizationStore, "tracesoul2", "relation", draft.id);
+            }
+            var noCalls = new AgentSequenceLlm();
+            Run(reorganizationDay, noCalls);
+            Require(noCalls.Requests.Count == 0 && DailyBuildHistory.ReadStates(history).Single(x => x.DayKey == reorganizationDay).Status == "done" &&
+                store.LoadIdentityCards("tracesoul2").Single(x => x.Slot == "relation").Body.Contains("恢复连接"),
+                "实际Migration复用用户已采用的重整卡，不再调用旧正文补写，原日进度照常收尾");
         }
         finally { context?.Dispose(); Directory.Delete(directory, true); }
         Console.WriteLine("Day review recovery checks passed: partial commit, process restart, pending states, strict references, stale cards and day summaries.");

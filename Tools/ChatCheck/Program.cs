@@ -20,6 +20,7 @@ internal static partial class Program
     private static void Main(string[] args)
     {
         SQLitePCL.Batteries_V2.Init();
+        if (args.Contains("--identity-reorganization")) { RunIdentityReorganizationChecksAsync().GetAwaiter().GetResult(); return; }
         if (args.Contains("--main-fallback")) { RunMainModelFallbackChecksAsync().GetAwaiter().GetResult(); return; }
         if (TraceSoul2.Host.BackupArchiveService.TryRunSnapshotWorker(args, out var snapshotExit))
         { Environment.ExitCode = snapshotExit; return; }

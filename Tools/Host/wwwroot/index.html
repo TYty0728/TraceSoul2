@@ -789,6 +789,20 @@
           <div id="cardsBox"></div>
         </div>
         <div class="box">
+          <h2>重新形成身份认识</h2>
+          <p class="muted">使用复盘模型归并已有私密认知，再形成当前认识。生成候选会调用 API；候选与旧卡对照后由你写回。固定卡请先解除固定。原始经历与认知保留。</p>
+          <div class="row">
+            <div><label>身份卡</label><select id="identityReorgSlot" onchange="loadIdentityReorganization(true)"><option value="relation">我们的关系</option><option value="self">我是谁</option><option value="other">对你的认识</option><option value="expression_habit">表达习惯</option></select></div>
+            <div><label>关联待整理日期（可选）</label><input type="date" id="identityReorgDay" /></div>
+            <div class="nogrow"><label>&nbsp;</label><button id="identityReorgStart" onclick="startIdentityReorganization(false)">生成 / 继续候选</button></div>
+            <div class="nogrow"><label>&nbsp;</label><button id="identityReorgRestart" onclick="startIdentityReorganization(true)">重新生成</button></div>
+          </div>
+          <p id="identityReorgStatus" class="muted"></p>
+          <div id="identityReorgPreview"></div>
+          <button id="identityReorgApply" class="primary" hidden onclick="applyIdentityReorganization()">采用候选，写回此身份卡</button>
+          <p class="muted">写回后，到记忆页续做关联日期即可收尾；已接受的身份卡会被复用。正文待整理不会自动触发重整。</p>
+        </div>
+        <div class="box">
           <h2>在场环境</h2>
           <p class="muted">只有你和他单独相处时才是私密。其他人的单独聊天、群聊以及身份未确认的交流，都按公开处理。本控制台是你的私密入口。</p>
           <label>你本人的 QQ 账号</label><input id="environmentOwnerQq" inputmode="numeric" placeholder="填写你的 QQ 号，不是机器人的 QQ 号" />
@@ -2546,12 +2560,59 @@
   }
 
   /* ================= 身份 ================= */
+  let identityReorgTimer = null, identityReorgDraft = null;
+  async function loadIdentityReorganization(resetDay = false) {
+    clearTimeout(identityReorgTimer);
+    const slot = $("identityReorgSlot").value;
+    try {
+      const state = await api("/identity/reorganization/" + slot);
+      if ($("identityReorgSlot").value !== slot) return;
+      identityReorgDraft = state.draft;
+      const d = state.draft;
+      if (resetDay || !$("identityReorgDay").value) $("identityReorgDay").value = d?.day || state.defaultDay || "";
+      const labels = { running: "正在形成候选", ready: "候选已生成，请查看对照", failed: "本次未完成，可继续", interrupted: "任务已中断，可继续", applied: "已写回，可到记忆页续做关联日期" };
+      $("identityReorgStatus").textContent = (state.busy ? "身份重整任务执行中。" : "") + (state.error ? state.error + " · " : "") + (d ? (labels[d.status] || d.status) + " · 归并 " + d.batchesDone + "/" + d.batchesTotal + " 批" + (d.error ? " · " + d.error : "") : "尚未生成候选。");
+      $("identityReorgStart").disabled = state.busy;
+      $("identityReorgRestart").disabled = state.busy;
+      $("identityReorgApply").hidden = state.busy || d?.status !== "ready";
+      const box = $("identityReorgPreview"); box.replaceChildren();
+      function text(title, value) {
+        const heading = document.createElement("h3"); heading.textContent = title;
+        const body = document.createElement("pre"); body.style.whiteSpace = "pre-wrap"; body.textContent = value || "（无）";
+        box.append(heading, body);
+      }
+      if (d) {
+        text("原身份卡", d.original);
+        if (d.proposal) { text("候选正文", d.proposal.body); text("认识发生了什么变化", d.proposal.change); text("正文依据", (d.proposal.cognition_ids || []).join("、")); }
+        if ((d.understandings || []).length) text("归并后的认识与边界", d.understandings.map((x, i) => (i + 1) + ". " + x.meaning + "\n条件：" + x.scope + "\n例外 / 反证：" + x.exceptions + "\n确定程度：" + x.certainty + "\n依据：" + x.cognition_ids.join("、")).join("\n\n"));
+        if ((d.details || []).length) text("保留在经历层的材料", d.details.map(x => x.id + "：" + x.reason).join("\n"));
+      }
+      if (state.busy) identityReorgTimer = setTimeout(() => loadIdentityReorganization(), 2000);
+    } catch (e) { $("identityReorgStatus").textContent = e.message; }
+  }
+  async function startIdentityReorganization(restart) {
+    $("identityReorgStart").disabled = true; $("identityReorgRestart").disabled = true;
+    try { await api("/identity/reorganization/" + $("identityReorgSlot").value, "POST", { day: $("identityReorgDay").value, restart }); }
+    catch (e) { alert(e.message); }
+    await loadIdentityReorganization();
+  }
+  async function applyIdentityReorganization() {
+    if (!identityReorgDraft || identityReorgDraft.status !== "ready") return;
+    $("identityReorgApply").disabled = true;
+    try {
+      await api("/identity/reorganization/" + identityReorgDraft.slot + "/apply", "POST", { id: identityReorgDraft.id });
+      renderCards(await api("/identity/cards"));
+      await loadIdentityReorganization();
+    } catch (e) { alert(e.message); }
+    finally { $("identityReorgApply").disabled = false; }
+  }
   let environmentSettings = { ownerAccounts: [], publicIdentity: "" };
   async function loadIdentity() {
     const st = await api("/status");
     $("username").value = st.username || "";
     $("assname").value = st.assname || "";
     renderCards(await api("/identity/cards"));
+    await loadIdentityReorganization();
     renderIdentityPuzzle(await api("/identity/puzzle"));
     environmentSettings = await api("/environment/settings");
     $("environmentOwnerQq").value = (environmentSettings.ownerAccounts || []).find(x => x.platformId === "builtin.onebot")?.userId || "";
