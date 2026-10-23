@@ -144,8 +144,10 @@ internal static partial class Program
             var classification = new SelectionProbeLlm { Reply = messages => {
                 using var json = System.Text.Json.JsonDocument.Parse(messages.Last().content);
                 if (messages[0].content.Contains("全局归并"))
-                    return ReorganizationAssessment(json.RootElement.GetProperty("understandings").EnumerateArray()
-                        .SelectMany(x => x.GetProperty("cognition_ids").EnumerateArray()).Select(x => x.GetString()).ToArray());
+                    return TraceJson.ToJson(new { groups = new[] { json.RootElement.GetProperty("understandings").EnumerateArray()
+                        .Select(x => x.GetProperty("index").GetInt32()).ToArray() } });
+                if (messages[0].content.Contains("单组认识成稿"))
+                    return TraceJson.ToJson(new { meaning = "当前关系理解", scope = "必要条件", exceptions = "反证边界", certainty = "开放" });
                 if (messages[0].content.Contains("认识归并"))
                 {
                     var input = json.RootElement.GetProperty("cognitions").EnumerateArray().Select(x => x.GetProperty("Id").GetString()).ToList();
@@ -189,6 +191,120 @@ internal static partial class Program
             Require(rejected, "语义比较遗漏候选时不能提交原create兜底");
         }
         finally { Directory.Delete(directory, true); }
+        await RunIdentityGlobalGroupingChecksAsync();
         Console.WriteLine("Identity evolution passed: 30-day stability, growing evidence, paraphrase consolidation, real revision, counterevidence and no stale revival.");
+    }
+
+    private static async Task RunIdentityGlobalGroupingChecksAsync()
+    {
+        var directory = Path.Combine(Path.GetTempPath(), "identity-global-" + Guid.NewGuid().ToString("N"));
+        Directory.CreateDirectory(directory);
+        var path = Path.Combine(directory, "brain.db");
+        const string root = "tracesoul2", day = "2020-04-01", key = day + ":" + root + ":relation";
+        const int count = 160;
+        var originalBody = "";
+        try
+        {
+            using (var store = new SqliteMemoryManager(path))
+            {
+                store.SavePairIdentity("本人", "同伴", "称呼");
+                originalBody = store.LoadIdentityCards(root).Single(x => x.Slot == "relation").Body;
+                using (var db = new SQLite.SQLiteConnection(path))
+                    db.RunInTransaction(() => {
+                        for (var i = 0; i < count; i++)
+                            db.Insert(new CognitionSliceRecord { Id = "global-source-" + i.ToString("000"), Status = "active", IdentitySlot = "relation",
+                                Summary = "独立认识" + i + new string('知', 350), Scope = "双方能够回应时", Exceptions = "有反证时需保留边界",
+                                ContextConversationId = root, MemoryVisibility = "private" });
+                    });
+                var batchCalls = 0;
+                var legacy = new SelectionProbeLlm { Reply = messages => {
+                    if (messages[0].content.Contains("全局归并")) throw new IOException("模拟旧版全局输出失败，保留全部分批进度");
+                    batchCalls++;
+                    using var json = System.Text.Json.JsonDocument.Parse(messages.Last().content);
+                    return TraceJson.ToJson(new { understandings = json.RootElement.GetProperty("cognitions").EnumerateArray().Select(x => new {
+                        meaning = x.GetProperty("Summary").GetString(), scope = x.GetProperty("Scope").GetString(),
+                        exceptions = x.GetProperty("Exceptions").GetString(), certainty = "有条件成立", cognition_ids = new[] { x.GetProperty("Id").GetString() }
+                    }).ToArray(), details = Array.Empty<object>() });
+                } };
+                try { await IdentityEvolutionLogic.EvaluateAsync(store, root, "relation", day, legacy, CancellationToken.None); }
+                catch (IOException) { }
+                var saved = PuzzleViewLogic.Read<IdentityEvolutionLogic.State>(store.LoadPluginDocument(IdentityEvolutionLogic.StoreId, key));
+                Require(batchCalls > 1 && saved.batchesDone == batchCalls && saved.understandings.Count == count && !saved.globallyGrouped,
+                    "160项认识在全局失败前逐批保存，能够模拟旧版已有进度");
+                var oldJson = System.Text.Json.Nodes.JsonNode.Parse(TraceJson.ToJson(saved)).AsObject();
+                oldJson.Remove("globalPlan"); oldJson.Remove("globalResults");
+                store.SavePluginDocument(IdentityEvolutionLogic.StoreId, key, oldJson.ToJsonString());
+
+                var validGroups = new List<List<int>> { new() { 0, 80 }, new() { 1, 81 } };
+                validGroups.AddRange(Enumerable.Range(0, count).Except(new[] { 0, 1, 80, 81 }).Select(x => new List<int> { x }));
+                var invalidPlans = new[] {
+                    "{\"groups\":[[0",
+                    TraceJson.ToJson(new { groups = new[] { Enumerable.Range(0, count - 1).ToArray() } }),
+                    TraceJson.ToJson(new { groups = new[] { Enumerable.Range(0, count - 1).Append(0).ToArray() } }),
+                    TraceJson.ToJson(new { groups = new[] { Enumerable.Range(0, count - 1).Append(count).ToArray() } })
+                };
+                foreach (var reply in invalidPlans)
+                {
+                    var invalid = new AgentSequenceLlm(reply, reply); var rejected = false;
+                    try { await IdentityEvolutionLogic.EvaluateAsync(store, root, "relation", day, invalid, CancellationToken.None); }
+                    catch (InvalidOperationException) { rejected = true; }
+                    saved = PuzzleViewLogic.Read<IdentityEvolutionLogic.State>(store.LoadPluginDocument(IdentityEvolutionLogic.StoreId, key));
+                    Require(rejected && invalid.Requests.Count == 2 && invalid.Requests.All(x => x.Contains("全局归并")) &&
+                        saved.batchesDone == batchCalls && saved.globalPlan == null && saved.understandings.Count == count,
+                        "截断、遗漏、重复和越界编号最多纠正一次，不写坏计划或重做分批");
+                }
+                var merge = TraceJson.ToJson(new { meaning = "跨批同义认识归为一个当前理解", scope = "双方可以回应", exceptions = "忙碌时保留边界", certainty = "开放" });
+                var overlong = TraceJson.ToJson(new { meaning = "OVERSIZED_MERGE_SENTINEL" + new string('长', 1400), scope = "条件", exceptions = "反证", certainty = "开放" });
+                var interrupted = new AgentSequenceLlm(TraceJson.ToJson(new { groups = validGroups }), merge, overlong, overlong);
+                var failed = false;
+                try { await IdentityEvolutionLogic.EvaluateAsync(store, root, "relation", day, interrupted, CancellationToken.None); }
+                catch (InvalidOperationException) { failed = true; }
+                saved = PuzzleViewLogic.Read<IdentityEvolutionLogic.State>(store.LoadPluginDocument(IdentityEvolutionLogic.StoreId, key));
+                Require(failed && interrupted.Requests.Count == 4 && saved.globalPlan.groups.Count == count - 2 && saved.globalResults.Count == 1 &&
+                    saved.globalResults[0].cognition_ids.SequenceEqual(new[] { "global-source-000", "global-source-080" }) &&
+                    !interrupted.Requests[0].Contains("global-source-") && !interrupted.Requests[3].Contains("OVERSIZED_MERGE_SENTINEL") &&
+                    !saved.globallyGrouped && store.LoadIdentityCards(root).Single(x => x.Slot == "relation").Body == originalBody,
+                    "全局仅返回编号；仅合并项成稿，来源由程序完整带回；单组失败保留计划和已成稿项，纠正不携带长草稿");
+            }
+            using (var store = new SqliteMemoryManager(path))
+            {
+                var original = store.GetCognitionNodes(5000).Single(x => x.Id == "global-source-081").Summary;
+                var concurrent = new SelectionProbeLlm { Reply = _ => {
+                    using var db = new SQLite.SQLiteConnection(path);
+                    db.Execute("UPDATE cognition_slices SET Summary=? WHERE Id=?", "生成期间认识已变化", "global-source-081");
+                    return TraceJson.ToJson(new { meaning = "并发期间的旧候选", scope = "条件", exceptions = "反证", certainty = "开放" });
+                } };
+                var staleRejected = false;
+                try { await IdentityEvolutionLogic.EvaluateAsync(store, root, "relation", day, concurrent, CancellationToken.None); }
+                catch (InvalidOperationException) { staleRejected = true; }
+                using (var db = new SQLite.SQLiteConnection(path))
+                    db.Execute("UPDATE cognition_slices SET Summary=? WHERE Id=?", original, "global-source-081");
+                var protectedState = PuzzleViewLogic.Read<IdentityEvolutionLogic.State>(store.LoadPluginDocument(IdentityEvolutionLogic.StoreId, key));
+                Require(staleRejected && concurrent.Requests.Count == 1 && protectedState.globalResults.Count == 1 &&
+                    store.LoadIdentityCards(root).Single(x => x.Slot == "relation").Body == originalBody,
+                    "单组生成期间来源变化拒绝旧结果，已有进度和身份原卡不受影响");
+                var resumed = new AgentSequenceLlm(TraceJson.ToJson(new { meaning = "第二组的当前理解", scope = "明确的条件", exceptions = "保留反证", certainty = "开放" }),
+                    IdentityChangeReply("global-source-000", false));
+                var state = await IdentityEvolutionLogic.EvaluateAsync(store, root, "relation", day, resumed, CancellationToken.None);
+                Require(resumed.Requests.Count == 2 && resumed.Requests[0].Contains("单组认识成稿") && resumed.Requests[1].Contains("变化判断") &&
+                    state.globallyGrouped && state.understandings.Count == count - 2 && state.globalPlan == null && state.globalResults.Count == 0 &&
+                    state.understandings.SelectMany(x => x.cognition_ids).Distinct().Count() == count && state.understandings[2].meaning.StartsWith("独立认识2") &&
+                    store.GetCognitionNodes(5000).Count == count && store.LoadIdentityCards(root).Single(x => x.Slot == "relation").Body == originalBody,
+                    "跨实例续做只补未完成合并，全部来源守恒，单项原文直接保留，不重请求计划、旧批或合格合并");
+                var noCalls = new AgentSequenceLlm();
+                var repeated = await IdentityEvolutionLogic.EvaluateAsync(store, root, "relation", day, noCalls, CancellationToken.None);
+                Require(noCalls.Requests.Count == 0 && repeated.globallyGrouped, "已完成全局与变化判断恢复零请求");
+                repeated.globallyGrouped = false; repeated.decision = null;
+                repeated.globalPlan = new IdentityEvolutionLogic.GroupingPlan { groups = new() { Enumerable.Range(0, repeated.understandings.Count).ToList() } };
+                store.SavePluginDocument(IdentityEvolutionLogic.StoreId, key, TraceJson.ToJson(repeated));
+                var oneGroup = new AgentSequenceLlm(TraceJson.ToJson(new { meaning = "全部材料综合成同一当前理解", scope = "保留共同条件", exceptions = "保留完整反证边界", certainty = "开放" }),
+                    IdentityChangeReply("global-source-000", false));
+                var consolidated = await IdentityEvolutionLogic.EvaluateAsync(store, root, "relation", day, oneGroup, CancellationToken.None);
+                Require(oneGroup.Requests.Count == 2 && !oneGroup.Requests[0].Contains("global-source-") &&
+                    consolidated.understandings.Count == 1 && consolidated.understandings[0].cognition_ids.Count == count,
+                    "大组合并只生成一项认识，完整来源映射不占模型输出预算");
+            }
+        }
+        finally { Directory.Delete(directory, true); }
     }
 }
