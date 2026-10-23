@@ -6,7 +6,9 @@
 - 分批归并保存检查点，失败可继续；采用核对来源与版本，以事务保存派生身份、原卡历史与采用记录。可关联待整理日期，日构建复用已采用的新卡收尾，避免再次请求超长草稿。
 - 这是独立的人工重整入口；普通夜间身份复盘仍使用原有流程。完整机制与使用方法见[身份重整](IDENTITY_REORGANIZATION.md)。
 
-产品0.1.63，PluginApi1.16.0与官方插件版本不变。未调用正式模型、改写阿循资料或部署服务器；本地Release全解决方案（24项既有相机测试类型冲突警告）、完整ChatCheck/Prompt、实际Migration、临时Host、页面与发布隐私检查通过；公开发布待核对。
+产品0.1.63，PluginApi1.16.0与官方插件版本不变。未调用正式模型、改写阿循资料或部署服务器；本地Release全解决方案（24项既有相机测试类型冲突警告）、完整ChatCheck/Prompt、实际Migration、临时Host、页面与发布隐私检查通过；公开发布验收通过。
+
+发布确认：[v0.1.63](https://github.com/TYty0728/TraceSoul2/releases/tag/v0.1.63)／源码1255a5c已公开，[发布CI39891740299](https://github.com/TYty0728/TraceSoul2/actions/runs/39891740299)完整回归、Docker升级/数据保留、源码镜像启动与三平台打包全部通过。匿名latest=v0.1.63，三ZIP与SDK1.16.0公开HEAD200，SHA-256与GitHub digest一致；范围读取三包确认身份重整服务/页面、复盘采用记录衔接、版本及通用模板，无运行资料。未完整下载三包、部署服务器、调用正式模型或写回阿循资料。win-x64 `d7f0386ea334a701f930151d933d0cb6abdc5e9ec5996c2f3231852bd1bc6e31`； linux-x64 `c9da654eca90585bc752ee41adbeb83f1db94d62f3fe038c3fbb367f5d23f2bb`； linux-arm64 `f2ea351fd22502521d26bd657ce12d0d770db956f10721d311fae21b56017208`；
 
 ## 0.1.62（2026-10-23）
 
