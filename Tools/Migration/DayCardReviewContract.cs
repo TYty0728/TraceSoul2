@@ -101,6 +101,29 @@ namespace TraceSoul2.Migrate
             var narrative = (output.inner_narrative ?? string.Empty).Trim();
             if (checkLength && narrative.Length > 120)
                 return "$.inner_narrative 当前" + narrative.Length + "字，最多120字。按原篇幅重新写下。上一份太长，不要交回上一份。";
+            return InnerStateError(output);
+        }
+
+        public static string InnerStateError(ReplayPrompts.DayCardReviewOutputData output)
+        {
+            if (output == null) return "日终内心须为对象。";
+            foreach (var field in new[] { ("inner_mood", output.inner_mood, 80),
+                ("inner_relationship_lens", output.inner_relationship_lens, 200),
+                ("inner_ongoing_activity", output.inner_ongoing_activity, 120) })
+                if ((field.Item2?.Trim().Length ?? 0) > field.Item3)
+                    return field.Item1 + "当前" + field.Item2.Trim().Length + "字，最多" + field.Item3 + "字；只写当日变化，不逐条续接旧经历。";
+            if (output.inner_attention == null || output.inner_attention.Count > 3)
+                return "inner_attention须为最多3项的数组；无关注给[]。";
+            foreach (var item in output.inner_attention)
+            {
+                if (item == null || !new[] { "topic", "activity", "concern" }.Contains(item.kind) || string.IsNullOrWhiteSpace(item.content))
+                    return "inner_attention每项须有合法kind和非空content。";
+                if (item.content.Trim().Length > 160)
+                    return "inner_attention.content当前" + item.content.Trim().Length + "字，最多160字；只保留一个浮起的念头。";
+                if ((item.source_refs?.Count ?? 0) > 0) return "inner_attention不自填source_refs；真实来源由程序绑定。";
+            }
+            if (output.inner_attention.Select(x => x.content.Trim()).Distinct(StringComparer.Ordinal).Count() != output.inner_attention.Count)
+                return "inner_attention同一念头只留一项。";
             return null;
         }
 

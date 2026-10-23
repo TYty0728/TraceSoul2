@@ -166,13 +166,14 @@ namespace TraceSoul2.Migrate
                 var dayKindLabel = TimeLanguage.DayKindLabel(anchor);
 
                 var prompt = ReplayPrompts.BuildEventObservationPrompt(
-                    pair, chunk, route, indexCandidates, recentTags, periodLabel, dayKindLabel);
+                    pair, chunk, route, indexCandidates, recentTags, periodLabel, dayKindLabel,
+                    context.Migration.GetEntriesByIndexIds(indexCandidates.Select(x => x.Id).ToList()));
                 var messages = new List<DeepSeekMessageData>
                 {
                     new DeepSeekMessageData("system", prompt),
                     new DeepSeekMessageData("user", CorePrompts.Migration.ObserveUser)
                 };
-                var output = await CompleteObservationAsync(context, llm, progress, observationKey, observation, messages);
+                var output = await CompleteObservationAsync(context, llm, progress, observationKey, observation, messages, chunk, indexCandidates);
                 observationCalls++;
                 var batchIndexes = new List<EventIndexRecord>();
                 var batchEntries = new List<EventEntryRecord>();
@@ -206,6 +207,8 @@ namespace TraceSoul2.Migrate
                     foreach (var write in output.event_writes ?? new List<ReplayPrompts.EventWriteItemData>())
                     {
                         if (write == null || string.IsNullOrWhiteSpace(write.event_summary)) continue;
+                        var eventSources = observation.SourceVersion == 0 ? chunk : ResolveEventSources(write.source_moment_ids, chunk);
+                        var eventTime = DateTimeOffset.FromUnixTimeMilliseconds(eventSources[0].CreatedUnixMs).ToOffset(MigrationContext.ChinaOffset);
                         var tagIds = ResolveTagIds(write.tag_ids, write.new_tag_names, tagAliases, tagByLabel);
                         if (tagIds.Count == 0)
                         {
@@ -216,14 +219,14 @@ namespace TraceSoul2.Migrate
                         {
                             Id = Guid.NewGuid().ToString("N"),
                             TagIds = string.Join(",", tagIds),
-                            TimeLabel = periodLabel,
-                            DayKindLabel = dayKindLabel,
-                            TimeUnixMs = anchor.ToUnixTimeMilliseconds(),
+                            TimeLabel = TimeLanguage.PeriodZh(TimeLanguage.PeriodOf(eventTime)),
+                            DayKindLabel = TimeLanguage.DayKindLabel(eventTime),
+                            TimeUnixMs = eventTime.ToUnixTimeMilliseconds(),
                             PlaceLabel = Limit(write.place, 20),
                             PersonLabel = Limit(write.person, 20),
                             EventSummary = (write.event_summary ?? string.Empty).Trim(),
                             MoodLabel = Limit(write.mood, 12),
-                            FirstMomentId = chunk[0].Id,
+                            FirstMomentId = eventSources[0].Id,
                             Status = "active",
                             CreatedUnixMs = now,
                             UpdatedUnixMs = now
@@ -237,19 +240,21 @@ namespace TraceSoul2.Migrate
                             IndexId = index.Id,
                             Summary = (write.entry_summary ?? string.Empty).Trim(),
                             Detail = string.Empty,
-                            SourceMomentId = chunk[chunk.Count - 1].Id,
+                            SourceMomentId = eventSources[^1].Id,
                             Realm = NormalizeRealm(write.realm),
                             CreatedUnixMs = now
                         };
                         context.Migration.AppendEventEntry(entry);
                         dayEntries.Add(entry);
                         batchEntries.Add(entry);
-                        evidenceByEntry[entry.Id] = chunk;
+                        evidenceByEntry[entry.Id] = eventSources;
+                        observation.EntrySources[entry.Id] = eventSources.Select(x => x.Id).ToList();
                     }
 
                     foreach (var append in output.event_appends ?? new List<ReplayPrompts.EventAppendItemData>())
                     {
                         if (append == null || string.IsNullOrWhiteSpace(append.entry_summary)) continue;
+                        var eventSources = observation.SourceVersion == 0 ? chunk : ResolveEventSources(append.source_moment_ids, chunk);
                         var target = ResolveIndexAlias(append.index_alias, aliasToIndex);
                         if (target == null)
                         {
@@ -262,14 +267,15 @@ namespace TraceSoul2.Migrate
                             IndexId = target.Id,
                             Summary = (append.entry_summary ?? string.Empty).Trim(),
                             Detail = string.Empty,
-                            SourceMomentId = chunk[chunk.Count - 1].Id,
+                            SourceMomentId = eventSources[^1].Id,
                             Realm = NormalizeRealm(null),
                             CreatedUnixMs = now
                         };
                         context.Migration.AppendEventEntry(entry);
                         dayEntries.Add(entry);
                         batchEntries.Add(entry);
-                        evidenceByEntry[entry.Id] = chunk;
+                        evidenceByEntry[entry.Id] = eventSources;
+                        observation.EntrySources[entry.Id] = eventSources.Select(x => x.Id).ToList();
                         if (!dayIndexes.Any(x => x.Id == target.Id)) dayIndexes.Add(target);
                         if (!batchIndexes.Any(x => x.Id == target.Id)) batchIndexes.Add(target);
                     }
@@ -313,10 +319,7 @@ namespace TraceSoul2.Migrate
                     new DeepSeekMessageData("system", prompt),
                     new DeepSeekMessageData("user", CorePrompts.Migration.DetailUser)
                 };
-                var detailOutput = await DeepSeekStructuredOutputLogic.CompleteAsync<ReplayPrompts.DetailOutputData>(
-                    llm, messages, x => x != null && !string.IsNullOrWhiteSpace(x.detail),
-                    "细节输出缺少 detail。", detailToken);
-                entry.Detail = (detailOutput.detail ?? string.Empty).Trim();
+                entry.Detail = await CompleteDetailAsync(context, llm, detailKey, detailStamp, messages, detailToken);
                 context.Migration.CommitCoreProgress(() =>
                 {
                     EnsureCoreProgress(context, progress);
@@ -333,7 +336,7 @@ namespace TraceSoul2.Migrate
                 var n = Interlocked.Increment(ref detailCalls);
                 Console.WriteLine("  细节「" + Limit(entry.Summary, 20) + "」：" + Limit(entry.Detail, 60));
                 LogCall(context, dayKey, "detail", n,
-                    "细节：" + Limit(entry.Summary, 40), TraceJson.ToJson(detailOutput));
+                    "细节：" + Limit(entry.Summary, 40), TraceJson.ToJson(new { detail = entry.Detail }));
             }, error => context.Providers.Protection.Pause("provider:" + llm.ProviderId, "复盘细节生成", error));
 
             // ---------- 条目语义向量：一句话总结编码（幂等，召回拼装用） ----------
@@ -527,9 +530,7 @@ namespace TraceSoul2.Migrate
             }
 
             // 内心：attention 是会代谢的碎片；ongoing 是共享场景。旧 unfinished 字段不再恢复。
-            var attention = (reviewOutput.inner_attention == null || reviewOutput.inner_attention.Count == 0)
-                ? null
-                : reviewOutput.inner_attention;
+            var attention = reviewOutput.inner_attention;
             var ongoing = (reviewOutput.inner_ongoing_activity ?? string.Empty).Trim();
             var proposed = new InnerRuntimeWriteData
             {
@@ -690,90 +691,9 @@ namespace TraceSoul2.Migrate
             return 0;
         }
 
-        /// <summary>
-        /// 认知合并去重：先合并归一化后完全同文的重复，再合并二元组 Jaccard≥0.75 的近义认知；
-        /// 保留置信度最高者（并列取最早），合并后清理阶梯里的重复指针。被合并项只是停用，不物理删除。
-        /// </summary>
+        /// <summary>Legacy lexical merging cannot prove equal meaning or preserve counterevidence.</summary>
         public static int DedupeCognitions(MigrationContext context)
-        {
-            var cognitions = context.Migration.GetAllActiveCognitions();
-            var merges = new List<Tuple<string, string>>();
-            var merged = new HashSet<string>(StringComparer.Ordinal);
-
-            var groups = cognitions
-                .Where(x => x != null && NormalizeCognition(x.Summary).Length >= 2)
-                .GroupBy(x => NormalizeCognition(x.Summary), StringComparer.Ordinal)
-                .Where(g => g.Count() > 1);
-            foreach (var group in groups)
-            {
-                var list = group.ToList();
-                var keeper = KeepCognition(list);
-                foreach (var dup in list.Where(x => x.Id != keeper.Id))
-                {
-                    merges.Add(Tuple.Create(dup.Id, keeper.Id));
-                    merged.Add(dup.Id);
-                }
-            }
-
-            var remaining = cognitions.Where(x => x != null && !merged.Contains(x.Id)).ToList();
-            for (var i = 0; i < remaining.Count; i++)
-            {
-                if (merged.Contains(remaining[i].Id)) continue;
-                for (var j = i + 1; j < remaining.Count; j++)
-                {
-                    if (merged.Contains(remaining[j].Id)) continue;
-                    if (BigramJaccard(remaining[i].Summary, remaining[j].Summary) < 0.75f) continue;
-                    var keeper = KeepCognition(new List<CognitionSliceRecord> { remaining[i], remaining[j] });
-                    var dup = keeper.Id == remaining[i].Id ? remaining[j] : remaining[i];
-                    merges.Add(Tuple.Create(dup.Id, keeper.Id));
-                    merged.Add(dup.Id);
-                }
-            }
-
-            foreach (var merge in merges)
-            {
-                var keep = cognitions.FirstOrDefault(x => x.Id == merge.Item2);
-                context.Migration.MergeCognitionInto(merge.Item1, merge.Item2,
-                    keep == null ? string.Empty : keep.Summary);
-            }
-            if (merges.Count > 0)
-                context.Migration.RemoveDuplicateLadderRefs();
-            Console.WriteLine("认知合并去重：合并 " + merges.Count + " 条，active 认知剩余 " +
-                              context.Migration.GetAllActiveCognitions().Count + " 条。");
-            return merges.Count;
-        }
-
-        private static CognitionSliceRecord KeepCognition(List<CognitionSliceRecord> list)
-        {
-            return list.OrderByDescending(x => x.Confidence).ThenBy(x => x.CreatedUnixMs).First();
-        }
-
-        private static string NormalizeCognition(string text)
-        {
-            var builder = new StringBuilder();
-            foreach (var ch in text ?? string.Empty)
-                if (char.IsLetterOrDigit(ch)) builder.Append(ch);
-            return builder.ToString();
-        }
-
-        private static float BigramJaccard(string a, string b)
-        {
-            var sa = NormalizeCognition(a);
-            var sb = NormalizeCognition(b);
-            if (sa.Length < 3 || sb.Length < 3) return 0f;
-            var setA = Bigrams(sa);
-            var setB = Bigrams(sb);
-            var inter = setA.Intersect(setB).Count();
-            var union = setA.Union(setB).Count();
-            return union == 0 ? 0f : (float)inter / union;
-        }
-
-        private static HashSet<string> Bigrams(string text)
-        {
-            var set = new HashSet<string>(StringComparer.Ordinal);
-            for (var i = 0; i + 1 < text.Length; i++) set.Add(text.Substring(i, 2));
-            return set;
-        }
+            => throw new InvalidOperationException("旧dedupe-cognitions按文字相似度改写认知图的机制已停用。请使用身份重整预览当前认识；原认知、条件、反证与证据继续保留，不按相似句子合并。");
 
         /// <summary>日榜排序：事件与认知各自排名、合并后整批替换当天 day 榜。</summary>
         private static async Task RankDayLadderAsync(
@@ -945,6 +865,7 @@ namespace TraceSoul2.Migrate
             foreach (var moment in moments)
             {
                 var length = (moment.Content ?? string.Empty).Length;
+                if (length > 16000) throw new InvalidOperationException("单条事件原文超过16000字预算，原件保留，不能截断后标记已构筑。");
                 if (current.Count >= 18 || (current.Count > 0 && chars + length > 6000))
                 {
                     result.Add(current);

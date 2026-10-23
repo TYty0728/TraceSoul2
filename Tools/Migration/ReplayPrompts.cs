@@ -14,6 +14,8 @@ namespace TraceSoul2.Migrate
         [Serializable]
         public sealed class EventWriteItemData
         {
+            public string event_focus;
+            public List<string> source_moment_ids = new();
             public List<string> tag_ids = new List<string>();
             public List<string> new_tag_names = new List<string>();
             public string place;
@@ -27,6 +29,8 @@ namespace TraceSoul2.Migrate
         [Serializable]
         public sealed class EventAppendItemData
         {
+            public string event_focus;
+            public List<string> source_moment_ids = new();
             public string index_alias;
             public string entry_summary;
         }
@@ -85,7 +89,8 @@ namespace TraceSoul2.Migrate
             List<EventIndexRecord> indexCandidates,
             List<LifeTagRecord> recentTags,
             string periodLabel,
-            string dayKindLabel)
+            string dayKindLabel,
+            List<EventEntryRecord> priorEntries = null)
         {
             pair = pair ?? PairIdentity.Missing;
             var builder = new StringBuilder();
@@ -115,7 +120,12 @@ namespace TraceSoul2.Migrate
             var candidates = (indexCandidates ?? new List<EventIndexRecord>());
             if (candidates.Count == 0) builder.AppendLine(CorePrompts.Migration.Empty);
             else foreach (var candidate in candidates)
+            {
                 builder.AppendLine("- " + candidate.Id + " | " + candidate.EventSummary + " | " + candidate.TimeLabel + " | " + candidate.PlaceLabel + " | " + candidate.MoodLabel);
+                foreach (var entry in (priorEntries ?? new()).Where(x => x.IndexId == candidate.Id)
+                    .OrderByDescending(x => x.CreatedUnixMs).Take(3).Reverse())
+                    builder.AppendLine("  已记进展：" + entry.Summary);
+            }
             builder.AppendLine();
             CorePrompts.Write(builder, pair.Apply(CorePrompts.Migration.EventJsonSchema));
             return builder.ToString();
@@ -304,7 +314,7 @@ namespace TraceSoul2.Migrate
             var time = DateTimeOffset.FromUnixTimeMilliseconds(moment.CreatedUnixMs)
                 .ToOffset(MigrationContext.ChinaOffset).ToString("HH:mm");
             var content = (moment.Content ?? string.Empty).Replace('\n', ' ');
-            return time + " " + pair.LabelForRole(moment.Role) + "：" + content;
+            return moment.Id + "｜" + time + " " + pair.LabelForRole(moment.Role) + "：" + content;
         }
     }
 }

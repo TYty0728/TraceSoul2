@@ -20,7 +20,10 @@ namespace TraceSoul2.Migrate
     /// </summary>
     public static class DayLadderLogic
     {
-        private const int CandidateCap = 20;
+        private static async Task<HashSet<string>> SelectCandidatesAsync(ILlmClient llm,
+            List<ReviewSelectionLogic.Candidate> candidates, string purpose, int capacity)
+            => (await ReviewSelectionLogic.SelectAsync(llm, candidates, purpose, capacity, 6000))
+                .Select(x => x.Id).ToHashSet(StringComparer.Ordinal);
 
         public static async Task<List<LadderItemRecord>> RankDayAsync(
             MigrationContext context,
@@ -40,8 +43,13 @@ namespace TraceSoul2.Migrate
                 return new List<LadderItemRecord>();
             }
 
+            var selected = await SelectCandidatesAsync(llm, ordered.Select(x => new ReviewSelectionLogic.Candidate {
+                Id = x.Id, Description = x.TimeLabel + "｜" + x.EventSummary, EvidenceChars = x.EventSummary?.Length ?? 0 }).ToList(),
+                dayKey + "事件日榜；只选重要事件，原因只解释意义，不扩写经历", LadderContextLogic.Capacity("day"));
+            ordered.RemoveAll(x => !selected.Contains(x.Id));
+
             var prompt = BuildRankPrompt(pair, dayKey, ordered, "日榜·事件", LadderContextLogic.Capacity("day"));
-            var output = await AskRankAsync(context, llm, dayKey + "|event", prompt);
+            var output = await AskRankAsync(context, llm, dayKey + "|event", prompt, ordered.Count, LadderContextLogic.Capacity("day"));
             var items = ResolveDayItems(output, ordered, dayKey);
             Console.WriteLine("  事件日榜 " + items.Count + " 条：" +
                               string.Join("；", items.Select(x => x.Rank + "." + x.Label).Take(LadderContextLogic.Capacity("day"))));
@@ -67,8 +75,13 @@ namespace TraceSoul2.Migrate
                 return new List<LadderItemRecord>();
             }
 
+            var selected = await SelectCandidatesAsync(llm, ordered.Select(x => new ReviewSelectionLogic.Candidate {
+                Id = x.Id, Description = x.Summary, EvidenceChars = x.Summary?.Length ?? 0 }).ToList(),
+                dayKey + "认知日榜；同义认识只需一项，条件与反证不能混掉", LadderContextLogic.Capacity("day"));
+            ordered.RemoveAll(x => !selected.Contains(x.Id));
+
             var prompt = BuildCognitionRankPrompt(pair, dayKey, ordered);
-            var output = await AskRankAsync(context, llm, dayKey + "|cognition", prompt);
+            var output = await AskRankAsync(context, llm, dayKey + "|cognition", prompt, ordered.Count, LadderContextLogic.Capacity("day"));
             var items = ResolveDayCognitionItems(output, ordered, dayKey);
             Console.WriteLine("  认知日榜 " + items.Count + " 条：" +
                               string.Join("；", items.Select(x => x.Rank + "." + x.Label).Take(LadderContextLogic.Capacity("day"))));
@@ -212,12 +225,15 @@ namespace TraceSoul2.Migrate
                 var candidates = all
                     .Where(x => (string.IsNullOrWhiteSpace(x.ListKind) ? "event" : x.ListKind) == kind)
                     .OrderBy(x => x.Rank)
-                    .Take(CandidateCap)
                     .ToList();
                 if (candidates.Count == 0) continue;
                 var kindName = kind == "cognition" ? "认知" : "事件";
+                var selected = await SelectCandidatesAsync(llm, candidates.Select(x => new ReviewSelectionLogic.Candidate {
+                    Id = x.RefId, Description = x.Label, EvidenceChars = x.Label?.Length ?? 0 }).ToList(),
+                    periodKey + tierName + kindName + "；比较全部候选，只选本层重要认识或经历，不续写旧上榜原因", LadderContextLogic.Capacity(tier));
+                candidates.RemoveAll(x => !selected.Contains(x.RefId));
                 var prompt = BuildRankPrompt(pair, periodKey + "·" + kindName, candidates, tierName + kindName, LadderContextLogic.Capacity(tier));
-                var output = await AskRankAsync(context, llm, periodKey + "|" + tier + "|" + kind, prompt);
+                var output = await AskRankAsync(context, llm, periodKey + "|" + tier + "|" + kind, prompt, candidates.Count, LadderContextLogic.Capacity(tier));
                 var aliasToCandidate = new Dictionary<string, LadderItemRecord>(StringComparer.OrdinalIgnoreCase);
                 for (var i = 0; i < candidates.Count; i++) aliasToCandidate["i" + (i + 1)] = candidates[i];
                 var rank = 1;
@@ -236,7 +252,7 @@ namespace TraceSoul2.Migrate
                         RefId = source.RefId,
                         RefKind = source.RefKind,
                         Label = source.Label,
-                        Reason = Limit(item.reason, 60),
+                        Reason = (item.reason ?? "").Trim(),
                         CreatedUnixMs = DateTimeOffset.UtcNow.ToUnixTimeMilliseconds()
                     });
                     promotedRefs.Add(source.RefId);
@@ -250,7 +266,7 @@ namespace TraceSoul2.Migrate
         }
 
         private static async Task<LadderRankOutputData> AskRankAsync(
-            MigrationContext context, ILlmClient llm, string dayKey, string prompt)
+            MigrationContext context, ILlmClient llm, string dayKey, string prompt, int count, int capacity)
         {
             var messages = new List<DeepSeekMessageData>
             {
@@ -259,12 +275,24 @@ namespace TraceSoul2.Migrate
             };
             var output = await DeepSeekStructuredOutputLogic.CompleteAsync<LadderRankOutputData>(
                 llm, messages,
-                x => x != null && x.items != null && x.items.Count > 0,
-                "榜单输出缺少 items。", CancellationToken.None);
+                null, "榜单输出缺少 items。", CancellationToken.None,
+                validationError: x => RankError(x, count, capacity), includeInvalidResponse: false);
             DayBuilder.LogCall(context, dayKey, "ladder_rank", 0,
                 "榜单：" + (output.items ?? new List<LadderRankItemData>()).Count + " 条",
                 TraceJson.ToJson(output));
             return output;
+        }
+
+        private static string RankError(LadderRankOutputData output, int count, int capacity)
+        {
+            if (output?.items == null || output.items.Count < 1 || output.items.Count > capacity)
+                return "items须有1～" + capacity + "项，不凑满榜单。";
+            var ids = Enumerable.Range(1, count).Select(i => "i" + i).ToHashSet(StringComparer.OrdinalIgnoreCase);
+            if (output.items.Any(x => x == null || !ids.Contains((x.index_alias ?? "").Trim())) ||
+                output.items.Select(x => x.index_alias.Trim()).Distinct(StringComparer.OrdinalIgnoreCase).Count() != output.items.Count)
+                return "index_alias须为本次候选编号且每项只出现一次。";
+            if (output.items.Any(x => (x.reason?.Trim().Length ?? 0) > 60)) return "reason超过60字，只写上榜意义，不复述经历。";
+            return null;
         }
 
         private static List<LadderItemRecord> ResolveDayItems(
@@ -296,8 +324,8 @@ namespace TraceSoul2.Migrate
                     Rank = rank,
                     RefId = refId,
                     RefKind = "event_index",
-                    Label = Limit(index.EventSummary, 80),
-                    Reason = Limit(item.reason, 60),
+                    Label = index.EventSummary,
+                    Reason = (item.reason ?? "").Trim(),
                     CreatedUnixMs = DateTimeOffset.UtcNow.ToUnixTimeMilliseconds()
                 });
                 rank += 1;
@@ -334,8 +362,8 @@ namespace TraceSoul2.Migrate
                     Rank = rank,
                     RefId = refId,
                     RefKind = "cognition",
-                    Label = Limit(cognition.Summary, 80),
-                    Reason = Limit(item.reason, 60),
+                    Label = cognition.Summary,
+                    Reason = (item.reason ?? "").Trim(),
                     CreatedUnixMs = DateTimeOffset.UtcNow.ToUnixTimeMilliseconds()
                 });
                 rank += 1;
@@ -377,8 +405,7 @@ namespace TraceSoul2.Migrate
             var builder = new System.Text.StringBuilder();
             builder.AppendLine(pair.Apply(CorePrompts.Migration.EventRankIntro(tierName, periodKey)));
             for (var i = 0; i < candidates.Count; i++)
-                builder.AppendLine("i" + (i + 1) + " | " + candidates[i].Label +
-                    (string.IsNullOrWhiteSpace(candidates[i].Reason) ? string.Empty : " | " + candidates[i].Reason));
+                builder.AppendLine("i" + (i + 1) + " | " + candidates[i].Label);
             builder.AppendLine();
             builder.AppendLine(CorePrompts.Migration.EventRankAsk(topSize));
             builder.AppendLine(CorePrompts.Migration.RankJsonSchema);
@@ -404,11 +431,6 @@ namespace TraceSoul2.Migrate
             return days;
         }
 
-        private static string Limit(string value, int max)
-        {
-            value = value ?? string.Empty;
-            return value.Length <= max ? value : value.Substring(0, max);
-        }
     }
 
     [Serializable]

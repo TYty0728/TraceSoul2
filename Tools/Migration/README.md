@@ -1,5 +1,7 @@
 # TraceSoul2.Migrate — 老系统迁移与记忆重建工具
 
+0.1.66全复盘链的当前取舍、篇幅与恢复机制见[全链审查](../../docs/REVIEW_PIPELINE_AUDIT.md)。旧`dedupe-cognitions`按文字相似度合并认知的入口已停用，避免合掉不同条件和反证；身份可通过网页重整预览处理，原始认知保留。
+
 把 AstrBot 老系统的 `full_log.txt` 导入为新框架 moments，并按数据内时间逐日复盘出
 事实切片 / 认知切片 / 人生 Tag / 时间阶梯（比较晋升制）。
 

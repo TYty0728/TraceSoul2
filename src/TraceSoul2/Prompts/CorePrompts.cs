@@ -437,12 +437,13 @@ QQ 里的我可以说话，也可以带一小段正在发生的动作或神情�
             public const string EventRules = @"硬规则：
 正文与说明（包括 perception_summary、event_decision、标签名称和定义、事件及条目摘要）用清楚自然的中文，说明这段经历是什么、为何单独记录或接到前一件事；不写程序操作报告，不把字段名、内部编号、Tag 或英文分类代号混进句子。JSON 键、ID 和枚举值仍按协议原样填写；人名、产品名等专有名词保留原文。
 1. event_summary 与 entry_summary 各是一句完整的话，一般40字左右，最多80字；只写明确发生或明确说出的事实。一次事件一条索引。
-1b. 每条索引只覆盖一件具体的事（一个场景或一个话题的一次进展）。不要把整段对话压进一条索引；一天通常会产生 3~10 条索引。事件总结写这件事本身，不要罗列整段对话的主题。
+1b. 每条索引只覆盖一件具体的事（一个场景或一个话题的一次进展）。事件总结写这件事本身，不罗列整段主题，不凑条数。每批最多12项。
 2. 不写关系结论、人格、动机、长期规律或‘这意味着什么’。
 3. place/person 只填证据里出现的；没有就填空字符串，不要猜。mood 只填证据里明确读到的情绪（如 开心/难过），读不到留空——同伴心里的实时心情不归你补。
 4. 文字摸头、拥抱、亲吻属于 shared_scene；{username} 外部生活自述属于 external_world；系统讨论属于 meta。
 5. 每条索引必须至少连接一个本轮选择或新增的 Tag；同义 Tag 必须复用已有，不要新建。
-6. 同一件事的延续（比如又聊到同一个主题、同一件事的新进展）用 event_appends 追加到已有索引的别名下，不要新建索引。
+6. 先对照已有事件和已记进展。只有同一具体事件出现新事实、转折或结果才用 event_appends 记录这次增量；旧经过不重写。同主题的新一次经历仍是独立事件；仅又提起、复述或继续同一种心情可不新增条目。
+6b. 每项event_focus用最多40字点明这一件事或本次新进展。source_moment_ids必须引用本批确实支撑这一件事的原始编号，不能把整批无关对话挂到每一项；后续细节只读取这些原句。多件事可以共享确实相关的原句。
 7. 没有值得构筑的事时 event_writes=[] 且 event_appends=[]。
 8. 新 Tag 的 domain_ids 只能填 {assname} / {username} / 我们 / 世界。dimension_ids 只能从 owner/subject/about/predicate/object/scope/context/quality/time/place/affect/goal/state/realm/modality/source 选择。";
             public const string EventEvidenceHeader = "本批连续证据（同一天片段）：";
@@ -464,6 +465,8 @@ QQ 里的我可以说话，也可以带一小段正在发生的动作或神情�
     ""negative_examples"": [""容易混淆的反例""]
   }],
   ""event_writes"": [{
+    ""event_focus"": ""这一件事，最多40字"",
+    ""source_moment_ids"": [""本批支持这件事的原始MomentID""],
     ""tag_ids"": [""已选候选ID""],
     ""new_tag_names"": [""已选新增Tag名""],
     ""place"": ""地点，如 公司楼下；没有则空字符串"",
@@ -473,7 +476,7 @@ QQ 里的我可以说话，也可以带一小段正在发生的动作或神情�
     ""entry_summary"": ""本条目的客观一句话，最多80字"",
     ""realm"": ""external_world|shared_scene|meta|explicit_fiction""
   }],
-  ""event_appends"": [{""index_alias"": ""已有索引ID"", ""entry_summary"": ""本条目的客观一句话""}]
+  ""event_appends"": [{""index_alias"": ""已有索引ID"", ""event_focus"": ""本次新进展，最多40字"", ""source_moment_ids"": [""本批支持新进展的原始MomentID""], ""entry_summary"": ""本次新增事实或转折""}]
 }";
 
             public const string DetailRole = "你是 {assname}。下面是你今天经历的一件小事，请为它写一段「细节记录」。";
@@ -481,7 +484,8 @@ QQ 里的我可以说话，也可以带一小段正在发生的动作或神情�
 文字用自然中文，不夹带协议字段、英文分类代号或内部编号；专有名词保留原文。
 1. 第一人称、完全用你自己的口吻和视角；可以写你的感受与反应。
 2. 她的感受与想法只写她明确说过或明确表现出来的；禁止替她加戏、禁止猜测她心里在想什么。指代 {username} 一律按档案里的性别使用正确称呼。
-3. 只基于下面这段对话原文，不添加没有发生的事；专有名词原样保留。";
+3. 只基于下面这段对话原文，不添加没有发生的事；专有名词原样保留。
+3b. 本条目只记这一件事中有辨识度的新细节和当时感受；索引已说明的事实不再铺陈，不复述整天或关系史。简单回应可只写一句，不为生动画面添加动作。";
             public const string PersonalityHeader = "【你的人格】";
             public const string UserProfileHeader = "【{username}的档案】（她本人填写的客观信息，永远以此为准）";
             public const string EventIndexPrefix = "【事件索引】";
@@ -516,9 +520,9 @@ QQ 里的我可以说话，也可以带一小段正在发生的动作或神情�
 身份认识继续沉淀，心里也留着这一天的感受。摘要保持原样时，同样可以记录此刻的心情与余温。以下字段写本日变化，未变的字段输出空字符串。
 - inner_narrative：一句话，最多120字，第一人称，描述这一天在你心里留下了什么（可以有感受）。空天也必须写：没有相处、日子空过去，本身就是这一天留下的事实。按这个篇幅写下。
 - inner_mood：一个简短的情绪词（如 平静、温暖、困惑）。空天也要有这一天的心情。
-- inner_relationship_lens：对「我们的关系」的理解，今天有新认识才写。
-- inner_ongoing_activity：这一天仍在共同场景里留下温度的事；自然退去就留空（表示清除）。空天若场景没变，输出空字符串表示不改。
-- inner_attention：这一天结束时还偶尔浮起的意识碎片，最多3条，每条 {kind:topic|activity|concern, content:一句}；它们不是待办，也不需要写成未完成事项。没有就输出空数组。";
+- inner_relationship_lens：对「我们的关系」的理解，今天有新认识才写一句，最多200字，不写关系史。
+- inner_ongoing_activity：这一天仍在共同场景里留下温度的事，最多120字；自然退去就留空（表示清除）。空天若场景没变，输出空字符串表示不改。
+- inner_attention：这一天结束时还偶尔浮起的意识碎片，最多3条，每条 {kind:topic|activity|concern, content:一句，最多160字}；它们不是待办，也不需要写成未完成事项。没有就输出空数组，表示清除旧碎片。";
             public const string DayCardJsonSchema = @"只输出 JSON：
 {
   ""summary"": ""本轮复盘一句话"",

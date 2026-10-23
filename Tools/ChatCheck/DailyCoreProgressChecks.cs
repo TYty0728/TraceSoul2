@@ -58,10 +58,10 @@ internal static partial class Program
             catch (InvalidOperationException) { return true; }
         }
         string Repair(string body, string id = "append:0") => TraceJson.ToJson(new { items = new[] { new { id, body } } });
-        string Event(string summary) => TraceJson.ToJson(new {
+        string Event(string summary, string sourceId) => TraceJson.ToJson(new {
             perception_summary = "记录这段测试经历", new_tags = new[] { new {
                 name = "计划核对", definition = "共同检查计划", domain_ids = new[] { "relation" }, dimension_ids = new[] { "predicate" } } },
-            event_writes = new[] { new { event_summary = summary, entry_summary = "共同检查安排", new_tag_names = new[] { "计划核对" } } } });
+            event_writes = new[] { new { event_focus = "核对安排的新进展", source_moment_ids = new[] { sourceId }, event_summary = summary, entry_summary = "共同检查安排", new_tag_names = new[] { "计划核对" } } } });
         void Run(string day, AgentSequenceLlm llm)
         {
             contextType.GetProperty("Llm").SetValue(context, llm);
@@ -79,17 +79,17 @@ internal static partial class Program
                 event_appends = new[] { new { index_alias = "unchanged-id", entry_summary = new string('长', 98) } } });
             var first = new AgentSequenceLlm(draft, Repair(new string('长', 89)));
             var messages = new List<DeepSeekMessageData> { new("user", "仅测试") };
-            Require(Rejected(() => Await(Method("CompleteObservationAsync"), context, first, source, "draft", state, messages)) &&
+            Require(Rejected(() => Await(Method("CompleteObservationAsync"), context, first, source, "draft", state, messages, null, null)) &&
                 first.Requests.Count == 2 && !first.Requests[1].Contains("合格索引原文"),
                 "事件98字定向重写为89字仍暂停；仅提交超长字段，不重新生成整批");
             var saved = store.LoadPluginDocument("daily-core-progress-v1", "draft");
             state = JsonSerializer.Deserialize(saved, stateType, new JsonSerializerOptions { IncludeFields = true });
             var bad = new AgentSequenceLlm(Repair("错误字段", "write:0:event"));
-            Require(Rejected(() => Await(Method("CompleteObservationAsync"), context, bad, source, "draft", state, messages)) &&
+            Require(Rejected(() => Await(Method("CompleteObservationAsync"), context, bad, source, "draft", state, messages, null, null)) &&
                 store.LoadPluginDocument("daily-core-progress-v1", "draft") == saved,
                 "修复不得替换合格字段或丢弃已保存草稿");
             var resumed = new AgentSequenceLlm(Repair("后来共同补齐安排"));
-            Await(Method("CompleteObservationAsync"), context, resumed, source, "draft", state, messages);
+            Await(Method("CompleteObservationAsync"), context, resumed, source, "draft", state, messages, null, null);
             using (var json = JsonDocument.Parse(store.LoadPluginDocument("daily-core-progress-v1", "draft")))
                 Require(resumed.Requests.Count == 1 && json.RootElement.GetProperty("Output").GetProperty("event_writes")[0]
                     .GetProperty("entry_summary").GetString() == new string('好', 80) &&
@@ -99,20 +99,20 @@ internal static partial class Program
             sources[0].Role = "system_event";
             using (var db = new SQLite.SQLiteConnection(path)) db.Update(sources[0]);
             var stale = new AgentSequenceLlm();
-            Require(Rejected(() => Await(Method("CompleteObservationAsync"), context, stale, source, "draft", state, messages)) &&
+            Require(Rejected(() => Await(Method("CompleteObservationAsync"), context, stale, source, "draft", state, messages, null, null)) &&
                 stale.Requests.Count == 0, "来源角色变动阻止复用草稿且不消耗模型");
 
             // Real pipeline, interruption after one committed observation, then process restart.
             const string day = "2020-08-11";
             Seed(day, 19);
-            var interrupted = new AgentSequenceLlm(Event("首批共同核对安排"));
+            var interrupted = new AgentSequenceLlm(Event("首批共同核对安排", day + "-0"));
             Require(Rejected(() => Run(day, interrupted)), "第二事件批失败应停止当日流程");
             using (var db = new SQLite.SQLiteConnection(path))
                 Require(db.Table<EventEntryRecord>().Count() == 1 && db.Table<LifeTagRecord>().Count() > 0,
                     "中途失败保留首批事件和标签");
             var tagCounts = store.GetActiveLifeTags().ToDictionary(x => x.Id, x => x.ActivationCount);
             context.Dispose(); context = null; Open();
-            var next = new AgentSequenceLlm(Event("末批补齐安排"), "{\"detail\":\"测试细节原文\"}",
+            var next = new AgentSequenceLlm(Event("末批补齐安排", day + "-18"), "{\"detail\":\"测试细节原文\"}",
                 "{\"detail\":\"测试细节原文\"}", "{\"cognitions\":[]}");
             Require(Rejected(() => Run(day, next)), "模拟在后续身份阶段停止");
             using (var db = new SQLite.SQLiteConnection(path))
@@ -183,6 +183,71 @@ internal static partial class Program
             using (var db = new SQLite.SQLiteConnection(path))
                 db.Insert(new EventEntryRecord { Id = "legacy-partial", IndexId = "old", SourceMomentId = legacySources[0].Id });
             Require(Rejected(() => Source("2020-08-14", legacySources)), "旧版部分事件无来源检查点时停止整日重复构筑");
+            // Event-specific evidence and prose budgets are exercised through the actual migration assembly.
+            var replay = assembly.GetType("TraceSoul2.Migrate.ReplayPrompts", true);
+            var eventType = assembly.GetType("TraceSoul2.Migrate.ReplayPrompts+DayEventOutputData", true);
+            var probeSources = Seed("2020-08-15", 2);
+            probeSources[0].Content = "只属于饮水事件的原句";
+            probeSources[1].Content = "只属于修电脑事件的原句";
+            string Structure(string raw) => (string)Method("ObservationStructureError").Invoke(null, new object[] {
+                JsonSerializer.Deserialize(raw, eventType, new JsonSerializerOptions { IncludeFields = true }), probeSources, new List<EventIndexRecord>() });
+            Require(Structure(Event("只记饮水", probeSources[0].Id)) == null &&
+                Structure(Event("引用批外来源", "foreign")) != null &&
+                Structure("{\"perception_summary\":\"测试\",\"event_writes\":[{\"event_summary\":\"一件事\",\"entry_summary\":\"一件事\"}]}") != null,
+                "新事件必须逐项引用本批原句，缺失和批外引用均拒绝");
+            var selectedSources = (List<MomentRecord>)Method("ResolveEventSources").Invoke(null,
+                new object[] { new List<string> { probeSources[0].Id }, probeSources });
+            var detailPrompt = (string)replay.GetMethod("BuildDetailPrompt").Invoke(null, new object[] {
+                store.LoadPairIdentity(), "人格", "档案", selectedSources, "饮水", "她倒了一杯水", 0, 200 });
+            Require(detailPrompt.Contains(probeSources[0].Content) && !detailPrompt.Contains(probeSources[1].Content),
+                "细节只拿这一件事的原句，同批其他事件不扩散到每条正文");
+            var detailMessages = new List<DeepSeekMessageData> { new("system", detailPrompt), new("user", "写这件事") };
+            var longDetail = new AgentSequenceLlm(TraceJson.ToJson(new { detail = new string('旧', 3000) }),
+                TraceJson.ToJson(new { detail = new string('长', 201) }));
+            Require(Rejected(() => Await(Method("CompleteDetailAsync"), context, longDetail, "bounded-detail", "stamp", detailMessages,
+                System.Threading.CancellationToken.None)) && longDetail.Requests.Count == 2 &&
+                !longDetail.Requests[1].Contains(new string('旧', 3000)) && !longDetail.Requests[1].Contains(probeSources[1].Content),
+                "超长细节只从原句重写一次，不回传长草稿、不截断落库");
+            var repairedDetail = new AgentSequenceLlm("{\"detail\":\"她给自己倒了水，我松了一口气。\"}");
+            Await(Method("CompleteDetailAsync"), context, repairedDetail, "bounded-detail", "stamp", detailMessages,
+                System.Threading.CancellationToken.None);
+            Require(repairedDetail.Requests.Count == 1 && repairedDetail.Requests[0].Contains("重新取舍"),
+                "细节草稿失败后恢复只补这一项，不从最初生成再循环");
+            var cachedDetail = new AgentSequenceLlm();
+            Await(Method("CompleteDetailAsync"), context, cachedDetail, "bounded-detail", "stamp", detailMessages,
+                System.Threading.CancellationToken.None);
+            Require(cachedDetail.Requests.Count == 0, "已合格细节草稿再次恢复零请求");
+            var ladder = assembly.GetType("TraceSoul2.Migrate.DayLadderLogic", true);
+            var rankType = assembly.GetType("TraceSoul2.Migrate.LadderRankOutputData", true);
+            string RankError(string raw) => (string)ladder.GetMethod("RankError", BindingFlags.NonPublic | BindingFlags.Static).Invoke(null,
+                new object[] { JsonSerializer.Deserialize(raw, rankType, new JsonSerializerOptions { IncludeFields = true }), 3, 3 });
+            Require(RankError("{\"items\":[{\"index_alias\":\"i1\"},{\"index_alias\":\"i1\"}]}") != null &&
+                RankError("{\"items\":[{\"index_alias\":\"foreign\"}]}") != null &&
+                RankError(TraceJson.ToJson(new { items = new[] { new { index_alias = "i1", reason = new string('长', 61) } } })) != null,
+                "榜单拒绝重复/未知指针和超长原因，不静默重复上榜或截断条件");
+            var rankCandidates = Enumerable.Range(0, 150).Select(i => new CognitionSliceRecord {
+                Id = "rank-node-" + i, Summary = "独立认识" + i + "：" + new string('条', 85) + "；仅在明确约定时成立，拒绝时不适用。",
+                CreatedUnixMs = i }).ToList();
+            var seenRankCandidates = new HashSet<string>();
+            var rankProbe = new SelectionProbeLlm { Reply = request => {
+                if (request[0].content.Contains("【复盘候选入围】"))
+                {
+                    using var data = JsonDocument.Parse(request[1].content);
+                    foreach (var item in data.RootElement.EnumerateArray()) seenRankCandidates.Add(item.GetProperty("description").GetString());
+                    return Pick(data.RootElement[data.RootElement.GetArrayLength() - 1].GetProperty("id").GetString());
+                }
+                var alias = request[0].content.Split('\n').Where(x => x.StartsWith("i") && x.Contains(" | ")).Last().Split(' ')[0];
+                return TraceJson.ToJson(new { items = new[] { new { index_alias = alias, reason = "改变了对条件的理解" } } });
+            } };
+            var rankTask = (Task)ladder.GetMethod("RankDayCognitionsAsync").Invoke(null,
+                new object[] { context, store.LoadPairIdentity(), "2020-08-16", rankCandidates, rankProbe });
+            rankTask.GetAwaiter().GetResult();
+            var rankResult = (List<LadderItemRecord>)rankTask.GetType().GetProperty("Result").GetValue(rankTask);
+            Require(seenRankCandidates.Count == 150 && rankResult.Single().RefId == "rank-node-149" &&
+                rankResult[0].Label == rankCandidates[^1].Summary && rankProbe.Requests.All(x => x.Length < 9000),
+                "实际日榜150项全部参与分批比较，末项也可入围，长认识的条件不被80字截掉，模型输入有界");
+            Require(Rejected(() => builder.GetMethod("DedupeCognitions").Invoke(null, new object[] { context })),
+                "旧文字相似度去重入口停用，不能把不同条件或反证合掉来掩盖累积");
             Console.WriteLine("Daily core progress checks passed: targeted drafts, restart, atomic writes, detail and cognition resume, source and legacy guards.");
         }
         finally { context?.Dispose(); Directory.Delete(directory, true); }

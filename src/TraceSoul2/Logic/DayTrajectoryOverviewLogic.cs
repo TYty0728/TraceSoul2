@@ -103,6 +103,18 @@ namespace TraceSoul2.Logic
             }
             var refs = new Dictionary<string, List<string>>(StringComparer.Ordinal);
             var lines = new List<string>();
+            // A long day may contain many independent events. Revisit a bounded recent window,
+            // retaining older groups as they are, rather than feeding the entire rolling prose back.
+            var retained = new List<Event>();
+            var window = new List<Event>();
+            var groupChars = 0;
+            foreach (var group in groups.AsEnumerable().Reverse())
+            {
+                if (window.Count >= 40 || groupChars + group.text.Length + 128 > 4000) retained.Add(group);
+                else { window.Add(group); groupChars += group.text.Length + 128; }
+            }
+            groups = window.AsEnumerable().Reverse().ToList();
+            retained.Reverse();
             for (var i = 0; i < groups.Count; i++)
             {
                 var id = "g" + i;
@@ -117,7 +129,7 @@ namespace TraceSoul2.Logic
                 lines.Add(id + " · " + DateTimeOffset.FromUnixTimeMilliseconds(batch[i].CreatedUnixMs)
                     .ToOffset(MemoryDayLogic.ChinaOffset).ToString("MM-dd HH:mm") + "：" + DayTrajectoryLogic.EntryText(batch[i]));
             }
-            var sourceIds = refs.Values.SelectMany(x => x).ToHashSet(StringComparer.Ordinal);
+            var sourceIds = refs.Values.SelectMany(x => x).Concat(retained.SelectMany(x => x.sources)).ToHashSet(StringComparer.Ordinal);
             var marker = JsonSerializer.Serialize(entries.Select(x => x.Id).OrderBy(x => x).ToList());
             if (!startup) store.SavePluginDocument(StoreId, attemptedKey, marker);
             else store.SavePluginDocument(StoreId, key + ":attempt:v3", marker);
@@ -153,8 +165,9 @@ namespace TraceSoul2.Logic
                         var lengthError = longest > 60
                             ? "有事件短句超过60字（最长" + longest + "字）。按原指令每句不超过60字，重新写下完整 JSON。不要交回超长的那几句。"
                             : null;
-                        var invalid = parsed?.events?.Count is not > 0 || parsed.events.Any(x => string.IsNullOrWhiteSpace(x?.text) ||
+                        var invalid = parsed?.events?.Count is not > 0 || parsed.events.Count > refs.Count * 2 || parsed.events.Any(x => string.IsNullOrWhiteSpace(x?.text) ||
                             x.text.Length > 60 || x.sources?.Count is not > 0) ||
+                            parsed.events.Select(x => x?.text?.Trim()).Distinct(StringComparer.Ordinal).Count() != parsed.events.Count ||
                             outputRefs.Distinct(StringComparer.Ordinal).Count() != refs.Count || outputRefs.Any(x => x == null || !refs.ContainsKey(x));
                         if (!invalid)
                         {
@@ -163,10 +176,8 @@ namespace TraceSoul2.Logic
                         }
                         if (attempt == 1 || lengthError == null)
                             throw new InvalidOperationException(lengthError ?? "概览来源或正文校验失败");
-                        var prior = raw.Length <= 16000 ? raw : raw.Substring(0, 16000);
                         prompt = new List<DeepSeekMessageData>(messages)
                         {
-                            new("assistant", prior),
                             new("user", "上一条不满足要求：" + lengthError + CorePrompts.Retry.JsonRepairSuffix)
                         };
                     }
@@ -177,6 +188,7 @@ namespace TraceSoul2.Logic
                         if (string.IsNullOrWhiteSpace(item.text)) throw new InvalidOperationException("概览正文为空");
                         item.sources = item.sources.SelectMany(id => refs[id]).Distinct(StringComparer.Ordinal).ToList();
                     }
+                    result.events = retained.Concat(result.events).ToList();
                 }
                 catch (OperationCanceledException) when (token.IsCancellationRequested) { throw; }
                 catch (Exception error)

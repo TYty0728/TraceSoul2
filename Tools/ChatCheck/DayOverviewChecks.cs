@@ -69,6 +69,7 @@ internal static partial class Program
 
     private static async Task RunDayOverviewChecksAsync()
     {
+        await RunLongDayOverviewChecksAsync();
         await RunStartupDayOverviewChecksAsync();
         await RunCompactDayOverviewChecksAsync();
         await RunDayOverviewKernelCheckAsync();
@@ -141,6 +142,40 @@ internal static partial class Program
             Console.WriteLine("Day overview checks passed: grouped view, full sources, new entries, restart, time prefixes, privacy and bounded failure.");
         }
         finally { Delete(path); Delete(path + "-wal"); Delete(path + "-shm"); }
+    }
+
+    private static async Task RunLongDayOverviewChecksAsync()
+    {
+        using var store = new SqliteMemoryManager(":memory:");
+        const string context = "long-day-overview";
+        var start = MemoryDayLogic.CurrentStart(DateTimeOffset.Now);
+        var day = start.ToString("yyyy-MM-dd");
+        for (var i = 0; i < 183; i++)
+        {
+            var id = "overview-source-" + i;
+            store.SaveMoment(new MomentRecord { Id = id, ConversationId = context, Role = "user", Content = "合成原件",
+                CreatedUnixMs = start.AddSeconds(i).ToUnixTimeMilliseconds() });
+            store.AppendDayTrajectory(context, id, "独立事件原件" + i);
+        }
+        var entries = store.GetDayTrajectoryEntries(context, day);
+        store.SavePluginDocument("runtime.trajectory-overview", context + ":" + day,
+            System.Text.Json.JsonSerializer.Serialize(new { format_version = 3,
+                events = entries.Take(180).Select((x, i) => new { text = "旧事件" + i, sources = new[] { x.Id } }) }));
+        var llm = new SelectionProbeLlm { Reply = request => {
+            var ids = request[1].content.Split('\n').Where(x => (x.StartsWith("g") || x.StartsWith("n")) && x.Contains(" · "))
+                .Select(x => x.Split(' ')[0]).ToList();
+            return System.Text.Json.JsonSerializer.Serialize(new { events = ids.Select(id => new { text = "整理事件" + id, sources = new[] { id } }) });
+        } };
+        var services = new TracePluginServices(store, new HierarchicalVectorRouterLogic(new FakeEncoder())) { ReviewLlm = llm };
+        var work = DayTrajectoryOverviewLogic.PrepareStartup(services, context);
+        var commit = await work.AnalyzeAsync(default);
+        Require(commit != null, "长日概览可产生有界整理结果");
+        await commit(default);
+        var result = DayTrajectoryOverviewLogic.Read(store, context, day);
+        Require(llm.Requests.Count == 1 && llm.Requests[0].Length < 14000 && !llm.Requests[0].Contains("旧事件0\n") &&
+            llm.Requests[0].Contains("旧事件179") && result.Count == 183 && result.Any(x => x.Text == "旧事件0") &&
+            store.GetDayTrajectoryEntries(context, day).Count == 183,
+            "180件旧事件只比较近期有界窗口，早期独立事件与全部原件保留，不把滚动全文无限送回模型");
     }
 
     private static async Task RunStartupDayOverviewChecksAsync()

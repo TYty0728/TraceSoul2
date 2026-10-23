@@ -41,6 +41,13 @@ internal static partial class Program
         Require(Error(merged) == null && Error("{\"cards\":[]}") == null, "同卡多依据合法，明确不更新合法");
         Require(Error("{}")?.Contains("$.cards") == true && Error("{\"cards\":null}") != null,
             "省略 cards 不能冒充无变化");
+        foreach (var invalidInner in new[] {
+            TraceJson.ToJson(new { cards = Array.Empty<object>(), inner_relationship_lens = new string('长', 201) }),
+            TraceJson.ToJson(new { cards = Array.Empty<object>(), inner_ongoing_activity = new string('长', 121) }),
+            TraceJson.ToJson(new { cards = Array.Empty<object>(), inner_mood = new string('长', 81) }),
+            TraceJson.ToJson(new { cards = Array.Empty<object>(), inner_attention = new[] { new { kind = "topic", content = new string('长', 161) } } }),
+            TraceJson.ToJson(new { cards = Array.Empty<object>(), inner_attention = new[] { new { kind = "topic", content = "重复念头" }, new { kind = "topic", content = "重复念头" } } }) })
+            Require(Error(invalidInner) != null, "日终内心的关系视角/场景/心情/碎片全部独立校验，不截断或重复保存");
         Require(Error(Output(Card("personality", "不应覆盖", "p1"))).Contains("本人固定"), "仍拒绝覆盖固定内容");
         Require(Error(Output(Card("relation", new string('字', 445), "r1"))) == null &&
             Error(Output(Card("relation", new string('字', 600), "r1"))) == null &&
