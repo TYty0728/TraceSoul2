@@ -1,0 +1,2 @@
+# Optional SSH connection helper; separate from hardware/ASR dependencies.
+paramiko==5.0.0

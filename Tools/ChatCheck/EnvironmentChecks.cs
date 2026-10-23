@@ -78,6 +78,13 @@ internal static partial class Program
                 var group = EnvironmentLogic.Resolve(store, root, Qq("10001", true));
                 Require(ownerSnapshot.Visibility == "private" && ownerSnapshot.ContextConversationId == root,
                     "绑定本人且一对一才是私密");
+                var legacyRoot = root + "-legacy-target";
+                var legacyQq = EnvironmentLogic.Resolve(store, legacyRoot, Qq("10001"));
+                store.SavePluginDocument("kernel.environment", "target:" + legacyRoot, TraceJson.ToJson(legacyQq));
+                EnvironmentLogic.Remember(store, new EnvironmentSnapshotData { RootConversationId = legacyRoot,
+                    ContextConversationId = legacyRoot, PlatformId = "wxxz", Visibility = "private" });
+                Require(EnvironmentLogic.Resolve(store, legacyRoot, new PluginEventData { PluginId = "builtin.time", Role = "system_event" })
+                    .EnvironmentId == legacyQq.EnvironmentId, "首次板端交流覆盖根目标前先保存旧版已确认QQ目标，升级不丢主动联系渠道");
                 Require(stranger.Visibility == "public" && !stranger.SpeakerIsOwner &&
                     group.Visibility == "public" && group.SpeakerIsOwner && !group.DirectAddress,
                     "同名冒认无效；本人在群中仍公开；普通群交谈可旁听");
@@ -193,6 +200,8 @@ internal static partial class Program
                     store.GetRecentDialogueMoments(publicScope, 10).Where(x => x.Id != "public-day-evidence")
                         .All(x => !string.IsNullOrWhiteSpace(x.EnvironmentJson)),
                     "重启保留环境、身份绑定和事件来源，内心更新不能擦除环境");
+                Require(EnvironmentLogic.Resolve(store, root, new PluginEventData { PluginId = "builtin.time", Role = "system_event" })
+                    .EnvironmentId == ownerSnapshot.EnvironmentId, "重启恢复独立QQ主动目标，不跟随最近的控制台或公开环境");
                 store.SavePairIdentity("新用户名称", "新同伴名称", "新昵称");
                 Require(store.GetRecentDialogueMoments(publicScope, 10).All(x => x.Role is "user" or "assistant"),
                     "修改私密身份名称不能把公开参与者重写成专属用户");

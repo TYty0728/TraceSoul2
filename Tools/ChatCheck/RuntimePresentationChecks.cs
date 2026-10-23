@@ -40,6 +40,7 @@ internal static partial class Program
                 new() { content = "过期关注", UpdatedUnixMs = now.AddHours(-7).ToUnixTimeMilliseconds() } }) }
         };
         store.SavePluginDocument(SubjectRuntimeLogic.StoreId, root, TraceJson.ToJson(original));
+        original = SubjectRuntimeLogic.Read(store, root); // 先完成旧版正文接回；展示本身不再改写状态。
         life.Value.activity = "看书";
         life.Value.activity_source = LifeStateSourceValues.Mind;
         life.Value.activity_updated_unix_ms = now.AddHours(-8).ToUnixTimeMilliseconds();

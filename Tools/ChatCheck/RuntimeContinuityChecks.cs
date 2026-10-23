@@ -14,6 +14,7 @@ internal static partial class Program
 {
     private static async Task RunRuntimeContinuityChecksAsync()
     {
+        await CheckUnifiedRuntimeAsync();
         var path = Path.Combine(Path.GetTempPath(), "runtime-continuity-" + Guid.NewGuid().ToString("N") + ".db");
         const string root = "continuity", day = "2026-09-20";
         var start = MemoryDayLogic.StartOf(day);

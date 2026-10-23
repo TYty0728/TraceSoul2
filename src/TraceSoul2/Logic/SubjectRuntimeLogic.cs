@@ -19,16 +19,18 @@ namespace TraceSoul2.Logic
     public sealed class SubjectState
     {
         public long Revision { get; set; }
+        public bool RootRuntime { get; set; }
         public string Affect { get; set; } = "calm";
         public SubjectFragment Narrative { get; set; }
         public SubjectFragment Mood { get; set; }
         public SubjectFragment Attention { get; set; }
+        public SubjectFragment Scene { get; set; }
         public bool Asleep { get; set; }
         public bool Idle { get; set; }
         public string SourceMomentId { get; set; }
     }
 
-    /// <summary>连续主体状态与局部场景分开；每个感受的原因独立保留来源，不能被另一字段的更新公开。</summary>
+    /// <summary>唯一主体 runtime；环境只过滤读取视图，片段来源不能被另一字段的更新公开。</summary>
     public static class SubjectRuntimeLogic
     {
         public const string StoreId = "kernel.subject";
@@ -42,13 +44,42 @@ namespace TraceSoul2.Logic
         };
         public static SubjectState Read(IMemoryStore store, string root)
         {
-            var saved = PuzzleViewLogic.Read<SubjectState>(store.LoadPluginDocument(StoreId, root));
-            if (saved != null) return saved;
-            var old = store.LoadOrCreateInnerRuntime(root);
-            SubjectFragment Legacy(string text) => new() { Text = text, Context = root, Visibility = "private",
-                MomentId = old.SourceMomentId, UpdatedUnixMs = old.UpdatedUnixMs };
-            return new SubjectState { Narrative = Legacy(old.Narrative), Mood = Legacy(old.Mood),
-                Attention = Legacy(TraceJson.ToJson(old.Attention)), Asleep = old.Asleep, Idle = old.Idle };
+            for (var attempt = 0; attempt < 3; attempt++)
+            {
+                var saved = PuzzleViewLogic.Read<SubjectState>(store.LoadPluginDocument(StoreId, root));
+                var old = store.LoadOrCreateInnerRuntime(root);
+                if (saved == null)
+                {
+                    SubjectFragment Legacy(string text) => new() { Text = text, Context = root, Visibility = "private",
+                        MomentId = old.SourceMomentId, UpdatedUnixMs = old.UpdatedUnixMs };
+                    return new SubjectState { RootRuntime = true, Narrative = Legacy(old.Narrative), Mood = Legacy(old.Mood),
+                        Attention = Legacy(TraceJson.ToJson(old.Attention)), Scene = Legacy(old.OngoingActivity),
+                        Asleep = old.Asleep, Idle = old.Idle };
+                }
+                if (!saved.RootRuntime)
+                {
+                    // 旧版将最新主体感受存成独立正文；一次性接回根runtime，之后这些片段只负责来源/可见性。
+                    old.Narrative = saved.Narrative?.Text ?? old.Narrative;
+                    old.Mood = saved.Mood?.Text ?? old.Mood;
+                    old.Attention = PuzzleViewLogic.Read<List<AttentionItemData>>(saved.Attention?.Text) ?? old.Attention;
+                    old.OngoingActivity = saved.Scene?.Text ?? old.OngoingActivity;
+                    old.Asleep = saved.Asleep; old.Idle = saved.Idle;
+                    old.UpdatedUnixMs = new[] { old.UpdatedUnixMs, saved.Narrative?.UpdatedUnixMs ?? 0,
+                        saved.Mood?.UpdatedUnixMs ?? 0, saved.Attention?.UpdatedUnixMs ?? 0, saved.Scene?.UpdatedUnixMs ?? 0 }.Max();
+                    old.Revision++; old.SnapshotId = Guid.NewGuid().ToString("N");
+                    if (!string.IsNullOrWhiteSpace(saved.SourceMomentId)) old.SourceMomentId = saved.SourceMomentId;
+                    var previous = saved.Revision;
+                    saved.Revision++; saved.RootRuntime = true;
+                    if (store is SqliteMemoryManager sqlite)
+                    {
+                        if (!sqlite.TrySaveSubject(root, previous, saved, old)) continue;
+                    }
+                    else { store.SaveInnerRuntime(old); store.SavePluginDocument(StoreId, root, TraceJson.ToJson(saved)); }
+                }
+                saved.Asleep = old.Asleep; saved.Idle = old.Idle;
+                return saved;
+            }
+            throw new InvalidOperationException("主体runtime正在更新，未使用旧环境快照覆盖。");
         }
         public static void Begin(TraceTurnContext turn)
         {
@@ -57,21 +88,28 @@ namespace TraceSoul2.Logic
         }
         public static InnerRuntimeData View(TraceTurnContext turn)
         {
-            var local = turn.Services.Storage.LoadOrCreateInnerRuntime(turn.ConversationId);
-            if (turn.Environment == null) return local;
             return View(turn.Services.Storage, PuzzleViewLogic.Root(turn), turn.ConversationId,
                 EnvironmentLogic.IsPublic(turn), EnvironmentLogic.IsHumanInput(turn));
         }
 
+        public static InnerRuntimeData Current(TraceTurnContext turn)
+        {
+            Read(turn.Services.Storage, PuzzleViewLogic.Root(turn));
+            return turn.Services.Storage.LoadOrCreateInnerRuntime(PuzzleViewLogic.Root(turn));
+        }
+
         public static InnerRuntimeData View(IMemoryStore store, string root, string context, bool isPublic, bool humanInput = false)
         {
-            var local = store.LoadOrCreateInnerRuntime(context);
             var current = Read(store, root);
-            bool VisibleFragment(SubjectFragment fragment) => fragment != null && (!isPublic || fragment.Context == context);
-            local.Narrative = VisibleFragment(current.Narrative) ? current.Narrative.Text : "";
-            local.Mood = VisibleFragment(current.Mood) ? current.Mood.Text : AffectLabel(current.Affect);
-            local.Attention = VisibleFragment(current.Attention)
-                ? PuzzleViewLogic.Read<List<AttentionItemData>>(current.Attention.Text) ?? new() : new();
+            var local = store.LoadOrCreateInnerRuntime(root);
+            bool VisibleFragment(SubjectFragment fragment, string text) => !isPublic ||
+                fragment != null && fragment.Context == context && fragment.Text == text;
+            if (!VisibleFragment(current.Narrative, local.Narrative)) local.Narrative = "";
+            if (!VisibleFragment(current.Mood, local.Mood)) local.Mood = AffectLabel(current.Affect);
+            if (!VisibleFragment(current.Attention, TraceJson.ToJson(local.Attention))) local.Attention = new();
+            // 历史环境快照不再作为当下来源。公开可隐藏同一场景，但不能恢复一份旧场景。
+            if (!VisibleFragment(current.Scene, local.OngoingActivity)) local.OngoingActivity = "";
+            if (isPublic) { local.RelationshipLens = ""; local.UnfinishedIntent = ""; }
             local.Asleep = current.Asleep && !humanInput;
             local.Idle = current.Idle && !humanInput;
             return local;
@@ -85,20 +123,28 @@ namespace TraceSoul2.Logic
             var current = Read(store, root);
             var version = turn.Workspace.GetOrCreateState(StoreId, () => new TurnVersion { Revision = current.Revision });
             if (current.Revision != version.Revision) return; // 旧轮/日复盘不能覆盖已提交的新当下。
-            var local = store.LoadOrCreateInnerRuntime(turn.ConversationId);
+            var local = store.LoadOrCreateInnerRuntime(root);
             SubjectFragment Fragment(string text) => new() { Text = text, Context = turn.ConversationId,
                 Visibility = turn.Environment.Visibility, MomentId = turn.Moment.Id,
                 UpdatedUnixMs = DateTimeOffset.UtcNow.ToUnixTimeMilliseconds() };
             if (!string.IsNullOrWhiteSpace(step.inner)) current.Narrative = Fragment(local.Narrative);
             if (step.HasStateField("mood") && !string.IsNullOrWhiteSpace(step.mood)) current.Mood = Fragment(local.Mood);
             if (step.HasStateField("attention")) current.Attention = Fragment(TraceJson.ToJson(local.Attention));
+            if (step.ClearsScene() || !string.IsNullOrWhiteSpace(step.SceneValue())) current.Scene = Fragment(local.OngoingActivity);
             if (!string.IsNullOrEmpty(step.affect) && ValidAffect(step.affect)) current.Affect = step.affect;
-            current.Asleep = step.sleep;
-            current.Idle = local.Idle;
+            var presence = InnerLifeLogic.WithAsleep(local, step.sleep, turn.Moment.Id,
+                DateTimeOffset.UtcNow.ToUnixTimeMilliseconds());
+            current.Asleep = presence.Asleep;
+            current.Idle = presence.Idle;
             current.SourceMomentId = turn.Moment.Id;
             current.Revision++;
-            if (store is SqliteMemoryManager sqlite) sqlite.TrySaveSubject(root, version.Revision, current);
-            else store.SavePluginDocument(StoreId, root, TraceJson.ToJson(current));
+            if (store is SqliteMemoryManager sqlite)
+                sqlite.TrySaveSubject(root, version.Revision, current, presence == local ? null : presence);
+            else
+            {
+                if (presence != local) store.SaveInnerRuntime(presence);
+                store.SavePluginDocument(StoreId, root, TraceJson.ToJson(current));
+            }
         }
 
         public static bool CommitReview(SqliteMemoryManager store, string root, long expectedRevision,

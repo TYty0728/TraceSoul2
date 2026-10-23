@@ -53,7 +53,7 @@ namespace TraceSoul2.Logic
             var builder = new StringBuilder(content);
             var runtime = turn.Services == null || turn.Services.Storage == null
                 ? null
-                : turn.Services.Storage.LoadOrCreateInnerRuntime(turn.ConversationId);
+                : SubjectRuntimeLogic.View(turn);
             var narrative = runtime == null ? string.Empty : (runtime.Narrative ?? string.Empty).Trim();
             if (narrative.Length > 0)
             {

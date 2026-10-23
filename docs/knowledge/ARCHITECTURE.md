@@ -6,6 +6,8 @@
 
 当前源码已接通同源身份、连续主体、环境局部状态与昼夜拼图闭环。白天追加切片，深夜按来源范围整合经历与感受、形成认知及更新有依据的身份摘要。实现与离线验收见 [实施记录](../EXISTENCE_IMPLEMENTATION.md)，真实模型自然度未验收。
 
+2026-10-21确定并本地收拢：同一Soul跨任意平台只能有一个权威实例、一份实时runtime和一条状态版本线。所有本人私密入口共用根会话；公开视图和未来可选注入只过滤同一份内容，不保存另一份当下。旧环境快照停止发展，来源/受众/固定发送目标继续保留。正式约束见[总纲第45节](../ARCHITECTURE_ALIGNMENT.md#45-所有平台共用唯一实时主体2026-10-21)，当前修改尚未发布/部署。
+
 ## 篇幅
 
 模型要写下的正文，字数写在第一次指令里。超出这个篇幅时，按同一次任务、同一篇幅重新生成。不把超限文字截成短句，也不把它当成空结果丢掉，也不把超长草稿交回模型照抄。原先没有篇幅、写完再补一道缩短或凝练，不是这个闭环。日志预览和协议字段长度不在这条规则里。
@@ -47,7 +49,7 @@ KernelLogic → 保存输入 / 判断唤醒类型 / 识图 / 记忆预激活
 | `Logic/CommonContextPackLogic.cs`、`Logic/LlmContextPackLogic.cs` | 公共前缀、历史窗口和供应商策略路由 |
 | `Prompts/CorePrompts.cs`、插件的 `*Prompts.cs` | 核心与器官提示词；不要在路由层散落提示词 |
 | `Logic/IdentityProjectionLogic.cs`、`Logic/PuzzleViewLogic.cs` | 身份来源、版本失效、分享批准及证据可见性 |
-| `Logic/SubjectRuntimeLogic.cs`、`Logic/RuntimeContextLogic.cs` | 连续主体与局部状态的统一视图、版本提交 |
+| `Logic/SubjectRuntimeLogic.cs`、`Logic/RuntimeContextLogic.cs` | 唯一根runtime、来源过滤视图、版本提交与旧版接回 |
 | `Logic/RuntimeSliceLogic.cs`、`Manager/SqliteRuntimeSlices.cs` | 白天追加切片、夜间日回望、来源保存与召回 |
 | `Logic/PublicExperienceLogic.cs` | 公开原文与切片按环境进入夜间认知整理 |
 | `Logic/MouthLogic.cs` | 身体/器官匹配与通道收口 |

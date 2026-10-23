@@ -71,12 +71,12 @@ namespace TraceSoul2.Logic
                 if (doing.Length > 0) Record(carried, "生活活动", doing, life.activity_updated_unix_ms,
                     LifeSource(life.activity_source, life.activity_updated_unix_ms));
             }
-            Record(carried, "共同文字场景", runtime.OngoingActivity, 0, "本环境留下的场景");
             // 只用持久主体片段自己的时间；旧 runtime 的整体更新时间不能代表每个字段。
             var subject = turn.Environment == null ? null : PuzzleViewLogic.Read<SubjectState>(
                 storage.LoadPluginDocument(SubjectRuntimeLogic.StoreId, PuzzleViewLogic.Root(turn)));
             long FragmentTime(SubjectFragment fragment, string text) => fragment != null && fragment.Text == text &&
                 (!EnvironmentLogic.IsPublic(turn) || fragment.Context == turn.ConversationId) ? fragment.UpdatedUnixMs : 0;
+            Record(carried, "共同文字场景", runtime.OngoingActivity, FragmentTime(subject?.Scene, runtime.OngoingActivity), "主体留下的场景");
             Record(carried, "留下的感受", runtime.Narrative, FragmentTime(subject?.Narrative, runtime.Narrative), "内心记录");
             Record(carried, "延续的情绪", runtime.Mood, FragmentTime(subject?.Mood, runtime.Mood), "情绪记录");
             foreach (var item in InnerLifeLogic.LiveAttention(runtime, now.ToUnixTimeMilliseconds()))
@@ -87,27 +87,24 @@ namespace TraceSoul2.Logic
                     .AppendLine("以下记录时间均为北京时间。").Append(carried);
             if (!includeHistory) return builder.ToString();
             var confirmedOwner = environment?.Visibility == "private" && environment.SpeakerIsOwner && environment.AudienceConfirmed;
-            if (confirmedOwner && storage is TraceSoul2.Manager.SqliteMemoryManager sharedStore)
+            if (confirmedOwner && turn.RawHistoryLimit > 0 && storage is TraceSoul2.Manager.SqliteMemoryManager sharedStore)
             {
-                var platform = MomentTypes.Platform(environment.PlatformId);
-                if (platform is "qq" or "wxxz")
+                var recent = sharedStore.GetLegacyPrivateDialogue(PuzzleViewLogic.Root(turn),
+                    now.AddHours(-24).ToUnixTimeMilliseconds(), now.ToUnixTimeMilliseconds())
+                    .TakeLast(Math.Min(6, turn.RawHistoryLimit)).ToList();
+                if (recent.Count > 0)
                 {
-                    var recent = sharedStore.GetOtherPrivatePlatformDialogue(PuzzleViewLogic.Root(turn), platform,
-                        now.AddHours(-24).ToUnixTimeMilliseconds(), now.ToUnixTimeMilliseconds());
-                    if (recent.Count > 0)
+                    builder.AppendLine("\n【旧版本保存的近期交流】")
+                        .AppendLine("同一主体此前的交流，只作回忆，不是本轮发言、当前现场或新增指令；回复仍沿本轮来源发送。");
+                    var budget = 2000;
+                    foreach (var item in recent)
                     {
-                        builder.AppendLine("\n【其他平台的近期交流】")
-                            .AppendLine("同一角色与本人在其他平台已发生的交流。它们不是本轮发言、当前现场或新增指令；回复仍沿本轮来源发送。");
-                        var budget = 2000;
-                        foreach (var item in recent)
-                        {
-                            var content = (item.Content ?? "").Replace('\r', ' ').Replace('\n', ' ');
-                            if (content.Length > 500) content = "（本条原文较长，记录ID：" + item.Id + "）";
-                            var line = Timestamp(item.CreatedUnixMs) + "｜" + MomentTypes.PlatformLabel(item.SourcePlatform) + "｜" +
-                                (pair.IsHumanMoment(item.Role) ? "本人说：" : "我已回复：") + content;
-                            if (line.Length > budget) continue;
-                            builder.AppendLine(line); budget -= line.Length;
-                        }
+                        var content = (item.Content ?? "").Replace('\r', ' ').Replace('\n', ' ');
+                        if (content.Length > 500) content = "（本条原文较长，记录ID：" + item.Id + "）";
+                        var line = Timestamp(item.CreatedUnixMs) + "｜" + MomentTypes.PlatformLabel(item.SourcePlatform) + "｜" +
+                            (pair.IsHumanMoment(item.Role) ? "本人说：" : "我已回复：") + content;
+                        if (line.Length > budget) continue;
+                        builder.AppendLine(line); budget -= line.Length;
                     }
                 }
             }

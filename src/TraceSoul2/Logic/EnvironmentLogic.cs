@@ -53,13 +53,21 @@ namespace TraceSoul2.Logic
                 observation = new EnvironmentObservationData { PlatformId = source.PluginId, SessionType = "private",
                     SessionId = "local", SpeakerId = "local-owner", ExclusivePair = true, DirectAddress = true };
 
-            // 只有内核内部的后台事件可以恢复已绑定的目标；外部未知消息不继承上轮权限。
-            if (observation == null && !store.LoadPairIdentity().IsHumanMoment(source.Role) &&
-                source.PluginId is "builtin.time" or "runtime.execution" or "night.residue")
-                observation = Observation(Read<EnvironmentSnapshotData>(store.LoadPluginDocument(StoreId, "target:" + root)));
-            observation ??= new EnvironmentObservationData { PlatformId = source.PluginId };
             var internalEvent = !store.LoadPairIdentity().IsHumanMoment(source.Role) &&
                 source.PluginId is "builtin.time" or "runtime.execution" or "night.residue";
+            // 自主唤醒使用独立确认的QQ目标；板端最后一次发言不转成主动播音许可。
+            // 执行回执保留明确的原请求环境；缺少原请求时也不能借用最后一次板端目标。
+            if (internalEvent && (observation == null ||
+                source.PluginId != "runtime.execution" && MouthLogic.BodyOfPlugin(observation.PlatformId) != BodyIds.Qq))
+            {
+                var target = ProactiveTarget(store, root);
+                var explicitDebug = target == null && observation?.PlatformId == "builtin.dialogue" &&
+                    observation.SpeakerId == "local-owner" && observation.ExclusivePair &&
+                    observation.SessionType == "private" && !string.IsNullOrWhiteSpace(observation.SessionId) &&
+                    !Settings(store).OwnerAccounts.Any(x => MouthLogic.BodyOfPlugin(x.PlatformId) == BodyIds.Qq);
+                if (!explicitDebug) observation = Observation(target);
+            }
+            observation ??= new EnvironmentObservationData { PlatformId = source.PluginId };
             var platform = internalEvent && observation.PlatformId != null ? observation.PlatformId : source.PluginId;
             var accounts = Settings(store).OwnerAccounts ?? new();
             var local = platform == "builtin.dialogue" && observation.SpeakerId == "local-owner" && observation.ExclusivePair;
@@ -69,8 +77,8 @@ namespace TraceSoul2.Logic
             var id = platform + ":" + observation.AccountId + ":" + observation.SessionType + ":" + observation.SessionId;
             if (string.IsNullOrWhiteSpace(observation.SessionId)) id = platform + ":unknown:" + (source.ExternalEventId ?? Guid.NewGuid().ToString("N"));
             var rootId = Read<EnvironmentSnapshotData>(store.LoadPluginDocument(StoreId, "target:" + root))?.RootConversationId ?? root;
-            // WXXZ shares the subject, but keeps its raw dialogue separate from QQ/console.
-            var scope = isPrivate && platform != "wxxz" ? rootId : rootId + ":environment:" +
+            // 平台只是入口。所有本人私密交流共用根作用域；公开作用域只用于来源/可见视图。
+            var scope = isPrivate ? rootId : rootId + ":environment:" +
                 Convert.ToHexString(SHA256.HashData(Encoding.UTF8.GetBytes(id))).Substring(0, 24).ToLowerInvariant();
             return new EnvironmentSnapshotData
             {
@@ -90,6 +98,13 @@ namespace TraceSoul2.Logic
 
         public static void Remember(IMemoryStore store, EnvironmentSnapshotData environment)
         {
+            // 兼容升级前保存的QQ目标，须在本轮板端/控制台覆盖根目标之前保全。
+            var root = environment.RootConversationId;
+            var previous = Read<EnvironmentSnapshotData>(store.LoadPluginDocument(StoreId, "target:" + root));
+            if (ValidProactiveQq(store, root, previous))
+                store.SavePluginDocument(StoreId, "proactive-qq:" + root, TraceJson.ToJson(previous));
+            if (ValidProactiveQq(store, root, environment))
+                store.SavePluginDocument(StoreId, "proactive-qq:" + root, TraceJson.ToJson(environment));
             store.SavePluginDocument(StoreId, "target:" + environment.ContextConversationId, TraceJson.ToJson(environment));
             // 根 runtime 保留最近的在场状态，私密后台目标单独保存，公开消息不会覆盖它。
             var runtime = store.LoadOrCreateInnerRuntime(environment.RootConversationId);
@@ -97,6 +112,24 @@ namespace TraceSoul2.Logic
             runtime.Revision++;
             runtime.SnapshotId = Guid.NewGuid().ToString("N");
             store.SaveInnerRuntime(runtime);
+        }
+
+        private static bool ValidProactiveQq(IMemoryStore store, string root, EnvironmentSnapshotData target) =>
+            target != null && target.RootConversationId == root && target.Visibility == "private" &&
+            target.SessionType == "private" && !string.IsNullOrWhiteSpace(target.SessionId) &&
+            target.SpeakerIsOwner && target.AudienceConfirmed && MouthLogic.BodyOfPlugin(target.PlatformId) == BodyIds.Qq &&
+            CanDeliver(store, target);
+
+        private static EnvironmentSnapshotData ProactiveTarget(IMemoryStore store, string root)
+        {
+            var saved = Read<EnvironmentSnapshotData>(store.LoadPluginDocument(StoreId, "proactive-qq:" + root));
+            if (ValidProactiveQq(store, root, saved)) return saved;
+            var legacy = Read<EnvironmentSnapshotData>(store.LoadPluginDocument(StoreId, "target:" + root));
+            if (ValidProactiveQq(store, root, legacy)) return legacy;
+            // 只有未配置QQ的本地调试会话可继续使用控制台；不能回退到开发板或其他真人目标。
+            return !Settings(store).OwnerAccounts.Any(x => MouthLogic.BodyOfPlugin(x.PlatformId) == BodyIds.Qq) &&
+                legacy?.RootConversationId == root && legacy.PlatformId == "builtin.dialogue" &&
+                legacy.SpeakerId == "local-owner" && legacy.Visibility == "private" ? legacy : null;
         }
 
         public static EnvironmentObservationData Observation(EnvironmentSnapshotData value) => value == null ? null : new()

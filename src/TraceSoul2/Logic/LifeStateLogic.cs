@@ -8,10 +8,7 @@ namespace TraceSoul2.Logic
     {
         public static string Scope(TraceTurnContext turn)
         {
-            var environment = turn.Environment;
-            return environment?.Visibility == "private" && environment.SpeakerIsOwner &&
-                environment.AudienceConfirmed && !string.IsNullOrWhiteSpace(environment.RootConversationId)
-                ? environment.RootConversationId : turn.ConversationId;
+            return PuzzleViewLogic.Root(turn);
         }
 
         public static string FormatDoing(LifeStateData life)

@@ -161,6 +161,8 @@ QQ和WXXZ的共用图库位于`runtime/plugins_data/qq-sticker/`，模型与语�
 
 ### 开发板桥
 
+2026-10-22新增可选的 [SSH 回环隧道工具](WXXZ_REMOTE_TUNNEL.md)，可在不重启现有容器的情况下，将电脑桥接入该容器的回环地址；需要远端宿主的明确 SSH/sudo 权限。工具只建立临时网络连接，仍须核对角色、声纹、语音配置及唯一 runtime 部署状态。
+
 开发板通过USB或已配对的局域网Wi-Fi连接运行`Tools/SensoryBoard/bridge.py`的电脑，桥负责采音、ASR及播放。Wi-Fi使用设备证书校验与独立令牌，充电宝仅供电；服务器不能直接使用本地电脑的COM端口，也不能把板端5443端口当作HTTP桥。可选择受保护的HTTPS网关，或把SSH转发建立在Host所在网络命名空间的回环端口；默认地址仍为`http://127.0.0.1:5089/`。
 
 专用HTTPS入口在Compose的私密`.env`中填写：

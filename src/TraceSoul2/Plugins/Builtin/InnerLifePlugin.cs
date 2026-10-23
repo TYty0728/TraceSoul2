@@ -75,7 +75,7 @@ namespace TraceSoul2.Plugins.Builtin
             {
                 if (output == null || !output.changed)
                     return Task.FromResult<TraceCapabilityResultData>(null);
-                var current = context.Services.Storage.LoadOrCreateInnerRuntime(context.ConversationId);
+                var current = SubjectRuntimeLogic.Current(context);
                 var clearHold = string.Equals(output.GetField("attention_clear", string.Empty), "true",
                     StringComparison.OrdinalIgnoreCase);
                 var attention = clearHold ? new List<AttentionWriteData>() : null;
@@ -131,7 +131,7 @@ namespace TraceSoul2.Plugins.Builtin
                 {
                     Status = "success",
                     Summary = "这一拍的内心余波已更新到 revision " + next.Revision + "。",
-                    Payload = InnerLifeLogic.Format(next),
+                    Payload = EnvironmentLogic.IsPublic(context) ? string.Empty : InnerLifeLogic.Format(next),
                     EvidenceRefs = new List<string> { "moment:" + context.Moment.Id }
                 });
             }

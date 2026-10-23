@@ -45,13 +45,17 @@ internal static partial class Program
                 EnvironmentLogic.Remember(store, environment);
                 var wake = new PluginEventData { PluginId = "builtin.time", Role = "system_event", Content = "心跳" };
                 var wakeEnvironment = EnvironmentLogic.Resolve(store, "call-test", wake);
-                var turn = new TraceTurnContext("call-test", null, new(), 0, false, services, environment: wakeEnvironment, wake: KernelWakeValues.Mind);
-                Require(manager.GetAvailableCatalog(turn).Any(x => x.Id == "realtime.call.text.send"), "原有主动联系唤醒能路由到当前电话");
+                var autonomous = new TraceTurnContext("call-test", null, new(), 0, false, services, environment: wakeEnvironment, wake: KernelWakeValues.Mind);
+                Require(wakeEnvironment.Visibility == "public" && !manager.GetAvailableCatalog(autonomous).Any(x => x.Id == "realtime.call.text.send"),
+                    "没有已确认QQ目标的自主唤醒不借用当前电话；通话在线不构成主动联系许可");
+                var turn = new TraceTurnContext("call-test", Moment("call-test", input.Content), new(), 0, true, services,
+                    environment: environment, wake: KernelWakeValues.Dialogue);
+                Require(manager.GetAvailableCatalog(turn).Any(x => x.Id == "realtime.call.text.send"), "本人本轮通话输入仍沿当前电话回复");
                 Require(AgentPromptContextLogic.Context(turn).Contains("无需填补沉默"), "持续通话状态进入 Agent 动态提示");
                 var result = await manager.ExecuteAsync(new BrainCapabilityCallData { capability_id = "realtime.call.text.send",
                     arguments = new() { new() { name = "text", value = "在做什么呢？" } } }, turn, default);
                 Require(result.Status == "success" && pushed.Count == 1 && result.ProducedEvent.IsOperational,
-                    "主动通话发言走实际推送并等待播放回执");
+                    "本轮通话回复走实际推送并等待播放回执");
                 using var output = JsonDocument.Parse(pushed[0]);
                 var id = output.RootElement.GetProperty("output_id").GetString();
                 hub.TakeInbound();
@@ -67,6 +71,6 @@ internal static partial class Program
             Require(services.MindTurnPromptAppends.Count == 0, "卸载删除通话动态提示");
         }
         finally { Directory.Delete(directory, true); }
-        Console.WriteLine("Realtime call integration checks passed: enrollment permission, private binding, existing proactive wake, playback environment and unload.");
+        Console.WriteLine("Realtime call integration checks passed: private binding, source-bound reply, proactive QQ boundary, playback environment and unload.");
     }
 }

@@ -20,6 +20,8 @@
 
 ## 使用
 
+连接远端 Docker Host 时，电脑继续运行本桥，使用 [SSH 回环隧道](../../docs/WXXZ_REMOTE_TUNNEL.md) 将桥接入目标容器；不需要本机另起 Soul。隧道、角色配置与实际语音通话分别验收。
+
 安装 Python 3.12/3.13 和 `requirements.txt` 到独立环境。在烧录本目录固件的板子连上 USB 后运行：
 
 ```powershell

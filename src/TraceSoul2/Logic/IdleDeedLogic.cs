@@ -110,7 +110,7 @@ namespace TraceSoul2.Logic
             if (turn == null || turn.Services == null || turn.Services.Storage == null)
                 return builder.ToString().TrimEnd();
 
-            var runtime = turn.Services.Storage.LoadOrCreateInnerRuntime(turn.ConversationId);
+            var runtime = SubjectRuntimeLogic.View(turn);
             var mood = runtime == null ? string.Empty : (runtime.Mood ?? string.Empty).Trim();
             var inner = runtime == null ? string.Empty : OneLine(runtime.Narrative, 500);
             builder.Append(CorePrompts.IdleDeed.MoodPrefix)

@@ -127,20 +127,19 @@ namespace TraceSoul2.Manager
                 .ToList();
         }
 
-        public List<MomentRecord> GetOtherPrivatePlatformDialogue(string root, string platform, long from, long through)
+        public List<MomentRecord> GetLegacyPrivateDialogue(string root, long from, long through)
         {
             var prefix = root + ":environment:";
             var pair = LoadPairIdentity();
             return connection.Query<MomentRecord>(
                 "SELECT * FROM moments WHERE MemoryVisibility='private' AND CreatedUnixMs>=? AND CreatedUnixMs<=? " +
-                "AND SourcePlatform IN ('qq','wxxz') AND SourcePlatform!=? " +
-                "AND (ConversationId=? OR substr(ConversationId,1,?)=?) " +
+                "AND substr(ConversationId,1,?)=? " +
                 "AND (MemoryStatus IS NULL OR MemoryStatus!='operational') ORDER BY CreatedUnixMs DESC LIMIT 128",
-                from, through, platform, root, prefix.Length, prefix)
+                from, through, prefix.Length, prefix)
                 .Where(m => pair.IsHumanMoment(m.Role) || pair.IsCompanionMoment(m.Role))
                 .Where(m => { var e = EnvironmentLogic.FromMoment(m);
                     return e?.RootConversationId == root && e.Visibility == "private" && e.SessionType == "private" &&
-                        e.SpeakerIsOwner && e.AudienceConfirmed &&
+                        e.ContextConversationId == m.ConversationId && !string.IsNullOrWhiteSpace(e.SessionId) && e.SpeakerIsOwner && e.AudienceConfirmed &&
                         MomentTypes.Platform(e.PlatformId) == m.SourcePlatform && EnvironmentLogic.CanDeliver(this, e); })
                 .Take(6).OrderBy(m => m.CreatedUnixMs).ToList();
         }
@@ -389,7 +388,7 @@ namespace TraceSoul2.Manager
 
         public InnerRuntimeData LoadOrCreateInnerRuntime(string conversationId)
         {
-            conversationId = Required(conversationId, "conversationId");
+            conversationId = RuntimeRoot(Required(conversationId, "conversationId"));
             var record = connection.Find<InnerRuntimeRecord>(conversationId);
             if (record != null) return ToRuntimeData(record);
             var created = InnerLifeLogic.CreateInitial(
@@ -403,6 +402,14 @@ namespace TraceSoul2.Manager
         {
             if (nextRuntime == null) throw new ArgumentNullException("nextRuntime");
             connection.RunInTransaction(() => WriteInnerRuntime(nextRuntime));
+        }
+
+        private string RuntimeRoot(string context)
+        {
+            var environment = PuzzleViewLogic.Read<EnvironmentSnapshotData>(LoadPluginDocument("kernel.environment", "target:" + context));
+            return environment?.ContextConversationId == context && !string.IsNullOrWhiteSpace(environment.RootConversationId) &&
+                (context == environment.RootConversationId || context.StartsWith(environment.RootConversationId + ":environment:", StringComparison.Ordinal))
+                ? environment.RootConversationId : context;
         }
 
         public List<CognitionSliceRecord> CommitCognitions(
@@ -1217,6 +1224,8 @@ namespace TraceSoul2.Manager
 
         private void WriteInnerRuntime(InnerRuntimeData next)
         {
+            if (RuntimeRoot(next.ConversationId) != next.ConversationId)
+                throw new InvalidOperationException("环境只持有主体的可见视图，不能另存一份 runtime。");
             var current = connection.Find<InnerRuntimeRecord>(next.ConversationId);
             if (current == null)
             {

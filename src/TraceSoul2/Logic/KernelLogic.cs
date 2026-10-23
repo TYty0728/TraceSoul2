@@ -166,15 +166,8 @@ namespace TraceSoul2.Logic
             conversationId = environment.ContextConversationId;
             var prepareTimer = Stopwatch.StartNew();
             var wake = KernelWakeLogic.Resolve(source);
-            var inner = storage.LoadOrCreateInnerRuntime(conversationId);
-            if (inner.Environment != environment && conversationId != environment.RootConversationId)
-            {
-                inner.Environment = environment;
-                inner.Revision++;
-                inner.SnapshotId = Guid.NewGuid().ToString("N");
-                storage.SaveInnerRuntime(inner);
-            }
             var subject = SubjectRuntimeLogic.Read(storage, environment.RootConversationId);
+            var inner = storage.LoadOrCreateInnerRuntime(environment.RootConversationId);
             inner.Asleep = subject.Asleep;
             inner.Idle = subject.Idle;
             if (inner.Asleep && HeartbeatLogic.ShouldSkipWhileAsleep(source, pair, wake) &&
@@ -1292,7 +1285,7 @@ namespace TraceSoul2.Logic
             output.facet_outputs = output.facet_outputs ?? new List<BrainFacetOutputData>();
             InnerRuntimeData runtime = null;
             if (turn != null && turn.Services != null && turn.Services.Storage != null)
-                runtime = turn.Services.Storage.LoadOrCreateInnerRuntime(turn.ConversationId);
+                runtime = SubjectRuntimeLogic.Current(turn);
             // Agent 的状态补丁保留字段存在性；旧 Mind 入口继续使用原结算规则。
             var proposed = InnerLifeLogic.ProposeFromMind(mind, runtime, turn != null && turn.RequiresExpression);
             if (InnerLifeLogic.HasProposedWrite(proposed))
@@ -1304,7 +1297,8 @@ namespace TraceSoul2.Logic
                     {
                         facet_id = "inner.snapshot",
                         changed = true,
-                        summary = proposed.narrative ?? InnerLifeLogic.FormatHold(runtime),
+                        summary = proposed.narrative ?? InnerLifeLogic.FormatHold(
+                            EnvironmentLogic.IsPublic(turn) ? SubjectRuntimeLogic.View(turn) : runtime),
                         fields = new List<BrainFacetFieldData>()
                     };
                     if (string.IsNullOrWhiteSpace(snapshot.summary)) snapshot.summary = "内心";
@@ -1410,7 +1404,7 @@ namespace TraceSoul2.Logic
         {
             if (EnvironmentLogic.IsPublic(turn)) return;
             if (turn == null || turn.Services == null || turn.Services.Storage == null) return;
-            var runtime = turn.Services.Storage.LoadOrCreateInnerRuntime(turn.ConversationId);
+            var runtime = SubjectRuntimeLogic.Current(turn);
             var heartbeatTurn = HeartbeatLogic.IsHeartbeatContent(
                 turn.Moment == null ? string.Empty : turn.Moment.Content);
             if (runtime.Asleep || (decision != null && decision.sleep))
