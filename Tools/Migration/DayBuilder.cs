@@ -389,9 +389,10 @@ namespace TraceSoul2.Migrate
             context.Migration.SetReviewStage("身份复盘与内心同步");
             var cardsNow = context.Store.LoadIdentityCards(MigrationContext.ConversationId);
             var reviewOutput = core.ReviewDone ? new ReplayPrompts.DayCardReviewOutputData { cards = new() }
-                : await RunDayReviewAsync(context, pair, llm, dayKey, cardsNow, userProfileCard, dayIndexes, dayEntries);
+                : await RunAutomaticDayReviewAsync(context, dayKey, core.EmptyDay);
             var changed = ApplyReviewOutput(context, pair, reviewOutput, cardsNow, lastMomentId, core.EmptyDay);
             UpdateReviewCheckpoint(context, dayKey);
+            CompleteAutomaticInner(context, dayKey, reviewOutput);
             core.ReviewDone = reviewOutput.PendingParts.Count == 0;
             WriteCoreCheckpoint(context, dayKey, core);
             if (core.DaySummaryPending) reviewOutput.PendingParts.Add("day_summary");
@@ -603,9 +604,24 @@ namespace TraceSoul2.Migrate
                     new DeepSeekMessageData("system", prompt),
                     new DeepSeekMessageData("user", CorePrompts.Migration.CognitionUser)
                 };
-                var output = await DeepSeekStructuredOutputLogic.CompleteAsync<ReplayPrompts.CognitionFormationOutputData>(
-                    llm, messages, null, "认知复盘必须输出包含 cognitions 数组的JSON对象。", CancellationToken.None,
-                    validationError: x => CognitionFormationLogic.ValidationError(x.cognitions, evidence, activeCognitions, activeTags));
+                var plan = cognitionKey == null ? null : PuzzleViewLogic.Read<CognitionPlanCheckpoint>(
+                    context.Store.LoadPluginDocument(CoreProgressDocuments, cognitionKey + ":proposal"));
+                var output = plan?.Stamp == cognitionStamp && plan?.CandidateStamp == candidateStamp ? plan.Output : null;
+                if (output == null)
+                {
+                    output = await DeepSeekStructuredOutputLogic.CompleteAsync<ReplayPrompts.CognitionFormationOutputData>(
+                        llm, messages, null, "认知复盘必须输出包含 cognitions 数组的JSON对象。", CancellationToken.None,
+                        validationError: x => CognitionFormationLogic.ValidationError(x.cognitions, evidence, activeCognitions, activeTags));
+                    if (cognitionKey != null) context.Store.SavePluginDocument(CoreProgressDocuments, cognitionKey + ":proposal",
+                        TraceJson.ToJson(new CognitionPlanCheckpoint { Stamp = cognitionStamp, CandidateStamp = candidateStamp, Output = output }));
+                }
+                var resolution = await CognitionConsolidationLogic.ResolveAsync(context.Store, llm, evidence,
+                    activeCognitions, output.cognitions, context.RequireCognitionEncoder, context.Vectors, CancellationToken.None);
+                activeCognitions = resolution.Candidates;
+                var validation = CognitionFormationLogic.ValidationError(resolution.Writes, evidence, activeCognitions, activeTags);
+                if (validation != null) throw new InvalidOperationException(validation);
+                output.cognitions = resolution.Writes;
+                candidateStamp = Digest(activeCognitions.OrderBy(x => x.Id, StringComparer.Ordinal));
                 var changed = progress == null ? context.Store.CommitCognitions(evidence[^1].Id, output.cognitions)
                     : context.Store.CommitCognitionsWithCheckpoint(evidence[^1].Id, output.cognitions,
                         CoreProgressDocuments, cognitionKey, () =>

@@ -104,11 +104,11 @@ internal static partial class Program
 
         var bad = Write("修正标签后保留原来的完整理解", wrongTag);
         var corrected = Write(bad.summary, tagId);
-        var repair = new AgentSequenceLlm(Json(bad), Json(corrected));
+        var repair = new AgentSequenceLlm(Json(bad), Json(corrected), ConsolidationNewReply(corrected.summary));
         Run(repair);
         var saved = graph.GetCognitionNodes(100).Single(x => x.Summary == bad.summary);
         var correction = repair.Messages[1].Last().content;
-        Require(repair.Requests.Count == 2 && correction.Contains("cognitions[0].tag_ids[0]") &&
+        Require(repair.Requests.Count == 3 && correction.Contains("cognitions[0].tag_ids[0]") &&
             correction.Contains("竖线左侧") && repair.Messages[1][0].content.Contains(tagId + " | 合成测试标签") &&
             !correction.Contains(wrongTag) && store.GetCognitionTagIds(new[] { saved.Id })[saved.Id].SequenceEqual(new[] { tagId }) &&
             graph.GetCognitionEvidence(new[] { saved.Id }).Single().MomentId == source.Id,
@@ -137,14 +137,14 @@ internal static partial class Program
 
         var noTag = Write("模型明确选择不挂可选标签仍可保存", wrongTag);
         var noTagJson = Json(noTag); noTag.tag_ids.Clear();
-        var optional = new AgentSequenceLlm(noTagJson, Json(noTag));
+        var optional = new AgentSequenceLlm(noTagJson, Json(noTag), ConsolidationNewReply(noTag.summary));
         Run(optional);
         var optionalSaved = graph.GetCognitionNodes(100).Single(x => x.Summary == noTag.summary);
-        Require(optional.Requests.Count == 2 && store.GetCognitionTagIds(new[] { optionalSaved.Id }).Values.All(x => x.Count == 0),
+        Require(optional.Requests.Count == 3 && store.GetCognitionTagIds(new[] { optionalSaved.Id }).Values.All(x => x.Count == 0),
             "LLM可以在纠错时明确返回空可选标签，正文及原始依据仍经校验保存");
-        var direct = new AgentSequenceLlm(Json(Write("合法结果无需再纠错", tagId)));
+        var direct = new AgentSequenceLlm(Json(Write("合法结果无需再纠错", tagId)), ConsolidationNewReply("合法结果无需再纠错"));
         Run(direct);
-        Require(direct.Requests.Count == 1, "合法认知不增加纠错调用");
+        Require(direct.Requests.Count == 2 && direct.Requests[1].Contains("认知写入前比较"), "合法认知不增加格式纠错，仍经过写入前语义比较");
         Console.WriteLine("Cognition repair Migration checks passed: targeted retry, valid tags, optional empty tags, strict evidence and no partial writes.");
     }
 

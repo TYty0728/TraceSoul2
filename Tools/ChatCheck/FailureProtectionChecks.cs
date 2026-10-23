@@ -19,6 +19,7 @@ internal static partial class Program
     {
         await RunMainModelFallbackChecksAsync();
         await RunIdentityReorganizationChecksAsync();
+        await RunIdentityEvolutionChecksAsync();
         var directory = Path.Combine(Path.GetTempPath(), "tracesoul-failure-check-" + Guid.NewGuid().ToString("N"));
         Directory.CreateDirectory(directory);
         try

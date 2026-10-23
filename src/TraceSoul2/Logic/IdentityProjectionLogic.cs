@@ -11,14 +11,21 @@ namespace TraceSoul2.Logic
     /// <summary>同一身份依据的稳定视图。卡片与认知共享出处，失效依据不继续冒充当前自我。</summary>
     public static class IdentityProjectionLogic
     {
+        // Evidence/weight revisions do not change what a cognition means. Sharing approvals
+        // continue to use PuzzleViewLogic.Stamp, which binds the exact source revision.
+        public static string MeaningStamp(CognitionSliceRecord node) => "meaning-v1:" + PuzzleViewLogic.Fingerprint(new {
+            node.Id, node.Summary, node.Domains, node.About, node.Scope, node.Exceptions,
+            node.IdentitySlot, node.Status, node.LastChallengedUnixMs, node.ContextConversationId, node.MemoryVisibility, node.SubjectKey });
+        public static bool Matches(string stamp, CognitionSliceRecord node)
+            => stamp == MeaningStamp(node) || stamp == PuzzleViewLogic.Stamp(node);
         public static bool Current(IdentityCardRecord card, IEnumerable<CognitionSliceRecord> nodes)
         {
             if (card.Origin != "derived") return true;
             var sources = PuzzleViewLogic.Read<Dictionary<string, string>>(card.CognitionSourcesJson);
             if (sources == null || sources.Count == 0) return false;
             var index = nodes.ToDictionary(x => x.Id);
-            return sources.All(x => index.TryGetValue(x.Key, out var node) && node.Status == "active" &&
-                PuzzleViewLogic.Stamp(node) == x.Value);
+            return sources.All(x => index.TryGetValue(x.Key, out var node) && PuzzleDomains.Live(node.Status) &&
+                Matches(x.Value, node));
         }
 
         public static string Build(TraceTurnContext turn)
@@ -45,10 +52,35 @@ namespace TraceSoul2.Logic
             var pinned = cards.Where(x => x.Pinned).Select(x => x.Slot).ToHashSet();
             var covered = cards.Where(x => Current(x, nodes) && (!isPublic || PuzzleViewLogic.Shared(store, x.Id, PuzzleViewLogic.Stamp(x))))
                 .SelectMany(x => (PuzzleViewLogic.Read<Dictionary<string, string>>(x.CognitionSourcesJson) ?? new()).Keys).ToHashSet();
+            var details = new HashSet<string>();
             var chars = 0;
+            var groupsShown = 0;
+            var visibleIds = visible.Select(x => x.Id).ToHashSet();
+            if (store is SqliteMemoryManager sql)
+                foreach (var card in cards.Where(x => !x.Pinned && Current(x, nodes)))
+                {
+                    var state = IdentityEvolutionLogic.Read(sql, PuzzleViewLogic.Root(turn), card.Slot);
+                    if (state?.cardStamp != PuzzleViewLogic.Stamp(card)) continue;
+                    var current = nodes.Where(x => PuzzleDomains.Live(x.Status) && x.IdentitySlot == card.Slot && x.MemoryVisibility != "public" &&
+                        (string.IsNullOrEmpty(x.ContextConversationId) || x.ContextConversationId == PuzzleViewLogic.Root(turn)));
+                    if (state.sourcesStamp != IdentityEvolutionLogic.SourcesStamp(current)) continue;
+                    foreach (var item in state.details) details.Add(item.id);
+                    foreach (var group in state.understandings)
+                    {
+                        var alreadyRepresented = group.cognition_ids.Any(covered.Contains);
+                        if (!alreadyRepresented && group.cognition_ids.All(visibleIds.Contains) && groupsShown < 12)
+                        {
+                            var text = "【经历形成的理解：" + card.Slot + "】" + group.meaning + "；适用：" + group.scope +
+                                "；例外：" + group.exceptions + "；确定程度：" + group.certainty;
+                            if (chars + text.Length <= 3000) { builder.AppendLine(text); chars += text.Length; groupsShown++; }
+                        }
+                        // One represented understanding can have many historical paraphrase nodes.
+                        foreach (var id in group.cognition_ids) covered.Add(id);
+                    }
+                }
             foreach (var node in visible.Where(x => x.Status == "active" && !string.IsNullOrEmpty(x.IdentitySlot) &&
-                         !pinned.Contains(x.IdentitySlot) && !covered.Contains(x.Id))
-                .OrderByDescending(x => x.Strength).ThenBy(x => x.Id, StringComparer.Ordinal).Take(12))
+                         !pinned.Contains(x.IdentitySlot) && !covered.Contains(x.Id) && !details.Contains(x.Id))
+                .OrderByDescending(x => x.Strength).ThenBy(x => x.Id, StringComparer.Ordinal).Take(Math.Max(0, 12 - groupsShown)))
             {
                 var text = "【经历形成的理解：" + node.IdentitySlot + "】" + node.Summary +
                     (node.IdentitySlot is "other" or "relation" ? "；对象：" + node.About + "（" + node.SubjectKey + "）" : "") +

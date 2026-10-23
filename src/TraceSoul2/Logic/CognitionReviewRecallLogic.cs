@@ -16,7 +16,7 @@ namespace TraceSoul2.Logic
 
         public static List<CognitionSliceRecord> Select(SqliteMemoryManager store, IReadOnlyList<MomentRecord> evidence,
             Func<IVectorEncoder> encoderFactory, IVectorCacheStore cache = null, string context = null,
-            CancellationToken token = default)
+            CancellationToken token = default, IReadOnlyList<string> queryOverride = null)
         {
             token.ThrowIfCancellationRequested();
             if (evidence == null || evidence.Count == 0) return new();
@@ -28,7 +28,7 @@ namespace TraceSoul2.Logic
             var nodes = store.GetCognitionReviewCandidates(scope, isPublic);
             if (nodes.Count == 0) return new();
             var encoder = encoderFactory?.Invoke() ?? throw new InvalidOperationException("认知复盘缺少语义编码器，未进行认知写入。");
-            var queries = evidence.Select(x => x.Content).Append(context).SelectMany(Chunks)
+            var queries = (queryOverride ?? evidence.Select(x => x.Content).Append(context).ToList()).SelectMany(Chunks)
                 .Distinct(StringComparer.Ordinal).Select(x => Encode(encoder, x, VectorTextPurpose.Query, token)).ToList();
             if (queries.Count == 0) return new();
             var hits = new List<(CognitionSliceRecord Node, float[] Scores)>();

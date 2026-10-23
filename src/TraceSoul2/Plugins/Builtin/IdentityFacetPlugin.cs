@@ -18,7 +18,7 @@ namespace TraceSoul2.Plugins.Builtin
             Version = "2.1.0",
             Author = "TraceSoul2",
             Role = PluginRoleValues.Kernel,
-            Description = "每轮挂载我的人格、我是谁、她是谁、我们的关系；每日复盘时由中枢在开口后调用 identity.review。"
+            Description = "每轮挂载我的人格、我是谁、她是谁、我们的关系；日构建及显式 identity.review 共用有检查点的认识演化流程。"
         };
 
         public void Register(TracePluginContext context)
@@ -97,29 +97,25 @@ namespace TraceSoul2.Plugins.Builtin
                 TraceTurnContext context,
                 CancellationToken cancellationToken)
             {
-                var pair = context.Services.Storage.LoadPairIdentity();
-                var cards = context.Services.Storage.LoadIdentityCards(context.ConversationId);
-                var since = DateTimeOffset.UtcNow.AddHours(-26).ToUnixTimeMilliseconds();
-                var moments = context.Services.Storage.GetMomentsSince(context.ConversationId, since, 80);
-                var inner = context.Services.Storage.LoadOrCreateInnerRuntime(context.ConversationId);
-                var llm = ResolveLlm(context);
-                if (llm == null)
-                    throw new InvalidOperationException("复盘没有可用的语言模型。请在「大脑 · LLM」里指定复盘槽或对话开口。");
-                var review = new IdentityReviewLogic(llm);
-                var output = await review.AnalyzeAsync(
-                    pair, cards, moments, inner.Narrative, context.ConversationId, cancellationToken);
-                output = IdentityCardLogic.Normalize(output, cards, pair);
-                var changed = context.Services.Storage.ApplyIdentityReview(
-                    context.ConversationId, context.Moment.Id, output);
-                var next = context.Services.Storage.LoadIdentityCards(context.ConversationId);
-                return new TraceCapabilityResultData
+                if (EnvironmentLogic.IsPublic(context)) throw new InvalidOperationException("身份重整只能从私密主体入口执行。");
+                if (context.Services.Storage is not SqliteMemoryManager store)
+                    throw new InvalidOperationException("身份演化需要支持检查点的主体存储。");
+                var llm = ResolveLlm(context) ?? throw new InvalidOperationException("复盘没有可用的语言模型。");
+                var root = PuzzleViewLogic.Root(context);
+                var day = MemoryDayLogic.ClosedDayKey(DateTimeOffset.Now);
+                var changed = new List<string>(); var pending = new List<string>();
+                foreach (var slot in IdentityReorganizationLogic.Slots)
                 {
-                    Status = "success",
-                    Summary = string.IsNullOrWhiteSpace(output.summary)
-                        ? (changed.Count == 0 ? "身份短卡无需修订。" : "已修订 " + changed.Count + " 张身份短卡。")
-                        : output.summary,
-                    Payload = IdentityCardLogic.FormatForExpressor(next, pair),
-                    EvidenceRefs = changed.Select(x => "identity:" + x.Slot).ToList()
+                    var state = await IdentityEvolutionLogic.EvaluateAsync(store, root, slot, day, llm, cancellationToken);
+                    if (state?.pending == true) { pending.Add(slot); continue; }
+                    IdentityEvolutionLogic.Commit(store, root, slot, state);
+                    if (state?.decision.effect == "changed") changed.Add(slot);
+                }
+                return new TraceCapabilityResultData {
+                    Status = pending.Count > 0 ? "pending" : "success",
+                    Summary = pending.Count > 0 ? "认识已保存，部分身份正文待整理。" : changed.Count == 0 ? "当前身份认识保持不变。" : "已更新有实质变化的身份认识。",
+                    Payload = IdentityProjectionLogic.Build(context),
+                    EvidenceRefs = changed.Select(x => "identity:" + x).ToList()
                 };
             }
 

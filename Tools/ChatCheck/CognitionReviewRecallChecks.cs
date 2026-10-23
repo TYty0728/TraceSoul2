@@ -134,7 +134,7 @@ internal static partial class Program
         fresh = new MomentRecord { Id = "recall-revision", ConversationId = source.ConversationId, Role = "user",
             Content = "早餐只想要不甜的面包", CreatedUnixMs = source.CreatedUnixMs + 2000 };
         store.SaveMoment(fresh);
-        Run(new AgentSequenceLlm(Json(Write("他喜欢不甜的烘焙食品", "revise", old.Id))));
+        Run(new AgentSequenceLlm(Json(Write("他喜欢不甜的烘焙食品", "revise", old.Id)), TraceJson.ToJson(new { decisions = new[] { new { index = 0, kind = "revise", target_id = old.Id, before = old.Summary, after = "他喜欢不甜的烘焙食品", explanation = "偏好的条件发生变化" } } })));
         var revised = graph.GetCognitionNodes(5000).Single(x => x.Summary == "他喜欢不甜的烘焙食品");
         var next = new AgentSequenceLlm("{\"cognitions\":[]}"); Run(next);
         Require(graph.GetCognitionNodes(5000).Single(x => x.Id == old.Id).Status == "superseded" &&

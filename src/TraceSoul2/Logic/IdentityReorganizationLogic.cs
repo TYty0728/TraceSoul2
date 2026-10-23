@@ -64,8 +64,8 @@ namespace TraceSoul2.Logic
         public static string Digest(object value) => Convert.ToHexString(SHA256.HashData(Encoding.UTF8.GetBytes(TraceJson.ToJson(value))));
         public static string RecoveryHash(SqliteMemoryManager store, string day) => Digest(
             store.LoadPluginDocument("daily-review-recovery-v1", "identity:" + day));
-        public static List<CognitionSliceRecord> Sources(SqliteMemoryManager store, string root, string slot)
-            => store.ReadIdentityReorganizationNodes().Where(x => x.Status == "active" && x.IdentitySlot == slot &&
+        public static List<CognitionSliceRecord> Sources(SqliteMemoryManager store, string root, string slot, bool includeWeakened = false)
+            => store.ReadIdentityReorganizationNodes().Where(x => (x.Status == "active" || (includeWeakened && x.Status == "weakened")) && x.IdentitySlot == slot &&
                 x.MemoryVisibility != "public" && (string.IsNullOrEmpty(x.ContextConversationId) || x.ContextConversationId == root))
                 .OrderBy(x => x.Id, StringComparer.Ordinal).ToList();
         public static string GraphStamp(SqliteMemoryManager store) => Digest(store.ReadIdentityReorganizationNodes()
@@ -172,10 +172,10 @@ namespace TraceSoul2.Logic
             if (covered.Count != ids.Count || covered.Distinct().Count() != covered.Count || ids.Except(covered).Any())
                 throw new IdentityReorganizationException("理解归并遗漏、重复或引用了未知认知，原件保留。");
         }
-        public static void ValidateProposal(Draft draft)
+        public static void ValidateProposal(Draft draft, bool checkLength = true)
         {
             var p = draft.proposal;
-            if (p == null || string.IsNullOrWhiteSpace(p.body) || p.body.Length > IdentityCardSlotValues.BodyLimit(draft.slot) ||
+            if (p == null || string.IsNullOrWhiteSpace(p.body) || (checkLength && p.body.Length > IdentityCardSlotValues.BodyLimit(draft.slot)) ||
                 string.IsNullOrWhiteSpace(p.change) || p.understanding_indices == null || p.understanding_indices.Count == 0 ||
                 p.understanding_indices.Distinct().Count() != p.understanding_indices.Count ||
                 p.understanding_indices.Any(i => i < 0 || i >= draft.understandings.Count) ||

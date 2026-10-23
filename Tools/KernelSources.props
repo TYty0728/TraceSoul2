@@ -5,6 +5,9 @@
     已移入 TraceSoul2.PluginApi 项目（PluginApiSources.props），这里不再重复编译。
   -->
   <ItemGroup>
+    <Compile Include="$(MSBuildThisFileDirectory)../src/TraceSoul2/Logic/IdentityEvolutionLogic.cs" />
+    <Compile Include="$(MSBuildThisFileDirectory)../src/TraceSoul2/Manager/SqliteIdentityEvolution.cs" />
+    <Compile Include="$(MSBuildThisFileDirectory)../src/TraceSoul2/Logic/CognitionConsolidationLogic.cs" />
     <Compile Include="$(MSBuildThisFileDirectory)../src/TraceSoul2/Logic/IdentityReorganizationLogic.cs" />
     <Compile Include="$(MSBuildThisFileDirectory)../src/TraceSoul2/Manager/SqliteIdentityReorganization.cs" />
     <Compile Include="$(MSBuildThisFileDirectory)../src/TraceSoul2/Logic/PuzzleViewLogic.cs" />

@@ -119,6 +119,18 @@ namespace TraceSoul2.Manager
             }
             if (op == "reinforce" || op == "weaken" || op == "retire")
             {
+                // Upgrade only references whose exact old source still matches, before its
+                // metadata changes. Never bless a previously stale or edited source.
+                foreach (var card in connection.Table<IdentityCardRecord>().Where(x => x.Origin == "derived").ToList())
+                {
+                    var refs = PuzzleViewLogic.Read<Dictionary<string, string>>(card.CognitionSourcesJson);
+                    if (refs == null || !refs.TryGetValue(target.Id, out var oldStamp) || oldStamp != PuzzleViewLogic.Stamp(target)) continue;
+                    SavePluginDocument("kernel.identity.history", card.Id + ":" + card.Revision + ":" + PuzzleViewLogic.Stamp(card),
+                        TraceSoul2.Util.TraceJson.ToJson(card));
+                    refs[target.Id] = IdentityProjectionLogic.MeaningStamp(target);
+                    card.CognitionSourcesJson = TraceSoul2.Util.TraceJson.ToJson(refs);
+                    connection.Update(card);
+                }
                 // 重放相同证据不能反复改变置信与强度。
                 if (op != "retire" && evidence.All(e => connection.Table<CognitionEvidenceRecord>().Any(x =>
                     x.CognitionId == target.Id && x.MomentId == e.MomentId && x.Relation == relation)))
@@ -135,7 +147,7 @@ namespace TraceSoul2.Manager
                 target.Confidence = op == "reinforce" ? Math.Max(target.Confidence, confidence) : Math.Min(target.Confidence, confidence);
                 target.Strength = Clamp01(target.Strength + (op == "reinforce" ? 0.08f : -0.08f));
                 target.Status = op == "retire" ? "retired" : op == "weaken" ? "weakened" : "active";
-                if (op == "reinforce") target.LastConfirmedUnixMs = now; else target.LastChallengedUnixMs = now;
+                if (op == "reinforce") target.LastConfirmedUnixMs = now; else target.LastChallengedUnixMs = Math.Max(now, target.LastChallengedUnixMs + 1);
                 target.Revision++; target.UpdatedUnixMs = now;
                 connection.Update(target); AddGraphEvidence(target.Id, evidence, relation);
                 return target;

@@ -156,7 +156,7 @@ internal static partial class Program
             var formation = Method("RunCognitionFormationWithRecoveryAsync");
             var cogOutput = TraceJson.ToJson(new { cognitions = new[] { new { operation = "create", summary = "我会共同核对计划",
                 domains = new[] { "ass" }, evidence_moment_ids = new[] { cognitionSources[0].Id }, confidence = .7, strength = .6 } } });
-            var firstCognition = new AgentSequenceLlm(cogOutput);
+            var firstCognition = new AgentSequenceLlm(cogOutput, ConsolidationNewReply("我会共同核对计划"));
             Require(Rejected(() => Await(formation, context, store.LoadPairIdentity(), firstCognition, cognitionDay,
                 new List<EventIndexRecord>(), new List<EventEntryRecord>(), cognitionSources, cognitionSource)),
                 "后续认知批失败停止且保留首批检查点");

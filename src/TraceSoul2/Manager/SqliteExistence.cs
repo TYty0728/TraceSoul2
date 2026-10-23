@@ -39,7 +39,7 @@ namespace TraceSoul2.Manager
                 var current = connection.Find<IdentityCardRecord>(conversationId + "|" + slot);
                 if (current?.Pinned == true) throw new InvalidOperationException("本人固定的身份内容不能被复盘覆盖。");
                 var nodes = ids.Select(id => connection.Find<CognitionSliceRecord>(id)).ToList();
-                if (nodes.Any(n => n == null || n.Status != "active" ||
+                if (nodes.Any(n => n == null || !PuzzleDomains.Live(n.Status) ||
                     (!string.IsNullOrEmpty(n.ContextConversationId) && n.ContextConversationId != conversationId) ||
                     n.MemoryVisibility == "public" || n.IdentitySlot != slot))
                     throw new InvalidOperationException("身份摘要引用了失效、跨环境或用途不符的认知。");
@@ -47,7 +47,7 @@ namespace TraceSoul2.Manager
                     throw new InvalidOperationException("身份摘要缺少经历来源。");
                 result = SaveIdentityCard(conversationId, slot, body, sourceMomentId);
                 result.Origin = "derived";
-                result.CognitionSourcesJson = TraceJson.ToJson(nodes.ToDictionary(n => n.Id, PuzzleViewLogic.Stamp));
+                result.CognitionSourcesJson = TraceJson.ToJson(nodes.ToDictionary(n => n.Id, IdentityProjectionLogic.MeaningStamp));
                 connection.Update(result);
             });
             return result;

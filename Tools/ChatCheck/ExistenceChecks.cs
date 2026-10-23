@@ -127,9 +127,9 @@ internal static partial class Program
                 PublicEvidence("public-a", publicEnv); PublicEvidence("public-b", otherEnv);
                 var publicWrite = Write("public-a", "我在多人交流时也愿意认真倾听。");
                 var reviewLlm = new AgentSequenceLlm(TraceJson.ToJson(new PublicExperienceLogic.Output { cognitions = new() { publicWrite } }),
-                    "{\"cognitions\":[]}");
+                    ConsolidationNewReply(publicWrite.summary), "{\"cognitions\":[]}");
                 var built = await PublicExperienceLogic.BuildAsync(store, reviewLlm, dayStart, dayStart + 86400000);
-                Require(built == 2 && reviewLlm.Requests.Count == 2 && reviewLlm.Requests.All(x => !x.Contains(secret)) &&
+                Require(built == 2 && reviewLlm.Requests.Count == 3 && reviewLlm.Requests.All(x => !x.Contains(secret)) &&
                     !store.GetUnbuiltPublicMemoryDayKeysBefore(dayStart + 86400000).Contains("2001-02-03"),
                     "公开经历按环境整理，无私密卡或原件混入；真实提交后退出队列");
                 var publicNode = store.GetCognitionNodes(50).Single(x => x.Summary == publicWrite.summary);

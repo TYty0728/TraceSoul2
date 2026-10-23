@@ -195,43 +195,27 @@ internal static partial class Program
 
     private static void RunDayReviewRecoveryChecks(Assembly assembly)
     {
-        var directory = Path.Combine(Path.GetTempPath(), "daily-recovery-" + Guid.NewGuid().ToString("N"));
+        var directory = Path.Combine(Path.GetTempPath(), "daily-evolution-" + Guid.NewGuid().ToString("N"));
         Directory.CreateDirectory(directory);
-        var path = Path.Combine(directory, "brain.db");
-        var history = Path.Combine(directory, "migration.db");
+        var path = Path.Combine(directory, "brain.db"); var history = Path.Combine(directory, "migration.db");
         var contextType = assembly.GetType("TraceSoul2.Migrate.MigrationContext", true);
-        var storeType = assembly.GetType("TraceSoul2.Manager.SqliteMemoryManager", true);
         var builder = assembly.GetType("TraceSoul2.Migrate.DayBuilder", true);
         MethodInfo Method(string name) => builder.GetMethod(name, BindingFlags.Static | BindingFlags.NonPublic);
-        IDisposable context = null;
-        object actualStore = null;
-        IMemoryStore store = null;
+        IDisposable context = null; IMemoryStore store = null;
         void Open()
         {
             context = (IDisposable)Activator.CreateInstance(contextType);
-            actualStore = Activator.CreateInstance(storeType, path);
-            contextType.GetProperty("Store").SetValue(context, actualStore);
-            contextType.GetProperty("Migration").SetValue(context, Activator.CreateInstance(
-                assembly.GetType("TraceSoul2.Migrate.MigrationDb", true), history, path));
-            store = (IMemoryStore)actualStore;
-            store.SavePairIdentity("本人", "同伴", "称呼");
-            store.LoadIdentityCards("tracesoul2");
+            store = (IMemoryStore)Activator.CreateInstance(assembly.GetType("TraceSoul2.Manager.SqliteMemoryManager", true), path);
+            contextType.GetProperty("Store").SetValue(context, store);
+            contextType.GetProperty("Migration").SetValue(context, Activator.CreateInstance(assembly.GetType("TraceSoul2.Migrate.MigrationDb", true), history, path));
+            store.SavePairIdentity("本人", "同伴", "称呼"); store.LoadIdentityCards("tracesoul2");
         }
-        List<MomentRecord> Seed(string day, int count = 1)
+        void Checkpoint(string day)
         {
-            var start = MemoryDayLogic.StartOf(day).ToUnixTimeMilliseconds();
-            var sources = Enumerable.Range(0, count).Select(i => new MomentRecord { Id = day + "-" + i,
-                ConversationId = "tracesoul2", Role = "user", Content = "完整测试来源", CreatedUnixMs = start + i }).ToList();
-            foreach (var source in sources) store.SaveMoment(source);
-            return sources;
-        }
-        void Checkpoint(string day, List<MomentRecord> sources, bool summaryPending = false, bool reviewDone = false)
-        {
-            var core = Method("SaveCoreCheckpoint").Invoke(null, new object[] { context, day, sources,
-                new List<EventIndexRecord>(), new List<EventEntryRecord>(), null });
+            var m = new MomentRecord { Id = day, ConversationId = "tracesoul2", Role = "user", Content = "原始合成经历", CreatedUnixMs = MemoryDayLogic.StartOf(day).ToUnixTimeMilliseconds() };
+            store.SaveMoment(m);
+            var core = Method("SaveCoreCheckpoint").Invoke(null, new object[] { context, day, new List<MomentRecord> { m }, new List<EventIndexRecord>(), new List<EventEntryRecord>(), null });
             core.GetType().GetField("Ranked").SetValue(core, true);
-            core.GetType().GetField("ReviewDone").SetValue(core, reviewDone);
-            core.GetType().GetField("DaySummaryPending").SetValue(core, summaryPending);
             Method("WriteCoreCheckpoint").Invoke(null, new object[] { context, day, core });
         }
         void Run(string day, ILlmClient llm)
@@ -239,259 +223,79 @@ internal static partial class Program
             contextType.GetProperty("Llm").SetValue(context, llm);
             ((Task)builder.GetMethod("RunAsync").Invoke(null, new object[] { context, new[] { "--day", day } })).GetAwaiter().GetResult();
         }
-        string Output(string reference, string body, string habit = "合格的表达理解") => TraceJson.ToJson(new {
-            cards = new[] { new { slot = "relation", body, cognition_ids = new[] { reference } },
-                new { slot = "expression_habit", body = habit, cognition_ids = new[] { "h" } } } });
-        string Repair(string body) => TraceJson.ToJson(new { items = new[] { new { id = "relation", body } } });
+        var longRelation = true; var change = true; var interruptHabit = false;
+        var stages = new List<string>();
+        string Reply(List<DeepSeekMessageData> messages)
+        {
+            var system = messages[0].content; stages.Add(system);
+            using var json = JsonDocument.Parse(messages.Last().content);
+            var input = json.RootElement;
+            if (system.Contains("自动身份·认识归并"))
+            {
+                var ids = input.GetProperty("cognitions").EnumerateArray().Select(x => x.GetProperty("Id").GetString()).ToArray();
+                if (interruptHabit && ids.Contains("h")) throw new TimeoutException("synthetic interruption");
+                return ReorganizationAssessment(ids);
+            }
+            if (system.Contains("自动身份·变化判断"))
+            {
+                var ids = input.GetProperty("current_understandings")[0].GetProperty("cognition_ids").EnumerateArray().Select(x => x.GetString()).ToArray();
+                return TraceJson.ToJson(new { basis_ids = ids, effect = change ? "changed" : "unchanged", reason = change ? "认识形成" : "已有认识保持贴切", deltas = change
+                    ? new object[] { new { kind = "add", before = "", after = "有依据的当前认识", cognition_ids = ids } } : Array.Empty<object>() });
+            }
+            if (system.Contains("自动身份·当前认识成稿"))
+            {
+                Require(!messages.Last().content.Contains("old_card") && !messages.Last().content.Contains("原卡"), "自动成稿没有递归旧正文输入");
+                var ids = input.GetProperty("understandings")[0].GetProperty("cognition_ids").EnumerateArray().Select(x => x.GetString()).ToArray();
+                return TraceJson.ToJson(new { body = longRelation && input.GetProperty("slot").GetString() == "relation" ? new string('长', 745) : "当前关系认识及必要条件",
+                    change = "认识变化", understanding_indices = new[] { 0 }, cognition_ids = ids });
+            }
+            if (system.Contains("日终内心")) return "{\"cards\":[],\"inner_narrative\":\"这一天留下平静的感受\",\"inner_mood\":\"平静\"}";
+            throw new InvalidOperationException("Unexpected automatic stage");
+        }
         try
         {
-            Open();
-            const string day = "2020-08-20";
-            var sources = Seed(day);
+            Open(); const string day = "2020-08-20"; Checkpoint(day);
             using (var db = new SQLite.SQLiteConnection(path))
                 foreach (var item in new[] { ("r", "relation"), ("h", "expression_habit") })
                 {
-                    db.Insert(new CognitionSliceRecord { Id = item.Item1, IdentitySlot = item.Item2, Status = "active",
-                        Summary = "当前有效理解", ContextConversationId = "tracesoul2", MemoryVisibility = "private" });
-                    db.Insert(new CognitionEvidenceRecord { Id = "e-" + item.Item1, CognitionId = item.Item1,
-                        MomentId = sources[0].Id, Relation = "support", Weight = 1 });
+                    db.Insert(new CognitionSliceRecord { Id = item.Item1, IdentitySlot = item.Item2, Status = "active", Summary = "完整理解", ContextConversationId = "tracesoul2", MemoryVisibility = "private" });
+                    db.Insert(new CognitionEvidenceRecord { Id = "e-" + item.Item1, CognitionId = item.Item1, MomentId = day, Relation = "supports" });
                 }
-            Checkpoint(day, sources);
-            var first = new AgentSequenceLlm(Output("r", new string('长', 745)), Repair(new string('长', 745)));
-            Run(day, first);
-            var savedHabit = store.LoadIdentityCards("tracesoul2").Single(x => x.Slot == "expression_habit");
-            Require(first.Requests.Count == 2 && savedHabit.Body == "合格的表达理解" &&
-                DailyBuildHistory.ReadStates(history).Single().Status == "pending",
-                "真实日构建只将超限单卡列为待整理，合格卡已提交，日状态不能假报完成");
-            store.SaveMoment(new MomentRecord { Id = "late-public", ConversationId = "tracesoul2:environment:test",
-                Role = "user", Content = "公开测试来源", MemoryVisibility = "public",
-                CreatedUnixMs = MemoryDayLogic.StartOf(day).ToUnixTimeMilliseconds() + 50 });
-            var cachedCore = Method("LoadCoreCheckpoint").Invoke(null, new object[] { context, day });
-            Require(!(bool)Method("CanResumeCore").Invoke(null, new object[] { context, day, cachedCore }),
-                "私密核心检查点不能略过新到的公开经历，避免待整理队列反复触发却永远不处理公开来源");
-            using (var db = new SQLite.SQLiteConnection(path)) db.Execute("UPDATE moments SET MemoryStatus='built' WHERE Id='late-public'");
-            context.Dispose(); context = null;
-            Open();
-            var resumed = new AgentSequenceLlm(Repair("来源保持完整的关系理解"));
-            Run(day, resumed);
-            Require(resumed.Requests.Count == 1 && resumed.Messages[0][0].content.Contains("复盘未完成正文") &&
-                DailyBuildHistory.ReadStates(history).Single().Status == "done" &&
-                store.LoadIdentityCards("tracesoul2").Single(x => x.Slot == "relation").Body == "来源保持完整的关系理解" &&
-                store.LoadIdentityCards("tracesoul2").Single(x => x.Slot == "expression_habit").Revision == savedHabit.Revision,
-                "重启后仅续做待整理卡，已完成的事件/认知/排序不重跑，合格卡不重复提交");
+            Run(day, new SelectionProbeLlm { Reply = Reply });
+            var habit = store.LoadIdentityCards("tracesoul2").Single(x => x.Slot == "expression_habit");
+            Require(DailyBuildHistory.ReadStates(history).Single().Status == "pending" && habit.Origin == "derived", "自动身份逐项提交，超长只保留本项pending");
+            context.Dispose(); Open(); longRelation = false; stages.Clear();
+            Run(day, new SelectionProbeLlm { Reply = Reply });
+            Require(stages.Count == 1 && stages.Single().Contains("当前认识成稿") && DailyBuildHistory.ReadStates(history).Single().Status == "done" &&
+                store.LoadIdentityCards("tracesoul2").Single(x => x.Slot == "expression_habit").Revision == habit.Revision,
+                "实际Migration跨进程续做仅重成稿，不重复归并/变化判断/其他卡或已提交内心");
+            stages.Clear(); Run(day, new AgentSequenceLlm()); Require(stages.Count == 0, "完成日不重复整理");
 
-            const string invalidDay = "2020-08-21";
-            Checkpoint(invalidDay, Seed(invalidDay));
-            var invalid = Output("h", new string('长', 745), "不应写入的表达");
-            var rejected = false;
-            try { Run(invalidDay, new AgentSequenceLlm(invalid, invalid)); }
-            catch (InvalidOperationException) { rejected = true; }
-            Require(rejected && store.LoadIdentityCards("tracesoul2").Single(x => x.Slot == "expression_habit").Body == savedHabit.Body &&
-                DailyBuildHistory.ReadStates(history).Single(x => x.DayKey == invalidDay).Status == "failed",
-                "超限不能掩盖跨组引用错误，初始结构校验失败不部分写卡，仍记录真正失败");
+            const string second = "2020-08-21"; Checkpoint(second); change = false; stages.Clear();
+            Run(second, new SelectionProbeLlm { Reply = Reply });
+            Require(stages.Count == 1 && stages.Single().Contains("日终内心"), "认知及证据未变时零身份请求，每日感受独立处理");
 
-            var changedDuringCall = new SelectionProbeLlm { Reply = _ => {
-                store.SaveIdentityCard("tracesoul2", "relation", "刚刚保存的新内容", "");
-                return Output("r", "不应覆盖新卡"); } };
-            rejected = false;
-            try { Run(invalidDay, changedDuringCall); } catch (InvalidOperationException) { rejected = true; }
-            Require(rejected && store.LoadIdentityCards("tracesoul2").Single(x => x.Slot == "relation").Body == "刚刚保存的新内容",
-                "生成期间身份卡被外部修订时拒绝旧结果，不能让检查点覆盖较新内容");
-            var changedEvidence = new SelectionProbeLlm { Reply = _ => {
-                using var db = new SQLite.SQLiteConnection(path);
-                db.Execute("UPDATE cognition_slices SET Revision=Revision+1, Summary=? WHERE Id=?", "已被反证修订的认识", "r");
-                return Output("r", "根据旧认识写出的正文"); } };
-            rejected = false;
-            try { Run(invalidDay, changedEvidence); } catch (InvalidOperationException) { rejected = true; }
-            Require(rejected && changedEvidence.Requests.Count == 1 &&
-                store.LoadIdentityCards("tracesoul2").Single(x => x.Slot == "relation").Body == "刚刚保存的新内容",
-                "生成期间认知版本发生变化时不提交旧正文，也不把旧文绑定到新版本依据");
+            const string interrupted = "2020-08-22"; Checkpoint(interrupted); change = true;
+            using (var db = new SQLite.SQLiteConnection(path)) db.Execute("UPDATE cognition_slices SET Summary='新的认识及范围' WHERE Id IN ('r','h')");
+            interruptHabit = true; var rejected = false;
+            try { Run(interrupted, new SelectionProbeLlm { Reply = Reply }); } catch (TimeoutException) { rejected = true; }
+            Require(rejected && DailyBuildHistory.ReadStates(history).Single(x => x.DayKey == interrupted).Status == "failed", "真正调用失败保存日状态并停止");
+            var relationRevision = store.LoadIdentityCards("tracesoul2").Single(x => x.Slot == "relation").Revision;
+            interruptHabit = false; stages.Clear(); Run(interrupted, new SelectionProbeLlm { Reply = Reply });
+            Require(stages.All(x => !x.Contains("复盘未完成正文")) && store.LoadIdentityCards("tracesoul2").Single(x => x.Slot == "relation").Revision == relationRevision,
+                "后续卡断网不丢先前提交的认识，不回到旧正文压缩路径");
 
-            const string summaryDay = "2020-08-22";
-            var summarySources = Seed(summaryDay, 13);
-            foreach (var source in summarySources)
-                storeType.GetMethod("AppendRuntimeSlice").Invoke(actualStore, new object[] { new RuntimeSliceRecord {
-                    RootConversationId = "tracesoul2", ContextConversationId = "tracesoul2", MomentId = source.Id,
-                    SnapshotJson = "{\"inner\":\"测试感受\"}" } });
-            Checkpoint(summaryDay, summarySources, summaryPending: true, reviewDone: true);
-            var nomination = "{\"events\":[{\"summary\":\"当天的变化\",\"source_ids\":[\"s1\"]}]}";
-            var excessive = TraceJson.ToJson(new { summary = new string('长', 1001) });
-            var longSummary = new AgentSequenceLlm(nomination, excessive, excessive);
-            Run(summaryDay, longSummary);
-            Require(DailyBuildHistory.ReadStates(history).Single(x => x.DayKey == summaryDay).Status == "pending" &&
-                ((List<RuntimeSliceRecord>)storeType.GetMethod("GetRuntimeSlices").Invoke(actualStore,
-                    new object[] { "tracesoul2", summaryDay, true })).Count == 13,
-                "回望超限使用明确待整理状态，不阻断已完成核心，也不把未整理切片清掉或伪装完成");
-            context.Dispose(); context = null;
-            Open();
-            var summaryResume = new AgentSequenceLlm("{\"summary\":\"符合预算的完整回望。\"}");
-            Run(summaryDay, summaryResume);
-            Require(summaryResume.Requests.Count == 1 && DailyBuildHistory.ReadStates(history).Single(x => x.DayKey == summaryDay).Status == "done",
-                "回望恢复复用提名检查点，已经完成的身份卡和核心不再调用模型");
-
-            using (var db = new SQLite.SQLiteConnection(path))
-            {
-                // Earlier concurrent-edit checks deliberately made relation a user-pinned card.
-                db.Execute("UPDATE identity_cards SET Pinned=0 WHERE Slot='relation'");
-                db.Insert(new CognitionSliceRecord { Id = "s", IdentitySlot = "self", Status = "active",
-                    Summary = "只属于自我的认识", ContextConversationId = "tracesoul2", MemoryVisibility = "private" });
-                db.Insert(new CognitionEvidenceRecord { Id = "e-s", CognitionId = "s", MomentId = sources[0].Id,
-                    Relation = "support", Weight = 1 });
-            }
-            string MultiDraft() => TraceJson.ToJson(new { cards = new[] {
-                new { slot = "relation", body = new string('关', 631), cognition_ids = new[] { "r" } },
-                new { slot = "self", body = new string('我', 677), cognition_ids = new[] { "s" } },
-                new { slot = "expression_habit", body = "合格表达保留", cognition_ids = new[] { "h" } } },
-                inner_narrative = "合格的当日感受" });
-            string SingleRepair(string id, string body) => TraceJson.ToJson(new { items = new[] { new { id, body } } });
-            string Target(List<DeepSeekMessageData> messages)
-            {
-                using var request = JsonDocument.Parse(messages.Last().content);
-                var targets = request.RootElement.GetProperty("targets");
-                Require(targets.GetArrayLength() == 1, "每次补写只能有一个任务");
-                var id = targets[0].GetProperty("id").GetString();
-                Require(request.RootElement.GetProperty("output_example").GetProperty("items")[0].GetProperty("id").GetString() == id,
-                    "示例动态对应本次目标，不能用固定relation示例诱导遗漏self");
-                Require(request.RootElement.GetProperty("cognitions").EnumerateArray().All(x =>
-                    x.GetProperty("IdentitySlot").GetString() == id), "补写只携带本项绑定认知，不混入其他卡材料");
-                return id;
-            }
-            // Actual RunAsync: one omitted field stays pending while accepted fields commit once.
-            var missingReplies = new[] { "{}", "{\"items\":[]}", "{\"items\":null}", SingleRepair("self", " ") };
-            for (var i = 0; i < missingReplies.Length; i++)
-            {
-                var splitDay = "2020-09-0" + (i + 1);
-                Checkpoint(splitDay, Seed(splitDay));
-                var split = new SelectionProbeLlm { Reply = messages => {
-                    if (!messages[0].content.Contains("复盘未完成正文")) return MultiDraft();
-                    return Target(messages) == "relation" ? Repair("关系已独立写完") : missingReplies[i];
-                } };
-                Run(splitDay, split);
-                var relation = store.LoadIdentityCards("tracesoul2").Single(x => x.Slot == "relation");
-                var habit = store.LoadIdentityCards("tracesoul2").Single(x => x.Slot == "expression_habit");
-                Require(split.Requests.Count == 3 && relation.Body == "关系已独立写完" && habit.Body == "合格表达保留" &&
-                    DailyBuildHistory.ReadStates(history).Single(x => x.DayKey == splitDay).Status == "pending",
-                    "漏项或空正文只将self列为待整理，关系与表达已提交，单次每项最多一请求");
-                using (var saved = JsonDocument.Parse(store.LoadPluginDocument("daily-review-recovery-v1", "identity:" + splitDay)))
-                    Require(saved.RootElement.GetProperty("Applied").EnumerateArray().Select(x => x.GetString())
-                        .OrderBy(x => x).SequenceEqual(new[] { "expression_habit", "inner", "relation" }),
-                        "持久进度记录已经应用的卡及内心，不能把缺失正文标成完成");
-                context.Dispose(); context = null; Open();
-                var finish = new SelectionProbeLlm { Reply = messages => {
-                    Require(Target(messages) == "self", "重启只补self，不能重做关系、事件、认知、排序或初始草稿");
-                    return SingleRepair("self", "补齐自我理解");
-                } };
-                Run(splitDay, finish);
-                Require(finish.Requests.Count == 1 && DailyBuildHistory.ReadStates(history).Single(x => x.DayKey == splitDay).Status == "done" &&
-                    store.LoadIdentityCards("tracesoul2").Single(x => x.Slot == "relation").Revision == relation.Revision &&
-                    store.LoadIdentityCards("tracesoul2").Single(x => x.Slot == "expression_habit").Revision == habit.Revision,
-                    "续做完成且已经提交的两张卡版本不变");
-            }
-            // Fail after relation succeeds: checkpoint must survive both transport and strict-contract failures.
-            for (var i = 0; i < 4; i++)
-            {
-                var interruptedDay = "2020-09-1" + (i + 1);
-                Checkpoint(interruptedDay, Seed(interruptedDay));
-                var interrupted = new SelectionProbeLlm { Reply = messages => {
-                    if (!messages[0].content.Contains("复盘未完成正文")) return MultiDraft();
-                    if (Target(messages) == "relation") return Repair("中断前已保存的关系");
-                    if (i == 0) throw new System.Net.Http.HttpRequestException("offline simulated disconnect");
-                    if (i == 1) return SingleRepair("relation", "错误目标不能冒充self");
-                    if (i == 2) return "{\"items\":[{\"id\":\"self\",\"body\":\"一\"},{\"id\":\"self\",\"body\":\"二\"}]}";
-                    return "{\"items\":[";
-                } };
-                rejected = false;
-                try { Run(interruptedDay, interrupted); }
-                catch (Exception ex) when (ex is System.Net.Http.HttpRequestException || ex is InvalidOperationException || ex is JsonException)
-                    { rejected = true; }
-                using (var saved = JsonDocument.Parse(store.LoadPluginDocument("daily-review-recovery-v1", "identity:" + interruptedDay)))
-                    Require(rejected && interrupted.Requests.Count == 3 &&
-                        saved.RootElement.GetProperty("Output").GetProperty("cards")[0].GetProperty("body").GetString() == "中断前已保存的关系" &&
-                        saved.RootElement.GetProperty("Output").GetProperty("cards")[1].GetProperty("body").GetString().Length == 677,
-                        "后续断网/错目标/重复/坏JSON仍严格报错，但前一项合格结果持久保留，原待稿不覆盖");
-                context.Dispose(); context = null; Open();
-                var finish = new SelectionProbeLlm { Reply = messages => {
-                    Require(Target(messages) == "self", "失败重启不得再次请求已保存的relation");
-                    return SingleRepair("self", "中断后补齐自我");
-                } };
-                Run(interruptedDay, finish);
-                Require(finish.Requests.Count == 1 && DailyBuildHistory.ReadStates(history).Single(x => x.DayKey == interruptedDay).Status == "done" &&
-                    store.LoadIdentityCards("tracesoul2").Single(x => x.Slot == "relation").Body == "中断前已保存的关系",
-                    "检查点跨实例恢复，补齐后应用完整结果");
-            }
-
-            const string staleRepairDay = "2020-09-20";
-            Checkpoint(staleRepairDay, Seed(staleRepairDay));
-            var staleRepair = new SelectionProbeLlm { Reply = messages => {
-                if (!messages[0].content.Contains("复盘未完成正文")) return MultiDraft();
-                Require(Target(messages) == "relation", "版本变化前仅发出首项补写");
-                store.SaveIdentityCard("tracesoul2", "relation", "补写期间的新卡", "");
-                return Repair("过期修复不得覆盖新卡");
+            const string stale = "2020-08-23"; Checkpoint(stale);
+            using (var db = new SQLite.SQLiteConnection(path)) db.Execute("UPDATE cognition_slices SET Summary='需要重新判断的关系认识' WHERE Id='r'");
+            var edit = new SelectionProbeLlm { Reply = messages => {
+                if (messages[0].content.Contains("当前认识成稿")) store.SaveIdentityCard("tracesoul2", "relation", "本人刚刚修改的正文", "");
+                return Reply(messages);
             } };
-            rejected = false;
-            try { Run(staleRepairDay, staleRepair); } catch (InvalidOperationException) { rejected = true; }
-            Require(rejected && staleRepair.Requests.Count == 2 &&
-                store.LoadIdentityCards("tracesoul2").Single(x => x.Slot == "relation").Body == "补写期间的新卡",
-                "每项调用后立即核对版本，冲突时不提交旧草稿、不再花费下一项请求");
-
-            const string staleInnerDay = "2020-09-21";
-            using (var db = new SQLite.SQLiteConnection(path))
-                db.Execute("UPDATE identity_cards SET Pinned=0 WHERE Slot='relation'");
-            Checkpoint(staleInnerDay, Seed(staleInnerDay));
-            var staleInner = new SelectionProbeLlm { Reply = messages => {
-                if (!messages[0].content.Contains("复盘未完成正文")) return TraceJson.ToJson(new {
-                    cards = new[] { new { slot = "relation", body = new string('长', 631), cognition_ids = new[] { "r" } } },
-                    inner_narrative = new string('旧', 130), inner_mood = "旧情绪" });
-                Require(Target(messages) == "relation", "实时内心已更新后不再请求过时内心草稿");
-                store.SavePluginDocument("kernel.subject", "tracesoul2", "{\"Revision\":9999,\"Narrative\":{\"Text\":\"新当下\"}}");
-                return Repair("保留身份补写");
-            } };
-            Run(staleInnerDay, staleInner);
-            Require(staleInner.Requests.Count == 2 && store.LoadPluginDocument("kernel.subject", "tracesoul2").Contains("新当下") &&
-                DailyBuildHistory.ReadStates(history).Single(x => x.DayKey == staleInnerDay).Status == "done",
-                "拆分期间出现新当下时跳过旧内心，身份可以完成而不覆盖实时感受");
-
-            const string innerDay = "2020-09-22";
-            Checkpoint(innerDay, Seed(innerDay));
-            using (var db = new SQLite.SQLiteConnection(path))
-                foreach (var item in new[] { ("private", "tracesoul2", "本人私密回望"),
-                    ("public", "tracesoul2", "公开回望不混入"), ("private", "tracesoul2:other", "其他环境不混入") })
-                    db.Execute("INSERT INTO runtime_day_summaries (Id,RootConversationId,ContextConversationId,DayKey,MemoryVisibility,Summary,IsCurrent) VALUES (?,?,?,?,?,?,1)",
-                        Guid.NewGuid().ToString("N"), "tracesoul2", item.Item2, innerDay, item.Item1, item.Item3);
-            var innerOnly = new SelectionProbeLlm { Reply = messages => {
-                if (!messages[0].content.Contains("复盘未完成正文")) return TraceJson.ToJson(new {
-                    cards = new object[0], inner_narrative = new string('长', 130) });
-                Require(Target(messages) == "inner_narrative" && messages.Last().content.Contains("本人私密回望") &&
-                    !messages.Last().content.Contains("公开回望不混入") && !messages.Last().content.Contains("其他环境不混入"),
-                    "内心独立补写只读取对应环境的私密回望，示例也必须是inner_narrative");
-                return SingleRepair("inner_narrative", "独立整理的当天感受");
-            } };
-            Run(innerDay, innerOnly);
-            Require(innerOnly.Requests.Count == 2 && store.LoadPluginDocument("kernel.subject", "tracesoul2").Contains("独立整理的当天感受") &&
-                DailyBuildHistory.ReadStates(history).Single(x => x.DayKey == innerDay).Status == "done",
-                "单独内心补写通过版本校验后同步，正常完成");
-
-            const string reorganizationDay = "2020-08-30";
-            using (var db = new SQLite.SQLiteConnection(path)) db.Execute("UPDATE identity_cards SET Pinned=0 WHERE Slot='relation'");
-            Checkpoint(reorganizationDay, Seed(reorganizationDay));
-            Run(reorganizationDay, new AgentSequenceLlm(
-                TraceJson.ToJson(new { cards = new[] { new { slot = "relation", body = new string('长', 745), cognition_ids = new[] { "r" } } } }),
-                Repair(new string('长', 745))));
-            Require(DailyBuildHistory.ReadStates(history).Single(x => x.DayKey == reorganizationDay).Status == "pending", "重整前复现关系正文待整理");
-            using (var reorganizationStore = new SqliteMemoryManager(path))
-            {
-                var draft = IdentityReorganizationLogic.GenerateAsync(reorganizationStore, "tracesoul2", "relation", reorganizationDay,
-                    new AgentSequenceLlm(ReorganizationAssessment("r"), ReorganizationProposal("r")), System.Threading.CancellationToken.None).GetAwaiter().GetResult();
-                IdentityReorganizationLogic.Apply(reorganizationStore, "tracesoul2", "relation", draft.id);
-            }
-            var noCalls = new AgentSequenceLlm();
-            Run(reorganizationDay, noCalls);
-            Require(noCalls.Requests.Count == 0 && DailyBuildHistory.ReadStates(history).Single(x => x.DayKey == reorganizationDay).Status == "done" &&
-                store.LoadIdentityCards("tracesoul2").Single(x => x.Slot == "relation").Body.Contains("恢复连接"),
-                "实际Migration复用用户已采用的重整卡，不再调用旧正文补写，原日进度照常收尾");
+            rejected = false; try { Run(stale, edit); } catch (InvalidOperationException) { rejected = true; }
+            Require(rejected && store.LoadIdentityCards("tracesoul2").Single(x => x.Slot == "relation").Body == "本人刚刚修改的正文", "生成中人工修改不被旧候选覆盖");
         }
         finally { context?.Dispose(); Directory.Delete(directory, true); }
-        Console.WriteLine("Day review recovery checks passed: partial commit, process restart, pending states, strict references, stale cards and day summaries.");
+        Console.WriteLine("Automatic day recovery passed: separate inner, partial identity commit, pending render resume, restart, no-change skip and stale protection.");
     }
 
     private static void RunOct3ReviewReplay(string assemblyPath, string directory)

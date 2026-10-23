@@ -42,7 +42,21 @@ namespace TraceSoul2.Logic
                         (evidence.Any(m => EnvironmentLogic.FromMoment(m)?.SpeakerIsOwner == true) ||
                          x.cognitions.All(w => !(w.domains ?? new()).Contains("user"))),
                     "认知变更缺少有效证据或对象不符。", token);
-                store.CommitPublicExperience(evidence.Select(x => x.Id), output.cognitions);
+                var resolution = await CognitionConsolidationLogic.ResolveAsync(store, llm, evidence, existing,
+                    output.cognitions, encoderFactory, cache, token);
+                if (!CognitionFormationLogic.Valid(resolution.Writes, evidence, resolution.Candidates, new List<LifeTagRecord>()) ||
+                    (!evidence.Any(m => EnvironmentLogic.FromMoment(m)?.SpeakerIsOwner == true) && resolution.Writes.Any(w => (w.domains ?? new()).Contains("user"))))
+                    throw new InvalidOperationException("公开认知比较后对象或依据无效。");
+                var candidateStamp = IdentityReorganizationLogic.Digest(resolution.Candidates.OrderBy(x => x.Id, StringComparer.Ordinal).ToList());
+                var sourceStamp = IdentityReorganizationLogic.Digest(evidence.OrderBy(x => x.Id, StringComparer.Ordinal).ToList());
+                store.CommitPublicExperienceChecked(evidence.Select(x => x.Id), resolution.Writes, () => {
+                    var ids = resolution.Candidates.Select(x => x.Id).ToHashSet();
+                    if (candidateStamp != IdentityReorganizationLogic.Digest(store.GetCognitionReviewCandidates(evidence[0].ConversationId, true)
+                        .Where(x => ids.Contains(x.Id)).OrderBy(x => x.Id, StringComparer.Ordinal).ToList()) ||
+                        sourceStamp != IdentityReorganizationLogic.Digest(evidence.Select(x => x.Id).Chunk(256).SelectMany(store.GetEvidenceMoments)
+                            .OrderBy(x => x.Id, StringComparer.Ordinal).ToList()))
+                        throw new InvalidOperationException("公开认知生成期间来源或认识已变化，未提交旧结果。");
+                });
                 count += evidence.Count;
             }
         }
