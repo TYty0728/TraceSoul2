@@ -165,6 +165,23 @@ internal static partial class Program
                 store.GetCognitionNodes(5000).Any(x => x.Summary == "DETAIL_SENTINEL_49"),
                 "完整处理40条以外的材料，已识别细节不再绕过身份卡注入，原认知仍可查证");
 
+            var beforeBulk = store.LoadIdentityCards(root).Single(x => x.Slot == "relation");
+            using (var db = new SQLite.SQLiteConnection(Path.Combine(directory, "brain.db")))
+                db.RunInTransaction(() => {
+                    for (var i = 0; i < 1500; i++)
+                    {
+                        db.Insert(new MomentRecord { Id = "bulk-proof-" + i, ConversationId = root, Role = "user", Content = "独立的后续印证", CreatedUnixMs = 10000 + i });
+                        db.Insert(new CognitionEvidenceRecord { Id = "bulk-e-" + i, CognitionId = updated.Id, MomentId = "bulk-proof-" + i, Relation = "supports" });
+                    }
+                });
+            var bulk = new AgentSequenceLlm(IdentityChangeReply(updated.Id, false));
+            state = await IdentityEvolutionLogic.EvaluateAsync(store, root, "relation", "2020-03-01", bulk, CancellationToken.None);
+            IdentityEvolutionLogic.Commit(store, root, "relation", state);
+            Require(bulk.Requests.Count == 1 && bulk.Requests[0].Length < 12000 && !bulk.Requests[0].Contains("bulk-proof-") &&
+                bulk.Requests[0].Contains("evidence_summary") && store.ReadIdentityReorganizationEvidence(new[] { updated.Id }).Count >= 1500 &&
+                store.LoadIdentityCards(root).Single(x => x.Slot == "relation").Body == beforeBulk.Body,
+                "1500条证据保留在库，模型只读有界证据摘要，身份正文不随历史证据增长");
+
             var malformed = new AgentSequenceLlm("{\"decisions\":[]}"); var rejected = false;
             try { await CognitionConsolidationLogic.ResolveAsync(store, malformed, new[] { Source(35) }, new[] { updated },
                 new List<BrainCognitionWriteData> { proposal }, () => new AllSemanticEncoder(), null, CancellationToken.None); }

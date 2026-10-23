@@ -44,6 +44,27 @@ namespace TraceSoul2.Logic
             public bool pending;
             public bool priorCardCurrent;
             public List<string> weakened_ids = new();
+            public List<EvidenceSummary> evidence_summary = new();
+        }
+        public sealed class EvidenceSummary
+        {
+            public int understanding_index;
+            public int supports;
+            public int challenges;
+            public int self_reflections;
+            public int links;
+        }
+        private static List<EvidenceSummary> SummarizeEvidence(SqliteMemoryManager store, State state, List<CognitionSliceRecord> nodes)
+        {
+            var evidence = store.ReadIdentityReorganizationEvidence(nodes.Select(x => x.Id));
+            return state.understandings.Select((group, index) => {
+                var ids = group.cognition_ids.ToHashSet();
+                var rows = evidence.Where(x => ids.Contains(x.CognitionId)).ToList();
+                int Count(Func<string, bool> accepts) => rows.Where(x => accepts(x.Relation ?? "")).Select(x => x.MomentId).Distinct().Count();
+                return new EvidenceSummary { understanding_index = index,
+                    supports = Count(x => x is "support" or "supports"), challenges = Count(x => x is "challenge" or "challenges"),
+                    self_reflections = Count(x => x == "self_reflection"), links = Count(x => x.StartsWith("link:", StringComparison.Ordinal)) };
+            }).ToList();
         }
         public static State Read(SqliteMemoryManager store, string root, string slot)
             => PuzzleViewLogic.Read<State>(store.LoadPluginDocument(StoreId, root + ":" + slot));
@@ -141,10 +162,11 @@ namespace TraceSoul2.Logic
             if (state.decision == null)
             {
                 Check();
+                state.evidence_summary = SummarizeEvidence(store, state, nodes);
                 var request = TraceJson.ToJson(new { slot, previous_understandings = accepted?.understandings, previous_identity_changes = accepted?.decision?.deltas,
                     old_card_for_comparison_only = card.Body, old_card_current = IdentityProjectionLogic.Current(card, store.GetCognitionNodes(5000)),
                     current_understandings = state.understandings, details = state.details,
-                    previous_evidence_stamp = accepted?.evidenceStamp, current_evidence = store.ReadIdentityReorganizationEvidence(nodes.Select(x => x.Id)) });
+                    previous_evidence_summary = accepted?.evidence_summary, evidence_summary = state.evidence_summary });
                 if (request.Length > 120000) throw new InvalidOperationException("身份变化判断材料超过预算，未截取。");
                 var raw = await llm.CompleteJsonAsync(new List<DeepSeekMessageData> {
                     new("system", "【自动身份·变化判断】只判断当前身份认识是否有实质变化，此阶段不写正文。" +
