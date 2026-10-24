@@ -14,6 +14,7 @@ namespace TraceSoul2.Migrate
         private readonly SQLiteConnection connection;
         private readonly SQLiteConnection brain;
         private readonly object brainWriteGate = new object();
+        private readonly object callLogGate = new object();
         private string activeReviewAttempt;
 
         public MigrationDb(string migrationDbPath, string brainframePath)
@@ -346,7 +347,7 @@ namespace TraceSoul2.Migrate
         public void SaveCallLog(ReplayCallLogRecord record)
         {
             record.CreatedUnixMs = DateTimeOffset.UtcNow.ToUnixTimeMilliseconds();
-            connection.Insert(record);
+            lock (callLogGate) connection.Insert(record);
         }
 
         public List<ReplayCallLogRecord> GetCallLogs(string dayKey)

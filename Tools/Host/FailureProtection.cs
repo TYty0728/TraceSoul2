@@ -248,9 +248,10 @@ namespace TraceSoul2.Host
     {
         private readonly ILlmClient inner;
         private readonly FailureProtection protection;
+        private readonly bool review;
         private string Key => "provider:" + inner.ProviderId;
-        public ProtectedLlmClient(ILlmClient inner, FailureProtection protection)
-        { this.inner = inner; this.protection = protection; }
+        public ProtectedLlmClient(ILlmClient inner, FailureProtection protection, bool review = false)
+        { this.inner = inner; this.protection = protection; this.review = review; }
         public string ProviderId => inner.ProviderId;
         public string Model => inner.Model;
         public string BaseUrl => (inner as ILlmEndpoint)?.BaseUrl;
@@ -266,6 +267,8 @@ namespace TraceSoul2.Host
             token.ThrowIfCancellationRequested();
             try { return await call(); }
             catch (OperationCanceledException) when (token.IsCancellationRequested) { throw; }
+            // The review item decides whether it can retain its source event. Unhandled failures still reach the daily worker.
+            catch (LlmContentRejectedException) when (review) { throw; }
             catch (Exception error)
             {
                 protection.Report(Key, "语言模型通道", error);

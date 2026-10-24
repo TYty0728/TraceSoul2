@@ -458,8 +458,8 @@ namespace TraceSoul2.Host
                 var config = ToConfig(item, model, thinkingOverride);
                 if (review) config.Temperature = data.reviewTemperature ?? 0.2f;
                 if (LlmProviderCatalog.IsGeminiNative(item.type))
-                    return new ProtectedLlmClient(new GeminiClientManager(config), Protection);
-                return new ProtectedLlmClient(new DeepSeekClientManager(config), Protection);
+                    return new ProtectedLlmClient(new GeminiClientManager(config), Protection, review);
+                return new ProtectedLlmClient(new DeepSeekClientManager(config), Protection, review);
             }
         }
 

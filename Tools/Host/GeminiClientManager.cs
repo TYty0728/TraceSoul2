@@ -191,6 +191,7 @@ namespace TraceSoul2.Host
                     var body = await response.Content.ReadAsStringAsync();
                     lastUsage = LlmUsageLogic.Parse(body);
                     DumpCall(payload, body);
+                    LlmContentRejectionLogic.CheckResponse(body);
                     if (!response.IsSuccessStatusCode)
                     {
                         var failure = new InvalidOperationException(

@@ -35,6 +35,7 @@ namespace TraceSoul2.Logic
             where T : class
         {
             var raw = await client.CompleteJsonAsync(messages, cancellationToken, promptCacheKey);
+            LlmContentRejectionLogic.CheckRefusal(raw);
             Exception firstError;
             T parsed;
             try
@@ -46,6 +47,7 @@ namespace TraceSoul2.Logic
                 if (parsed != null && string.IsNullOrEmpty(detail) && (validator == null || validator(parsed))) return parsed;
                 throw new InvalidOperationException(string.IsNullOrEmpty(detail) ? missingMessage : detail);
             }
+            catch (LlmContentRejectedException) { throw; }
             catch (Exception exception)
             {
                 firstError = exception;
@@ -66,6 +68,7 @@ namespace TraceSoul2.Logic
                     : CorePrompts.Retry.JsonRepairUser(failure) +
                       " 请重新输出完整 JSON，不要只输出修改片段；字符串中的双引号必须转义，属性和值之间用冒号，属性之间用逗号。"));
             var repairedRaw = await client.CompleteJsonAsync(repair, cancellationToken, promptCacheKey);
+            LlmContentRejectionLogic.CheckRefusal(repairedRaw);
             try
             {
                 parsed = Parse<T>(repairedRaw, onParsed);
@@ -75,6 +78,7 @@ namespace TraceSoul2.Logic
                 if (parsed != null && string.IsNullOrEmpty(detail) && (validator == null || validator(parsed))) return parsed;
                 throw new InvalidOperationException(string.IsNullOrEmpty(detail) ? missingMessage : detail);
             }
+            catch (LlmContentRejectedException) { throw; }
             catch (Exception secondError)
             {
                 if (secondError is ReviewProsePendingException)

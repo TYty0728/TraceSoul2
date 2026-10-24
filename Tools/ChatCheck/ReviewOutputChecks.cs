@@ -14,6 +14,7 @@ internal static partial class Program
 {
     private static async Task RunReviewOutputChecksAsync()
     {
+        await RunContentRejectionChecksAsync();
         await RunUnifiedMainModelChecksAsync();
         await RunJevRouteChecksAsync();
         var root = Path.Combine(Path.GetTempPath(), "review-output-check-" + Guid.NewGuid().ToString("N"));

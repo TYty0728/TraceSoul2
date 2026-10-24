@@ -31,7 +31,7 @@ namespace TraceSoul2.Migrate
             public string RecordsStamp;
             public bool Applied;
         }
-        public sealed class CompletedProgress { public string Stamp; public string BodyStamp; }
+        public sealed class CompletedProgress { public string Stamp; public string BodyStamp; public bool ContentRejected; }
 
         private static string ProgressKey(string day, string generation, string kind, object source)
             => day + ":" + generation + ":" + kind + ":" + Digest(source);
@@ -246,7 +246,7 @@ namespace TraceSoul2.Migrate
             return null;
         }
 
-        private sealed class DetailDraft { public string Stamp; public string Body; }
+        private sealed class DetailDraft { public string Stamp; public string Body; public bool ContentRejected; }
         private static async Task<string> CompleteDetailAsync(MigrationContext context, ILlmClient llm,
             string key, string stamp, List<DeepSeekMessageData> messages, CancellationToken token)
         {
@@ -254,25 +254,41 @@ namespace TraceSoul2.Migrate
             var draft = PuzzleViewLogic.Read<DetailDraft>(context.Store.LoadPluginDocument(CoreProgressDocuments, draftKey));
             if (draft != null && draft.Stamp != stamp)
                 throw new InvalidOperationException("细节草稿来源已变化，不能直接复用。");
-            if (draft == null)
+            if (draft?.ContentRejected == true) throw new LlmContentRejectedException();
+            try
             {
-                var output = await DeepSeekStructuredOutputLogic.CompleteAsync<ReplayPrompts.DetailOutputData>(llm,
-                    messages, x => !string.IsNullOrWhiteSpace(x?.detail), "细节输出缺少detail。", token,
-                    includeInvalidResponse: false);
-                draft = new DetailDraft { Stamp = stamp, Body = output.detail.Trim() };
-                context.Store.SavePluginDocument(CoreProgressDocuments, draftKey, TraceJson.ToJson(draft));
+                if (draft == null)
+                {
+                    var output = await DeepSeekStructuredOutputLogic.CompleteAsync<ReplayPrompts.DetailOutputData>(llm,
+                        messages, x => !string.IsNullOrWhiteSpace(x?.detail), "细节输出缺少detail。", token,
+                        includeInvalidResponse: false,
+                        typedValidationError: x => LlmContentRejectionLogic.IsRefusal(x.detail) ? new LlmContentRejectedException() : null);
+                    draft = new DetailDraft { Stamp = stamp, Body = output.detail.Trim() };
+                    context.Migration.SaveProgressDocument(CoreProgressDocuments, draftKey, TraceJson.ToJson(draft));
+                }
+                LlmContentRejectionLogic.CheckRefusal(draft.Body);
+                if (draft.Body.Length <= 200) return draft.Body;
+                // Regenerate from the selected original sources. Never feed the long draft back for polishing.
+                var rewrite = new List<DeepSeekMessageData>(messages) {
+                    new("user", "【单件细节重新取舍】这件事仅保留一两个有辨识度的细节，目标80字、最多200字。只按所给原句重新写，不补写旧经过。输出{\"detail\":\"完整短段\"}。") };
+                var raw = await llm.CompleteJsonAsync(rewrite, token);
+                LlmContentRejectionLogic.CheckRefusal(raw);
+                var repaired = DeepSeekStructuredOutputLogic.Read<ReplayPrompts.DetailOutputData>(raw);
+                LlmContentRejectionLogic.CheckRefusal(repaired?.detail);
+                if (string.IsNullOrWhiteSpace(repaired?.detail) || repaired.detail.Trim().Length > 200)
+                    throw new InvalidOperationException("细节仍未形成200字以内的完整正文；已保存草稿，恢复只续做这一项，不截断。");
+                draft.Body = repaired.detail.Trim();
+                context.Migration.SaveProgressDocument(CoreProgressDocuments, draftKey, TraceJson.ToJson(draft));
+                return draft.Body;
             }
-            if (draft.Body.Length <= 200) return draft.Body;
-            // Regenerate from the selected original sources. Never feed the long draft back for polishing.
-            var rewrite = new List<DeepSeekMessageData>(messages) {
-                new("user", "【单件细节重新取舍】这件事仅保留一两个有辨识度的细节，目标80字、最多200字。只按所给原句重新写，不补写旧经过。输出{\"detail\":\"完整短段\"}。") };
-            var raw = await llm.CompleteJsonAsync(rewrite, token);
-            var repaired = DeepSeekStructuredOutputLogic.Read<ReplayPrompts.DetailOutputData>(raw);
-            if (string.IsNullOrWhiteSpace(repaired?.detail) || repaired.detail.Trim().Length > 200)
-                throw new InvalidOperationException("细节仍未形成200字以内的完整正文；已保存草稿，恢复只续做这一项，不截断。");
-            draft.Body = repaired.detail.Trim();
-            context.Store.SavePluginDocument(CoreProgressDocuments, draftKey, TraceJson.ToJson(draft));
-            return draft.Body;
+            catch (LlmContentRejectedException)
+            {
+                token.ThrowIfCancellationRequested();
+                // Persist the refusal, never its prose, so a restart does not request this item again.
+                context.Migration.SaveProgressDocument(CoreProgressDocuments, draftKey,
+                    TraceJson.ToJson(new DetailDraft { Stamp = stamp, Body = "", ContentRejected = true }));
+                throw;
+            }
         }
     }
 }

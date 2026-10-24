@@ -384,6 +384,7 @@ namespace TraceSoul2.Manager
                     lastUsage = LlmUsageLogic.Parse(body);
                     var httpStatus = (int)response.StatusCode;
                     DumpCall(bodyJson, body, httpStatus);
+                    LlmContentRejectionLogic.CheckResponse(body);
                     DeepSeekChatResponseData parsed = null;
                     try
                     {
@@ -711,6 +712,7 @@ namespace TraceSoul2.Manager
         public static bool IsRetryableProviderException(Exception exception)
         {
             if (exception == null) return false;
+            if (exception is LlmContentRejectedException) return false;
             if (exception is TimeoutException || exception is HttpRequestException)
                 return true;
             var message = exception.Message ?? string.Empty;

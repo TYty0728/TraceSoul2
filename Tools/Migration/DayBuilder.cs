@@ -319,7 +319,16 @@ namespace TraceSoul2.Migrate
                     new DeepSeekMessageData("system", prompt),
                     new DeepSeekMessageData("user", CorePrompts.Migration.DetailUser)
                 };
-                entry.Detail = await CompleteDetailAsync(context, llm, detailKey, detailStamp, messages, detailToken);
+                var contentRejected = false;
+                try { entry.Detail = await CompleteDetailAsync(context, llm, detailKey, detailStamp, messages, detailToken); }
+                catch (LlmContentRejectedException)
+                {
+                    detailToken.ThrowIfCancellationRequested();
+                    // The event has already passed source validation. Keep its recorded short sentence as the reading body.
+                    entry.Detail = entry.Summary;
+                    contentRejected = true;
+                    Console.WriteLine("  [内容审核] 一条细节停止加工，沿用已保存事件短句，其余条目继续。");
+                }
                 context.Migration.CommitCoreProgress(() =>
                 {
                     EnsureCoreProgress(context, progress);
@@ -331,12 +340,12 @@ namespace TraceSoul2.Migrate
                         throw new InvalidOperationException("细节生成期间身份档案已修订，旧输出不能提交。");
                     context.Migration.UpdateEventEntryDetail(entry.Id, entry.Detail);
                     context.Migration.SaveProgressDocument(CoreProgressDocuments, detailKey,
-                        TraceJson.ToJson(new CompletedProgress { Stamp = detailStamp, BodyStamp = Digest(entry.Detail) }));
+                        TraceJson.ToJson(new CompletedProgress { Stamp = detailStamp, BodyStamp = Digest(entry.Detail), ContentRejected = contentRejected }));
                 });
                 var n = Interlocked.Increment(ref detailCalls);
                 Console.WriteLine("  细节「" + Limit(entry.Summary, 20) + "」：" + Limit(entry.Detail, 60));
                 LogCall(context, dayKey, "detail", n,
-                    "细节：" + Limit(entry.Summary, 40), TraceJson.ToJson(new { detail = entry.Detail }));
+                    "细节：" + Limit(entry.Summary, 40), TraceJson.ToJson(new { detail = entry.Detail, content_rejected = contentRejected }));
             }, error => context.Providers.Protection.Pause("provider:" + llm.ProviderId, "复盘细节生成", error));
 
             // ---------- 条目语义向量：一句话总结编码（幂等，召回拼装用） ----------
