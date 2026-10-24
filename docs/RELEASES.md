@@ -8,7 +8,9 @@
 
 0.1.69仅保留中间标签，发布任务已取消，无正式Release；0.1.70包含底层自然语言拒绝立即停止重试的完整修复。
 
-产品0.1.70，PluginApi1.16.0与官方插件版本不变。Release全解决方案构建、完整ChatCheck/Prompt、实际Migration及发布隐私检查通过；新增64项真实并发保存及内容拒绝、同批继续、重启、来源、取消和误判保护。公开发布待验收；未部署或重跑正式复盘。
+产品0.1.70，PluginApi1.16.0与官方插件版本不变。Release全解决方案构建、完整ChatCheck/Prompt、实际Migration及发布隐私检查通过；新增64项真实并发保存及内容拒绝、同批继续、重启、来源、取消和误判保护。公开发布验收通过；未部署或重跑正式复盘。
+
+发布确认：[v0.1.70](https://github.com/TYty0728/TraceSoul2/releases/tag/v0.1.70)／源码2c0dfa8已公开，[发布CI40056458135](https://github.com/TYty0728/TraceSoul2/actions/runs/40056458135)完整回归、Docker升级/数据保留、源码镜像启动及三平台打包全部成功。匿名latest=v0.1.70，三ZIP/SDK1.16.0公开HEAD200，SHA-256与GitHub digest一致；范围读包确认内容拒绝识别、拒绝检查点及并发留痕锁，版本/通用模板正确，无运行资料。未完整下载三包、部署或重跑正式复盘。 win-x64 `53d921a29408c5d530b0672df5d2bf9f29b4d9da27d472a053f2067e9b48ba59`； linux-x64 `261990ddd4f0fda130fb800a89d376485dc9f05104bb4ba2019286a7c01ef08b`； linux-arm64 `365d4224cde8b209fbc49d54d149d30feb5f140fac3c6c26a06a3d2f961317a6`；
 
 ## 0.1.68（2026-10-23）
 

@@ -20,3 +20,5 @@
 ## 验证
 
 Release全解决方案构建、完整ChatCheck、Prompt布局及实际Migration入口回归通过，构建有24条既有相机测试类型冲突警告，0错误。新增验证覆盖64项真实多线程草稿/调用留痕保存，明确HTTP审核响应的一次请求边界、Gemini阻断、自然语言/JSON拒绝、一般服务错误与普通句子误判保护、同批正常条目继续、重启恢复、拒绝标记续用、来源修订、坏JSON及取消。测试使用临时库和模拟/本地HTTP模型；没有以测试替代正式模型质量验收。
+
+发布验收：[v0.1.70](https://github.com/TYty0728/TraceSoul2/releases/tag/v0.1.70)及[正式CI](https://github.com/TYty0728/TraceSoul2/actions/runs/40056458135)全部通过，匿名latest、三平台包/SDK和摘要已核对。本轮未部署或重跑正式复盘。
