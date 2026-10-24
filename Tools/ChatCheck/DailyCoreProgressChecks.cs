@@ -279,6 +279,36 @@ internal static partial class Program
                 Require(wasCancelled && string.IsNullOrEmpty(store.LoadPluginDocument("daily-core-progress-v1", "cancelled-refusal:draft")),
                     "取消优先于内容兜底，不把取消请求保存成拒绝");
             }
+            // The comparison can fail after proposal persistence; restart must not re-form that proposal.
+            const string comparisonDay = "2020-08-19";
+            var comparisonSources = Seed(comparisonDay, 1);
+            var comparisonSource = Source(comparisonDay, comparisonSources);
+            var legacyNode = store.CommitCognitions(comparisonSources[0].Id, new[] { new BrainCognitionWriteData {
+                operation = "create", summary = "一起核对计划与饮水的测试经历形成旧认识", domains = new() { "relation" },
+                identity_slot = "", evidence_moment_ids = new() { comparisonSources[0].Id }, confidence = .7f, strength = .5f } }).Single();
+            const string comparisonSummary = "我愿意和对方共同核对安排，并说明关系中的边界";
+            var comparisonProposal = TraceJson.ToJson(new { cognitions = new[] { new { operation = "create", summary = comparisonSummary,
+                domains = new[] { "relation" }, identity_slot = "relation", evidence_moment_ids = new[] { comparisonSources[0].Id }, confidence = .7, strength = .5 } } });
+            var wrongPurpose = TraceJson.ToJson(new { decisions = new[] { new { index = 0, kind = "revise", target_id = legacyNode.Id,
+                before = legacyNode.Summary, after = comparisonSummary, explanation = "测试故意引用空用途目标" } } });
+            var compareFailure = new AgentSequenceLlm(comparisonProposal, wrongPurpose, wrongPurpose);
+            var compareCount = storeType.GetMethod("CountCognitions").Invoke(actualStore, null);
+            Require(Rejected(() => Await(formation, context, store.LoadPairIdentity(), compareFailure, comparisonDay,
+                new List<EventIndexRecord>(), new List<EventEntryRecord>(), comparisonSources, comparisonSource)) && compareFailure.Requests.Count == 3 &&
+                Equals(compareCount, storeType.GetMethod("CountCognitions").Invoke(actualStore, null)),
+                "实际Migration先存候选，比较两次跨用途失败仍零认知写入");
+            context.Dispose(); context = null; Open();
+            var compareResume = new AgentSequenceLlm(ConsolidationNewReply(comparisonSummary));
+            Await(formation, context, store.LoadPairIdentity(), compareResume, comparisonDay,
+                new List<EventIndexRecord>(), new List<EventEntryRecord>(), comparisonSources, comparisonSource);
+            Require(compareResume.Requests.Count == 1 && compareResume.Requests[0].Contains("认知写入前比较") &&
+                !Equals(compareCount, storeType.GetMethod("CountCognitions").Invoke(actualStore, null)) &&
+                ((ICognitionGraphStore)store).GetCognitionNodes(5000).Single(x => x.Id == legacyNode.Id).IdentitySlot == "",
+                "跨实例续做复用候选，仅比较一次并提交新认识，不改旧空用途节点");
+            var completedCompare = new AgentSequenceLlm();
+            Await(formation, context, store.LoadPairIdentity(), completedCompare, comparisonDay,
+                new List<EventIndexRecord>(), new List<EventEntryRecord>(), comparisonSources, comparisonSource);
+            Require(completedCompare.Requests.Count == 0, "已提交认知检查点重复续做零调用");
             var ladder = assembly.GetType("TraceSoul2.Migrate.DayLadderLogic", true);
             var rankType = assembly.GetType("TraceSoul2.Migrate.LadderRankOutputData", true);
             string RankError(string raw) => (string)ladder.GetMethod("RankError", BindingFlags.NonPublic | BindingFlags.Static).Invoke(null,

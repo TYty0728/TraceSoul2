@@ -25,6 +25,7 @@ internal static partial class Program
     }
     private static async Task RunIdentityEvolutionChecksAsync()
     {
+        await RunCognitionComparisonChecksAsync();
         var directory = Path.Combine(Path.GetTempPath(), "identity-evolution-" + Guid.NewGuid().ToString("N"));
         Directory.CreateDirectory(directory);
         try

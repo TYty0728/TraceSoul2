@@ -61,6 +61,7 @@
     <Compile Include="MainModelFallbackChecks.cs" />
     <Compile Include="IdentityReorganizationChecks.cs" />
     <Compile Include="IdentityEvolutionChecks.cs" />
+    <Compile Include="CognitionComparisonChecks.cs" />
     <Compile Include="../Host/DecisionsClient.cs" Link="DecisionsClient.cs" />
     <Compile Include="DecisionsChecks.cs" />
     <Compile Include="../Host/WxxzPlatform.cs" Link="WxxzPlatform.cs" />
