@@ -322,6 +322,7 @@ namespace TraceSoul2.Host
                             text.Append(t.GetString());
                     }
                 }
+                LlmContentRejectionLogic.CheckRefusal(text.ToString());
                 return new GeminiAttempt(text.ToString(), finish, "finish_reason=" + finish);
             }
         }

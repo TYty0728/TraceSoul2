@@ -17,7 +17,9 @@ internal static partial class Program
             (403, "{\"error\":{\"code\":\"content_policy_violation\",\"message\":\"private test material\"}}"),
             (200, "{\"choices\":[{\"finish_reason\":\"content_filter\",\"message\":{\"content\":null}}]}"),
             (200, "{\"choices\":[{\"finish_reason\":\"stop\",\"message\":{\"refusal\":\"private test material\",\"content\":null}}]}"),
-            (200, "{\"error\":{\"type\":\"DataInspectionFailed\",\"message\":\"private test material\"}}") })
+            (200, "{\"error\":{\"type\":\"DataInspectionFailed\",\"message\":\"private test material\"}}"),
+            (200, "{\"choices\":[{\"finish_reason\":\"stop\",\"message\":{\"content\":\"抱歉，我无法满足这个请求。\"}}]}"),
+            (200, "{\"choices\":[{\"finish_reason\":\"stop\",\"message\":{\"content\":\"I cannot assist with this request.\"}}]}") })
         {
             using var server = new FailureHttpServer(reply.Item1, reply.Item2);
             var client = new DeepSeekClientManager(new DeepSeekConfigData { ApiKey = "test", BaseUrl = server.Url,
@@ -36,6 +38,14 @@ internal static partial class Program
         {
             try { LlmContentRejectionLogic.CheckResponse(body); throw new Exception("Expected Gemini rejection"); }
             catch (LlmContentRejectedException) { }
+        }
+        using (var nativeServer = new FailureHttpServer(200,
+            "{\"candidates\":[{\"content\":{\"parts\":[{\"text\":\"抱歉，我无法满足这个请求。\"}]},\"finishReason\":\"STOP\"}]}"))
+        {
+            var nativeClient = new GeminiClientManager(new DeepSeekConfigData { ApiKey = "test", BaseUrl = nativeServer.Url,
+                Model = "test", EmptyContentRetries = 2, TransientErrorRetries = 0 });
+            try { await nativeClient.CompleteJsonAsync(messages); throw new Exception("Expected native refusal"); }
+            catch (LlmContentRejectedException) { Require(nativeServer.Calls == 1, "Gemini自然语言拒绝同样不进入JSON未完重试"); }
         }
         foreach (var body in new[] {
             "{\"error\":{\"code\":\"invalid_api_key\",\"message\":\"Unauthorized sensitive account\"}}",

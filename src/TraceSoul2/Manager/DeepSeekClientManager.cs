@@ -434,6 +434,7 @@ namespace TraceSoul2.Manager
                             "，body长度=" + body.Length + "。");
 
                     var choice = parsed.choices[0];
+                    LlmContentRejectionLogic.CheckRefusal(choice.message.content);
                     return new CompletionAttempt(
                         choice.message.content,
                         choice.finish_reason,
