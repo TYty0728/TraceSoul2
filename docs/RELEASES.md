@@ -6,7 +6,9 @@
 - 比较结果按具体字段进行一次有界纠正，仍错误则停止，不自动忽略或转换写入。候选草稿、逐批检查点、来源及并发版本保护保留，续做只补失败比较。
 - 只读核对远端0.1.70的23日复盘：80条事件细节全部完成，认知4批完成，第5批2项候选中第一项跨用途修订被拒；HTTP200、ID和前后正文有效，非审核拒绝。真实原响应回放及实际Migration跨实例恢复回归通过。机制与边界见[认知比较续做](COGNITION_COMPARISON_RECOVERY.md)。
 
-产品0.1.71，PluginApi1.16.0和官方插件版本不变。Release全解决方案、完整ChatCheck/Prompt、实际Migration、专项和发布隐私检查通过；24条既有相机测试警告、0错误。公开发布待验收；未部署或重跑正式复盘。
+产品0.1.71，PluginApi1.16.0和官方插件版本不变。Release全解决方案、完整ChatCheck/Prompt、实际Migration、专项和发布隐私检查通过；24条既有相机测试警告、0错误。公开发布验收通过；未部署或重跑正式复盘。
+
+发布确认：[v0.1.71](https://github.com/TYty0728/TraceSoul2/releases/tag/v0.1.71)／源码5958460已公开，[发布CI40063994618](https://github.com/TYty0728/TraceSoul2/actions/runs/40063994618)完整回归、Docker升级/数据保留、源码镜像启动和三平台打包全部成功。匿名latest=v0.1.71，三ZIP/SDK1.16.0公开HEAD200，SHA-256与GitHub digest一致；范围读包确认认知比较同用途目标清单、字段校验及既有内容拒绝/细节恢复，版本与通用模板正确，无运行资料。未完整下载三包、部署或重跑正式复盘。 win-x64 `dde566e61c3721b46ad8b8d25781e919bf73f2c369b9dcc2f0747980cee3cf78`； linux-x64 `90163ea4b5829fba02b980944c0b694e7feaa447faea0241e7d805b0ec676d49`； linux-arm64 `76a7d942f85e7b357b4a46de1ec8d11693236c5a31e0ee225a65fe766ec972c4`；
 
 ## 0.1.70（2026-10-24）
 
