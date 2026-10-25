@@ -37,6 +37,8 @@ internal static partial class Program
 
     private static async Task RunReviewSelectionChecksAsync()
     {
+        await RunSelectionEvidenceBudgetChecksAsync();
+        await RunSelectionBudgetRecoveryChecksAsync();
         var candidates = Enumerable.Range(0, 140).Select(i => new ReviewSelectionLogic.Candidate {
             Id = "real-" + i, Description = "候选" + i, EvidenceChars = 100 }).ToList();
         var seen = new HashSet<string>();
@@ -271,6 +273,108 @@ internal static partial class Program
         }
         finally { Directory.Delete(dir, true); }
         Console.WriteLine("Review selection checks passed: bounded selection, provenance, privacy, restart, late data and concurrency.");
+    }
+
+    private static async Task RunSelectionEvidenceBudgetChecksAsync()
+    {
+        // 现场仅保留成本和短编号；合成描述不包含私人原文。
+        var costs = new[] { 3354, 1454, 1561, 5095, 2694, 1503, 1938, 1904, 1475, 1238, 2035, 2823,
+            1481, 2128, 1653, 2530, 1595, 3922, 1031, 1202, 1811, 2535, 1391, 2551 };
+        var candidates = costs.Select((cost, i) => new ReviewSelectionLogic.Candidate {
+            Id = "budget-source-" + i, Description = "独立事件" + i, EvidenceChars = cost }).ToList();
+        var first = Pick("i1", "i4", "i5", "i12", "i13", "i22");
+        var second = Pick("i1", "i4", "i12", "i13", "i16", "i22");
+        var corrected = Pick("i1", "i4", "i12", "i13", "i22");
+        var model = new AgentSequenceLlm(first, corrected);
+        var selected = await ReviewSelectionLogic.SelectAsync(model, candidates, "回望预算回归", 6, 16000);
+        Require(selected.Count == 5 && selected.Sum(x => x.EvidenceChars) == 15288 && model.Requests.Count == 2 &&
+            model.Requests[1].Contains(first) && model.Requests[1].Contains("合计17982字") &&
+            model.Requests[1].Contains("上限16000字") && model.Requests[1].Contains("超额1982字") &&
+            model.Requests[1].Contains("i4=5095") && model.Requests[1].Contains("只修改selected_ids") &&
+            !model.Requests[1].Contains("新正文必须更短") && !model.Requests[1].Contains("budget-source-"),
+            "依据预算纠正保留短编号输出，反馈精确合计/超额及成本，不误用正文精简或暴露原始ID");
+        var repeated = new AgentSequenceLlm(first, second);
+        string failure = null;
+        try { await ReviewSelectionLogic.SelectAsync(repeated, candidates, "持续超预算", 6, 16000); }
+        catch (InvalidOperationException error) { failure = error.Message; }
+        Require(failure != null && failure.Contains("合计17982字") && failure.Contains("合计17818字") &&
+            failure.Contains("超额1818字") && repeated.Requests.Count == 2 &&
+            costs.SequenceEqual(candidates.Select(x => x.EvidenceChars)),
+            "现场两次超预算原样回放仍停止，两次具体错误保留，不裁切候选或增加第三次请求");
+        var boundary = new List<ReviewSelectionLogic.Candidate> {
+            new() { Id = "a", Description = "事件一", EvidenceChars = 8000 },
+            new() { Id = "b", Description = "事件二", EvidenceChars = 8000 },
+            new() { Id = "c", Description = "事件三", EvidenceChars = 1 } };
+        var exact = new AgentSequenceLlm(Pick("i1", "i2"));
+        Require((await ReviewSelectionLogic.SelectAsync(exact, boundary, "恰好预算", 6, 16000)).Count == 2 &&
+            exact.Requests.Count == 1, "完整依据恰好16000字一次通过，少选不因未满数量而纠正");
+        var large = new[] { new ReviewSelectionLogic.Candidate { Id = "large-a", Description = "大依据一", EvidenceChars = int.MaxValue },
+            new ReviewSelectionLogic.Candidate { Id = "large-b", Description = "大依据二", EvidenceChars = int.MaxValue } };
+        var overflow = new AgentSequenceLlm(Pick("i1", "i2"), Pick("i1"));
+        Require((await ReviewSelectionLogic.SelectAsync(overflow, large, "大预算", 2, int.MaxValue)).Count == 1 &&
+            overflow.Requests.Count == 2 && overflow.Requests[1].Contains("合计4294967294字"),
+            "依据合计使用长整数，不能溢出后错误通过预算校验");
+        Console.WriteLine("Selection evidence budget checks passed: exact feedback, bounded repair, recorded costs and strict limits.");
+    }
+
+    private static async Task RunSelectionBudgetRecoveryChecksAsync()
+    {
+        var dir = Path.Combine(Path.GetTempPath(), "selection-budget-recovery-" + Guid.NewGuid().ToString("N"));
+        Directory.CreateDirectory(dir);
+        try
+        {
+            var path = Path.Combine(dir, "brain.db");
+            const string root = "budget-recovery", day = "2020-08-20";
+            var begin = MemoryDayLogic.StartOf(day).ToUnixTimeMilliseconds();
+            var snapshots = new Dictionary<string, string>();
+            using (var store = new SqliteMemoryManager(path))
+            {
+                for (var i = 0; i < 40; i++)
+                {
+                    var id = "budget-moment-" + i.ToString("D2");
+                    store.SaveMoment(new MomentRecord { Id = id, ConversationId = root, Role = "user",
+                        Content = "原始经历" + i, MemoryVisibility = "private", CreatedUnixMs = begin + i });
+                    store.AppendRuntimeSlice(new RuntimeSliceRecord { RootConversationId = root, ContextConversationId = root,
+                        MomentId = id, SnapshotJson = TraceJson.ToJson(new { today = "完整原件" + i, inner = new string('材', 2100) }) });
+                }
+                foreach (var slice in store.GetRuntimeSlices(root, day)) snapshots.Add(slice.Id, slice.SnapshotJson);
+                var failed = new SelectionProbeLlm { Reply = messages => {
+                    if (messages[0].content.Contains("【当天回望事件提名】"))
+                    {
+                        var aliases = messages[1].content.Split('\n', StringSplitOptions.RemoveEmptyEntries)
+                            .Select(line => line.Substring(0, line.IndexOf('｜'))).ToArray();
+                        return TraceJson.ToJson(new { events = new[] { new { summary = "一件事的完整转折和结果", source_ids = aliases } } });
+                    }
+                    Require(messages[0].content.Contains("【复盘候选入围】"), "超预算失败不应进入回望成稿");
+                    return Pick("i1", "i2");
+                } };
+                var stopped = false;
+                try { await RuntimeSliceLogic.ReviewDayAsync(store, failed, root, day); }
+                catch (InvalidOperationException error) { stopped = error.Message.Contains("超额"); }
+                Require(stopped && failed.Requests.Count(x => x.Contains("【复盘候选入围】")) == 2 &&
+                    store.GetRuntimeSlices(root, day, true).Count == 40 && store.GetRuntimeDayReviews(root, day).Count == 0 &&
+                    store.GetRuntimeDaySummaries(root, day).Count == 0,
+                    "入围两次超预算后停止，全部原切片待处理，不发布回望或冒充完成");
+            }
+            using (var reopened = new SqliteMemoryManager(path))
+            {
+                var resume = new SelectionProbeLlm { Reply = messages => {
+                    if (messages[0].content.Contains("【复盘候选入围】")) return Pick("i1");
+                    Require(messages[0].content.Contains("【当天回望入围成稿】") &&
+                        messages[1].content.Contains("budget-moment-00") &&
+                        messages[1].content.Contains(new string('材', 2100)) && !messages[1].content.Contains("budget-moment-39"),
+                        "恢复只重选编号并从入围的完整原切片成稿，不重复提名或截断依据");
+                    return "{\"summary\":\"恢复后按关键转折写成的完整回望。\"}";
+                } };
+                Require(await RuntimeSliceLogic.ReviewDayAsync(reopened, resume, root, day) == 40 &&
+                    resume.Requests.Count == 2 && reopened.GetRuntimeDaySummaries(root, day).Count == 1 &&
+                    reopened.GetEvidenceMoments(Enumerable.Range(0, 40).Select(i => "budget-moment-" + i.ToString("D2"))).Count == 40 &&
+                    reopened.GetRuntimeSlices(root, day).All(x => snapshots[x.Id] == x.SnapshotJson),
+                    "跨实例恢复复用全部提名，两次请求完成入围/成稿；未入围原件与所有来源保持");
+            }
+        }
+        finally { Directory.Delete(dir, true); }
+        Console.WriteLine("Selection budget recovery checks passed: failed selection preserves nominations and complete original sources across restart.");
     }
 
     private static void RunReviewSelectionMigrationChecks(Assembly assembly)

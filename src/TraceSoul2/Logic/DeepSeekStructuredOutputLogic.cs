@@ -97,6 +97,7 @@ namespace TraceSoul2.Logic
 
         private static bool IsLengthOverrun(Exception error)
         {
+            if (error is ReviewSelectionValidationException) return false;
             if (error is ReviewProsePendingException) return true;
             var message = error?.Message ?? "";
             if (!message.Contains("字")) return false;
