@@ -6,7 +6,9 @@
 - 复用旧版已有请求契约，避免调试Host与旧共享DLL组合出现缺字段错误；PluginApi保持1.16.0，官方插件版本不变。
 - 明确区分模型空白正文与程序组件不配套，保留备用边界、调用上限和目标ID等业务校验。详见[GLM请求与组件兼容](GLM_JSON_REQUESTS.md)。
 
-模拟HTTP专项、完整Debug构建和ChatCheck，以及实际旧PluginApi六种离线兼容组合已通过。独立发布检出、Release回归及公开资产验收待完成；不部署服务器或恢复日构建。
+独立检出Release全解决方案、完整ChatCheck/Prompt、实际Migration、发布隐私检查及实际旧PluginApi六种离线兼容组合通过；24条既有相机测试警告，0错误。未部署服务器、恢复日构建或调用正式模型。
+
+发布确认：[v0.1.73](https://github.com/TYty0728/TraceSoul2/releases/tag/v0.1.73)／源码05b34b6已公开，[发布CI40165460294](https://github.com/TYty0728/TraceSoul2/actions/runs/40165460294)全部成功。匿名latest=v0.1.73，三平台ZIP及SDK1.16.0公开可访问，SHA-256与GitHub digest一致；范围读取确认版本、错误分类、既有复盘恢复及通用模板，无运行资料。未完整下载三包。win-x64 `d4a805ef5f37e6c18560f5b073bf79ac718fec53e8108747e46f867c49bff15b`； linux-x64 `1e97d9b56c44606a12470741ca465826caa2049c6e77fc288dc8d46251e2f9aa`； linux-arm64 `524445c5fc1a96ae18ba712d0628d1f5e86b39ee6bc6f61414d07a106a12a70b`；
 
 ## 0.1.72（2026-10-25）
 
