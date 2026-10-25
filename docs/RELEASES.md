@@ -6,7 +6,9 @@
 - 使用独立消息列表，格式要求不写回历史或带入其他备用模型；普通文字调用不添加，协议兼容降级仍保留结构化任务要求，每通道请求上限不变。
 - 三份现场失败请求隔离重放均为空白，同样本追加格式约束后均为合法JSON；旧空白纠正另一次恢复。样本结果不等于零失败保证，也不把中转503渠道错误算作本次修复。
 
-产品0.1.75，PluginApi1.16.0与官方插件版本不变。DeepSeek/备用专项、Release Host/ChatCheck、完整ChatCheck和Prompt布局通过；公开发布验收待完成。诊断使用原供应商隔离请求，结果未写角色或发送QQ；本次发布不部署服务器或恢复正式任务。详见[请求对照和边界](knowledge/QQ_RUNBOOK.md)。
+产品0.1.75，PluginApi1.16.0与官方插件版本不变。DeepSeek/备用专项、Release全解决方案、完整ChatCheck、Prompt布局、实际Migration和发布安全检查通过；24项既有相机测试警告、0错误。公开发布验收通过。诊断使用原供应商隔离请求，结果未写角色或发送QQ；本次发布不部署服务器或恢复正式任务。详见[请求对照和边界](knowledge/QQ_RUNBOOK.md)。
+
+发布确认：[v0.1.75](https://github.com/TYty0728/TraceSoul2/releases/tag/v0.1.75)／源码8e19395已公开，[发布CI40201626508](https://github.com/TYty0728/TraceSoul2/actions/runs/40201626508)完整回归、Docker升级/数据保留、源码镜像启动及三平台打包全部成功。匿名latest=v0.1.75，三平台ZIP公开可访问，侧车SHA-256与GitHub digest一致，SDK1.16.0实际下载摘要通过；范围读取三包确认版本、Host/Migration中的格式补充、通用身份模板及无运行资料。未完整下载三包、部署服务器或恢复正式任务。win-x64 `1a9058a96a6e0ff7dd8904b5b9516ea25062c5e1a368cc04ee4f3bcac8597ada`； linux-x64 `706901fbfc3b438d071e8ae958485ea39ecd3f17947f8e5ab42ee2eb51544479`； linux-arm64 `03e19b58d0202decc5fcb3a78c554d43b288f0ffb05308e21557a8d737028b55`；
 
 ## 0.1.74（2026-10-25）
 
