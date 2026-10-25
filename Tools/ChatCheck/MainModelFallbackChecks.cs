@@ -24,14 +24,21 @@ internal static partial class Program
         try
         {
             await CheckFallbackWireAsync(root);
+            await CheckGlmJsonWireAsync(root);
             await CheckFallbackClientBoundaryAsync();
             await CheckFallbackKernelAsync();
             CheckFallbackConfiguration(root);
             Require(FailureProtection.SafeReason(new InvalidOperationException("retry exhausted", new TimeoutException())) ==
                 "请求超时或任务被中断", "包装后的超时仍给出准确安全原因");
+            Require(FailureProtection.SafeReason(new InvalidOperationException("语言模型连续 1 次返回了空 content。request_id=private")) ==
+                "模型返回空白正文", "空正文给出明确分类且不泄露供应商诊断");
+            foreach (var error in new Exception[] { new MissingFieldException("private"), new MissingMethodException("private"), new TypeLoadException("private") })
+                Require(!MainModelFallbackClient.CanFallback(error) &&
+                    FailureProtection.SafeReason(new InvalidOperationException("wrapped", error)) == "程序组件版本不一致或缺失，请核对 Host 与共享 DLL",
+                    "组件装载错误不能伪装成模型异常或切备用，安全分类穿透包装");
         }
         finally { Directory.Delete(root, true); }
-        Console.WriteLine("Main model fallback checks passed: three-stage wire bounds, cancellation, continuity, safe failures and persisted choices.");
+        Console.WriteLine("Main model fallback checks passed: GLM JSON/text wire format and repair, three-stage wire bounds, cancellation, continuity, safe failures and persisted choices.");
     }
 
     private static LlmProviderStore MakeFallbackStore(string path, params (string Id, string Url, string Type)[] providers)
@@ -45,6 +52,68 @@ internal static partial class Program
             secondary = providers.Length > 1 ? new LlmSlotRef { providerId = providers[1].Id, model = providers[1].Id + "-model" } : null,
             tertiary = providers.Length > 2 ? new LlmSlotRef { providerId = providers[2].Id, model = providers[2].Id + "-model" } : null });
         return store;
+    }
+
+    private static async Task CheckGlmJsonWireAsync(string root)
+    {
+        var messages = new List<DeepSeekMessageData> {
+            new DeepSeekMessageData("system", "Return JSON with step and reply."),
+            new DeepSeekMessageData("user", "hello") };
+        foreach (var fallback in new[] { false, true })
+        foreach (var thinking in new[] { false, true })
+        {
+            using var primary = new FailureHttpServer(200,
+                "{\"choices\":[{\"message\":{\"content\":\"   \"},\"finish_reason\":\"stop\"}]}");
+            using var glm = new FailureHttpServer(200, FallbackOk, call => (200, call == 1
+                ? "{\"choices\":[{\"message\":{\"content\":\"hello, plain text instead of JSON\"},\"finish_reason\":\"stop\"}]}"
+                : FallbackOk));
+            var store = new LlmProviderStore(Path.Combine(root, "glm-" + fallback + "-" + thinking, "providers.json"));
+            store.Upsert(new LlmProviderRecord { id = "glm", baseUrl = glm.Url, model = "glm-5.2",
+                apiKey = "test", timeout = 5, thinkingEnabled = thinking, reasoningEffort = "low" });
+            if (fallback)
+            {
+                store.Upsert(new LlmProviderRecord { id = "primary", baseUrl = primary.Url,
+                    model = "deepseek-flash", type = "deepseek", apiKey = "test", timeout = 5 });
+                store.Select("primary", "deepseek-flash");
+                store.SetMainFallbacks(new MainModelFallbackSettings {
+                    secondary = new LlmSlotRef { providerId = "glm", model = "glm-5.2" } });
+            }
+            else store.Select("glm", "glm-5.2");
+            var client = store.CreateCurrentClient();
+            var result = await DeepSeekStructuredOutputLogic.CompleteAsync<AgentOutputData>(client, messages,
+                x => x.step == "finish" && x.reply == "ok", "输出缺少有效字段", default);
+            Require(result.reply == "ok" && glm.Calls == 2 && primary.Calls == (fallback ? 1 : 0),
+                "GLM主用/备用格式错误只在当前GLM纠正一次，不重放失败的主通道");
+            foreach (var body in glm.Requests)
+            {
+                using var request = JsonDocument.Parse(body);
+                var value = request.RootElement;
+                Require(value.GetProperty("response_format").GetProperty("type").GetString() == "json_object",
+                    "GLM首次与纠正请求都必须传递JSON模式");
+                Require(value.GetProperty("thinking").GetProperty("type").GetString() == (thinking ? "enabled" : "disabled") &&
+                    value.GetProperty("reasoning_effort").GetString() == (thinking ? "low" : "none"),
+                    "GLM JSON模式保留原思考开关和强度");
+            }
+            using var original = JsonDocument.Parse(glm.Requests[0]);
+            using var repaired = JsonDocument.Parse(glm.Requests[1]);
+            Require(original.RootElement.GetProperty("messages").GetArrayLength() == messages.Count &&
+                repaired.RootElement.GetProperty("messages").GetArrayLength() == messages.Count + (fallback ? 2 : 1) &&
+                store.Protection.List().Count == 0,
+                "GLM格式纠正保留原消息并追加反馈，主用内部纠正/备用外层纠正成功不产生持久失败报告");
+            await client.CompleteTextAsync(messages);
+            using var textRequest = JsonDocument.Parse(glm.Requests.Last());
+            Require(!textRequest.RootElement.TryGetProperty("response_format", out _),
+                "GLM普通文本请求不能携带JSON模式或null占位");
+        }
+        // The existing protocol-compatibility retry must still be able to remove response_format.
+        var config = new DeepSeekConfigData { Model = "glm-5.2", BaseUrl = "http://127.0.0.1:1", ApiKey = "test" };
+        using var relaxed = JsonDocument.Parse(DeepSeekClientManager.BuildChatRequestJson(config, messages, 1f, true, false));
+        Require(!relaxed.RootElement.TryGetProperty("response_format", out _), "GLM兼容重试允许省略JSON模式字段");
+        config.Type = "deepseek";
+        config.Model = "deepseek-flash";
+        using var deepseekText = JsonDocument.Parse(DeepSeekClientManager.BuildChatRequestJson(config, messages, 1f, false, false));
+        Require(!deepseekText.RootElement.TryGetProperty("response_format", out _),
+            "共用请求DTO不能向DeepSeek普通文本请求新增JSON模式字段");
     }
 
     private static async Task CheckFallbackWireAsync(string root)

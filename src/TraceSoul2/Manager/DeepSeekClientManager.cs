@@ -153,10 +153,12 @@ namespace TraceSoul2.Manager
             }
             if (UsesGlmExtensions(model))
             {
-                return TraceJson.ToJson(new GlmChatRequestData
+                // Reuse the existing JSON-capable contract; do not add a field to the shared GLM DTO.
+                return JsonSerializer.Serialize(new DeepSeekChatRequestData
                 {
                     model = model,
                     messages = messages,
+                    response_format = json && useJsonResponseFormat ? new DeepSeekResponseFormatData() : null,
                     thinking = new DeepSeekThinkingData
                     {
                         type = config.ThinkingEnabled ? "enabled" : "disabled"
@@ -165,7 +167,7 @@ namespace TraceSoul2.Manager
                     temperature = temperature,
                     top_p = config.TopP,
                     max_tokens = config.MaxTokens
-                });
+                }, OmitNullJson);
             }
             return JsonSerializer.Serialize(
                 new OpenAiChatRequestData
