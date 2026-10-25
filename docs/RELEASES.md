@@ -6,7 +6,9 @@
 - 候选数量明确为上限。原件、严格预算和失败保护保持；不截断依据、不机械删项，持续错误仍停止。已保存提名按来源指纹跨实例复用。
 - 以现场24项成本复现两次17982/17818字超限，新增正确重选、精确边界、长整数及临时SQLite跨实例续做回归。机制及现场证据见[入围预算纠正](REVIEW_SELECTION_BUDGET.md)。
 
-产品0.1.72，PluginApi1.16.0和官方插件版本不变。Release全解决方案、完整ChatCheck/Prompt、实际Migration、入围预算/恢复专项及发布隐私检查通过；24条既有相机测试警告、0错误。公开发布验收待完成；未部署、恢复日构建或调用正式模型。
+产品0.1.72，PluginApi1.16.0和官方插件版本不变。Release全解决方案、完整ChatCheck/Prompt、实际Migration、入围预算/恢复专项及发布隐私检查通过；24条既有相机测试警告、0错误。公开发布验收通过；未部署、恢复日构建或调用正式模型。
+
+发布确认：[v0.1.72](https://github.com/TYty0728/TraceSoul2/releases/tag/v0.1.72)／源码d02752f已公开，[发布CI40156208847](https://github.com/TYty0728/TraceSoul2/actions/runs/40156208847)完整回归、Docker升级/数据保留、源码镜像启动及三平台打包全部成功。匿名latest=v0.1.72，三ZIP/SDK1.16.0公开HEAD200，SHA-256与GitHub digest一致；范围读包确认入围预算校验类型、精确成本反馈、既有逐批恢复与通用模板，无运行资料。未完整下载三包、部署或重跑正式复盘。win-x64 `b19a4dd9d6cc391d45051ac0536bee5817e7919d51c80f0b8c3e3b15ca0b5995`； linux-x64 `242e99523678ef232bc88feb3a2c1f34e1f701dd00af7cd05ee9e36afd933323`； linux-arm64 `663de4ef69d7d9ee205b871fba47b71df5060aa482d778669b7227992471e05f`。
 
 ## 0.1.71（2026-10-24）
 

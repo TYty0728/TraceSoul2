@@ -22,4 +22,4 @@ deepseek-flash在temperature=0.2下两次HTTP200，返回JSON、候选编号和�
 
 既有选择、来源、受众、迟到资料及正文超长回归仍适用。测试使用模拟模型和临时库，不证明真实模型每次都能纠正。升级不会解除正式日构建暂停或自动重跑付费复盘。
 
-本地Release全解决方案构建、完整ChatCheck、Prompt布局、实际Migration入口及发布隐私检查通过；24条既有相机测试类型冲突警告、0错误。公开发布验收待完成。
+本地Release全解决方案构建、完整ChatCheck、Prompt布局、实际Migration入口及发布隐私检查通过；24条既有相机测试类型冲突警告、0错误。公开发布验收：[v0.1.72](https://github.com/TYty0728/TraceSoul2/releases/tag/v0.1.72)及[正式CI](https://github.com/TYty0728/TraceSoul2/actions/runs/40156208847)全部通过，匿名latest、三平台包/SDK和摘要已核对；范围读包确认精确预算反馈及版本。未部署、解除保护或重跑正式复盘。
