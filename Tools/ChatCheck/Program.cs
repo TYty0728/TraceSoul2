@@ -22,6 +22,7 @@ internal static partial class Program
         SQLitePCL.Batteries_V2.Init();
         if (args.Contains("--cognition-comparison")) { RunCognitionComparisonChecksAsync().GetAwaiter().GetResult(); return; }
         if (args.Length == 3 && args[0] == "--cognition-comparison-replay") { RunCognitionComparisonReplay(args[1], args[2]); return; }
+        if (args.Contains("--review-reliability")) { RunReviewReliabilityChecksAsync().GetAwaiter().GetResult(); return; }
         if (args.Contains("--identity-evolution")) { RunIdentityEvolutionChecksAsync().GetAwaiter().GetResult(); return; }
         if (args.Contains("--identity-reorganization")) { RunIdentityReorganizationChecksAsync().GetAwaiter().GetResult(); return; }
         if (args.Contains("--main-fallback")) { RunMainModelFallbackChecksAsync().GetAwaiter().GetResult(); return; }
@@ -89,6 +90,7 @@ internal static partial class Program
         RunQwenTtsChecksAsync().GetAwaiter().GetResult();
         RunExistenceChecksAsync().GetAwaiter().GetResult();
         RunReviewSelectionChecksAsync().GetAwaiter().GetResult();
+        RunReviewReliabilityChecksAsync().GetAwaiter().GetResult();
         RunRuntimePresentationChecksAsync().GetAwaiter().GetResult();
         RunDayOverviewChecksAsync().GetAwaiter().GetResult();
         RunEnvironmentChecksAsync().GetAwaiter().GetResult();

@@ -28,6 +28,9 @@ namespace TraceSoul2.Migrate
         public string MigrationModel { get; private set; }
         public IVectorEncoder CognitionEncoder { get; private set; }
         private OnnxBgeEncoder encoder;
+        private ILlmClient budgetClient;
+        public void BeginReviewBudget() => budgetClient = Llm == null ? null : new ReviewBudgetClient(Llm,
+            (calls, stage) => Migration.SetReviewStage(stage + "（本轮逻辑请求 " + calls + "）"));
 
         public IVectorEncoder RequireCognitionEncoder() => CognitionEncoder ?? RequireEncoder();
 
@@ -94,7 +97,7 @@ namespace TraceSoul2.Migrate
                 throw new InvalidOperationException(
                     "还没有可用的语言模型提供商或 API Key。请先运行 Host 控制台保存提供商，"
                     + "或直接编辑 " + Path.Combine(DataDirectory, "llm-providers.json") + "。");
-            return Llm;
+            return budgetClient ?? Llm;
         }
 
         public PairIdentity RequirePair()

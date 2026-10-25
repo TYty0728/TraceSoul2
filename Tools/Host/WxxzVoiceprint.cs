@@ -13,6 +13,19 @@ public sealed class WxxzVoiceprint
     public const string Model = "3dspeaker/campplus-zh-cn-16k:f682b514c05d947ee3fa91cd6ec6c5c7543479a128373fa29b1faedccd21fd11";
     public const double Threshold = 0.65; // Initial operating point; requires field calibration.
     private readonly string path;
+    private readonly Func<DateTimeOffset> now;
+    private long diagnosticUntil;
+    public sealed record DiagnosticSettings(double threshold = Threshold, int durationSeconds = 300);
+    private bool DiagnosticActive => System.Threading.Interlocked.Read(ref diagnosticUntil) > now().ToUnixTimeMilliseconds();
+    public void ConfigureDiagnostic(DiagnosticSettings settings)
+    {
+        if (settings == null || (settings.threshold != 0 && settings.threshold != Threshold) ||
+            settings.durationSeconds is < 1 or > 900)
+            throw new ArgumentException("调试阈值只支持0或0.65，有效期为1～900秒。");
+        if (settings.threshold == 0 && !IsEnrolled) throw new InvalidOperationException("请先录入本人声纹。");
+        System.Threading.Interlocked.Exchange(ref diagnosticUntil, settings.threshold == 0
+            ? now().AddSeconds(settings.durationSeconds).ToUnixTimeMilliseconds() : 0);
+    }
     private sealed class Sample
     {
         public double[] embedding { get; set; }
@@ -21,7 +34,8 @@ public sealed class WxxzVoiceprint
         public string text { get; set; }
     }
     private Sample[] pending;
-    public WxxzVoiceprint(string path) { this.path = path; }
+    public WxxzVoiceprint(string path, Func<DateTimeOffset> now = null)
+    { this.path = path; this.now = now ?? (() => DateTimeOffset.UtcNow); }
     public object Status()
     {
         var saved = LoadSamples();
@@ -31,7 +45,9 @@ public sealed class WxxzVoiceprint
             legacyProfile = IsEnrolled && saved == null,
             slots = slots.Select((s, i) => new { number = i + 1, accepted = s != null,
                 speechMs = s?.speech_ms ?? 0, text = s?.text ?? "" }).ToArray(),
-            threshold = Threshold, decisionBasis = "whole_utterance", calibrated = false };
+            threshold = DiagnosticActive ? 0 : Threshold, diagnosticBypass = DiagnosticActive,
+            diagnosticUntilUnixMs = System.Threading.Interlocked.Read(ref diagnosticUntil),
+            decisionBasis = "whole_utterance", calibrated = false };
     }
     public void ClearPending() { pending = null; }
 
@@ -144,13 +160,14 @@ public sealed class WxxzVoiceprint
     {
         var profile = Load();
         if (profile == null) return (false, null);
+        var bypass = DiagnosticActive;
         try
         {
             Evidence(voice, out _);
             var score = Cosine(profile, Vector(voice.GetProperty("embedding")));
-            return (score >= Threshold, Math.Round(score, 4));
+            return (bypass || score >= Threshold, Math.Round(score, 4));
         }
-        catch (Exception e) when (e is InvalidOperationException or KeyNotFoundException or FormatException) { return (false, null); }
+        catch (Exception e) when (e is InvalidOperationException or KeyNotFoundException or FormatException) { return (bypass, null); }
     }
 
     public object Inspect(JsonElement voice)

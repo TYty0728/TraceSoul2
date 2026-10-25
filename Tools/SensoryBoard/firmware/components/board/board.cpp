@@ -50,6 +50,9 @@ void board_brightness(unsigned percent){
     ledc_set_duty(LEDC_LOW_SPEED_MODE,LEDC_CHANNEL_0,(percent>100?100:percent)*1023/100);
     ledc_update_duty(LEDC_LOW_SPEED_MODE,LEDC_CHANNEL_0);
 }
+esp_err_t board_volume(unsigned level){
+    return esp_codec_dev_set_out_vol(output_dev,level>100?100:(int)level)==ESP_CODEC_DEV_OK?ESP_OK:ESP_FAIL;
+}
 BoardTouch board_touch_snapshot(){
     portENTER_CRITICAL(&touch_lock);
     BoardTouch result={touch_ready,touch_down,touch_testing,touch_x,touch_y,touch_count};
@@ -168,7 +171,7 @@ void board_init() {
     light.timer_sel = LEDC_TIMER_1; light.gpio_num = 6; light.duty = 614;
     ESP_ERROR_CHECK(ledc_channel_config(&light));
     esp_es8311_port_init(bus);
-    ESP_ERROR_CHECK(esp_codec_dev_set_out_vol(output_dev, 45));
+    ESP_ERROR_CHECK(board_volume(60));
     lcd_lock=xSemaphoreCreateMutex();assert(lcd_lock);
     i2c_device_config_t touch_cfg={};touch_cfg.device_address=0x38;touch_cfg.dev_addr_length=I2C_ADDR_BIT_LEN_7;touch_cfg.scl_speed_hz=400000;
     if(i2c_master_bus_add_device(bus,&touch_cfg,&touch)==ESP_OK)xTaskCreate(poll_touch,"touch-input",4096,nullptr,3,nullptr);
@@ -188,12 +191,15 @@ esp_err_t board_frame_region(const uint8_t *rgb565,int top,int rows) {
 }
 esp_err_t board_frame(const uint8_t *rgb565) {return board_frame_region(rgb565,0,480);}
 
-esp_err_t board_audio(const uint8_t *pcm, size_t size) {
+esp_err_t board_audio_begin(unsigned *epoch) {
     if(playback_blocked.load())return ESP_ERR_INVALID_STATE;
-    unsigned epoch=playback_epoch.load();
+    *epoch=playback_epoch.load();
     esp_err_t err = amplifier(true);
     if (err != ESP_OK) return err;
     vTaskDelay(pdMS_TO_TICKS(20));
+    return ESP_OK;
+}
+esp_err_t board_audio_write(const uint8_t *pcm, size_t size, unsigned epoch) {
     // Micro-slices bound write latency and feed the scheduler; 48kHz mono PCM16.
     for (size_t offset = 0; offset < size; offset += 4096) {
         if(playback_blocked.load()||epoch!=playback_epoch.load()){amplifier(false);return ESP_ERR_INVALID_STATE;}
@@ -204,9 +210,19 @@ esp_err_t board_audio(const uint8_t *pcm, size_t size) {
         }
         vTaskDelay(1);
     }
-    // Let the final DMA samples drain before reporting playback completion.
-    vTaskDelay(pdMS_TO_TICKS(150));
+    return ESP_OK;
+}
+esp_err_t board_audio_end(bool complete) {
+    // Drain once for the entire reply, never between transport packets.
+    if(complete)vTaskDelay(pdMS_TO_TICKS(150));
     return amplifier(false);
+}
+esp_err_t board_audio(const uint8_t *pcm, size_t size) {
+    unsigned epoch=0;
+    esp_err_t err=board_audio_begin(&epoch);
+    if(err==ESP_OK)err=board_audio_write(pcm,size,epoch);
+    esp_err_t end=board_audio_end(err==ESP_OK);
+    return err==ESP_OK?end:err;
 }
 
 esp_err_t board_record_begin(uint8_t *pcm) {

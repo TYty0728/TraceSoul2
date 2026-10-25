@@ -58,12 +58,25 @@ class UpdateServerTests(unittest.TestCase):
 
     def test_kill_uses_shell_builtin_and_validates_pid(self):
         with patch.object(updater, "docker") as docker:
-            updater.stop_host("tracesoul2", "11")
+            updater.stop_host("tracesoul2", "11", "a" * 32)
             docker.assert_called_once_with("tracesoul2", "sh", "-c", 'kill -TERM "$1"', "sh", "11")
             with self.assertRaises(ValueError):
-                updater.stop_host("tracesoul2", "1")
+                updater.stop_host("tracesoul2", "1", "a" * 32)
             with self.assertRaises(ValueError):
-                updater.stop_host("tracesoul2", "11; shutdown")
+                updater.stop_host("tracesoul2", "11; shutdown", "a" * 32)
+
+    def test_maintenance_required_and_exact_lease(self):
+        with patch.object(updater, "docker") as docker:
+            with self.assertRaises(ValueError):
+                updater.stop_host("tracesoul2", "11")
+            docker.assert_not_called()
+        with patch.object(updater.urllib.request, "urlopen", return_value=io.BytesIO(json.dumps({"ready": True, "lease": "a" * 32}).encode())) as opened:
+            self.assertEqual(updater.maintenance_request("http://localhost", "session=test", "POST"), "a" * 32)
+            self.assertEqual(opened.call_args.args[0].method, "POST")
+        for result in [{}, {"ready": False, "lease": "a" * 32}, {"ready": True, "lease": "invalid"}]:
+            with patch.object(updater.urllib.request, "urlopen", return_value=io.BytesIO(json.dumps(result).encode())):
+                with self.assertRaises(RuntimeError):
+                    updater.maintenance_request("http://localhost", "session=test", "POST")
 
     def test_pid_scanner_has_no_embedded_null_and_filters_dotnet(self):
         with patch.object(updater, "docker", return_value="11") as docker:

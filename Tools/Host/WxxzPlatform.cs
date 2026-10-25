@@ -40,7 +40,7 @@ namespace TraceSoul2.Host
         private object lastWakePreparation, lastWakeUse;
         private string VoiceDescription => speech?.Description ?? "Windows 系统测试音色";
         private readonly object callSync = new();
-        private sealed class VoiceCall { public string Id, Session, ListenId, Notice=""; public bool WakeMode, Background; }
+        private sealed class VoiceCall { public string Id, Session, ListenId, IdleDisplayKey, Notice=""; public bool WakeMode, Background, InitialCapture=true; }
         private VoiceCall currentCall;
         public readonly WxxzDiagnostics Diagnostics = new();
         private readonly WxxzDisplay displayState = new();
@@ -132,7 +132,7 @@ namespace TraceSoul2.Host
         public async Task<object> PrepareWakeAudioAsync(CancellationToken token, bool monitorStarting = false)
         {
             if(CallId != null || BackgroundBusy && !monitorStarting) throw new InvalidOperationException("请先暂停监听/结束通话，再预生成唤醒应答。");
-            if(speech?.SupportsWakeCache != true) throw new InvalidOperationException("预生成唤醒语音仅支持本地千问；请先保存播放音色。");
+            if(speech?.SupportsWakeCache != true) throw new InvalidOperationException("请先保存本地千问或远端角色语音；系统测试音色不支持预生成。");
             if(!await wakePreparation.WaitAsync(0,token)) throw new InvalidOperationException("唤醒语音正在预生成，请等待完成。");
             try
             {
@@ -151,6 +151,12 @@ namespace TraceSoul2.Host
             attention.Save(value); return Status();
         }
         public object PreviewWords(string text) => attention.Correct(text);
+        public object ConfigureVoiceDiagnostic(WxxzVoiceprint.DiagnosticSettings settings)
+        {
+            if (CallId != null || BackgroundBusy) throw new InvalidOperationException("请先结束通话再修改调试阈值。");
+            voiceprint.ConfigureDiagnostic(settings);
+            return Status();
+        }
         public object PreviewAttention(string text, bool focused, string speaker) => attention.Preview(text,focused,speaker);
         public (string id, string display, string audio) DeliveryState()
         {
@@ -172,6 +178,12 @@ namespace TraceSoul2.Host
             if(trace)Diagnostics.Add("display",artwork.HasValue?"reply_expression":"reply_artwork_unavailable",
                 artwork.HasValue?"实体屏幕使用本轮评分最高的可用表情。":"本轮评分或图片不可用，保留字幕与声音，不另选状态图。");
             return fields;
+        }
+        private (string id,ExpressionImage image)? CalmArtwork()
+        {
+            var library=services?.Expressions;
+            var id=WxxzArtwork.Select(library?.Catalog(),"calm");
+            return id==null?null:(id,library.ReadImage(id));
         }
 
         public object ConfigureSpeech(WxxzSpeech.Settings settings)
@@ -210,7 +222,12 @@ namespace TraceSoul2.Host
                 !receipt.TryGetProperty("display_receipts",out var frames)||frames.ValueKind!=JsonValueKind.Array||frames.GetArrayLength()!=pages.GetInt32()||
                 frames.EnumerateArray().Any(r=>!r.TryGetProperty("status",out var state)||state.GetString()!="done"||
                     !r.TryGetProperty("protocol",out var protocol)||protocol.GetInt32()!=1)))
-                throw new InvalidOperationException("WXXZ 未确认全部字幕页显示；未重发。");
+                throw new InvalidOperationException("WXXZ 未确认字幕画面已接收；未重发。");
+            if(display!=null && receipt.TryGetProperty("display_mode",out var mode) && mode.GetString()=="cached_pages" &&
+                (!receipt.TryGetProperty("caption_pages",out var captions)||captions.GetInt32() is <1 or >128||
+                 receipt.GetProperty("display_receipts").EnumerateArray().Any(r=>
+                    !r.TryGetProperty("ui_pages",out var cached)||cached.GetInt32()!=captions.GetInt32())))
+                throw new InvalidOperationException("WXXZ 未确认完整字幕缓存；未重发。");
             displayState.Finished(displayTicket,true);
             return receipt;
             }
@@ -413,15 +430,28 @@ namespace TraceSoul2.Host
                 await bodyAudio.WaitAsync(token);
                 try
                 {
-                string notice;
+                string notice; bool initial, showIdle; string idleState;
+                var snapshot=DisplayState();
                 lock(callSync)
                 {
                     if(currentCall?.Id!=expectedCall) return new CallCapture(expectedSession,expectedCall,attention.Now,default);
                     notice=currentCall.Notice;
+                    initial=currentCall.InitialCapture;
+                    currentCall.InitialCapture=false;
+                    idleState=!currentCall.WakeMode ? "listening" : attention.State().state=="focused" ? "focused" : "standby";
+                    var key=idleState+":"+snapshot.outputSequence;
+                    showIdle=initial || currentCall.IdleDisplayKey!=key;
+                    currentCall.IdleDisplayKey=key;
                 }
                 var started = attention.Now;
                 displayState.Capture(expectedSession,expectedCall,listenId,true);
-                var result = await Request("api/utterance", new { listen_id = listenId, notice }, token);
+                (string id,ExpressionImage image)? idleArtwork=null;
+                if(showIdle && companionDisplay)
+                    idleArtwork=snapshot.expressionId!=null && services?.Expressions!=null
+                        ? (snapshot.expressionId,services.Expressions.ReadImage(snapshot.expressionId)) : CalmArtwork();
+                var initialDisplay=showIdle&&companionDisplay ? DisplayFields(idleState,"",idleArtwork) : null;
+                var result = await Request("api/utterance", new { listen_id = listenId, notice,
+                    countdown=initial, display=initialDisplay, phase=idleState, focus_ms=attention.State().focusRemainingMs }, token);
                 return new CallCapture(expectedSession,expectedCall,started,result);
                 }
                 finally {bodyAudio.Release();}
@@ -453,11 +483,13 @@ namespace TraceSoul2.Host
                 var state = result.GetProperty("status").GetString();
                 var matched = voiceprint.Match(result.GetProperty("voice"));
                 lock(callSync)if(currentCall?.Id==expectedCall)
-                    currentCall.Notice=text.Length==0?(state=="no_speech"?"no_speech":"")
+                    currentCall.Notice=text.Length==0?""
                         :!matched.matched?"speaker_unconfirmed":"";
                 if (text.Length == 0)
                 {
-                    Diagnostics.Add("decision",state,"无可用听写，本次不进入Moment。",score:matched.score,voiceConfirmed:matched.matched);
+                    // A bounded idle microphone poll is normal standby, not a failed utterance.
+                    if(state!="no_speech")
+                        Diagnostics.Add("decision",state,"无可用听写，本次不进入Moment。",score:matched.score,voiceConfirmed:matched.matched);
                     return new { status = state, text = "", score = matched.score, attention = attention.State() };
                 }
                 if (text.Length > 4000) throw new InvalidOperationException("听写结果超长；未提交。");
@@ -489,14 +521,25 @@ namespace TraceSoul2.Host
             lock(callSync) if(currentCall?.Id != expectedCall) return;
             var config = attention.Configuration();
             var outputId = Guid.NewGuid().ToString("N");
-            var displayTicket=displayState.Prepare(session,expectedCall,config.reply);
+            var artwork=companionDisplay?CalmArtwork():null;
+            var displayTicket=displayState.Prepare(session,expectedCall,config.reply,artwork?.id);
             delivery = new { outputId, display = "pending", audio = "pending", wake = true };
             try
             {
-                await Request("api/text", new { text = config.reply }, token);
+                if(!companionDisplay) await Request("api/text", new { text = config.reply }, token);
                 lock(callSync) if(currentCall?.Id != expectedCall)
                 { delivery = new { outputId, display = "completed", audio = "not_started", wake = true }; return; }
-                await SpeakAsync(config.reply, token, wake:true,displayTicket:displayTicket);
+                await SpeakAsync(config.reply, token, wake:true,displayTicket:displayTicket,
+                    // Put the calm listening frame in place BEFORE playback. A full
+                    // USB frame after the acknowledgement would lose the next words.
+                    display:companionDisplay?DisplayFields("focused","",artwork):null);
+                lock(callSync) if(currentCall?.Id != expectedCall) return;
+                if(companionDisplay)
+                {
+                    displayState.Rest(displayTicket,artwork?.id);
+                    lock(callSync) if(currentCall?.Id==expectedCall && displayTicket!=null)
+                        currentCall.IdleDisplayKey="focused:"+displayTicket.Sequence;
+                }
                 delivery = new { outputId, display = "completed", audio = "completed", wake = true };
                 services.Storage.SaveOperationalEvent(new OperationalEventRecord
                 {
@@ -619,18 +662,27 @@ namespace TraceSoul2.Host
                 var audioStatus = "completed";
                 JsonElement audio = default;
                 try { audio = await owner.SpeakAsync(text, CancellationToken.None,display:display,displayTicket:displayTicket); }
-                catch (Exception)
+                catch (Exception error)
                 {
                     audioStatus = "failed_or_unknown";
                     if(owner.companionDisplay)
                     {
                         owner.delivery=new {outputId,display="failed_or_unknown",audio=audioStatus};
-                        throw new InvalidOperationException("WXXZ 字幕或播放未完成，未记录完整回复、未重发。");
+                        // Our service errors are deliberately sanitized. Keep the cause visible;
+                        // upstream response bodies, audio and URLs are never included here.
+                        var cause=error is InvalidOperationException ? error.Message : error.GetType().Name;
+                        throw new InvalidOperationException("WXXZ 回复播放失败："+cause+" 未记录完整回复、未重发。",error);
                     }
                 }
                 owner.delivery = new { outputId, display = "completed", audio = audioStatus,
                     displayReceipt = owner.companionDisplay ? (object)audio.GetProperty("display_receipts") : shown.GetProperty("receipt"),
                     audioReceipt = audio.ValueKind == JsonValueKind.Object ? (object)audio : null };
+                // The firmware overlays its listening indicator on the cached frame.
+                // Re-uploading that frame after every reply creates a deaf interval.
+                if(owner.companionDisplay && audioStatus=="completed" && displayTicket!=null)
+                    lock(owner.callSync)
+                        if(owner.currentCall!=null && owner.currentCall.Id==displayTicket.Call)
+                            owner.currentCall.IdleDisplayKey=(owner.currentCall.WakeMode?"focused:":"listening:")+displayTicket.Sequence;
                 context.Services.Storage.SaveOperationalEvent(new OperationalEventRecord
                 {
                     Id = Guid.NewGuid().ToString("N"), ConversationId = context.ConversationId,

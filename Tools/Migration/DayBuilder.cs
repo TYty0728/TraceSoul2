@@ -26,6 +26,8 @@ namespace TraceSoul2.Migrate
     {
         public static async Task<int> RunAsync(MigrationContext context, string[] args)
         {
+            using var executionLease = ReviewExecutionLease.Acquire(context.Migration.DataDirectory);
+            context.BeginReviewBudget();
             var dayKey = CliArgs.Value(args, "--day");
             if (string.IsNullOrWhiteSpace(dayKey))
                 throw new InvalidOperationException("需要 --day yyyy-MM-dd。");
@@ -40,20 +42,24 @@ namespace TraceSoul2.Migrate
                 }
                 var finishedDay = DateTime.ParseExact(dayKey, "yyyy-MM-dd", CultureInfo.InvariantCulture);
                 var finishedRange = DateRange.Parse(new[] { "--from", dayKey, "--to", dayKey });
-                if (context.Store.GetPublicMomentsInRange(finishedRange.DayStartMs(finishedDay), finishedRange.DayEndMs(finishedDay)).Count > 0)
+                var latePublicPending = false;
+                try { if (context.Store.GetPublicMomentsInRange(finishedRange.DayStartMs(finishedDay), finishedRange.DayEndMs(finishedDay)).Count > 0)
                     await PublicExperienceLogic.BuildAsync(context.Store, context.RequireLlm(), finishedRange.DayStartMs(finishedDay), finishedRange.DayEndMs(finishedDay),
-                        encoderFactory: context.RequireCognitionEncoder, cache: context.Vectors);
+                        encoderFactory: context.RequireCognitionEncoder, cache: context.Vectors); }
+                catch (ReviewProsePendingException) { latePublicPending = true; }
                 // 完成标记早于临时样本清理：即使上次进程恰好在两者之间退出，也能在这里补清理。
-                if (lateSummaryPending)
+                if (lateSummaryPending || latePublicPending)
                 {
                     // The existing done marker is authoritative for core work, including pre-checkpoint versions.
                     var sources = context.Migration.GetUnbuiltMomentsInRange(finishedRange.DayStartMs(finishedDay), finishedRange.DayEndMs(finishedDay));
                     var lateCore = SaveCoreCheckpoint(context, dayKey, sources, new(), new());
-                    lateCore.Ranked = lateCore.ReviewDone = lateCore.DaySummaryPending = true;
+                    lateCore.Ranked = lateCore.ReviewDone = true;
+                    lateCore.DaySummaryPending = lateSummaryPending;
                     WriteCoreCheckpoint(context, dayKey, lateCore);
                     context.Migration.SaveReviewState(new ReviewStateRecord { DayKey = dayKey, Status = "running", Error = "" });
                     context.Migration.SetReviewStage("迟到回望待整理");
-                    context.Migration.MarkDayPending(dayKey, new[] { "day_summary" });
+                    if (latePublicPending) context.Migration.MarkDayDeferred(dayKey, "迟到公开经历待整理");
+                    else context.Migration.MarkDayPending(dayKey, new[] { "day_summary" });
                 }
                 else context.Store.RetireDayRuntimeSamples(MigrationContext.ConversationId, dayKey);
                 Console.WriteLine((lateSummaryPending ? "核心已完成，迟到回望待整理：" : "日终复盘已完成，跳过重复构筑：") + dayKey);
@@ -69,8 +75,24 @@ namespace TraceSoul2.Migrate
             {
                 var checkpoint = LoadCoreCheckpoint(context, dayKey);
                 if (checkpoint != null && CanResumeCore(context, dayKey, checkpoint))
+                {
+                    var date = DateTime.ParseExact(dayKey, "yyyy-MM-dd", CultureInfo.InvariantCulture);
+                    var period = DateRange.Parse(new[] { "--from", dayKey, "--to", dayKey });
+                    await PublicExperienceLogic.BuildAsync(context.Store, context.RequireLlm(), period.DayStartMs(date), period.DayEndMs(date),
+                        encoderFactory: context.RequireCognitionEncoder, cache: context.Vectors);
                     return await FinishCheckpointAsync(context, dayKey, checkpoint);
+                }
                 return await RunCoreAsync(context, args, dayKey);
+            }
+            catch (ReviewDependencyPendingException exception)
+            {
+                context.Migration.MarkDayWaiting(dayKey, exception.Message);
+                return 0;
+            }
+            catch (ReviewProsePendingException exception)
+            {
+                context.Migration.MarkDayDeferred(dayKey, exception.Message);
+                return 0;
             }
             catch (Exception exception)
             {
@@ -107,9 +129,12 @@ namespace TraceSoul2.Migrate
             try { await RuntimeSliceLogic.ReviewDayAsync(context.Store, llm, MigrationContext.ConversationId, dayKey); }
             catch (ReviewProsePendingException) { daySummaryPending = true; }
             context.Migration.SetReviewStage("公开经历按环境整理");
-            var publicCount = await PublicExperienceLogic.BuildAsync(context.Store, llm, range.DayStartMs(day), range.DayEndMs(day),
-                encoderFactory: context.RequireCognitionEncoder, cache: context.Vectors);
-            if (moments.Count == 0 && publicCount > 0 && !daySummaryPending && previousCore == null)
+            var publicPending = false;
+            var publicCount = 0;
+            try { publicCount = await PublicExperienceLogic.BuildAsync(context.Store, llm, range.DayStartMs(day), range.DayEndMs(day),
+                encoderFactory: context.RequireCognitionEncoder, cache: context.Vectors); }
+            catch (ReviewProsePendingException) { publicPending = true; }
+            if (moments.Count == 0 && publicCount > 0 && !publicPending && !daySummaryPending && previousCore == null)
             {
                 context.Migration.MarkDayCompleted(dayKey);
                 return 0;
@@ -118,6 +143,7 @@ namespace TraceSoul2.Migrate
             {
                 MigrationLive.Start(context);
                 var emptyCore = previousCore ?? SaveCoreCheckpoint(context, dayKey, new(), new(), new());
+                if (publicPending) throw new ReviewProsePendingException("公开经历待整理，私密核心进度已保存。");
                 emptyCore.DaySummaryPending = daySummaryPending;
                 WriteCoreCheckpoint(context, dayKey, emptyCore);
                 return await FinishCheckpointAsync(context, dayKey, emptyCore, retryDaySummary: false);
@@ -149,16 +175,16 @@ namespace TraceSoul2.Migrate
                     observationCalls++;
                     continue;
                 }
-                var observationContext = ObservationContextStamp(context);
+                var observationContext = ObservationContextStamp(context, observation);
                 if (observation.Output != null && observation.ContextStamp != observationContext)
                     throw new InvalidOperationException("事件草稿引用的标签或索引已修订，不能直接提交旧草稿。");
                 observation.ContextStamp = observationContext;
                 var chunkText = string.Join("\n", chunk.Select(x => FormatMoment(x, pair)));
                 var route = router.Route(chunkText);
                 var conceptIds = route.Concepts.Select(x => x.Node.Id).ToList();
-                var activeTags = context.Store.GetActiveLifeTags();
+                var activeTags = observation.Tags ?? context.Store.GetActiveLifeTags();
                 var recentTags = activeTags.OrderByDescending(x => x.ActivationCount).Take(30).ToList();
-                var indexCandidates = context.Migration.GetEventIndexCandidates(
+                var indexCandidates = observation.Candidates ?? context.Migration.GetEventIndexCandidates(
                     activeTags.Select(x => x.Id).ToList(), 20);
                 var anchor = DateTimeOffset.FromUnixTimeMilliseconds(chunk[0].CreatedUnixMs)
                     .ToOffset(MigrationContext.ChinaOffset);
@@ -168,11 +194,14 @@ namespace TraceSoul2.Migrate
                 var prompt = ReplayPrompts.BuildEventObservationPrompt(
                     pair, chunk, route, indexCandidates, recentTags, periodLabel, dayKindLabel,
                     context.Migration.GetEntriesByIndexIds(indexCandidates.Select(x => x.Id).ToList()));
-                var messages = new List<DeepSeekMessageData>
+                var messages = observation.Messages ?? new List<DeepSeekMessageData>
                 {
                     new DeepSeekMessageData("system", prompt),
                     new DeepSeekMessageData("user", CorePrompts.Migration.ObserveUser)
                 };
+                observation.Messages = messages; observation.Tags = activeTags; observation.Candidates = indexCandidates;
+                observationContext = ObservationContextStamp(context, observation);
+                observation.ContextStamp = observationContext;
                 var output = await CompleteObservationAsync(context, llm, progress, observationKey, observation, messages, chunk, indexCandidates);
                 observationCalls++;
                 var batchIndexes = new List<EventIndexRecord>();
@@ -180,7 +209,7 @@ namespace TraceSoul2.Migrate
                 context.Migration.CommitCoreProgress(() =>
                 {
                     EnsureCoreProgress(context, progress);
-                    if (ObservationContextStamp(context) != observationContext)
+                    if (ObservationContextStamp(context, observation) != observationContext)
                         throw new InvalidOperationException("事件生成期间标签或索引已修订，旧输出不能提交。");
                     // 复用旧路的 Tag 创建/激活通道：只带 Tag 信息，不带事实。
                     var tagOutput = new MemoryObservationOutputData
@@ -299,6 +328,7 @@ namespace TraceSoul2.Migrate
                 IdentityCardSlotValues.UserProfile,
                 Card(cardsBefore, IdentityCardSlotValues.UserProfile).Body, pair);
             var detailCalls = 0;
+            var pendingDetails = 0;
             context.Migration.SetReviewStage("细节生成");
             await ProtectedParallelWork.RunAsync(dayEntries, 4, async (entry, detailToken) =>
             {
@@ -321,6 +351,7 @@ namespace TraceSoul2.Migrate
                 };
                 var contentRejected = false;
                 try { entry.Detail = await CompleteDetailAsync(context, llm, detailKey, detailStamp, messages, detailToken); }
+                catch (ReviewProsePendingException) { Interlocked.Increment(ref pendingDetails); return; }
                 catch (LlmContentRejectedException)
                 {
                     detailToken.ThrowIfCancellationRequested();
@@ -361,10 +392,14 @@ namespace TraceSoul2.Migrate
             }
 
             // ---------- 认知形成：跑完事件构筑后，直接用当天新增事件提炼第一人称理解 ----------
+            if (context.Migration.GetAllReviewStates().Any(x => (x.Status == "pending" || x.Status == "deferred" || x.Status == "waiting") && string.CompareOrdinal(x.DayKey, dayKey) < 0))
+                throw new ReviewDependencyPendingException("较早日期尚未完成，当前事件和细节已保存，认知演化等待前置任务。");
             context.Migration.SetReviewStage("认知形成");
             await RunCognitionFormationWithRecoveryAsync(
                 context, pair, llm, dayKey, dayIndexes, dayEntries, moments, progress);
 
+            if (publicPending) throw new ReviewProsePendingException("公开经历待整理，私密核心进度已保存。");
+            if (pendingDetails > 0) throw new ReviewProsePendingException("仍有" + pendingDetails + "条细节待整理，其他合格结果已保存。");
             var core = SaveCoreCheckpoint(context, dayKey, moments, dayIndexes, dayEntries, previousCore);
             core.DaySummaryPending = daySummaryPending;
             WriteCoreCheckpoint(context, dayKey, core);
@@ -400,6 +435,8 @@ namespace TraceSoul2.Migrate
             // ---------- 日终身份摘要复盘 + 内心全字段同步 ----------
             context.Migration.SetReviewStage("身份复盘与内心同步");
             var cardsNow = context.Store.LoadIdentityCards(MigrationContext.ConversationId);
+            var priorDeferred = context.Migration.GetAllReviewStates().Any(x => (x.Status == "deferred" || x.Status == "pending") && string.CompareOrdinal(x.DayKey, dayKey) < 0);
+            if (priorDeferred) throw new ReviewDependencyPendingException("较早日期仍有依赖任务待整理；本日核心已保存，身份和晋升等待前置任务。");
             var reviewOutput = core.ReviewDone ? new ReplayPrompts.DayCardReviewOutputData { cards = new() }
                 : await RunAutomaticDayReviewAsync(context, dayKey, core.EmptyDay);
             var changed = ApplyReviewOutput(context, pair, reviewOutput, cardsNow, lastMomentId, core.EmptyDay);
@@ -416,7 +453,12 @@ namespace TraceSoul2.Migrate
             if (!core.Ranked)
             {
                 var dayCognitions = context.Migration.GetCognitionsCreatedInRange(range.DayStartMs(day), range.DayEndMs(day));
-                await RankDayLadderAsync(context, pair, llm, dayKey, dayIndexes, dayCognitions);
+                if (!core.DayRanked)
+                {
+                    await RankDayLadderAsync(context, pair, llm, dayKey, dayIndexes, dayCognitions);
+                    core.DayRanked = true;
+                    WriteCoreCheckpoint(context, dayKey, core);
+                }
                 await DayLadderLogic.PromoteAsync(context, pair, dayKey, llm);
                 core.Ranked = true;
                 WriteCoreCheckpoint(context, dayKey, core);
@@ -619,9 +661,10 @@ namespace TraceSoul2.Migrate
                 var output = plan?.Stamp == cognitionStamp && plan?.CandidateStamp == candidateStamp ? plan.Output : null;
                 if (output == null)
                 {
-                    output = await DeepSeekStructuredOutputLogic.CompleteAsync<ReplayPrompts.CognitionFormationOutputData>(
-                        llm, messages, null, "认知复盘必须输出包含 cognitions 数组的JSON对象。", CancellationToken.None,
-                        validationError: x => CognitionFormationLogic.ValidationError(x.cognitions, evidence, activeCognitions, activeTags));
+                    output = await ReviewWorkLogic.CompleteAsync<ReplayPrompts.CognitionFormationOutputData>(
+                        context.Store, cognitionKey ?? dayKey + ":cognition", llm, messages,
+                        x => CognitionFormationLogic.ValidationError(x.cognitions, evidence, activeCognitions, activeTags, false),
+                        x => CognitionFormationLogic.TextParts(x.cognitions));
                     if (cognitionKey != null) context.Store.SavePluginDocument(CoreProgressDocuments, cognitionKey + ":proposal",
                         TraceJson.ToJson(new CognitionPlanCheckpoint { Stamp = cognitionStamp, CandidateStamp = candidateStamp, Output = output }));
                 }
@@ -874,7 +917,7 @@ namespace TraceSoul2.Migrate
             foreach (var moment in moments)
             {
                 var length = (moment.Content ?? string.Empty).Length;
-                if (length > 16000) throw new InvalidOperationException("单条事件原文超过16000字预算，原件保留，不能截断后标记已构筑。");
+                if (length > 16000) throw new ReviewProsePendingException("单条事件原文超过16000字预算，原件保留，不能截断后标记已构筑。");
                 if (current.Count >= 18 || (current.Count > 0 && chars + length > 6000))
                 {
                     result.Add(current);
@@ -901,31 +944,6 @@ namespace TraceSoul2.Migrate
             var time = DateTimeOffset.FromUnixTimeMilliseconds(moment.CreatedUnixMs)
                 .ToOffset(MigrationContext.ChinaOffset).ToString("HH:mm");
             return time + " " + pair.LabelForRole(moment.Role) + "：" + (moment.Content ?? string.Empty);
-        }
-
-        private static string EventProseError(ReplayPrompts.DayEventOutputData output)
-        {
-            if (output == null) return null;
-            string Over(string path, string value)
-            {
-                var text = (value ?? string.Empty).Trim();
-                if (text.Length <= 80) return null;
-                return path + " 当前" + text.Length + "字，最多80字。按原篇幅重新写下。上一份太长，不要交回上一份。";
-            }
-            var writes = output.event_writes ?? new List<ReplayPrompts.EventWriteItemData>();
-            for (var i = 0; i < writes.Count; i++)
-            {
-                var error = Over("$.event_writes[" + i + "].event_summary", writes[i]?.event_summary)
-                    ?? Over("$.event_writes[" + i + "].entry_summary", writes[i]?.entry_summary);
-                if (error != null) return error;
-            }
-            var appends = output.event_appends ?? new List<ReplayPrompts.EventAppendItemData>();
-            for (var i = 0; i < appends.Count; i++)
-            {
-                var error = Over("$.event_appends[" + i + "].entry_summary", appends[i]?.entry_summary);
-                if (error != null) return error;
-            }
-            return null;
         }
 
         /// <summary>把一次 LLM 调用写入留痕表并广播到实时监视控制台。</summary>

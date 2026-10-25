@@ -714,6 +714,7 @@
             <div class="row"><strong>小智语音通话</strong><button onclick="showSection('platform')">连接设备 / 管理声纹</button></div>
           <div style="margin-top:8px">
             <button id="wxxzCallStart" onclick="startWxxzCall()">开始语音通话</button>
+            <button id="wxxzDirectStart" onclick="startWxxzCall(false)">开始直接对话（无需叫名字）</button>
             <button id="wxxzCallStop" onclick="stopWxxzCall()" disabled>结束通话</button>
             <div id="wxxzCallState" class="muted">开启名字唤醒时先叫名字，专注30秒内可直接说话；停顿约1秒后听写，实际指令需本人声纹确认。播音时暂停采音，无需JEV逐句判断。</div>
             <div id="wxxzCallLast" class="muted"></div>
@@ -849,7 +850,7 @@
           <div id="dailyPreflight" class="muted">点击检查，先查看历史未完成日期和错误。</div>
           <button onclick="showSection('brain')">修改复盘模型与温度</button>
           <button id="dailyStart" class="primary" onclick="startDailyPlan()" disabled>检查后执行</button>
-          <p class="muted">检查不调用模型；开始后按日期处理，结构或来源错误会停止队列。正文篇幅待整理时保留合格结果和原件，明确显示部分完成；不会自动反复重试，手动开始只续做未完成项。</p>
+          <p class="muted">检查不调用模型；开始后按日期处理，结构或来源错误会停止队列。正文篇幅待整理时保留合格结果和原件，明确显示部分完成；按预算退避补做，达到上限才报告积压；等待前置任务不消耗重试次数。</p>
           <h3>错误保护</h3>
           <p class="muted">对话和模型错误仅报告，不暂停后续聊天。表情包对不上是正常结果，不记错误也不记警告。同一未处理报告只通知一次。日构建失败仍停止自动补跑，处理后恢复并重新检查历史，再点击开始构建。</p>
           <button onclick="loadFailures()">刷新保护状态</button>
@@ -1110,7 +1111,7 @@
             <label>唤醒应答<input id="wxxzWakeReply" maxlength="30" value="诶，我在。" /></label>
             <button id="wxxzWakeSave" onclick="saveWxxzWake()">保存名字设置</button>
             <button id="wxxzWakePrepare" onclick="prepareWxxzWakeAudio()">预生成唤醒语音（不播放）</button>
-            <div id="wxxzWakeAudioState" class="muted" role="status">本地千问可预生成已保存的唤醒应答；文字或音色改变后会重新生成。</div>
+            <div id="wxxzWakeAudioState" class="muted" role="status">本地千问和远端角色语音均可预生成唤醒应答。远端首次生成会调用语音接口，缓存保留到Host重启；文字、音色或接口配置改变后重新生成。</div>
             <button id="wxxzWakeStart" onclick="startWxxzCall(true)">开始名字监听</button>
             <button id="wxxzWakeStop" onclick="stopWxxzCall()" disabled>暂停监听</button>
             <div id="wxxzAttentionState" class="muted" role="status" aria-live="polite">名字监听未开始。</div>
@@ -1139,6 +1140,13 @@
           </div>
 
           <details class="device-detail"><summary>本人声纹与诊断</summary>
+          <div class="device-detail">
+            <h3>语音链路测试</h3>
+            <button id="wxxzVoiceBypass" onclick="configureWxxzVoiceDiagnostic(0)">放行所有声音（15分钟）</button>
+            <button id="wxxzVoiceRestore" onclick="configureWxxzVoiceDiagnostic(0.65)">恢复声纹核验</button>
+            <div id="wxxzVoiceDiagnosticState" class="muted" role="status">当前使用正常声纹门槛。</div>
+            <p class="muted">先暂停监听再切换。放行期间阈值为0，任何人的话都可能进入当前会话；原声纹不变，到期或Host重启恢复0.65。随后到「经历与对话」点击「开始直接对话」即可测试完整链路。</p>
+          </div>
           <div style="margin-top:12px">
             <button id="wxxzEnroll" onclick="enrollWxxzVoice()">录入本人声纹（第1/3段，8秒）</button>
             <span id="wxxzVoiceState" class="muted">自动通话前需录入本人声纹；各段特征和听写仅在本地保存，不保存原始录音。</span>
@@ -2072,7 +2080,7 @@
     if(value.lastPreparation) pieces.push(`上次预生成“${value.lastPreparation.text}”：${describe(value.lastPreparation)}`);
     if(value.lastUse) pieces.push(`上次唤醒取音：${describe(value.lastUse)}`);
     $('wxxzWakeAudioState').textContent = pieces.length ? pieces.join('；')+'。这是上次结果；每次使用都会重新核对当前文字和音色。'
-      : value.supported ? '尚未预生成；开始名字监听前会自动准备。本按钮不播放、不采音。' : '唤醒缓存仅支持本地千问；请先保存播放音色。';
+      : value.supported ? '尚未预生成；开始名字监听前会自动准备。本按钮不播放、不采音。远端首次生成会调用语音接口，缓存保留到Host重启。' : '请先保存本地千问或远端角色语音；系统测试音色不支持预生成。';
   }
   async function prepareWxxzWakeAudio() {
     if(sending || wxxzMonitorActive) return;
@@ -2241,6 +2249,9 @@
   }
   function renderWxxzVoice(voice) {
     if (!voice) return;
+    $('wxxzVoiceDiagnosticState').textContent = voice.diagnosticBypass
+      ? `调试放行中：阈值0，所有声音均可通过；${new Date(voice.diagnosticUntilUnixMs).toLocaleTimeString('zh-CN',{hour12:false})}恢复0.65。`
+      : `声纹核验已开启，当前阈值${voice.threshold ?? 0.65}。`;
     wxxzVoiceSamples = voice.samples || 0;
     $('wxxzVoiceState').textContent = voice.enrolled
       ? (wxxzVoiceSamples>0 && wxxzVoiceSamples<3 ? `重新录入 ${wxxzVoiceSamples}/3 段，完成后替换；旧声纹仍保留。`
@@ -2259,7 +2270,17 @@
     if (voice.legacyProfile && !wxxzVoiceSamples)
       $('wxxzVoiceState').textContent='旧声纹仍可使用；旧版未保存各段，重新录完三段后即可逐段查看听写和单独重录。';
   }
+  async function configureWxxzVoiceDiagnostic(threshold) {
+    if(sending || wxxzMonitorActive || wxxzCallId) return;
+    sending=true; wxxzVoiceBusy(true);
+    try {
+      renderWxxzStatus(await api('/wxxz/voice/diagnostic','PUT',{threshold,durationSeconds:900}));
+      ensureWxxzMonitorPolling();
+    } catch(e) { $('wxxzVoiceDiagnosticState').textContent='设置失败：'+e.message; }
+    finally { sending=false; applyWxxzMonitorLocks(); }
+  }
   function wxxzVoiceBusy(busy) {
+    for(const id of ['wxxzVoiceBypass','wxxzVoiceRestore','wxxzDirectStart']) $(id).disabled=busy;
     $('wxxzWakePrepare').disabled=busy;
     for (const id of ['wxxzWakeEnabled','wxxzWakeName','wxxzWakePhonetic','wxxzWakePronunciation','wxxzWakeAliases','wxxzWakeReply','wxxzWakeSave','wxxzWakeStart','wxxzListen','sendBtn','wxxzConnect','wxxzDisconnect','wxxzEnroll','wxxzSampleRecord1','wxxzSampleRecord2','wxxzSampleRecord3','wxxzVoiceCheck','wxxzCallStart','momentSource','wxxzPrivate','content','wxxzSpeechEngine','wxxzSpeechLocalVoice','wxxzSpeechRemoteModel','wxxzSpeechRemoteVoice','wxxzSpeechSave','wxxzSpeechTest'])
       $(id).disabled = busy;
@@ -3441,14 +3462,14 @@
       for (const item of plan.historicalFailures)
         line(`待处理 ${item.day}｜${item.stage}｜${item.reason}`);
       for (const item of plan.pendingReviews || [])
-        line(`${item.day}｜事件与认知已完成，回望或身份正文待整理｜${item.reason}。开始后只续做未完成项。`);
+        line(`${item.day}｜${item.stage || '派生内容待整理'}｜${item.reason}。开始后只续做未完成项。`);
       for (const reason of plan.blockers) line("暂不能执行：" + reason);
       if (plan.days.length) line("执行顺序：" + plan.days.join(" → "));
       else if (!plan.blockers.length) line("目标日期及之前的日构建均已完成，无需重复构建。");
       if (plan.recentAttempts.length) {
         line("最近构建记录（旧错误不会因再次尝试而清除）：");
         for (const item of plan.recentAttempts.slice(0, 8))
-          line(`${item.day}｜${item.status === "pending" ? "部分完成，待整理" : item.status}｜${item.stage}｜${item.reason}`);
+          line(`${item.day}｜${["pending", "deferred"].includes(item.status) ? "部分完成，待整理" : item.status === "waiting" ? "等待前置任务" : item.status}｜${item.stage}｜${item.reason}`);
       }
       button.textContent = plan.historicalFailures.length ? "处理历史未完成日期，再构建目标日" : "按以上顺序开始构建";
       button.disabled = !plan.ready;

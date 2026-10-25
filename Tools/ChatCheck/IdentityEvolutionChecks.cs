@@ -222,6 +222,7 @@ internal static partial class Program
                     if (messages[0].content.Contains("全局归并")) throw new IOException("模拟旧版全局输出失败，保留全部分批进度");
                     batchCalls++;
                     using var json = System.Text.Json.JsonDocument.Parse(messages.Last().content);
+                    Require(json.RootElement.GetProperty("cognitions").GetArrayLength() <= 4, "新身份批次同时约束预计输出数量");
                     return TraceJson.ToJson(new { understandings = json.RootElement.GetProperty("cognitions").EnumerateArray().Select(x => new {
                         meaning = x.GetProperty("Summary").GetString(), scope = x.GetProperty("Scope").GetString(),
                         exceptions = x.GetProperty("Exceptions").GetString(), certainty = "有条件成立", cognition_ids = new[] { x.GetProperty("Id").GetString() }
@@ -256,7 +257,7 @@ internal static partial class Program
                 }
                 var merge = TraceJson.ToJson(new { meaning = "跨批同义认识归为一个当前理解", scope = "双方可以回应", exceptions = "忙碌时保留边界", certainty = "开放" });
                 var overlong = TraceJson.ToJson(new { meaning = "OVERSIZED_MERGE_SENTINEL" + new string('长', 1400), scope = "条件", exceptions = "反证", certainty = "开放" });
-                var interrupted = new AgentSequenceLlm(TraceJson.ToJson(new { groups = validGroups }), merge, overlong, overlong);
+                var interrupted = new AgentSequenceLlm(TraceJson.ToJson(new { groups = validGroups }), merge, overlong, TraceJson.ToJson(new { text = new string('长', 1400) }));
                 var failed = false;
                 try { await IdentityEvolutionLogic.EvaluateAsync(store, root, "relation", day, interrupted, CancellationToken.None); }
                 catch (InvalidOperationException) { failed = true; }
@@ -269,11 +270,13 @@ internal static partial class Program
             }
             using (var store = new SqliteMemoryManager(path))
             {
+                using (var db = new SQLite.SQLiteConnection(path))
+                    db.Execute("UPDATE plugin_documents SET Json=json_set(Json, '$.NextAttemptUnixMs', 0) WHERE PluginId=?", ReviewWorkLogic.StoreId);
                 var original = store.GetCognitionNodes(5000).Single(x => x.Id == "global-source-081").Summary;
                 var concurrent = new SelectionProbeLlm { Reply = _ => {
                     using var db = new SQLite.SQLiteConnection(path);
                     db.Execute("UPDATE cognition_slices SET Summary=? WHERE Id=?", "生成期间认识已变化", "global-source-081");
-                    return TraceJson.ToJson(new { meaning = "并发期间的旧候选", scope = "条件", exceptions = "反证", certainty = "开放" });
+                    return TraceJson.ToJson(new { text = "并发期间的旧候选" });
                 } };
                 var staleRejected = false;
                 try { await IdentityEvolutionLogic.EvaluateAsync(store, root, "relation", day, concurrent, CancellationToken.None); }
@@ -284,10 +287,9 @@ internal static partial class Program
                 Require(staleRejected && concurrent.Requests.Count == 1 && protectedState.globalResults.Count == 1 &&
                     store.LoadIdentityCards(root).Single(x => x.Slot == "relation").Body == originalBody,
                     "单组生成期间来源变化拒绝旧结果，已有进度和身份原卡不受影响");
-                var resumed = new AgentSequenceLlm(TraceJson.ToJson(new { meaning = "第二组的当前理解", scope = "明确的条件", exceptions = "保留反证", certainty = "开放" }),
-                    IdentityChangeReply("global-source-000", false));
+                var resumed = new AgentSequenceLlm(IdentityChangeReply("global-source-000", false));
                 var state = await IdentityEvolutionLogic.EvaluateAsync(store, root, "relation", day, resumed, CancellationToken.None);
-                Require(resumed.Requests.Count == 2 && resumed.Requests[0].Contains("单组认识成稿") && resumed.Requests[1].Contains("变化判断") &&
+                Require(resumed.Requests.Count == 1 && resumed.Requests[0].Contains("变化判断") &&
                     state.globallyGrouped && state.understandings.Count == count - 2 && state.globalPlan == null && state.globalResults.Count == 0 &&
                     state.understandings.SelectMany(x => x.cognition_ids).Distinct().Count() == count && state.understandings[2].meaning.StartsWith("独立认识2") &&
                     store.GetCognitionNodes(5000).Count == count && store.LoadIdentityCards(root).Single(x => x.Slot == "relation").Body == originalBody,

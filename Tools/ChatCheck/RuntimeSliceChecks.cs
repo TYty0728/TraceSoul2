@@ -62,17 +62,19 @@ internal static partial class Program
                 RootConversationId = root, ContextConversationId = root, MomentId = sources[1].Id,
                 SnapshotJson = "{\"inner\":\"迟到的新材料\"}" } });
             var tooLong = TraceJson.ToJson(new { summary = new string('长', 1201) });
-            var failedFinal = new AgentSequenceLlm(tooLong, tooLong);
+            var failedFinal = new AgentSequenceLlm(tooLong, TraceJson.ToJson(new { text = new string('长', 1201) }));
             contextType.GetProperty("Llm").SetValue(context, failedFinal);
             try { ((Task)run.Invoke(null, new object[] { context, new[] { "--day", day } })).GetAwaiter().GetResult(); }
             catch (InvalidOperationException) { }
-            Require(failedFinal.Requests.Count == 2 && failedFinal.Requests[1].Contains("最多1000字") &&
+            Require(failedFinal.Requests.Count == 2 && failedFinal.Requests[1].Contains("上限1000字") &&
                 !failedFinal.Requests[1].Contains(new string('长', 1201)) && !failedFinal.Requests[1].Contains("按原篇幅重新写下") &&
                 !failedFinal.Requests[0].Contains("请合并重复叙述") &&
                 ((List<RuntimeSliceRecord>)storeType.GetMethod("GetRuntimeSlices").Invoke(actualStore, new object[] { root, day, true })).Count == 1 &&
                 (bool)storeType.GetMethod("HasPendingRuntimeDaySummary").Invoke(actualStore, new object[] { root, day }),
                 "迟到回望从原件重新成稿，超长不提交，原始切片仍待处理");
-            var resumedFinal = new AgentSequenceLlm("{\"summary\":\"迟到的这一段\"}");
+            using (var connection = new SQLite.SQLiteConnection(db))
+                connection.Execute("UPDATE plugin_documents SET Json=json_set(Json, '$.NextAttemptUnixMs', 0) WHERE PluginId=?", ReviewWorkLogic.StoreId);
+            var resumedFinal = new AgentSequenceLlm("{\"text\":\"迟到的这一段\"}");
             contextType.GetProperty("Llm").SetValue(context, resumedFinal);
             ((Task)run.Invoke(null, new object[] { context, new[] { "--day", day } })).GetAwaiter().GetResult();
             ((Task)run.Invoke(null, new object[] { context, new[] { "--day", day } })).GetAwaiter().GetResult();
@@ -270,13 +272,13 @@ internal static partial class Program
         }
         Seed("small-bounded", 4);
         var longText = new string('长', 3532);
-        var small = new AgentSequenceLlm(Summary(longText), Summary("只留下当天关键变化"));
+        var small = new AgentSequenceLlm(Summary(longText), TraceJson.ToJson(new { text = "只留下当天关键变化" }));
         Require(await RuntimeSliceLogic.ReviewDayAsync(store, small, "small-bounded", day) == 4 && small.Requests.Count == 2 &&
             !small.Requests[1].Contains(longText) && small.Requests.All(x => x.Contains("small-bounded-0")) &&
             store.GetRuntimeDayReviews("small-bounded", day).Single().Summary == "只留下当天关键变化",
             "少量切片成稿也先验篇幅，只从原件重新取舍一次，长文不入库也不回传");
         Seed("small-failed", 2);
-        var bad = new AgentSequenceLlm(Summary(longText), Summary(new string('长', 1201)));
+        var bad = new AgentSequenceLlm(Summary(longText), TraceJson.ToJson(new { text = new string('长', 1201) }));
         var failed = false;
         try { await RuntimeSliceLogic.ReviewDayAsync(store, bad, "small-failed", day); }
         catch (ReviewProsePendingException) { failed = true; }
@@ -284,7 +286,9 @@ internal static partial class Program
             store.GetRuntimeDayReviews("small-failed", day).Count == 0, "持续超长保留原始切片，不保存长段或标记完成");
         using (var reopened = new SqliteMemoryManager(path))
         {
-            var resumed = new AgentSequenceLlm(Summary("恢复后从原件形成短回望"));
+            using (var db = new SQLite.SQLiteConnection(path))
+                db.Execute("UPDATE plugin_documents SET Json=json_set(Json, '$.NextAttemptUnixMs', 0) WHERE PluginId=?", ReviewWorkLogic.StoreId);
+            var resumed = new AgentSequenceLlm(TraceJson.ToJson(new { text = "恢复后从原件形成短回望" }));
             Require(await RuntimeSliceLogic.ReviewDayAsync(reopened, resumed, "small-failed", day) == 2 && resumed.Requests.Count == 1 &&
                 !resumed.Requests[0].Contains(longText), "重新打开数据库仍从原件成稿，不循环缩写旧长段");
             var complete = new AgentSequenceLlm();

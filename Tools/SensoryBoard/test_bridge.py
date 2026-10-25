@@ -41,11 +41,44 @@ class Link:
 
 
 class BridgeChecks(unittest.TestCase):
-    def test_external_tts_wav_is_resampled_and_chunked_without_system_fallback(self):
+    def test_timeout_split_json_receipt_is_reassembled_without_replaying(self):
+        class SplitLink:
+            def __init__(self):self.parts=iter([b'{"protocol":1,"id":7,',b'',b'"status":"done","received":20}\\n'])
+            def read_until(self,*args):return next(self.parts).replace(b'\\n',b'\n')
+        board=bridge.Board('fake');board.connection=SplitLink()
+        self.assertEqual(board._reply(7,'done',20)['received'],20)
+
+    def test_stream_packets_are_checked_and_one_final_receipt_completes_reply(self):
+        class StreamLink(Link):
+            def write(self, data):
+                if self.header is None:
+                    super().write(data)
+                    self.replies[0]['audio_stream_version']=1
+                else:
+                    block=data[:-4]
+                    self_test.assertEqual(struct.unpack('<I',data[-4:])[0],bridge.checksum(block))
+                    super().write(block)
+        self_test=self
+        board=bridge.Board('fake');board.connection=link=StreamLink()
+        pcm=b'\x11\0'*(48000*11)
+        result=board.transact('audio_stream',pcm)
+        self.assertEqual(link.header['op'],'audio_stream')
+        self.assertEqual(bytes(link.payload),pcm)
+        self.assertEqual(result['received'],len(pcm))
+        self.assertEqual(result['status'],'done')
+
+    def test_old_firmware_gets_no_stream_payload_and_no_segmented_fallback(self):
+        board=bridge.Board('fake');board.connection=link=Link()
+        with self.assertRaisesRegex(RuntimeError,'0.4.7'):
+            board.transact('audio_stream',b'\0\0'*48000)
+        self.assertEqual(link.payload,b'')
+        self.assertTrue(link.closed)
+
+    def test_external_tts_wav_is_one_continuous_playback_without_system_fallback(self):
         class FakeBoard:
             def __init__(self): self.chunks=[]
             def transact(self, operation, pcm):
-                assert operation=='audio'
+                assert operation=='audio_stream'
                 self.chunks.append(pcm)
                 return {'id':len(self.chunks),'protocol':1,'status':'done'}
         output=io.BytesIO()
@@ -61,9 +94,9 @@ class BridgeChecks(unittest.TestCase):
             with urllib.request.build_opener(urllib.request.ProxyHandler({})).open(request,timeout=5) as response:return json.load(response)
         try:
             result=post(output.getvalue())
-            self.assertEqual([len(chunk) for chunk in board.chunks],[8*96000,3*96000])
+            self.assertEqual([len(chunk) for chunk in board.chunks],[11*96000])
             self.assertEqual(result['audio_ms'],11000)
-            self.assertEqual(len(result['receipts']),2)
+            self.assertEqual(len(result['receipts']),1)
             self.assertEqual(result['engine'],'外部角色语音')
             before=len(board.chunks)
             with self.assertRaises(urllib.error.HTTPError):post(b'invalid audio')

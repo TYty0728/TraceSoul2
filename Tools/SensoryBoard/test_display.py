@@ -50,6 +50,13 @@ class DisplayChecks(unittest.TestCase):
                         {'remaining':31},{'remaining':True},{'page':1},{'page':-1},{'page':True}):
             with self.subTest(request=request), self.assertRaises(ValueError):self.display.render(request)
 
+    def test_focus_frame_does_not_invent_a_frozen_thirty_second_timer(self):
+        generic,_=self.display.render({'state':'focused'})
+        thirty,_=self.display.render({'state':'focused','remaining':30})
+        ten,_=self.display.render({'state':'focused','remaining':10})
+        self.assertNotEqual(generic.tobytes(),thirty.tobytes())
+        self.assertNotEqual(thirty.tobytes(),ten.tobytes())
+
     def service(self,board):
         server=ThreadingHTTPServer(('127.0.0.1',0),bridge.make_handler(board,self.font))
         worker=threading.Thread(target=server.serve_forever,daemon=True);worker.start()
@@ -76,7 +83,8 @@ class DisplayChecks(unittest.TestCase):
         self.assertFalse(sent['display']['preview_only'])
         self.assertEqual(sent['preview'],result['preview'])
         with Image.open(io.BytesIO(base64.b64decode(result['preview']))) as image:
-            self.assertEqual(board.calls,[('frame',bridge.rgb565(image))])
+            from scene import encode
+            self.assertEqual(board.calls,[('scene',encode([bridge.rgb565(image)],'listening'))])
         with self.assertRaises(urllib.error.HTTPError):self.post(url,'/api/display',dict(page=100))
         self.assertEqual(len(board.calls),1)
 
@@ -107,15 +115,16 @@ class DisplayChecks(unittest.TestCase):
     def test_only_actual_shared_artwork_opts_into_native_motion(self):
         class Board:
             def __init__(self):self.metadata=[]
+            def ui(self,*args):return {'status':'done','protocol':1,'ui_pages':1}
             def transact(self,op,data,**metadata):
                 self.metadata.append(metadata);return {'status':'done','protocol':1}
         board=Board();url=self.service(board)
         output=io.BytesIO();Image.new('RGB',(80,80),'red').save(output,format='PNG')
         self.post(url,'/api/display',dict(image=base64.b64encode(output.getvalue()).decode()))
         self.post(url,'/api/display',{})
-        self.assertEqual(board.metadata,[{'artwork':True},{}])
+        self.assertEqual(board.metadata,[{'artwork':True}])
 
-    def test_speech_pages_share_original_pcm_no_omission_and_validate_before_device(self):
+    def test_speech_caches_all_caption_pages_and_one_whole_audio(self):
         class Board:
             def __init__(self):self.calls=[]
             def transact(self,op,data):self.calls.append((op,data));return {'status':'done','protocol':1}
@@ -125,10 +134,13 @@ class DisplayChecks(unittest.TestCase):
             wav.setnchannels(1);wav.setsampwidth(2);wav.setframerate(48000);wav.writeframes(b'\x11\x00'*48000*11)
         raw=out.getvalue();payload=dict(data=base64.b64encode(raw).decode(),display=dict(subtitle='测试字幕。'*20))
         result=self.post(url,'/api/speak',payload)
-        frames=[data for op,data in board.calls if op=='frame'];audio=[data for op,data in board.calls if op=='audio']
-        self.assertEqual(len(frames),len(self.display.pages(payload['display']['subtitle'])))
+        frames=[data for op,data in board.calls if op=='scene'];audio=[data for op,data in board.calls if op=='audio_stream']
+        self.assertEqual(len(frames),1)
+        self.assertFalse(result['caption_preview'])
+        self.assertGreater(result['caption_pages'],1)
+        self.assertEqual(int.from_bytes(frames[0][4:6],'little'),result['caption_pages'])
         self.assertEqual(b''.join(audio),bridge.decode_wav(raw,max_seconds=120))
-        self.assertTrue(all(len(chunk)<=8*96000 for chunk in audio))
+        self.assertEqual(len(audio),1)
         self.assertEqual(result['display_pages'],len(frames));self.assertTrue(result['display_complete'])
         before=len(board.calls);payload['display']['image']='invalid'
         with self.assertRaises(urllib.error.HTTPError):self.post(url,'/api/speak',payload)

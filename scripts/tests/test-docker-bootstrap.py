@@ -1,6 +1,7 @@
 """CI-only: use a real slim Docker container, supervisor and production updater."""
 import importlib.util
 import json
+import os
 from pathlib import Path
 import shutil
 import subprocess
@@ -47,17 +48,20 @@ def main():
         (bundle / "Data/keep.txt").write_text("character data stays")
         (bundle / "plugins_data/qq-tts/keep.txt").write_text("plugin settings stay")
         (bundle / "Plugins/third-party/keep.txt").write_text("third-party stays")
+        cookie = "fixture-maintenance=" + uuid.uuid4().hex
         env = {"TRACESOUL2_HOME": "/opt/tracesoul2/Data", "TRACESOUL2_PLUGINS": "/opt/tracesoul2/Plugins",
                "TRACESOUL2_PLUGINS_DATA": "/opt/tracesoul2/plugins_data", "TRACESOUL2_RESTART_MODE": "supervisor",
-               "TRACESOUL2_URLS": "http://0.0.0.0:5080"}
+               "TRACESOUL2_URLS": "http://0.0.0.0:5080", "TEST_MAINTENANCE_COOKIE": cookie}
         command = ["docker", "run", "-d", "--name", container, "--mount",
-                   "type=bind,src=" + str(bundle) + ",dst=/opt/tracesoul2", "-w", "/opt/tracesoul2"]
+                   "type=bind,src=" + str(bundle) + ",dst=/opt/tracesoul2", "-w", "/opt/tracesoul2", "-p", "127.0.0.1::5080"]
         for key, value in env.items():
             command += ["-e", key + "=" + value]
         command += [image, "sh", "/opt/tracesoul2/App/Start-TraceSoul2.sh"]
         try:
             run(*command)
             time.sleep(3)
+            port = subprocess.check_output(["docker", "port", container, "5080/tcp"], text=True).strip().rsplit(":", 1)[1]
+            console = "http://127.0.0.1:" + port
             def local_download(url, destination, size):
                 source = package if url.endswith("/1") else sha
                 destination.parent.mkdir(parents=True, exist_ok=True)
@@ -65,8 +69,10 @@ def main():
                 assert destination.stat().st_size == size
             with patch.object(bootstrap, "get_json", return_value={"tag_name": "v" + version, "assets": assets}), \
                  patch.object(bootstrap, "download", side_effect=local_download), \
-                 patch.object(sys, "argv", ["update-server.py", "--root", str(root), "--container", container, "--version", version]):
+                 patch.dict(os.environ, {"TRACESOUL2_MAINTENANCE_COOKIE": cookie}), \
+                 patch.object(sys, "argv", ["update-server.py", "--root", str(root), "--container", container, "--version", version, "--console-url", console]):
                 bootstrap.main()
+            assert (bundle / "Data/maintenance-acquired").read_text() == "reserved"
             assert json.loads((app / "tracesoul2.install.json").read_text())["version"] == version
             assert (bundle / "Data/keep.txt").read_text() == "character data stays"
             assert (bundle / "plugins_data/qq-tts/keep.txt").read_text() == "plugin settings stay"

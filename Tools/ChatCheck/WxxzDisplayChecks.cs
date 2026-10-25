@@ -35,7 +35,7 @@ internal static partial class Program
         display.Capture("session","call","capture",true);
         Require(Read().state=="standby"&&Read().animate,"名字监听在未唤醒时显示发呆，可间歇蹦跶");
         attention.Complete();
-        Require(Read().state=="listening"&&!Read().animate&&Read().focusRemainingMs==30000,"唤醒后倾听，30秒租期来自后台，停止跳动");
+        Require(Read().state=="focused"&&Read().animate&&Read().focusRemainingMs==30000,"唤醒后持续采音保留专注与30秒租期，网页与板端一致");
         now=now.AddSeconds(31);
         Require(Read().state=="standby"&&Read().focusRemainingMs==0,"没有新指令，采音期间也会回发呆");
         display.Capture("session","call","capture",false);

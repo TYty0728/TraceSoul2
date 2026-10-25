@@ -64,6 +64,9 @@ namespace TraceSoul2.Host
             }
         }
 
+        public void ReportReviewBacklog(string day)
+            => Report("review-backlog:" + day, "复盘待整理积压（" + day + "）", "自动补做预算已耗尽，原始经历和已完成结果保留；请检查待整理字段或模型输出。", "warning");
+
         public void Report(string key, string label, Exception error)
             => Report(key, label, SafeReason(error), "error", Diagnostic(error));
 

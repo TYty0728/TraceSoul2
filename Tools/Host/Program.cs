@@ -171,6 +171,7 @@ builder.Services.AddSingleton(sp => new BackupArchiveService(home, async (action
 builder.Services.AddHostedService<BackupArchiveWorker>();
 
 var app = builder.Build();
+var restartLease = new AsyncLocal<ReviewMaintenanceGate.Lease>();
 app.Use(async (context, next) =>
 {
     var remote = context.Connection.RemoteIpAddress;
@@ -261,6 +262,13 @@ app.Use(async (context, next) =>
     }
 });
 
+app.MapGet("/maintenance", (DailyPipelineWorker worker) => Results.Json(worker.MaintenanceStatus()));
+app.MapPost("/maintenance", async (DailyPipelineWorker worker, CancellationToken token) =>
+    Results.Json(new { lease = await worker.BeginExternalMaintenanceAsync(token), ready = true }));
+app.MapDelete("/maintenance/{id}", (string id, DailyPipelineWorker worker) =>
+{
+    worker.EndExternalMaintenance(id); return Results.Ok(new { released = true });
+});
 app.MapGet("/status", (SoulRuntime runtime) => Results.Json(runtime.Status()));
 app.MapGet("/live-state", (SoulRuntime runtime) => Results.Json(runtime.LiveState()));
 app.MapBackups();
@@ -274,7 +282,7 @@ app.MapPut("/updates/config", (UpdateService updates, UpdateConfigWrite body) =>
 app.MapPost("/updates/check", async (UpdateService updates, CancellationToken token) =>
     Results.Json(await updates.CheckAsync(token)));
 
-app.MapPost("/updates/install", (UpdateService updates, BackupArchiveService backups) =>
+app.MapPost("/updates/install", (UpdateService updates, BackupArchiveService backups, DailyPipelineWorker worker) =>
 {
     // Return immediately. Slow downloads live in the service, not an HTTP request.
     var result = updates.StartInstall(() =>
@@ -284,7 +292,8 @@ app.MapPost("/updates/install", (UpdateService updates, BackupArchiveService bac
             await Task.Delay(800);
             app.Lifetime.StopApplication();
         });
-    }, backups.PrepareForUpdateAsync);
+    }, (version, token) => worker.ArchiveDuringMaintenanceAsync(() => backups.PrepareForUpdateAsync(version, token)),
+        async token => await worker.HoldMaintenanceAsync(token));
     return Results.Json(result);
 });
 
@@ -622,6 +631,8 @@ app.MapPost("/wxxz/voice/enroll", async (SoulRuntime runtime, WxxzMomentWrite bo
     Results.Json(await runtime.VoiceWxxzAsync("enroll", body.sessionId, null, body.restart, token, body.requestId, body.sampleNumber)));
 app.MapPost("/wxxz/voice/check", async (SoulRuntime runtime, WxxzMomentWrite body, CancellationToken token) =>
     Results.Json(await runtime.VoiceWxxzAsync("check", body.sessionId, null, false, token, body.requestId)));
+app.MapPut("/wxxz/voice/diagnostic", async (SoulRuntime runtime, WxxzVoiceprint.DiagnosticSettings body, CancellationToken token) =>
+    Results.Json(await runtime.ExclusiveAsync(() => runtime.Wxxz.ConfigureVoiceDiagnostic(body), token)));
 // Progress must remain readable while a diagnostic holds the runtime gate.
 app.MapPost("/wxxz/voice/check/state", async (SoulRuntime runtime, WxxzMomentWrite body, CancellationToken token) =>
     Results.Json(await runtime.Wxxz.CheckVoiceStateAsync(body.sessionId, body.requestId, token)));
@@ -937,6 +948,19 @@ app.Use(async (HttpContext context, RequestDelegate next) =>
 
 app.UseAuthentication();
 app.UseAuthorization();
+// Reserve before any restart-related configuration or database mutation.
+app.Use(async (context, next) =>
+{
+    var path = context.Request.Path.Value ?? "";
+    var restarting = (HttpMethods.IsPost(context.Request.Method) &&
+        new[] { "/databases/switch", "/databases/create", "/debug/enter", "/debug/exit" }.Contains(path)) ||
+        (HttpMethods.IsPut(context.Request.Method) && (path == "/platforms/onebot/config" ||
+            (path.StartsWith("/plugins/", StringComparison.Ordinal) && path.EndsWith("/config", StringComparison.Ordinal))));
+    if (!restarting) { await next(); return; }
+    using var lease = await app.Services.GetRequiredService<DailyPipelineWorker>().HoldMaintenanceAsync(context.RequestAborted);
+    restartLease.Value = lease;
+    try { await next(); } finally { restartLease.Value = null; }
+});
 app.Use(async (context, next) =>
 {
     if (context.User.Identity?.IsAuthenticated == true)
@@ -1203,12 +1227,14 @@ if (File.Exists(Path.Combine(dataDir, "debug-mode.json")))
 app.Run();
 
 // 分支切换：以指定数据目录重启本宿主（同端口、同控制台，只换底层数据）。
-static void RestartHost(string targetDataDir)
+void RestartHost(string targetDataDir)
 {
+    var lease = restartLease.Value ?? throw new InvalidOperationException("重启必须持有维护租约。");
     TraceHome.RememberActiveSoul(targetDataDir);
     if (string.Equals(Environment.GetEnvironmentVariable("TRACESOUL2_RESTART_MODE"),
             "supervisor", StringComparison.OrdinalIgnoreCase))
     {
+        lease.RetainUntilExit();
         _ = Task.Run(async () =>
         {
             await Task.Delay(500);
@@ -1245,7 +1271,8 @@ static void RestartHost(string targetDataDir)
     var migrate = Environment.GetEnvironmentVariable("TRACESOUL2_MIGRATE_DLL");
     if (!string.IsNullOrWhiteSpace(migrate))
         startInfo.Environment["TRACESOUL2_MIGRATE_DLL"] = migrate;
-    Process.Start(startInfo);
+    if (Process.Start(startInfo) == null) throw new InvalidOperationException("无法启动新宿主。");
+    lease.RetainUntilExit();
     _ = Task.Run(async () =>
     {
         await Task.Delay(500);

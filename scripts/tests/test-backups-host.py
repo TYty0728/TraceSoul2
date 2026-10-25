@@ -131,6 +131,7 @@ def run():
                 manifest=json.loads((destination/'manifest.json').read_text(encoding='utf-8'))
                 assert (destination/'Data'/'souls'/manifest['activeSoul']/'tracesoul2-brainframe.sqlite3').is_file()
                 assert not list(destination.rglob('archive-recovery.key'))
+                assert not list(destination.rglob('review-execution.lock')), 'process-owned execution locks must not be archived'
                 home=json.loads((destination/'Data'/'home.json').read_text(encoding='utf-8'))
                 assert home['pluginsDirectory']=='../Plugins'
                 again=subprocess.run(['dotnet',str(assembly),'--archive-extract',str(package),str(keyfile),str(destination)],

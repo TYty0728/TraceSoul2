@@ -16,10 +16,12 @@ namespace TraceSoul2.Migrate
         private readonly object brainWriteGate = new object();
         private readonly object callLogGate = new object();
         private string activeReviewAttempt;
+        public string DataDirectory { get; }
 
         public MigrationDb(string migrationDbPath, string brainframePath)
         {
-            var dir = Path.GetDirectoryName(migrationDbPath);
+            var dir = Path.GetDirectoryName(Path.GetFullPath(migrationDbPath));
+            DataDirectory = dir;
             if (!string.IsNullOrWhiteSpace(dir)) Directory.CreateDirectory(dir);
             connection = new SQLiteConnection(migrationDbPath);
             connection.EnableWriteAheadLogging();
@@ -56,6 +58,8 @@ namespace TraceSoul2.Migrate
             if (state.Status == "running")
             {
                 var previous = GetReviewState(state.DayKey);
+                state.RetryCount = previous?.RetryCount ?? 0;
+                state.NextRetryUnixMs = previous?.NextRetryUnixMs ?? 0;
                 activeReviewAttempt = DailyBuildHistory.Start(connection, state.DayKey, previous == null ? null :
                     new DailyReviewState { DayKey = previous.DayKey, Status = previous.Status,
                         Error = previous.Error, UpdatedUnixMs = previous.UpdatedUnixMs });
@@ -91,9 +95,28 @@ namespace TraceSoul2.Migrate
                 "day_summary" => "当天回望",
                 "self" => "我是谁", "other" => "对方是谁", "relation" => "我们的关系",
                 "expression_habit" => "表达习惯", "inner_narrative" => "当天感受", _ => "身份摘要" }));
-            connection.InsertOrReplace(new ReviewStateRecord { DayKey = dayKey, Status = "pending",
-                Error = reason, UpdatedUnixMs = DateTimeOffset.UtcNow.ToUnixTimeMilliseconds() });
-            DailyBuildHistory.Finish(connection, activeReviewAttempt, "pending", reason);
+            ScheduleDeferred(dayKey, "pending", reason);
+        }
+
+        public void MarkDayDeferred(string dayKey, string reason) => ScheduleDeferred(dayKey, "deferred",
+            "部分派生任务待整理，原始经历及已完成检查点保留：" + reason);
+
+        public void MarkDayWaiting(string dayKey, string reason)
+        {
+            var previous = GetReviewState(dayKey);
+            connection.InsertOrReplace(new ReviewStateRecord { DayKey = dayKey, Status = "waiting", Error = reason,
+                RetryCount = previous?.RetryCount ?? 0, UpdatedUnixMs = DateTimeOffset.UtcNow.ToUnixTimeMilliseconds() });
+            DailyBuildHistory.Finish(connection, activeReviewAttempt, "waiting", reason);
+        }
+
+        private void ScheduleDeferred(string dayKey, string status, string reason)
+        {
+            var count = (GetReviewState(dayKey)?.RetryCount ?? 0) + 1;
+            var now = DateTimeOffset.UtcNow;
+            connection.InsertOrReplace(new ReviewStateRecord { DayKey = dayKey, Status = status, Error = reason,
+                RetryCount = count, NextRetryUnixMs = count < 3 ? now.AddMinutes(15 * Math.Pow(4, count - 1)).ToUnixTimeMilliseconds() : 0,
+                UpdatedUnixMs = now.ToUnixTimeMilliseconds() });
+            DailyBuildHistory.Finish(connection, activeReviewAttempt, status, reason);
         }
 
         public List<string> GetDoneDayKeys()
@@ -756,6 +779,8 @@ namespace TraceSoul2.Migrate
         public int TagCount { get; set; }
         public string Error { get; set; }
         public long UpdatedUnixMs { get; set; }
+        public int RetryCount { get; set; }
+        public long NextRetryUnixMs { get; set; }
     }
 
     [Table("replay_call_log")]

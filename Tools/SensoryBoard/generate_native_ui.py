@@ -6,6 +6,11 @@ from bridge import choose_font
 
 LABELS = {
     'title': 'TraceSoul',
+    'standby': '叫我的名字，我就在', 'focused': '我在，继续说吧',
+    'attention': '注意力', 'seconds': '秒', 'prepare': '准备开始监听',
+    'speak_now': '请说话', 'count_hint': '倒计时后，自然说完一句',
+    'offline': '连接已断开', 'error': '请在网页查看详情',
+    'rest': '监听已暂停', 'web_control': '网页控制',
     'home': '感官终端已启动',
     'online': 'Wi-Fi 已连接',
     'connecting': 'Wi-Fi 正在连接…',
@@ -23,6 +28,8 @@ LABELS = {
     'not_listening': '允许采音不等于正在监听',
     'brightness': '屏幕亮度',
     'level30': '30%', 'level60': '60%', 'level90': '90%',
+    'volume': '播放音量',
+    'vol30': '低', 'vol60': '正常', 'vol100': '较高',
     'back': '返回主页',
     'setup_hint': '首次配网请使用电脑控制页',
     'start_call': '开始对话', 'end_call': '结束对话',
@@ -35,6 +42,8 @@ LABELS = {
     'owner_unconfirmed': '这句未确认是本人', 'speak_more': '请自然多说一点',
     'no_speech': '刚才没有检测到语音', 'try_speaking': '继续听，请再说一句',
 }
+LABELS.update({f'digit{i}': str(i) for i in range(31)})
+LABELS.update({f'big{i}': str(i) for i in range(11)})
 
 
 def main():
@@ -47,15 +56,19 @@ def main():
              '#pragma once', '#include <stdint.h>',
              'struct NativeLabel { unsigned width, height; const uint8_t *pixels; };']
     for key, text in LABELS.items():
+        font = ImageFont.truetype(choose_font(args.font), 48 if key.startswith('big') else 19)
+        height = 58 if key.startswith('big') else 26
         bounds = font.getbbox(text)
         width = max(1, int(font.getlength(text) + 1))
-        image = Image.new('L', (width, 26))
+        image = Image.new('L', (width, height))
         ImageDraw.Draw(image).text((0, 2 - bounds[1]), text, font=font, fill=255)
         bits = [1 if value >= 96 else 0 for value in image.get_flattened_data()]
         packed = bytes(sum(bits[i + j] << (7 - j) for j in range(min(8, len(bits) - i)))
                        for i in range(0, len(bits), 8))
         lines.append(f'static const uint8_t label_{key}_pixels[] = {{' + ','.join(map(str, packed)) + '};')
-        lines.append(f'static const NativeLabel label_{key} = {{{width},26,label_{key}_pixels}};')
+        lines.append(f'static const NativeLabel label_{key} = {{{width},{height},label_{key}_pixels}};')
+    lines.append('static const NativeLabel *digit_labels[] = {' + ','.join('&label_digit'+str(i) for i in range(31)) + '};')
+    lines.append('static const NativeLabel *big_labels[] = {' + ','.join('&label_big'+str(i) for i in range(11)) + '};')
     args.output.write_text('\n'.join(lines) + '\n', encoding='utf-8')
     print(f'Generated {len(LABELS)} fixed labels')
 

@@ -18,11 +18,16 @@ namespace TraceSoul2.Logic
             CancellationToken token = default, Func<IVectorEncoder> encoderFactory = null, IVectorCacheStore cache = null)
         {
             var count = 0;
+            var deferred = new HashSet<string>(StringComparer.Ordinal);
             while (true)
             {
                 token.ThrowIfCancellationRequested();
-                var pending = store.GetPublicMomentsInRange(startMs, endMs);
-                if (pending.Count == 0) return count;
+                var pending = store.GetPublicMomentsInRange(startMs, endMs).Where(x => !deferred.Contains(x.Id)).ToList();
+                if (pending.Count == 0)
+                {
+                    if (deferred.Count > 0) throw new ReviewProsePendingException("公开经历仍有待整理项，其他环境和批次已保存。");
+                    return count;
+                }
                 var group = pending.GroupBy(x => x.ConversationId).First().ToList();
                 var evidence = RuntimeSliceLogic.EvidenceBatches(store, group).FirstOrDefault();
                 if (evidence == null) throw new InvalidOperationException("公开经历没有可处理的完整证据，原件保留。");
@@ -36,12 +41,14 @@ namespace TraceSoul2.Logic
                     string.Join("\n", evidence.Select(x => x.Id + "｜" + PuzzleViewLogic.SubjectKey(x) + "｜" +
                         EnvironmentLogic.PublicDialogue(x))) + evidenceContext +
                     "\n" + CorePrompts.Migration.CognitionJsonSchema;
-                var output = await DeepSeekStructuredOutputLogic.CompleteAsync<Output>(llm,
+                Output output;
+                try { output = await ReviewWorkLogic.CompleteAsync<Output>(store, "public-cognition", llm,
                     new List<DeepSeekMessageData> { new("system", prompt), new("user", "只根据这些经历输出认知变更，没有变化时给空数组。") },
-                    x => x != null && CognitionFormationLogic.Valid(x.cognitions, evidence, existing, new List<LifeTagRecord>()) &&
-                        (evidence.Any(m => EnvironmentLogic.FromMoment(m)?.SpeakerIsOwner == true) ||
-                         x.cognitions.All(w => !(w.domains ?? new()).Contains("user"))),
-                    "认知变更缺少有效证据或对象不符。", token);
+                    x => CognitionFormationLogic.ValidationError(x.cognitions, evidence, existing, new List<LifeTagRecord>(), false) ??
+                        (!evidence.Any(m => EnvironmentLogic.FromMoment(m)?.SpeakerIsOwner == true) &&
+                         x.cognitions.Any(w => (w.domains ?? new()).Contains("user")) ? "公开认知不能冒认专属用户。" : null),
+                    x => CognitionFormationLogic.TextParts(x.cognitions), token); }
+                catch (ReviewProsePendingException) { foreach (var item in evidence) deferred.Add(item.Id); continue; }
                 var resolution = await CognitionConsolidationLogic.ResolveAsync(store, llm, evidence, existing,
                     output.cognitions, encoderFactory, cache, token);
                 if (!CognitionFormationLogic.Valid(resolution.Writes, evidence, resolution.Candidates, new List<LifeTagRecord>()) ||

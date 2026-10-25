@@ -26,6 +26,8 @@ namespace TraceSoul2.Host
         public string Status { get; set; }
         public string Error { get; set; }
         public long UpdatedUnixMs { get; set; }
+        public int RetryCount { get; set; }
+        public long NextRetryUnixMs { get; set; }
     }
 
     // 与日构建共用 migration.sqlite3。读取不建表、不清状态，不调用模型。
@@ -37,7 +39,9 @@ namespace TraceSoul2.Host
             using var db = new SQLiteConnection(path, SQLiteOpenFlags.ReadOnly);
             db.BusyTimeout = TimeSpan.FromSeconds(5);
             if (!HasTable(db, "migration_review_state")) return new List<DailyReviewState>();
-            return db.Query<DailyReviewState>("SELECT DayKey,Status,Error,UpdatedUnixMs FROM migration_review_state ORDER BY DayKey");
+            var retry = db.GetTableInfo("migration_review_state").Any(x => x.Name == "NextRetryUnixMs")
+                ? ",RetryCount,NextRetryUnixMs" : "";
+            return db.Query<DailyReviewState>("SELECT DayKey,Status,Error,UpdatedUnixMs" + retry + " FROM migration_review_state ORDER BY DayKey");
         }
 
         public static List<DailyBuildAttempt> ReadAttempts(string path, string target)
@@ -47,6 +51,20 @@ namespace TraceSoul2.Host
             db.BusyTimeout = TimeSpan.FromSeconds(5);
             if (!HasTable(db, "migration_review_attempts")) return new List<DailyBuildAttempt>();
             return db.Query<DailyBuildAttempt>("SELECT * FROM migration_review_attempts WHERE DayKey<=? ORDER BY StartedUnixMs DESC LIMIT 30", target);
+        }
+
+        public static void RecoverInterrupted(string path, string reason)
+        {
+            if (!File.Exists(path)) return;
+            using var db = new SQLiteConnection(path);
+            db.BusyTimeout = TimeSpan.FromSeconds(5);
+            db.RunInTransaction(() => {
+                var now = DateTimeOffset.UtcNow.ToUnixTimeMilliseconds();
+                if (HasTable(db, "migration_review_attempts"))
+                    db.Execute("UPDATE migration_review_attempts SET Status='interrupted', Error=?, FinishedUnixMs=? WHERE Status='running'", reason, now);
+                if (HasTable(db, "migration_review_state"))
+                    db.Execute("UPDATE migration_review_state SET Status='interrupted', Error=?, UpdatedUnixMs=? WHERE Status='running'", reason, now);
+            });
         }
 
         private static bool HasTable(SQLiteConnection db, string name)
@@ -162,10 +180,14 @@ namespace TraceSoul2.Host
             if (rows.Any(x => !ValidDay(x.DayKey))) result.Blockers.Add("历史构建记录包含异常日期，请先检查迁移数据库。");
             rows = rows.Where(x => ValidDay(x.DayKey) && string.CompareOrdinal(x.DayKey, target) <= 0).ToList();
             var done = rows.Where(x => x.Status == "done").Select(x => x.DayKey).ToHashSet(StringComparer.Ordinal);
-            var unfinished = rows.Where(x => x.Status != "done" && x.Status != "pending").ToList();
-            var pending = rows.Where(x => x.Status == "pending").ToList();
+            var unfinished = rows.Where(x => x.Status != "done" && x.Status != "pending" && x.Status != "deferred" && x.Status != "waiting").ToList();
+            var pending = rows.Where(x => x.Status == "pending" || x.Status == "deferred" || x.Status == "waiting").ToList();
+            var due = pending.Where(x => x.NextRetryUnixMs > 0 && x.NextRetryUnixMs <= DateTimeOffset.UtcNow.ToUnixTimeMilliseconds() && x.RetryCount < 3)
+                .Select(x => x.DayKey).ToHashSet(StringComparer.Ordinal);
+            foreach (var waiting in pending.Where(x => x.Status == "waiting"))
+                if (!rows.Any(x => x.Status != "done" && string.CompareOrdinal(x.DayKey, waiting.DayKey) < 0)) due.Add(waiting.DayKey);
             result.PendingReviews = pending.Select(x => new DailyBuildIssue { Day = x.DayKey,
-                Status = "pending", Stage = "回望或身份正文待整理", Reason = x.Error }).ToList();
+                Status = x.Status, Stage = x.Status == "waiting" ? "等待前置任务" : x.Status == "deferred" ? "部分派生任务待整理" : "回望或身份正文待整理", Reason = x.Error }).ToList();
             var history = attempts.OrderByDescending(x => x.StartedUnixMs).ToList();
             result.HistoricalFailures = unfinished.Select(x => new DailyBuildIssue
             {
@@ -176,7 +198,7 @@ namespace TraceSoul2.Host
             result.RecentAttempts = history.Select(x => new DailyBuildIssue
             {
                 Day = x.DayKey, Status = x.Status, Stage = x.Stage,
-                Reason = x.Status == "done" ? "完成" : x.Status == "pending" ? x.Error : x.Status == "running" || x.Status == "interrupted"
+                Reason = x.Status == "done" ? "完成" : x.Status == "pending" || x.Status == "deferred" || x.Status == "waiting" ? x.Error : x.Status == "running" || x.Status == "interrupted"
                     ? "未正常结束或仍在运行" : FailureProtection.SafeReason(new InvalidOperationException(x.Error))
             }).ToList();
             var publicOnly = (pendingPublic ?? Array.Empty<string>()).ToHashSet(StringComparer.Ordinal);
@@ -184,10 +206,10 @@ namespace TraceSoul2.Host
             var unbuiltDays = unbuilt.ToHashSet(StringComparer.Ordinal);
             var pendingDays = pending.Select(x => x.DayKey).ToHashSet(StringComparer.Ordinal);
             result.Days = unbuiltDays.Concat(publicDays).Concat(unfinished.Select(x => x.DayKey))
-                .Concat(includePendingReviews ? pendingDays : Array.Empty<string>()).Append(target)
+                .Concat(includePendingReviews ? pendingDays : due).Append(target)
                 .Where(x => ValidDay(x) && string.CompareOrdinal(x, target) <= 0 &&
                     (!done.Contains(x) || publicDays.Contains(x)) &&
-                    (includePendingReviews || !pendingDays.Contains(x) || publicOnly.Contains(x) || unbuiltDays.Contains(x)))
+                    (includePendingReviews || !pendingDays.Contains(x) || due.Contains(x) || (pending.Any(p => p.DayKey == x && p.RetryCount == 0) && publicOnly.Contains(x))))
                 .Distinct(StringComparer.Ordinal).OrderBy(x => x, StringComparer.Ordinal).ToList();
             return result;
         }

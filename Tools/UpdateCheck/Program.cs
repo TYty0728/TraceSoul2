@@ -197,10 +197,15 @@ internal static class Program
         await Expect<ArgumentNullException>(()=>{service.StartInstall(()=>{},null);return Task.CompletedTask;});
         var reached=new TaskCompletionSource<bool>(TaskCreationOptions.RunContinuationsAsynchronously);
         var releaseArchive=new TaskCompletionSource<bool>(TaskCreationOptions.RunContinuationsAsynchronously);var shutdown=false;
-        service.StartInstall(()=>shutdown=true,async(version,token)=>{Require(version=="9.0.0","Archive must bind the selected update version");reached.SetResult(true);await releaseArchive.Task;throw new IOException("simulated archive failure");});
+        var maintenance = new TraceSoul2.Host.ReviewMaintenanceGate();
+        Require(maintenance.TryWork(), "Daily build starts before update");
+        service.StartInstall(()=>shutdown=true,async(version,token)=>{Require(version=="9.0.0","Archive must bind the selected update version");reached.SetResult(true);await releaseArchive.Task;throw new IOException("simulated archive failure");}, async token => await maintenance.ReserveAsync(token));
+        Require(!maintenance.TryWork() && !reached.Task.IsCompleted, "Update reservation blocks new work before archive and waits for daily build");
+        maintenance.EndWork();
         try
         {
             await reached.Task.WaitAsync(TimeSpan.FromSeconds(10));
+            Require(!maintenance.TryWork(), "Maintenance stays held through archive, including protected-archive fast paths");
             Require(!shutdown&&JsonSerializer.SerializeToElement(service.Status()).GetProperty("install").GetProperty("phase").GetString()=="archiving","Updater must wait for archive validation before handoff");
             releaseArchive.SetResult(true);
             for(var i=0;i<200;i++)
@@ -209,6 +214,7 @@ internal static class Program
                 if(state.GetProperty("phase").GetString()=="failed")
                 {
                     Require(!shutdown&&File.ReadAllText(Path.Combine(application,"TraceSoul2.Host.dll"))=="old-host-must-remain","Failed archive must preserve installed app and never stop Host");
+                    Require(maintenance.TryWork(), "Failed handoff releases maintenance"); maintenance.EndWork();
                     Console.WriteLine("Update handoff checks passed: validated package waits for archive; failed archive prevents runner and shutdown.");return;
                 }
                 await Task.Delay(10);

@@ -1,3 +1,4 @@
+from scene import encode as encode_scene, PHASES
 """Local-only USB output bridge for the Waveshare sensory terminal."""
 import argparse
 import functools
@@ -195,6 +196,13 @@ class BoardCommandError(RuntimeError):
         super().__init__('开发板返回：' + str(self.code))
 
 
+class BoardStreamError(RuntimeError):
+    def __init__(self, code, received):
+        self.code, self.received = code, received
+        super().__init__('麦克风流不完整；未听写或提交' if code == 'microphone_frame_incomplete'
+                         else '麦克风流校验失败；未听写或提交')
+
+
 class Board:
     def __init__(self, port):
         self.port, self.connection = port, None
@@ -223,10 +231,20 @@ class Board:
 
     def _reply(self, command_id, status, received=None, timeout=15):
         deadline = time.monotonic() + timeout
+        chunks = []
+        pending = bytearray()
         while time.monotonic() < deadline:
             raw = self.connection.read_until(b'\n', 1024)
+            if raw:
+                chunks.append({'bytes': len(raw), 'complete': raw.endswith(b'\n')})
+            pending.extend(raw)
+            if len(pending)>2048:
+                raise RuntimeError('开发板回执超过长度限制')
+            if not raw.endswith(b'\n'):
+                continue
+            complete=bytes(pending);pending.clear()
             try:
-                result = json.loads(raw)
+                result = json.loads(complete)
             except (ValueError, UnicodeError):
                 continue
             if not isinstance(result, dict) or result.get('id') != command_id or result.get('protocol') != 1:
@@ -236,11 +254,13 @@ class Board:
             if result.get('status') != status or (received is not None and result.get('received') != received):
                 raise RuntimeError('开发板回执顺序或字节数不匹配')
             return result
-        raise TimeoutError('等待开发板回执超时；本次结果未知，不会自动重播')
+        error = TimeoutError('等待开发板回执超时；本次结果未知，不会自动重播')
+        error.reply_diagnostic = {'expected': status, 'chunks': chunks[-6:]}
+        raise error
 
     @board_request
     def transact(self, op, payload=b'', *, artwork=False):
-        if type(artwork) is not bool or (artwork and op != 'frame'):
+        if type(artwork) is not bool or (artwork and op not in ('frame','scene')):
             raise ValueError('图片动效标志只用于显示帧')
         with self.lock:
             try:
@@ -250,12 +270,30 @@ class Board:
                 if artwork: header['artwork'] = True
                 self.connection.write(json.dumps(header).encode() + b'\n')
                 result = self._reply(command_id, 'ready')
+                if op == 'audio_stream' and result.get('audio_stream_version') != 1:
+                    raise RuntimeError('连续播放需要开发板固件 0.4.7 或更新版本；未发送音频')
                 for offset in range(0, len(payload), CHUNK):
                     block = payload[offset:offset + CHUNK]
-                    self.connection.write(block)
+                    self.connection.write(block + struct.pack('<I', checksum(block)) if op == 'audio_stream' else block)
                     self._reply(command_id, 'chunk', offset + len(block), timeout=8)
                 if payload:
                     result = self._reply(command_id, 'done', len(payload), timeout=20)
+                return result
+            except Exception:
+                self.close()
+                raise
+
+    @board_request
+    def ui(self, phase='standby', focus_ms=0, countdown=0):
+        if phase not in PHASES or type(focus_ms) is not int or not 0<=focus_ms<=30000 or type(countdown) is not int or not 0<=countdown<=10:
+            raise ValueError('无效的屏幕状态')
+        with self.lock:
+            try:
+                self._connect()
+                command_id=secrets.randbelow(0x7ffffffe)+1
+                self.connection.write(json.dumps(dict(id=command_id,op='ui',phase=PHASES.index(phase),focus_ms=focus_ms,countdown=countdown)).encode()+b'\n')
+                result=self._reply(command_id,'ready')
+                result=self._reply(command_id,'done',0,timeout=countdown+3)
                 return result
             except Exception:
                 self.close()
@@ -339,8 +377,10 @@ class Board:
                     read_deadline = time.monotonic() + 2
                     while len(block) < 3072 and time.monotonic() < read_deadline:
                         block.extend(self.connection.read(3072 - len(block)))
-                    if len(block) != 3072 or checksum(block) != frame.get('checksum'):
-                        raise RuntimeError('麦克风流校验失败；未听写或提交')
+                    if len(block) != 3072:
+                        raise BoardStreamError('microphone_frame_incomplete', len(block))
+                    if checksum(block) != frame.get('checksum'):
+                        raise BoardStreamError('microphone_checksum_mismatch', len(block))
                     if cancelled.is_set():
                         utterance.reason = 'cancelled'
                     elif time.monotonic() >= deadline:
@@ -390,8 +430,43 @@ def preview(image):
     return base64.b64encode(output.getvalue()).decode('ascii')
 
 
-def make_handler(board, font_path, asr=None, vad=None, speaker=None):
+def make_handler(board, font_path, asr=None, vad=None, speaker=None, listen_countdown_seconds=0):
+    if type(listen_countdown_seconds) is not int or not 0 <= listen_countdown_seconds <= 10:
+        raise ValueError('监听倒计时必须为0～10秒')
     display = CompanionDisplay(font_path)
+    display_lock = threading.RLock()
+    last_artwork = {}
+    last_scene = {}
+    def show_scene(request, audio_ms=0):
+        with display_lock:
+            if type(request.get('page',0)) is not int or request.get('page',0)!=0:
+                raise ValueError('设备场景从第一页开始，后续由板端翻页')
+            request=dict(request,caption_preview=False,page=0)
+            name=request.get('name','小汐')
+            # Status-only updates retain this companion's last actual library image.
+            if not request.get('image') and not request.get('subtitle') and last_artwork.get('name')==name:
+                request['image']=last_artwork.get('image')
+            image,layout=display.render(request)
+            pages=layout['page_count']
+            interval=max(5000,min(30000,round(audio_ms/pages))) if audio_ms and pages>1 else 6500
+            key=(name,request.get('image'),request.get('subtitle',''),interval)
+            cached=False
+            if last_scene.get('key')==key:
+                result=board.ui(request.get('state','standby'),request.get('remaining',0)*1000)
+                cached=result.get('ui_pages')==pages and result.get('frames')==last_scene.get('frames') and result.get('uptime_ms',0)>=last_scene.get('uptime_ms',0)
+            payload=b''
+            if not cached:
+                frames=[rgb565(image)]
+                for page in range(1,pages):
+                    frames.append(rgb565(display.render(dict(request,page=page))[0]))
+                payload=encode_scene(frames,request.get('state','standby'),interval)
+                result=board.transact('scene',payload,**({'artwork':True} if layout['artwork'] else {}))
+                last_scene.update(key=key,frames=result.get('frames'),uptime_ms=result.get('uptime_ms',0))
+                if request.get('remaining') is not None:
+                    result=board.ui(request.get('state','standby'),request['remaining']*1000)
+            if request.get('image'):last_artwork.update(name=name,image=request['image'])
+            layout.update(preview_only=False,transfer_bytes=len(payload),cached_pages=pages)
+            return image,layout,result
     capture_lock = threading.Lock()
     active = {}
     capture_progress = {}
@@ -405,6 +480,10 @@ def make_handler(board, font_path, asr=None, vad=None, speaker=None):
             self.send_response(status)
             self.send_header('Content-Type', content_type)
             self.send_header('Content-Length', str(len(data)))
+            # This HTTP/1.0 handler serves one request per connection. Explicitly
+            # tell pooled clients before a tunnel-delayed EOF can race the next POST.
+            self.send_header('Connection', 'close')
+            self.close_connection = True
             self.send_header('Cache-Control', 'no-store')
             self.send_header('X-Content-Type-Options', 'nosniff')
             self.end_headers()
@@ -434,6 +513,7 @@ def make_handler(board, font_path, asr=None, vad=None, speaker=None):
             return self.respond(404, {'error': 'not_found'})
 
         def do_POST(self):
+            request_started = time.monotonic()
             if not self.allowed() or self.headers.get('Content-Type', '').split(';')[0] != 'application/json':
                 return self.respond(403, {'error': '仅允许本机 JSON 请求'})
             try:
@@ -443,6 +523,7 @@ def make_handler(board, font_path, asr=None, vad=None, speaker=None):
                     raise ValueError('请求为空或文件太大')
                 self.connection.settimeout(10)
                 request = json.loads(self.rfile.read(length))
+                request_read_ms = round((time.monotonic() - request_started) * 1000)
                 if not isinstance(request, dict):
                     raise ValueError('请求应为对象')
                 if self.path == '/api/display/preview':
@@ -471,8 +552,7 @@ def make_handler(board, font_path, asr=None, vad=None, speaker=None):
                 elif self.path == '/api/touch/stop':
                     result=board.transact('touch_stop')
                 elif self.path == '/api/display':
-                    image, layout = display.render(request)
-                    result = board.transact('frame', rgb565(image), **({'artwork':True} if layout['artwork'] else {}))
+                    image, layout, result = show_scene(request)
                     layout['preview_only'] = False
                 elif self.path == '/api/status':
                     result = board.transact('hello')
@@ -514,6 +594,18 @@ def make_handler(board, font_path, asr=None, vad=None, speaker=None):
                         active[listen_id] = event
                         capture_progress[listen_id] = {'phase': 'preparing', 'recorded_ms': 0}
                     try:
+                        initial_display = request.get('display')
+                        if initial_display is not None and not event.is_set():
+                            image,layout,receipt=show_scene(initial_display)
+                        countdown = request.get('countdown', False)
+                        if type(countdown) is not bool:
+                            raise ValueError('无效的倒计时标记')
+                        phase=request.get('phase',initial_display.get('state','listening') if initial_display else 'listening')
+                        focus_ms=request.get('focus_ms',0)
+                        if not event.is_set():
+                            elapsed=round((time.monotonic()-request_started)*1000)
+                            receipt=board.ui(phase,max(0,focus_ms-elapsed),
+                                listen_countdown_seconds if self.path=='/api/voice/sample' or countdown else 0)
                         if self.path == '/api/voice/sample':
                             # Enrollment and diagnostics use an 8s window with bounded
                             # stream protocol instead of the old <=10s record buffer.
@@ -547,28 +639,43 @@ def make_handler(board, font_path, asr=None, vad=None, speaker=None):
                             return self.respond(200, {'ok': True, 'receipt': receipt, 'voice': voice, 'quality': quality})
                         utterance = vad.create()
                         capture_started = time.monotonic()
+                        preparation_ms = round((capture_started - request_started) * 1000)
+                        with capture_lock:
+                            capture_progress[listen_id] = {'phase':'recording','recorded_ms':0}
                         notice = request.get('notice', '')
                         if notice not in ('', 'speaker_unconfirmed', 'no_speech'):
                             raise ValueError('无效的采音提示')
                         receipt = board.listen(utterance, event, notice=notice)
                         capture_elapsed_ms = round((time.monotonic() - capture_started) * 1000)
+                        with capture_lock:
+                            capture_progress[listen_id] = {'phase':'processing','recorded_ms':utterance.frames * 32}
                         voice = None
+                        speaker_ms = recognition_ms = 0
                         result = {'text': '', 'status': utterance.reason}
                         if utterance.reason == 'speech_end' and not event.is_set():
+                            stage_started = time.monotonic()
                             voice = speaker.evidence(utterance.pcm)
+                            speaker_ms = round((time.monotonic() - stage_started) * 1000)
                             # Short wake names can be recognized without sufficient speaker evidence.
                             # Host still requires an owner match before admitting any conversation.
-                            result = asr.transcribe(utterance.pcm, 16000)
+                            stage_started = time.monotonic()
+                            result = asr.transcribe(getattr(utterance, 'recognition_pcm', b'') or utterance.pcm, 16000)
+                            recognition_ms = round((time.monotonic() - stage_started) * 1000)
                         if event.is_set():
                             result = {'text': '', 'status': 'cancelled'}
                             voice = None
                         mode = board.wifi.status()['mode'] if getattr(board, 'wifi', None) else 'usb'
+                        timing = dict(request_read_ms=request_read_ms, preparation_ms=preparation_ms,
+                            capture_elapsed_ms=capture_elapsed_ms, speaker_ms=speaker_ms, recognition_ms=recognition_ms,
+                            total_ms=round((time.monotonic()-request_started)*1000))
                         print(json.dumps(dict(event='utterance_metrics', transport=mode,
+                            unix_ms=round(time.time()*1000),
                             recorded_ms=utterance.frames * 32, speech_ms=len(utterance.pcm) // 32,
-                            capture_elapsed_ms=capture_elapsed_ms, status=result.get('status'))), flush=True)
+                            asr_audio_ms=len(getattr(utterance, 'recognition_pcm', b'') or utterance.pcm) // 32,
+                            **timing, status=result.get('status'))), flush=True)
                         return self.respond(200, dict(ok=True, receipt=receipt, voice=voice,
                             started_ms=utterance.started_at * 32 if utterance.started_at is not None else None,
-                            recorded_ms=utterance.frames * 32, **result))
+                            recorded_ms=utterance.frames * 32, timing=timing, **result))
                     finally:
                         with capture_lock:
                             active.pop(listen_id, None)
@@ -598,25 +705,16 @@ def make_handler(board, font_path, asr=None, vad=None, speaker=None):
                     display_request = request.get('display')
                     if display_request is not None:
                         if not isinstance(display_request,dict):raise ValueError('显示请求应为对象')
-                        display_request = dict(display_request,state='speaking',page=0)
-                        # Validate and render every page before beginning any physical playback.
-                        _, layout = display.render(display_request)
-                        pages = [display.render(dict(display_request,page=page))[0] for page in range(layout['page_count'])]
-                        # Each page gets a contiguous audio interval, split into <=8s board chunks.
-                        # This is approximate page timing, not word-level forced alignment.
-                        samples=len(pcm)//2
-                        for page,frame in enumerate(pages):
-                            display_receipts.append(board.transact('frame',rgb565(frame),
-                                **({'artwork':True} if layout['artwork'] else {})))
-                            first=(samples*page//len(pages))*2;last=(samples*(page+1)//len(pages))*2
-                            for offset in range(first,last,48000*2*8):
-                                receipts.append(board.transact('audio',pcm[offset:min(last,offset+48000*2*8)]))
+                        display_request = dict(display_request,page=0,caption_preview=False)
+                        display_request.setdefault('state','speaking')
+                        frame,layout,receipt=show_scene(display_request,len(pcm)*1000//96000)
+                        display_receipts.append(receipt)
+                        receipts.append(board.transact('audio_stream',pcm))
                         return self.respond(200,{'ok':True,'receipts':receipts,'display_receipts':display_receipts,
                             'engine':'外部角色语音' if external else 'Windows 系统测试音色','audio_ms':len(pcm)*1000//96000,
-                            'display_pages':len(pages),'display_complete':True})
-                    # Board accepts at most ten seconds. No automatic repeat on unknown results.
-                    for offset in range(0, len(pcm), 48000 * 2 * 8):
-                        receipts.append(board.transact('audio', pcm[offset:offset + 48000 * 2 * 8]))
+                            'display_pages':1,'caption_pages':layout['page_count'],'display_mode':'cached_pages',
+                            'display_complete':True,'caption_preview':False})
+                    receipts.append(board.transact('audio_stream',pcm))
                     return self.respond(200, {'ok': True, 'receipts': receipts,
                                              'engine': '外部角色语音' if external else 'Windows 系统测试音色',
                                              'audio_ms': len(pcm) * 1000 // 96000})
@@ -632,11 +730,18 @@ def make_handler(board, font_path, asr=None, vad=None, speaker=None):
             except (ValueError, KeyError, TypeError, wave.Error, Image.DecompressionBombError) as error:
                 self.respond(400, {'ok': False, 'error': str(error)})
             except Exception as error:
-                if self.path in ('/api/utterance', '/api/voice/sample'):
-                    code = error.code if isinstance(error, BoardCommandError) else type(error).__name__
+                if self.path in ('/api/utterance', '/api/voice/sample', '/api/speak'):
+                    code = error.code if isinstance(error, (BoardCommandError, BoardStreamError)) else type(error).__name__
+                    trace = error.__traceback__
+                    locations = []
+                    while trace is not None:
+                        locations.append(Path(trace.tb_frame.f_code.co_filename).name + ':' + str(trace.tb_lineno))
+                        trace = trace.tb_next
                     if not isinstance(code, str) or not re.fullmatch('[A-Za-z_]{1,64}', code):
                         code = 'unknown_error'
-                    print(json.dumps(dict(event='capture_error', kind=type(error).__name__, code=code)),
+                    print(json.dumps(dict(event='playback_error' if self.path=='/api/speak' else 'capture_error', kind=type(error).__name__, code=code,
+                          received=error.received if isinstance(error, BoardStreamError) else None, locations=locations[-4:],
+                          reply=getattr(error, 'reply_diagnostic', None))),
                           file=sys.stderr, flush=True)
                 self.respond(503, {'ok': False, 'error': str(error)})
     return Handler
@@ -650,6 +755,8 @@ def main():
     parser.add_argument('--font')
     parser.add_argument('--connection-config', help='Private USB/Wi-Fi pairing profile outside the repository')
     parser.add_argument('--asr-model-directory', help='Optional local SenseVoice int8 directory')
+    parser.add_argument('--listen-countdown-seconds', type=int, default=0, choices=range(0, 11),
+                        help='Show an on-device countdown before each capture (diagnostics)')
     args = parser.parse_args()
     if not args.preview_only and not args.port:
         parser.error('--port is required unless --preview-only is set')
@@ -672,7 +779,8 @@ def main():
         if speaker_model.is_file():
             from local_speaker import LocalSpeaker
             speaker = LocalSpeaker(speaker_model)
-    server = ThreadingHTTPServer(('127.0.0.1', args.http_port), make_handler(board, choose_font(args.font), asr, vad, speaker))
+    server = ThreadingHTTPServer(('127.0.0.1', args.http_port), make_handler(board, choose_font(args.font), asr, vad, speaker,
+                                                                          args.listen_countdown_seconds))
     print(f'感官终端控制台 http://127.0.0.1:{args.http_port}', flush=True)
     try:
         server.serve_forever()

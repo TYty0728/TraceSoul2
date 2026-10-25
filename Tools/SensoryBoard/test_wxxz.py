@@ -39,11 +39,11 @@ class SpeakChecks(unittest.TestCase):
             server.server_close()
             thread.join()
 
-    def test_long_speech_split_into_board_sized_chunks(self):
+    def test_long_speech_is_one_continuous_playback(self):
         code, data, calls = self.check_request(b'\0' * (8 * 96000 + 48000))
         self.assertEqual(code, 200)
-        self.assertEqual(calls, [('audio', 768000), ('audio', 48000)])
-        self.assertEqual(len(data['receipts']), 2)
+        self.assertEqual(calls, [('audio_stream', 816000)])
+        self.assertEqual(len(data['receipts']), 1)
 
     def test_unknown_playback_is_not_repeated(self):
         code, data, calls = self.check_request(b'\0' * 96000, fail=True)

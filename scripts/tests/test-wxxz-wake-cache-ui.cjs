@@ -18,6 +18,11 @@ vm.createContext(sandbox);
 vm.runInContext(html.slice(html.indexOf('  let wxxzSession ='),html.indexOf('  /* ---------- 最近一轮渲染')),sandbox);
 (async()=>{
   assert.match(html,/预生成唤醒语音（不播放）/);
+  assert.ok(!html.includes('唤醒缓存仅支持本地千问'));
+  sandbox.renderWxxzWakeAudio({supported:true});
+  assert.match($('wxxzWakeAudioState').textContent,/远端首次生成.*Host重启/);
+  sandbox.renderWxxzWakeAudio({supported:false});
+  assert.match($('wxxzWakeAudioState').textContent,/系统测试音色不支持/);
   let release;pending=new Promise(resolve=>release=resolve);
   const preparing=sandbox.prepareWxxzWakeAudio();
   assert.match($('wxxzWakeAudioState').textContent,/正在预生成/);

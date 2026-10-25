@@ -14,31 +14,64 @@ namespace TraceSoul2.Host
     {
         private readonly SoulRuntime runtime;
         private readonly string migrateDll;
-        private readonly SemaphoreSlim buildGate = new SemaphoreSlim(1, 1);
+        private readonly ReviewMaintenanceGate buildGate;
+        private readonly AsyncLocal<bool> maintenanceArchive = new();
+        private Task manualRun;
+        private ReviewMaintenanceGate.Lease externalLease;
+        private string externalId;
         private readonly CancellationTokenSource lifetime = new CancellationTokenSource();
         private string HistoryPath => Path.Combine(runtime.DataDirectory, "migration.sqlite3");
 
         public DailyPipelineWorker(SoulRuntime runtime)
         {
             this.runtime = runtime;
+            buildGate = new(() => ReviewExecutionLease.Acquire(runtime.DataDirectory));
             migrateDll = ResolveMigrateDll();
-            runtime.Providers.Protection.RecoverInterruptedAttempts();
+            try
+            {
+                using var lease = ReviewExecutionLease.Acquire(runtime.DataDirectory);
+                DailyBuildHistory.RecoverInterrupted(HistoryPath, "上次进程已结束，检查点保留");
+                runtime.Providers.Protection.RecoverInterruptedAttempts();
+            }
+            catch (InvalidOperationException) { runtime.Emit("仍有复盘进程持有执行锁，保留运行状态。"); }
         }
 
         public bool IsAvailable => !string.IsNullOrWhiteSpace(migrateDll);
         public string MigrateDll => migrateDll;
 
-        // A snapshot waits for the current batch and prevents another batch from starting.
+        public Task<ReviewMaintenanceGate.Lease> HoldMaintenanceAsync(CancellationToken token)
+            => buildGate.ReserveAsync(token);
+        public async Task ArchiveDuringMaintenanceAsync(Func<Task> archive)
+        {
+            if (!buildGate.MaintenanceHeld) throw new InvalidOperationException("更新存档必须持有维护租约。");
+            maintenanceArchive.Value = true;
+            try { await archive(); } finally { maintenanceArchive.Value = false; }
+        }
+        public async Task<string> BeginExternalMaintenanceAsync(CancellationToken token)
+        {
+            var lease = await HoldMaintenanceAsync(token);
+            externalId = Guid.NewGuid().ToString("N"); externalLease = lease;
+            return externalId;
+        }
+        public object MaintenanceStatus() => new { busy = buildGate.Busy, lease = externalId };
+        public void EndExternalMaintenance(string id)
+        {
+            if (id != externalId || externalLease == null) throw new InvalidOperationException("维护租约不匹配。");
+            var lease = externalLease; externalLease = null; externalId = null; lease.Dispose();
+        }
         public async Task<IDisposable> HoldForArchiveAsync(CancellationToken token)
         {
-            await buildGate.WaitAsync(token);
-            return new ArchiveLease(buildGate);
+            if (maintenanceArchive.Value) return new ArchiveLease(null);
+            while (!buildGate.TryWork()) await Task.Delay(100, token);
+            try { return new ArchiveLease(buildGate, ReviewExecutionLease.Acquire(runtime.DataDirectory)); }
+            catch { buildGate.EndWork(); throw; }
         }
         private sealed class ArchiveLease : IDisposable
         {
-            private SemaphoreSlim semaphore;
-            public ArchiveLease(SemaphoreSlim semaphore) { this.semaphore = semaphore; }
-            public void Dispose() { Interlocked.Exchange(ref semaphore, null)?.Release(); }
+            private ReviewMaintenanceGate gate;
+            private IDisposable execution;
+            public ArchiveLease(ReviewMaintenanceGate gate, IDisposable execution = null) { this.gate = gate; this.execution = execution; }
+            public void Dispose() { Interlocked.Exchange(ref execution, null)?.Dispose(); Interlocked.Exchange(ref gate, null)?.EndWork(); }
         }
 
         public DailyBuildPlan Inspect(string dayKey, bool includeBusy = true, bool includePendingReviews = true)
@@ -69,7 +102,7 @@ namespace TraceSoul2.Host
                 plan = new DailyBuildPlan { Day = target };
                 plan.Blockers.Add("无法读取历史构建状态，请先检查 migration.sqlite3 和主库；本次不会启动构建。");
             }
-            plan.Busy = includeBusy && buildGate.CurrentCount == 0;
+            plan.Busy = includeBusy && buildGate.Busy;
             if (plan.Busy)
                 foreach (var issue in plan.HistoricalFailures.Concat(plan.RecentAttempts).Where(x => x.Status == "running"))
                     issue.Reason = "正在执行";
@@ -98,7 +131,7 @@ namespace TraceSoul2.Host
             {
                 try
                 {
-                    if (buildGate.CurrentCount > 0)
+                    if (!buildGate.Busy)
                     {
                         var plan = Inspect(null, includePendingReviews: false);
                         // 旧版遗留 failed/running 也不能一启动就重复收费。
@@ -113,7 +146,7 @@ namespace TraceSoul2.Host
                                 historyReported = true;
                             }
                         }
-                        else if (plan.Ready && buildGate.Wait(0))
+                        else if (plan.Ready && buildGate.TryWork())
                         {
                             await RunReservedPlanAsync(plan.Day, stoppingToken, includePendingReviews: false);
                             historyReported = false;
@@ -138,15 +171,15 @@ namespace TraceSoul2.Host
 
         public DailyBuildPlan Trigger(string dayKey)
         {
-            if (!buildGate.Wait(0)) throw new InvalidOperationException("已有日构建队列正在执行，请勿重复启动。");
+            if (!buildGate.TryWork()) throw new InvalidOperationException("已有日构建队列正在执行，请勿重复启动。");
             DailyBuildPlan plan;
             try
             {
                 plan = Inspect(dayKey, false);
                 RequireReady(plan);
             }
-            catch { buildGate.Release(); throw; }
-            _ = RunReservedPlanAsync(plan.Day, lifetime.Token);
+            catch { buildGate.EndWork(); throw; }
+            manualRun = RunReservedPlanAsync(plan.Day, lifetime.Token);
             return plan;
         }
 
@@ -164,10 +197,15 @@ namespace TraceSoul2.Host
                 var plan = Inspect(target, false, includePendingReviews);
                 RequireReady(plan);
                 runtime.Emit("日构建检查通过，执行顺序：" + string.Join(" → ", plan.Days));
-                var succeeded = await DailyBuildPreflight.RunInOrderAsync(plan.Days,
-                    day => RunDayBuildAsync(day, token));
-                var pending = DailyBuildHistory.ReadStates(HistoryPath).Count(x => x.Status == "pending");
-                runtime.Emit(succeeded ? pending > 0 ? "事件与认知已处理，仍有" + pending + "天回望或身份正文待整理；可手动续做。"
+                var succeeded = true;
+                var yieldedForMaintenance = false;
+                foreach (var day in plan.Days)
+                {
+                    if (buildGate.MaintenanceRequested) { yieldedForMaintenance = true; break; }
+                    if (await RunDayBuildAsync(day, token) != 0) { succeeded = false; break; }
+                }
+                var pending = DailyBuildHistory.ReadStates(HistoryPath).Count(x => x.Status == "pending" || x.Status == "deferred" || x.Status == "waiting");
+                runtime.Emit(yieldedForMaintenance ? "当前日进度已保存，剩余日期等待维护结束后继续。" : succeeded ? pending > 0 ? "已保存各阶段进度，仍有" + pending + "天部分派生任务待整理，将按预算补做。"
                     : "历史待补与目标日构建均已完成。" : "日构建队列已停止；旧日未完成，不会执行后续日期。");
             }
             catch (OperationCanceledException) when (token.IsCancellationRequested) { }
@@ -176,15 +214,14 @@ namespace TraceSoul2.Host
                 runtime.Providers.Protection.Pause("daily", "日构建队列", error);
                 runtime.Emit("日构建队列已暂停：" + FailureProtection.SafeReason(error));
             }
-            finally { buildGate.Release(); }
+            finally { buildGate.EndWork(); }
         }
 
         public override async Task StopAsync(CancellationToken cancellationToken)
         {
             lifetime.Cancel();
             await base.StopAsync(cancellationToken);
-            await buildGate.WaitAsync(cancellationToken);
-            buildGate.Release();
+            if (manualRun != null) await manualRun.WaitAsync(cancellationToken);
         }
 
         private async Task<int> RunDayBuildAsync(string dayKey, CancellationToken cancellationToken)
@@ -212,22 +249,26 @@ namespace TraceSoul2.Host
                 {
                     if (!process.HasExited) process.Kill(entireProcessTree: true);
                     await process.WaitForExitAsync(CancellationToken.None);
+                    DailyBuildHistory.RecoverInterrupted(HistoryPath, timeout.IsCancellationRequested ? "子进程超时或服务停止，检查点保留" : "子进程被中断，检查点保留");
                     throw;
                 }
                 var state = DailyBuildHistory.ReadStates(HistoryPath).FirstOrDefault(x => x.DayKey == dayKey);
                 runtime.Emit("日构建结束（exit " + process.ExitCode + "）：" + dayKey);
-                if (process.ExitCode != 0 || state == null || (state.Status != "done" && state.Status != "pending"))
+                if (process.ExitCode != 0 || state == null || (state.Status != "done" && state.Status != "pending" && state.Status != "deferred" && state.Status != "waiting"))
                 {
                     runtime.Providers.Protection.FailAttempt("daily",
                         new InvalidOperationException(state?.Error ?? "子进程未确认完成"));
                     return -1;
                 }
                 runtime.Providers.Protection.CompleteAttempt("daily");
-                if (state.Status == "pending")
+                if (state.Status == "done") runtime.Providers.Protection.Resume("review-backlog:" + dayKey);
+                if (state.Status == "pending" || state.Status == "deferred")
                 {
-                    runtime.Emit(dayKey + "：" + state.Error + "。已保存检查点，不自动重试。");
+                    runtime.Emit(dayKey + "：" + state.Error + (state.RetryCount >= 3 ? "。已达自动补做预算，需检查积压原因。" : "。已保存检查点，将退避后补做。"));
+                    if (state.RetryCount >= 3) runtime.Providers.Protection.ReportReviewBacklog(dayKey);
                     // Core memories are complete. Pending prose must not suppress the independent night opportunity.
                 }
+                if (state.Status == "deferred" || state.Status == "waiting") return 0;
             }
             catch (Exception error)
             {

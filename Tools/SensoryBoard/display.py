@@ -54,14 +54,20 @@ class CompanionDisplay:
         name = request.get('name', '小汐')
         subtitle = request.get('subtitle', '')
         page = request.get('page', 0)
-        remaining = request.get('remaining', 30)
+        remaining = request.get('remaining')
         if not isinstance(state, str) or state not in STATES:
             raise ValueError('未知的显示状态')
         if not isinstance(name, str) or not name.strip() or len(name) > 32 or any(ord(c)<32 for c in name):
             raise ValueError('角色名字应为1～32字，不能换行')
-        if type(remaining) is not int or not 0 <= remaining <= 30:
+        if remaining is not None and (type(remaining) is not int or not 0 <= remaining <= 30):
             raise ValueError('注意力剩余秒数应为0～30')
         pages = self.pages(subtitle)
+        caption_preview = request.get('caption_preview', False)
+        if type(caption_preview) is not bool:
+            raise ValueError('字幕预览标志应为布尔值')
+        truncated = caption_preview and len(pages)>1
+        if truncated:
+            pages = [pages[0][:3] + [pages[0][3][:-1]+'…']]
         if type(page) is not int or not 0 <= page < len(pages):
             raise ValueError('字幕页码超出范围')
         image = Image.new('RGB', (WIDTH*SCALE, HEIGHT*SCALE), '#f7f7f2')
@@ -84,11 +90,8 @@ class CompanionDisplay:
 
         title, hint, accent = STATES[state]
         ink, muted = '#293d3c', '#7b8882'
-        text(20,22,fit(name.strip(),174,23),23,ink)
-        rect((228,20,300,47),13,'#e9eee7')
-        ellipse((239,31,245,37),accent)
-        text(254,25,'感官',12,'#687f71')
-
+        text(18,18,fit(name.strip(),140,23),23,ink)
+        text(19,46,'陪你说说话',10,muted)
         artwork = request.get('image')
         if artwork is not None:
             if not isinstance(artwork,str) or len(artwork)>6*1024*1024:
@@ -100,46 +103,17 @@ class CompanionDisplay:
                     if source.width*source.height>16_000_000 or source.format not in ('PNG','JPEG','WEBP','GIF'): raise ValueError()
                     # Static GIF first frame only; QQ keeps the original animation.
                     source.seek(0)
-                    fitted=ImageOps.contain(ImageOps.exif_transpose(source).convert('RGBA'),(284*SCALE,176*SCALE))
-                    image.paste(fitted,((WIDTH*SCALE-fitted.width)//2,70*SCALE+(176*SCALE-fitted.height)//2),fitted)
+                    fitted=ImageOps.contain(ImageOps.exif_transpose(source).convert('RGBA'),(284*SCALE,168*SCALE))
+                    image.paste(fitted,((WIDTH*SCALE-fitted.width)//2,70*SCALE+(168*SCALE-fitted.height)//2),fitted)
             except (OSError,ValueError,Image.DecompressionBombError):
                 raise ValueError('表情图片无效或尺寸过大') from None
         else:
-            # Original vector expression, not a portrait or a claim about sensed emotion.
-            ellipse((62,80,258,252),'#edf0e6')
-            face = '#deeadf' if state not in ('offline','error','paused') else '#e7e6e0'
-            rect((77,94,243,226),58,face)
-            ellipse((90,168,114,177),'#d6dfcc')
-            ellipse((206,168,230,177),'#d6dfcc')
-            if state in ('standby','paused'):
-                arc((108,142,134,159),0,180,ink)
-                arc((186,142,212,159),0,180,ink)
-            elif state == 'offline':
-                line((110,153,132,153),'#8f9c93',3); line((188,153,210,153),'#8f9c93',3)
-            elif state == 'thinking':
-                rect((115,138,126,159),5,ink); rect((194,138,205,159),5,ink)
-                ellipse((237,82,251,96),'#cfdbbf'); ellipse((257,64,278,85),'#e0e5d3')
-                text(268,74,'…',16,accent,'mm')
-            elif state == 'speaking':
-                arc((107,142,136,166),185,355,ink)
-                arc((184,142,213,166),185,355,ink)
-            else:
-                rect((117,141,128,164),5,ink); rect((192,141,203,164),5,ink)
-                if state == 'error':
-                    line((110,133,134,139),accent,3); line((186,139,210,133),accent,3)
-            if state == 'speaking':
-                ellipse((151,179,169,195),ink)
-            elif state in ('offline','error'):
-                line((150,187,170,187),'#8f9c93',2)
-            else:
-                arc((146,174,174,190),0,180,ink,2)
-            if state in ('listening','focused'):
-                arc((61,129,88,190),115,245,accent,2)
-                arc((232,129,259,190),295,65,accent,2)
-            if state == 'paused':
-                text(238,100,'z',18,muted)
+            # Do not disguise an absent shared-library image as a different character.
+            text(160,155,'暂无可用表情',16,muted,'mm')
         text(160,260,title,23,ink,'mm')
-        if state == 'focused':
+        # A rendered frame cannot tick by itself. Only draw seconds when the
+        # caller supplies an actual snapshot; never invent a frozen 30s timer.
+        if state == 'focused' and remaining is not None:
             hint = f'注意力还有 {remaining} 秒'
             rect((93,280,227,283),1,'#e1e7dc')
             if remaining:
@@ -147,16 +121,17 @@ class CompanionDisplay:
         text(160,299 if state=='focused' else 288,hint,12,muted,'mm')
 
         rect((16,317,304,456),16,'#ffffff', '#e7ebe2')
-        label = '听到的话' if state == 'listening' else '字幕'
+        label = '听到的话' if state == 'listening' else '这次想说'
         text(32,330,label,11,muted)
         if subtitle:
             for index, caption_line in enumerate(pages[page]):
                 text(32,350+index*25,caption_line,20,ink)
         else:
             text(32,369,'这里会显示听写或回复',17,'#9ba69d')
-        text(20,465,'TraceSoul',10,'#9ba69d')
-        text(300,465,f'{page+1} / {len(pages)}',10,'#9ba69d','rt')
+        text(20,465,'点字幕左右两侧翻页' if len(pages)>1 else 'TraceSoul · 陪伴终端',10,'#9ba69d')
+        text(300,465,'完整回复见网页' if truncated else f'{page+1} / {len(pages)}',10,'#9ba69d','rt')
         return image.resize((WIDTH,HEIGHT),Image.Resampling.LANCZOS), {
             'state':state, 'page':page, 'page_count':len(pages), 'width':WIDTH, 'height':HEIGHT,
             'font_size':20, 'caption_lines':pages[page], 'preview_only':True, 'artwork':artwork is not None,
+            'caption_preview':truncated,
         }

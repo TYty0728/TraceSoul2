@@ -26,6 +26,9 @@ namespace TraceSoul2.Migrate
             public Dictionary<string, List<string>> EntrySources = new();
             public ReplayPrompts.DayEventOutputData Output;
             public string ContextStamp;
+            public List<DeepSeekMessageData> Messages;
+            public List<EventIndexRecord> Candidates;
+            public List<LifeTagRecord> Tags;
             public List<string> IndexIds = new();
             public List<string> EntryIds = new();
             public string RecordsStamp;
@@ -79,9 +82,19 @@ namespace TraceSoul2.Migrate
                         x.MemoryVisibility, x.CreatedUnixMs, x.SnapshotJson }) });
         }
 
-        private static string ObservationContextStamp(MigrationContext context)
-            => Digest(new { Tags = context.Store.GetActiveLifeTags().OrderBy(x => x.Id, StringComparer.Ordinal),
-                Indexes = context.Migration.GetActiveEventIndexes().OrderBy(x => x.Id, StringComparer.Ordinal) });
+        private static string ObservationContextStamp(MigrationContext context, ObservationProgress snapshot = null)
+        {
+            if (snapshot?.Tags == null || snapshot.Candidates == null)
+                return Digest(new { Tags = context.Store.GetActiveLifeTags().OrderBy(x => x.Id, StringComparer.Ordinal),
+                    Indexes = context.Migration.GetActiveEventIndexes().OrderBy(x => x.Id, StringComparer.Ordinal) });
+            var tagIds = snapshot.Tags.Select(x => x.Id).ToHashSet(StringComparer.Ordinal);
+            var indexIds = snapshot.Candidates.Select(x => x.Id).ToHashSet(StringComparer.Ordinal);
+            return Digest(new {
+                Tags = context.Store.GetActiveLifeTags().Where(x => tagIds.Contains(x.Id)).OrderBy(x => x.Id, StringComparer.Ordinal)
+                    .Select(x => new { x.Id, x.Label, x.Definition, x.Status, x.Origin, x.SourceMomentId }),
+                Indexes = context.Migration.GetActiveEventIndexes().Where(x => indexIds.Contains(x.Id)).OrderBy(x => x.Id, StringComparer.Ordinal)
+                    .Select(x => new { x.Id, x.TagIds, x.EventSummary, x.TimeLabel, x.DayKindLabel, x.TimeUnixMs, x.PlaceLabel, x.PersonLabel, x.MoodLabel, x.FirstMomentId, x.Status }) });
+        }
 
         private static string ObservationRecordsStamp(IEnumerable<EventIndexRecord> indexes,
             IEnumerable<EventEntryRecord> entries)
@@ -137,20 +150,6 @@ namespace TraceSoul2.Migrate
             return true;
         }
 
-        private static Dictionary<string, string> EventProseParts(ReplayPrompts.DayEventOutputData output)
-        {
-            var result = new Dictionary<string, string>(StringComparer.Ordinal);
-            for (var i = 0; i < (output.event_writes?.Count ?? 0); i++)
-            {
-                if (output.event_writes[i] == null) continue;
-                result["write:" + i + ":event"] = output.event_writes[i].event_summary;
-                result["write:" + i + ":entry"] = output.event_writes[i].entry_summary;
-            }
-            for (var i = 0; i < (output.event_appends?.Count ?? 0); i++)
-                if (output.event_appends[i] != null) result["append:" + i] = output.event_appends[i].entry_summary;
-            return result;
-        }
-
         private static async Task<ReplayPrompts.DayEventOutputData> CompleteObservationAsync(
             MigrationContext context, ILlmClient llm, CoreProgressSource source, string key,
             ObservationProgress state, List<DeepSeekMessageData> messages,
@@ -170,45 +169,32 @@ namespace TraceSoul2.Migrate
             EnsureCoreProgress(context, source);
             // The validated structure and all good fields survive a failed prose repair.
             context.Store.SavePluginDocument(CoreProgressDocuments, key, TraceJson.ToJson(state));
-            var targets = EventProseParts(state.Output).Where(x => (x.Value?.Trim().Length ?? 0) > 80).ToList();
-            if (targets.Count > 0)
-            {
-                var batch = chunk ?? context.Store.GetEvidenceMoments(source.MomentIds);
-                var targetSources = targets.Select(x => {
-                    var parts = x.Key.Split(':');
-                    var ids = parts[0] == "append" ? state.Output.event_appends[int.Parse(parts[1])].source_moment_ids
-                        : state.Output.event_writes[int.Parse(parts[1])].source_moment_ids;
-                    var focus = parts[0] == "append" ? state.Output.event_appends[int.Parse(parts[1])].event_focus
-                        : state.Output.event_writes[int.Parse(parts[1])].event_focus;
-                    return new { id = x.Key, focus, source_ids = (state.SourceVersion == 0 ? batch : ResolveEventSources(ids, batch))
-                        .Select(m => m.Id).ToList() };
-                }).ToList();
-                var needed = targetSources.SelectMany(x => x.source_ids).ToHashSet(StringComparer.Ordinal);
-                var raw = await llm.CompleteJsonAsync(new List<DeepSeekMessageData> {
-                    new("system", "【事件短句定向重写】只为所列id根据对应原句重新写一句话，每条目标40字、最多80字。write中的event写这一件事，entry或append写本次事实与新进展，不罗列全部细节。保留明确发生的事实，不补造人物、动作或结果。其他字段与来源由程序保留。每个id恰好一项，只输出JSON {\"items\":[{\"id\":\"所给id\",\"body\":\"完整短句\"}]}。"),
-                    new("user", TraceJson.ToJson(new { targets = targetSources,
-                        sources = batch.Where(x => needed.Contains(x.Id)).Select(x => new { x.Id, x.Role, x.Content }) }))
-                }, CancellationToken.None);
-                var repair = DeepSeekStructuredOutputLogic.Read<ProseRepairs>(raw);
-                if (repair?.items == null || repair.items.Count != targets.Count ||
-                    repair.items.Any(x => x == null || !targets.Any(t => t.Key == x.id) || string.IsNullOrWhiteSpace(x.body)) ||
-                    repair.items.Select(x => x.id).Distinct().Count() != targets.Count)
-                    throw new InvalidOperationException("短句修复须完整对应待整理字段；已有合格内容已保存，恢复后只续做短句。");
-                foreach (var item in repair.items)
-                {
-                    var parts = item.id.Split(':');
-                    if (parts[0] == "append") state.Output.event_appends[int.Parse(parts[1])].entry_summary = item.body.Trim();
-                    else if (parts[2] == "event") state.Output.event_writes[int.Parse(parts[1])].event_summary = item.body.Trim();
-                    else state.Output.event_writes[int.Parse(parts[1])].entry_summary = item.body.Trim();
-                }
-                EnsureCoreProgress(context, source);
-                context.Store.SavePluginDocument(CoreProgressDocuments, key, TraceJson.ToJson(state));
-            }
-            var error = EventProseError(state.Output);
-            if (error != null) throw new InvalidOperationException(error + " 已保存事件草稿，恢复后只续做未合格短句。");
+            state.Output = await ReviewWorkLogic.CompleteAsync<ReplayPrompts.DayEventOutputData>(context.Store,
+                key + ":prose", llm, messages, x => ObservationStructureError(x, state.SourceVersion == 0 ? null : chunk, candidates),
+                ObservationParts, CancellationToken.None, state.Output);
+            EnsureCoreProgress(context, source);
+            context.Store.SavePluginDocument(CoreProgressDocuments, key, TraceJson.ToJson(state));
             return state.Output;
         }
 
+        private static IEnumerable<ReviewWorkLogic.TextPart> ObservationParts(ReplayPrompts.DayEventOutputData output)
+        {
+            var i = 0;
+            foreach (var item in output.event_writes ?? new())
+            {
+                var path = "event_writes[" + i++ + "].";
+                yield return new(path + "event_summary", 120, () => item.event_summary, v => item.event_summary = v);
+                yield return new(path + "entry_summary", 120, () => item.entry_summary, v => item.entry_summary = v);
+                yield return new(path + "event_focus", 80, () => item.event_focus, v => item.event_focus = v);
+            }
+            i = 0;
+            foreach (var item in output.event_appends ?? new())
+            {
+                var path = "event_appends[" + i++ + "].";
+                yield return new(path + "entry_summary", 120, () => item.entry_summary, v => item.entry_summary = v);
+                yield return new(path + "event_focus", 80, () => item.event_focus, v => item.event_focus = v);
+            }
+        }
         private static List<MomentRecord> ResolveEventSources(List<string> ids, List<MomentRecord> chunk)
         {
             if (ids == null || ids.Count == 0 || ids.Distinct().Count() != ids.Count ||
@@ -229,7 +215,7 @@ namespace TraceSoul2.Migrate
             {
                 if (item == null || string.IsNullOrWhiteSpace(item.event_summary) || string.IsNullOrWhiteSpace(item.entry_summary))
                     return "event_writes每项须有非空event_summary和entry_summary。";
-                if (string.IsNullOrWhiteSpace(item.event_focus) || item.event_focus.Trim().Length > 40)
+                if (string.IsNullOrWhiteSpace(item.event_focus))
                     return "event_focus须有1～40字，点明这一件事，不能逐条铺写细节。";
                 try { ResolveEventSources(item.source_moment_ids, chunk); } catch (InvalidOperationException ex) { return ex.Message; }
                 if (!seen.Add("new:" + item.entry_summary.Trim())) return "同一批中重复条目须合成一项，不重复记述。";
@@ -238,7 +224,7 @@ namespace TraceSoul2.Migrate
             {
                 if (item == null || string.IsNullOrWhiteSpace(item.entry_summary) ||
                     !(candidates ?? new()).Any(x => x.Id == item.index_alias)) return "event_appends必须引用所给已有索引且写出本次进展。";
-                if (string.IsNullOrWhiteSpace(item.event_focus) || item.event_focus.Trim().Length > 40)
+                if (string.IsNullOrWhiteSpace(item.event_focus))
                     return "event_focus须有1～40字，点明本次新增事实。";
                 try { ResolveEventSources(item.source_moment_ids, chunk); } catch (InvalidOperationException ex) { return ex.Message; }
                 if (!seen.Add(item.index_alias + ":" + item.entry_summary.Trim())) return "同一索引的同一进展只记一次。";
@@ -268,15 +254,12 @@ namespace TraceSoul2.Migrate
                 }
                 LlmContentRejectionLogic.CheckRefusal(draft.Body);
                 if (draft.Body.Length <= 200) return draft.Body;
-                // Regenerate from the selected original sources. Never feed the long draft back for polishing.
-                var rewrite = new List<DeepSeekMessageData>(messages) {
-                    new("user", "【单件细节重新取舍】这件事仅保留一两个有辨识度的细节，目标80字、最多200字。只按所给原句重新写，不补写旧经过。输出{\"detail\":\"完整短段\"}。") };
-                var raw = await llm.CompleteJsonAsync(rewrite, token);
-                LlmContentRejectionLogic.CheckRefusal(raw);
-                var repaired = DeepSeekStructuredOutputLogic.Read<ReplayPrompts.DetailOutputData>(raw);
-                LlmContentRejectionLogic.CheckRefusal(repaired?.detail);
-                if (string.IsNullOrWhiteSpace(repaired?.detail) || repaired.detail.Trim().Length > 200)
-                    throw new InvalidOperationException("细节仍未形成200字以内的完整正文；已保存草稿，恢复只续做这一项，不截断。");
+                var repaired = await ReviewWorkLogic.CompleteAsync<ReplayPrompts.DetailOutputData>(context.Store,
+                    key + ":prose:" + stamp, llm, messages,
+                    x => string.IsNullOrWhiteSpace(x?.detail) ? "detail必须为完整正文。" : null,
+                    x => new[] { new ReviewWorkLogic.TextPart("detail", 200, () => x.detail, v => x.detail = v) }, token,
+                    new ReplayPrompts.DetailOutputData { detail = draft.Body });
+                LlmContentRejectionLogic.CheckRefusal(repaired.detail);
                 draft.Body = repaired.detail.Trim();
                 context.Migration.SaveProgressDocument(CoreProgressDocuments, draftKey, TraceJson.ToJson(draft));
                 return draft.Body;

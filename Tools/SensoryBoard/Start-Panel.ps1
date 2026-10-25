@@ -3,6 +3,7 @@ param(
     [string]$Python = 'python',
     [string]$Port = 'COM3',
     [int]$HttpPort = 5089,
+    [ValidateRange(0,10)][int]$ListenCountdownSeconds = 0,
     [switch]$OpenBrowser
 )
 $ErrorActionPreference = 'Stop'
@@ -27,6 +28,7 @@ $runtimePath = (Resolve-Path -LiteralPath $RuntimeDirectory).Path
 $scriptPath = Join-Path $PSScriptRoot 'bridge.py'
 $bridgeArguments = @('-u', ('"{0}"' -f $scriptPath), '--port', $Port, '--http-port', $HttpPort)
 $bridgeArguments += @('--connection-config', ('"{0}"' -f (Join-Path $runtimePath 'wifi-client.json')))
+$bridgeArguments += @('--listen-countdown-seconds', $ListenCountdownSeconds)
 $asrDirectory = Join-Path $runtimePath 'asr/sensevoice-int8'
 if (Test-Path -LiteralPath (Join-Path $asrDirectory 'ready.json')) {
     $bridgeArguments += @('--asr-model-directory', ('"{0}"' -f $asrDirectory))

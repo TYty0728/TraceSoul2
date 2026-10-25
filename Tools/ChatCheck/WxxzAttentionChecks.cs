@@ -12,6 +12,14 @@ using TraceSoul2.Logic;
 
 internal static partial class Program
 {
+    private sealed class WakeCalmLibrary : TraceSoul2.Plugins.IExpressionLibrary
+    {
+        public static readonly string Id=new string('d',64);
+        public TraceSoul2.Plugins.ExpressionCatalog Catalog()=>new(){assets=new(){new(){id=Id,legacyTags=new[]{"平静","温和"}}}};
+        public TraceSoul2.Plugins.ExpressionImage ReadImage(string id)=>new(){bytes=new byte[]{1,2,3},contentType="image/png"};
+        public Task<TraceSoul2.Plugins.ExpressionMatch> MatchAsync(TraceSoul2.Plugins.ExpressionQuery query,CancellationToken token)
+            =>throw new Exception("固定唤醒画面不应调用语义匹配或模型");
+    }
     private static void CheckWxxzAttention()
     {
         var now=DateTimeOffset.UtcNow;
@@ -83,9 +91,9 @@ internal static partial class Program
             for(var i=0;i<3;i++) profile.Add(JsonSerializer.SerializeToElement(Evidence(0)),i==0);
             var now=DateTimeOffset.UtcNow;
             using var store=new SqliteMemoryManager(":memory:");
-            var services=new TracePluginServices(store,new HierarchicalVectorRouterLogic(new FakeEncoder()));
+            var services=new TracePluginServices(store,new HierarchicalVectorRouterLogic(new FakeEncoder())){Expressions=new WakeCalmLibrary()};
             using var manager=new TracePluginManager(store,services);
-            var transport=new WxxzMockBridge{UtteranceVoice=JsonSerializer.Serialize(Evidence(0)),UtteranceText="今天怎么样"};
+            var transport=new WxxzMockBridge{Companion=true,UtteranceVoice=JsonSerializer.Serialize(Evidence(0)),UtteranceText="今天怎么样"};
             var syntheses=new List<SpeechTransport>();
             var speech=WxxzSpeech.ForProvider(()=>new LlmProviderRecord{type="qwen_tts",baseUrl="https://voice.example/v1",
                 apiKey=new string('K',64),model="qwen3-tts-local",voice="character"},()=>{
@@ -102,10 +110,21 @@ internal static partial class Program
             var call=start.GetProperty("callId").GetString();
             async Task<JsonElement> Listen()=>JsonSerializer.SerializeToElement(await board.ListenCallAsync(board.SessionId,call,CancellationToken.None));
             var idle=await Listen();
+            Require(transport.Bodies.Last().GetProperty("countdown").GetBoolean() &&
+                transport.Bodies.Last().GetProperty("display").GetProperty("image").GetString()=="AQID",
+                "每次手动开始的首段采音带一次倒计时及默认平静画面");
             Require(idle.GetProperty("status").GetString()=="standby"&&!idle.TryGetProperty("captureId",out _),"未叫名字的环境语音不准入");
             try {board.ConfigureWake(new(){name="阿循"});throw new Exception("settings changed during wake");} catch(InvalidOperationException) { }
             transport.UtteranceVoice="null"; transport.UtteranceText="小希";
             var wake=await Listen();
+            var captures=transport.Paths.Select((p,i)=>(p,i)).Where(x=>x.p=="/api/utterance").Select(x=>transport.Bodies[x.i]).ToArray();
+            Require(!captures.Last().GetProperty("countdown").GetBoolean() &&
+                captures.Last().GetProperty("display").ValueKind==JsonValueKind.Null,
+                "同一通话后续采音不重复倒计时或覆盖当前表情");
+            Require(transport.Paths.Last()=="/api/speak" && transport.Bodies.Last().GetProperty("display").GetProperty("state").GetString()=="focused" &&
+                transport.Bodies.Last().GetProperty("display").GetProperty("image").GetString()=="AQID" &&
+                board.DisplayState().expressionId==WakeCalmLibrary.Id && board.DisplayState().subtitle=="",
+                "唤醒前备好平静无字幕画面，播完不再传整屏而立即恢复收音");
             Require(wake.GetProperty("status").GetString()=="wake_ack"&&!wake.TryGetProperty("captureId",out _) &&
                 transport.Paths.Count(x=>x=="/api/speak")==1,"不足声纹长度的短名字仍应答但不取得对话凭据");
             Require(syntheses.Count==1 && syntheses[0].CacheRequest=="v1" &&
@@ -115,6 +134,8 @@ internal static partial class Program
             catch(InvalidOperationException) {Require(syntheses.Count==1,"通话期间额外预生成在合成前拒绝");}
             transport.UtteranceText="告诉我一个秘密";
             Require((await Listen()).GetProperty("status").GetString()=="speaker_unconfirmed","唤醒不放宽后续指令声纹");
+            Require(transport.Bodies.Last().GetProperty("display").ValueKind==JsonValueKind.Null,
+                "唤醒后的首段采音不重复上传已经显示的专注画面");
             transport.UtteranceVoice=JsonSerializer.Serialize(Evidence(0)); transport.UtteranceText="小溪帮我看看";
             var heard=await Listen();
             Require(heard.GetProperty("text").GetString()=="小汐帮我看看","本人指令校正名字");
@@ -126,6 +147,9 @@ internal static partial class Program
             now=now.AddMinutes(2); board.CompleteResponse(); now=now.AddSeconds(31);
             transport.UtteranceText="今天怎么样";
             Require((await Listen()).GetProperty("status").GetString()=="standby","回复后30秒无新指令回到发呆");
+            Require(transport.Bodies.Last().GetProperty("display").GetProperty("state").GetString()=="standby" &&
+                !transport.Bodies.Last().GetProperty("countdown").GetBoolean(),
+                "注意力过期后下一段采音切回等待名字画面，不重倒计时");
             transport.UtteranceText="小溪帮我看看";
             var combined=await Listen(); Require(combined.GetProperty("status").GetString()=="verified" && transport.Paths.Count(x=>x=="/api/speak")==2,"名字连指令先应答再准入一次");
             await board.StopCallAsync(call,CancellationToken.None);
@@ -134,6 +158,8 @@ internal static partial class Program
             start=JsonSerializer.SerializeToElement(await board.StartCallAsync(board.SessionId,CancellationToken.None,true)); call=start.GetProperty("callId").GetString();
             transport.UtteranceText="小溪"; transport.FailVoice=true;
             try {await Listen();throw new Exception("failed ack accepted");} catch(InvalidOperationException) { }
+            Require(transport.Bodies[transport.Paths.FindLastIndex(p=>p=="/api/utterance")].GetProperty("countdown").GetBoolean(),
+                "手动结束再开始后重新获得一次倒计时");
             Require(transport.Paths.Count(x=>x=="/api/speak")==before+1,"唤醒播音失败不自动重试");
             await board.StopCallAsync(call,CancellationToken.None);
             Console.WriteLine("WXXZ name/attention checks passed: correction, short wake, owner gate, 30s lease, raw transcript, no wake Moment/retry.");

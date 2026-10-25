@@ -9,3 +9,6 @@ void native_ui_capture(bool recording,unsigned notice=0);
 void native_ui_speech();
 void native_ui_command();
 void native_ui_status(char *out,size_t size);
+esp_err_t native_ui_scene(const uint8_t *data,size_t size,bool artwork);
+void native_ui_phase(unsigned phase,unsigned focus_ms);
+void native_ui_countdown(unsigned seconds);

@@ -2,6 +2,7 @@ import json
 import threading
 import unittest
 import urllib.request
+from unittest.mock import patch
 from http.server import ThreadingHTTPServer
 from types import SimpleNamespace
 import bridge
@@ -89,6 +90,7 @@ class StreamChecks(unittest.TestCase):
         import concurrent.futures
         entered=threading.Event(); finish=threading.Event()
         class FakeBoard:
+            def ui(self,*args):return {'protocol':1,'status':'ready'}
             def record_stream(self, duration, event, on_progress):
                 assert duration == 8000
                 on_progress(640); entered.set()
@@ -158,6 +160,7 @@ class StreamChecks(unittest.TestCase):
 
     def test_physical_stop_returns_cancelled_http_without_asr_or_speaker(self):
         board = bridge.Board('fake'); board.connection = DeviceErrorLink()
+        board.ui=lambda *args: {'protocol':1,'status':'ready'}
         class UnusedModels:
             def transcribe(self, *_): raise AssertionError('Stopped audio reached ASR')
             def evidence(self, *_): raise AssertionError('Stopped audio reached speaker model')
@@ -177,6 +180,7 @@ class StreamChecks(unittest.TestCase):
 
     def test_stop_before_register_is_not_lost(self):
         class FakeBoard:
+            def ui(self,*args):return {'protocol':1,'status':'ready'}
             def listen(self, utterance, event, notice=''):
                 assert event.is_set()
                 utterance.reason = 'cancelled'
@@ -199,10 +203,44 @@ class StreamChecks(unittest.TestCase):
             self.assertIsNone(result['voice'])
         finally: server.shutdown(); server.server_close(); worker.join(2)
 
+    def test_countdown_only_on_initial_capture_then_keeps_companion_frame(self):
+        frames=[]; captures=[]; updates=[]
+        class FakeBoard:
+            def ui(self,*args):updates.append(args);return {'protocol':1,'status':'ready'}
+            def transact(self, op, data, **fields):
+                frames.append((data,fields));return {'protocol':1,'status':'done'}
+            def listen(self, utterance, event, notice=''):
+                captures.append(True);utterance.reason='no_speech'
+                return {'protocol':1,'status':'done'}
+        handler=bridge.make_handler(FakeBoard(),'unused',object(),SimpleNamespace(create=Utterance),object(),1)
+        server=ThreadingHTTPServer(('127.0.0.1',0),handler)
+        worker=threading.Thread(target=server.serve_forever,daemon=True);worker.start()
+        def post(body):
+            request=urllib.request.Request(f'http://127.0.0.1:{server.server_port}/api/utterance',
+                data=json.dumps(dict(listen_id='d'*32,**body)).encode(),headers={'Content-Type':'application/json'})
+            with urllib.request.build_opener(urllib.request.ProxyHandler({})).open(request,timeout=4) as response:
+                return json.load(response)
+        try:
+            with patch.object(bridge,'text_frame',side_effect=lambda text,font:text), \
+                 patch.object(bridge,'rgb565',return_value=bytes(320*480*2)), \
+                 patch.object(bridge.CompanionDisplay,'render',return_value=('calm-image',{'artwork':True,'page_count':1})):
+                post({'countdown':True,'display':{'state':'standby'}})
+                self.assertEqual(len(frames),1)
+                self.assertTrue(frames[-1][0].startswith(b'SCN1'))
+                self.assertEqual(updates[0],('standby',0,1))
+                post({'countdown':False,'display':None})
+                post({})
+                self.assertEqual(len(frames),1,'silence retries must not overwrite the image or count down')
+                self.assertEqual(len(captures),3)
+                self.assertEqual([u[2] for u in updates],[1,0,0])
+        finally: server.shutdown();server.server_close();worker.join(2)
+
     def test_short_name_reaches_asr_without_speaker_evidence(self):
         class FakeBoard:
+            def ui(self,*args):return {'protocol':1,'status':'ready'}
             def listen(self, utterance, event, notice=''):
                 utterance.reason='speech_end'; utterance.pcm=b'\x10\0'*8000
+                utterance.recognition_pcm=b'\x20\0'*17600
                 utterance.started_at=20; utterance.frames=65
                 return {'protocol':1,'status':'done'}
         class FakeAsr:
@@ -210,7 +248,9 @@ class StreamChecks(unittest.TestCase):
                 self.assertion=(len(pcm),rate)
                 return {'text':'小溪','status':'transcribed'}
         class FakeSpeaker:
-            def evidence(self, pcm): return None
+            def evidence(self, pcm):
+                assert len(pcm)==16000
+                return None
         asr=FakeAsr()
         handler=bridge.make_handler(FakeBoard(),'unused',asr,SimpleNamespace(create=Utterance),FakeSpeaker())
         server=ThreadingHTTPServer(('127.0.0.1',0),handler)
@@ -221,6 +261,6 @@ class StreamChecks(unittest.TestCase):
             with urllib.request.build_opener(urllib.request.ProxyHandler({})).open(request,timeout=3) as response:
                 result=json.load(response)
             self.assertEqual(result['text'],'小溪'); self.assertIsNone(result['voice'])
-            self.assertEqual(asr.assertion,(16000,16000))
+            self.assertEqual(asr.assertion,(35200,16000))
             self.assertEqual(result['started_ms'],640); self.assertEqual(result['recorded_ms'],2080)
         finally: server.shutdown(); server.server_close(); worker.join(2)

@@ -375,7 +375,7 @@ namespace TraceSoul2.Host
                 if (new[] { "auth-keys", "archives", "backups", "updates", "diagnostics", "dev", ".path-repair-configs" }
                     .Any(folder => Path.GetFullPath(entry).Equals(Path.Combine(home.Root, folder), PathComparison))) continue;
                 if (name.Contains(".tracesoul-moved-") || name.Contains(".tracesoul-stage-") || name.Contains(".tracesoul-empty-") ||
-                    name == ".git" || name == "__pycache__" || name == "debug-active" || name.StartsWith("debug-", StringComparison.OrdinalIgnoreCase) && Directory.Exists(entry)) continue;
+                    name == ".git" || name == "__pycache__" || name == "review-execution.lock" || name == "debug-active" || name.StartsWith("debug-", StringComparison.OrdinalIgnoreCase) && Directory.Exists(entry)) continue;
                 if (Directory.Exists(entry)) CopyTree(entry, prefix + "/" + name, target, manifest, token);
                 else if (!name.EndsWith("-wal") && !name.EndsWith("-shm") && !name.EndsWith("-journal") && !name.EndsWith(".tmp"))
                     CopyFile(entry, prefix + "/" + name, target, manifest, token);

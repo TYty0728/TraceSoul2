@@ -32,10 +32,13 @@ namespace TraceSoul2.Migrate
             foreach (var slot in IdentityReorganizationLogic.Slots)
             {
                 if (emptyDay) break;
-                var state = await IdentityEvolutionLogic.EvaluateAsync(context.Store, MigrationContext.ConversationId,
-                    slot, day, llm, CancellationToken.None);
-                if (state?.pending == true) pending.Add(slot);
-                else IdentityEvolutionLogic.Commit(context.Store, MigrationContext.ConversationId, slot, state);
+                context.Migration.SetReviewStage("身份：" + slot);
+                try {
+                    var state = await IdentityEvolutionLogic.EvaluateAsync(context.Store, MigrationContext.ConversationId,
+                        slot, day, llm, CancellationToken.None);
+                    if (state?.pending == true) pending.Add(slot);
+                    else IdentityEvolutionLogic.Commit(context.Store, MigrationContext.ConversationId, slot, state);
+                } catch (ReviewProsePendingException) { pending.Add(slot); }
             }
             var key = day + ":inner";
             var inner = PuzzleViewLogic.Read<AutomaticInnerCheckpoint>(context.Store.LoadPluginDocument(IdentityEvolutionLogic.StoreId, key));
@@ -54,10 +57,15 @@ namespace TraceSoul2.Migrate
                         dayReview = context.Store.GetRuntimeDaySummaries(MigrationContext.ConversationId, day)
                             .Where(x => x.MemoryVisibility != "public" && x.ContextConversationId == MigrationContext.ConversationId).Select(x => x.Summary),
                         current = new { mood = runtime.Mood, sharedScene = runtime.OngoingActivity } })) };
-                var output = await DeepSeekStructuredOutputLogic.CompleteAsync<ReplayPrompts.DayCardReviewOutputData>(llm,
-                    messages, null, "日终内心必须明确返回cards空数组。", CancellationToken.None,
-                    validationError: x => x?.cards == null || x.cards.Count != 0 ? "cards必须明确为[]；本阶段只写内心。" : DayCardReviewContract.InnerStateError(x),
-                    includeInvalidResponse: false);
+                ReplayPrompts.DayCardReviewOutputData output;
+                try {
+                    output = await ReviewWorkLogic.CompleteAsync<ReplayPrompts.DayCardReviewOutputData>(context.Store,
+                        key + ":" + revision, llm, messages,
+                        x => x?.cards == null || x.cards.Count != 0 ? "cards必须明确为[]；本阶段只写内心。" : DayCardReviewContract.InnerStateError(x, false), InnerParts);
+                } catch (ReviewProsePendingException) {
+                    pending.Add("inner_narrative");
+                    return new ReplayPrompts.DayCardReviewOutputData { cards = new(), PendingParts = pending };
+                }
                 output.SubjectRevision = revision;
                 inner = new AutomaticInnerCheckpoint { Output = output, SubjectRevision = revision };
                 context.Store.SavePluginDocument(IdentityEvolutionLogic.StoreId, key, TraceJson.ToJson(inner));
@@ -74,6 +82,16 @@ namespace TraceSoul2.Migrate
             context.Store.SavePluginDocument(IdentityEvolutionLogic.StoreId, key, TraceJson.ToJson(inner));
             result.PendingParts = pending.Concat(result.PendingParts).Distinct().ToList();
             return result;
+        }
+        private static IEnumerable<ReviewWorkLogic.TextPart> InnerParts(ReplayPrompts.DayCardReviewOutputData x)
+        {
+            yield return new("inner_narrative", 120, () => x.inner_narrative, v => x.inner_narrative = v);
+            yield return new("inner_mood", 80, () => x.inner_mood, v => x.inner_mood = v);
+            yield return new("inner_relationship_lens", 200, () => x.inner_relationship_lens, v => x.inner_relationship_lens = v);
+            yield return new("inner_ongoing_activity", 120, () => x.inner_ongoing_activity, v => x.inner_ongoing_activity = v);
+            var i = 0;
+            foreach (var item in x.inner_attention)
+                yield return new("inner_attention[" + i++ + "].content", 160, () => item.content, v => item.content = v);
         }
         private static void CompleteAutomaticInner(MigrationContext context, string day, ReplayPrompts.DayCardReviewOutputData output)
         {

@@ -14,10 +14,13 @@ using TraceSoul2.Util;
 namespace TraceSoul2.Logic
 {
     /// <summary>来源与结构已通过，但派生阅读正文尚未满足预算；不得当作完成。</summary>
-    public sealed class ReviewProsePendingException : InvalidOperationException
+    public class ReviewProsePendingException : InvalidOperationException
     {
         public ReviewProsePendingException(string message) : base(message) { }
     }
+
+    public sealed class ReviewDependencyPendingException : ReviewProsePendingException
+    { public ReviewDependencyPendingException(string message) : base(message) { } }
 
     public static class DeepSeekStructuredOutputLogic
     {

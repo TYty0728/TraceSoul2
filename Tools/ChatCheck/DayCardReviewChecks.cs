@@ -235,6 +235,7 @@ internal static partial class Program
         string Reply(List<DeepSeekMessageData> messages)
         {
             var system = messages[0].content; stages.Add(system);
+            if (messages.Last().content.Contains("【单字段篇幅整理】")) return TraceJson.ToJson(new { text = longRelation ? new string('长', 745) : "当前关系认识及必要条件" });
             using var json = JsonDocument.Parse(messages.Last().content);
             var input = json.RootElement;
             if (system.Contains("自动身份·认识归并"))
@@ -271,7 +272,10 @@ internal static partial class Program
             Run(day, new SelectionProbeLlm { Reply = Reply });
             var habit = store.LoadIdentityCards("tracesoul2").Single(x => x.Slot == "expression_habit");
             Require(DailyBuildHistory.ReadStates(history).Single().Status == "pending" && habit.Origin == "derived", "自动身份逐项提交，超长只保留本项pending");
-            context.Dispose(); Open(); longRelation = false; stages.Clear();
+            context.Dispose(); Open();
+            using (var db = new SQLite.SQLiteConnection(path))
+                db.Execute("UPDATE plugin_documents SET Json=json_set(Json, '$.NextAttemptUnixMs', 0) WHERE PluginId=?", ReviewWorkLogic.StoreId);
+            longRelation = false; stages.Clear();
             Run(day, new SelectionProbeLlm { Reply = Reply });
             Require(stages.Count == 1 && stages.Single().Contains("当前认识成稿") && DailyBuildHistory.ReadStates(history).Single().Status == "done" &&
                 store.LoadIdentityCards("tracesoul2").Single(x => x.Slot == "expression_habit").Revision == habit.Revision,

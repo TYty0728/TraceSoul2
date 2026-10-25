@@ -63,13 +63,13 @@ internal static partial class Program
                     sequence=body.GetProperty("ack").GetInt64(),action="",local_mic_paused=LocalMicPaused}}))});
             }
             var fail = path == "/api/text" ? FailText : path == "/api/speak" && FailVoice;
-            var receipt = "{\"protocol\":1,\"firmware\":"+System.Text.Json.JsonSerializer.Serialize(Firmware)+",\"local_mic_paused\":"+(LocalMicPaused?"true":"false")+",\"status\":\"" + (path == "/api/status" ? "ready" : "done") + "\"}";
+            var receipt = "{\"ui_pages\":1,\"protocol\":1,\"firmware\":"+System.Text.Json.JsonSerializer.Serialize(Firmware)+",\"local_mic_paused\":"+(LocalMicPaused?"true":"false")+",\"status\":\"" + (path == "/api/status" ? "ready" : "done") + "\"}";
             if (path == "/api/listen")
                 return Task.FromResult(new HttpResponseMessage(HttpStatusCode.OK) { Content = new StringContent("{\"ok\":true,\"receipt\":" + receipt + ",\"text\":\"本地听写样本\"}") });
             return Task.FromResult(new HttpResponseMessage(fail ? HttpStatusCode.ServiceUnavailable : HttpStatusCode.OK)
             { Content = new StringContent("{\"ok\":true," + (path == "/api/speak" ? "\"receipts\":[" + receipt + "]" : "\"receipt\":" + receipt) +
                 (Companion&&path=="/api/status"?",\"display_version\":1":"")+
-                (Companion&&path=="/api/speak"&&!MissingDisplayReceipt?",\"display_complete\":true,\"display_pages\":1,\"display_receipts\":["+receipt+"]":"")+"}", Encoding.UTF8, "application/json") });
+                (Companion&&path=="/api/speak"&&!MissingDisplayReceipt?",\"display_complete\":true,\"display_mode\":\"cached_pages\",\"caption_pages\":1,\"display_pages\":1,\"display_receipts\":["+receipt+"]":"")+"}", Encoding.UTF8, "application/json") });
         }
     }
     private static async Task CheckSourceReplyAndSharedLifeAsync()
@@ -321,7 +321,8 @@ internal static partial class Program
         System.IO.File.WriteAllText(remotePath,System.Text.Json.JsonSerializer.Serialize(new {
             api_url="https://speech.example.com/v1/audio/speech",api_key="legacy-test-token",model="voice-2-hd",voice_id="test-voice" }));
         SpeechTransport transport=null;
-        var client=new WxxzSpeech(settingsPath,remotePath,()=>transport=new SpeechTransport());
+        var requests=0;
+        var client=new WxxzSpeech(settingsPath,remotePath,()=>{requests++;return transport=new SpeechTransport();});
         try
         {
             Require(await client.SynthesizeAsync("系统测试",CancellationToken.None)==null && transport==null,"原系统音色不调用远端");
@@ -333,7 +334,48 @@ internal static partial class Program
                 !System.IO.File.ReadAllText(settingsPath).Contains("legacy-test-token"),"公开状态及WXXZ设置均不复制凭据");
             Require(new WxxzSpeech(settingsPath,remotePath).Description=="远端角色语音","音色选择独立保存并重载");
             var remoteWake=await client.SynthesizeWakeAsync("我在",CancellationToken.None);
-            Require(remoteWake.Cache=="unsupported" && transport.CacheRequest==null,"远端固定应答不请求缓存或提前消耗远端额度");
+            Require(client.SupportsWakeCache && remoteWake.Cache=="miss" && transport.CacheRequest==null,
+                "远端唤醒由Host缓存，不向供应商发送本地千问专用缓存头");
+            var calls=requests;
+            remoteWake.Audio[0]=0; // A caller cannot corrupt the stored clip.
+            var remoteHit=await client.SynthesizeWakeAsync("我在",CancellationToken.None);
+            Require(remoteHit.Cache=="hit" && requests==calls && remoteHit.Audio[0]==(byte)'R' && remoteHit.SynthesisMs==0,
+                "预生成后命中不再次调用供应商，缓存音频与调用者数组隔离");
+            await client.SynthesizeAsync("我在",CancellationToken.None);
+            Require(requests==calls+1,"普通回复不复用唤醒缓存");
+            calls=requests;
+            var concurrent=await Task.WhenAll(Enumerable.Range(0,4).Select(_=>client.SynthesizeWakeAsync("诶，我在。",CancellationToken.None)));
+            Require(requests==calls+1 && concurrent.Count(x=>x.Cache=="miss")==1 && concurrent.Count(x=>x.Cache=="hit")==3,
+                "相同唤醒文字并发只合成一次，新文字不能误用旧应答");
+            client.Save(new WxxzSpeech.Settings {engine="remote",remoteVoice="changed-voice"});
+            Require((await client.SynthesizeWakeAsync("诶，我在。",CancellationToken.None)).Cache=="miss" && transport.Voice=="changed-voice",
+                "改变播放音色后重新生成");
+            var originalRemote=System.IO.File.ReadAllText(remotePath);
+            client.Save(new WxxzSpeech.Settings {engine="remote"});
+            foreach(var field in new[]{"api_url","api_key","model","voice_id","proxy"})
+            {
+                System.IO.File.WriteAllText(remotePath,originalRemote);
+                await client.SynthesizeWakeAsync("诶，我在。",CancellationToken.None);
+                var config=System.Text.Json.JsonSerializer.Deserialize<Dictionary<string,string>>(originalRemote);
+                config[field]=field=="api_url"?"https://second.example/v1/audio/speech":field=="proxy"?"http://127.0.0.1:4567":"changed-"+field;
+                System.IO.File.WriteAllText(remotePath,System.Text.Json.JsonSerializer.Serialize(config));
+                Require((await client.SynthesizeWakeAsync("诶，我在。",CancellationToken.None)).Cache=="miss",
+                    "接口、凭据、模型或代理改变后不能复用旧缓存");
+            }
+            System.IO.File.WriteAllText(remotePath,originalRemote);
+            client.Save(new WxxzSpeech.Settings {engine="remote"});
+            await client.SynthesizeWakeAsync("我在",CancellationToken.None);
+            System.IO.File.Move(remotePath,remotePath+".saved");
+            calls=requests;
+            try {await client.SynthesizeWakeAsync("我在",CancellationToken.None);throw new Exception("missing remote config accepted");}
+            catch(InvalidOperationException){Require(requests==calls,"有缓存也必须先验证当前接口配置可用");}
+            System.IO.File.Move(remotePath+".saved",remotePath);
+            var failedWakeCalls=0;
+            var failedWake=new WxxzSpeech(settingsPath,remotePath,()=>{failedWakeCalls++;return new SpeechTransport{InvalidAudio=true};});
+            for(var attempt=0;attempt<2;attempt++)
+                try {await failedWake.SynthesizeWakeAsync("我在",CancellationToken.None);throw new Exception("invalid wake cached");}
+                catch(InvalidOperationException){ }
+            Require(failedWakeCalls==2,"无效音频不缓存，每次显式请求各尝试一次");
             var failed=new WxxzSpeech(settingsPath,remotePath,()=>transport=new SpeechTransport {Code=HttpStatusCode.Unauthorized});
             try {await failed.SynthesizeAsync("失败测试",CancellationToken.None);throw new Exception("TTS 401 accepted");}
             catch(InvalidOperationException e){Require(e.Message.Contains("401") && transport.Count==1,"失败不重试或偷偷换声音");}
@@ -474,6 +516,22 @@ internal static partial class Program
             try { voice.Add(Evidence(1,1), false, 2); throw new Exception("different speaker clip accepted"); }
             catch (InvalidOperationException) { }
             Require(System.IO.File.ReadAllText(path)==naturalProfile, "整句模式仍拒绝不一致的完整录入段且保留原档");
+            var clock = DateTimeOffset.UtcNow;
+            var debug = new WxxzVoiceprint(path, () => clock);
+            debug.ConfigureDiagnostic(new(0, 10));
+            Require(debug.Match(Evidence(1,1)).matched && debug.Match(default).matched,
+                "显式临时零阈值放行陌生声音和短名字");
+            Require(!new WxxzVoiceprint(path).Match(Evidence(1,1)).matched &&
+                System.IO.File.ReadAllText(path)==naturalProfile, "调试不持久化、不改声纹档案");
+            clock = clock.AddSeconds(10);
+            Require(!debug.Match(Evidence(1,1)).matched && !debug.Match(default).matched,
+                "调试到期自动恢复原门槛及短语音检查");
+            debug.ConfigureDiagnostic(new(0, 10));
+            debug.ConfigureDiagnostic(new());
+            Require(!debug.Match(Evidence(1,1)).matched, "可立即关闭临时调试");
+            foreach (var invalid in new[] {new WxxzVoiceprint.DiagnosticSettings(0, 901), new(0.1, 10), new(0, 0)})
+                try { debug.ConfigureDiagnostic(invalid); throw new Exception("invalid diagnostic accepted"); }
+                catch (ArgumentException) { }
         }
         finally
         {
@@ -541,7 +599,8 @@ internal static partial class Program
             Require(transport.Bodies.Last().GetProperty("notice").GetString()=="","本人核验通过后清除旧未通过提示");
             transport.UtteranceText="自动对话样本";transport.UtteranceStatus="transcribed";
             await board.ListenCallAsync(board.SessionId,callId,CancellationToken.None);
-            Require(transport.Bodies.Last().GetProperty("notice").GetString()=="no_speech","未检测到语音使用独立提示，不冒充声纹失败");
+            Require(transport.Bodies.Last().GetProperty("notice").GetString()=="","安静待机不显示未听到的失败提示");
+            Require(!board.Diagnostics.Snapshot().Any(x=>x.code=="no_speech"),"安静轮询不刷无效听写记录");
             await board.StopCallAsync(callId, CancellationToken.None);
             try { board.Receive(board.SessionId, Guid.NewGuid().ToString(), heard.GetProperty("text").GetString(), "测试者", "call-test", heard.GetProperty("captureId").GetString()); throw new Exception("stopped capture accepted"); }
             catch (InvalidOperationException) { }

@@ -57,7 +57,7 @@ internal static partial class Program
             catch (TargetInvocationException ex) when (ex.InnerException is InvalidOperationException) { return true; }
             catch (InvalidOperationException) { return true; }
         }
-        string Repair(string body, string id = "append:0") => TraceJson.ToJson(new { items = new[] { new { id, body } } });
+        string Repair(string body, string id = "append:0") => TraceJson.ToJson(new { text = body });
         string Event(string summary, string sourceId) => TraceJson.ToJson(new {
             perception_summary = "记录这段测试经历", new_tags = new[] { new {
                 name = "计划核对", definition = "共同检查计划", domain_ids = new[] { "relation" }, dimension_ids = new[] { "predicate" } } },
@@ -76,18 +76,20 @@ internal static partial class Program
             var state = Activator.CreateInstance(stateType);
             var draft = TraceJson.ToJson(new { perception_summary = "有效观察", event_writes = new[] {
                 new { event_summary = "合格索引原文", entry_summary = new string('好', 80) } },
-                event_appends = new[] { new { index_alias = "unchanged-id", entry_summary = new string('长', 98) } } });
-            var first = new AgentSequenceLlm(draft, Repair(new string('长', 89)));
+                event_appends = new[] { new { index_alias = "unchanged-id", entry_summary = new string('长', 198) } } });
+            var first = new AgentSequenceLlm(draft, Repair(new string('长', 189)));
             var messages = new List<DeepSeekMessageData> { new("user", "仅测试") };
             Require(Rejected(() => Await(Method("CompleteObservationAsync"), context, first, source, "draft", state, messages, null, null)) &&
                 first.Requests.Count == 2 && !first.Requests[1].Contains("合格索引原文"),
-                "事件98字定向重写为89字仍暂停；仅提交超长字段，不重新生成整批");
+                "事件198字定向重写为189字仍暂停；仅提交超长字段，不重新生成整批");
             var saved = store.LoadPluginDocument("daily-core-progress-v1", "draft");
             state = JsonSerializer.Deserialize(saved, stateType, new JsonSerializerOptions { IncludeFields = true });
             var bad = new AgentSequenceLlm(Repair("错误字段", "write:0:event"));
             Require(Rejected(() => Await(Method("CompleteObservationAsync"), context, bad, source, "draft", state, messages, null, null)) &&
                 store.LoadPluginDocument("daily-core-progress-v1", "draft") == saved,
                 "修复不得替换合格字段或丢弃已保存草稿");
+            using (var db = new SQLite.SQLiteConnection(path))
+                db.Execute("UPDATE plugin_documents SET Json=json_set(Json, '$.NextAttemptUnixMs', 0) WHERE PluginId=?", ReviewWorkLogic.StoreId);
             var resumed = new AgentSequenceLlm(Repair("后来共同补齐安排"));
             Await(Method("CompleteObservationAsync"), context, resumed, source, "draft", state, messages, null, null);
             using (var json = JsonDocument.Parse(store.LoadPluginDocument("daily-core-progress-v1", "draft")))
@@ -203,15 +205,17 @@ internal static partial class Program
                 "细节只拿这一件事的原句，同批其他事件不扩散到每条正文");
             var detailMessages = new List<DeepSeekMessageData> { new("system", detailPrompt), new("user", "写这件事") };
             var longDetail = new AgentSequenceLlm(TraceJson.ToJson(new { detail = new string('旧', 3000) }),
-                TraceJson.ToJson(new { detail = new string('长', 201) }));
+                TraceJson.ToJson(new { text = new string('长', 201) }));
             Require(Rejected(() => Await(Method("CompleteDetailAsync"), context, longDetail, "bounded-detail", "stamp", detailMessages,
                 System.Threading.CancellationToken.None)) && longDetail.Requests.Count == 2 &&
                 !longDetail.Requests[1].Contains(new string('旧', 3000)) && !longDetail.Requests[1].Contains(probeSources[1].Content),
                 "超长细节只从原句重写一次，不回传长草稿、不截断落库");
-            var repairedDetail = new AgentSequenceLlm("{\"detail\":\"她给自己倒了水，我松了一口气。\"}");
+            using (var db = new SQLite.SQLiteConnection(path))
+                db.Execute("UPDATE plugin_documents SET Json=json_set(Json, '$.NextAttemptUnixMs', 0) WHERE PluginId=?", ReviewWorkLogic.StoreId);
+            var repairedDetail = new AgentSequenceLlm("{\"text\":\"她给自己倒了水，我松了一口气。\"}");
             Await(Method("CompleteDetailAsync"), context, repairedDetail, "bounded-detail", "stamp", detailMessages,
                 System.Threading.CancellationToken.None);
-            Require(repairedDetail.Requests.Count == 1 && repairedDetail.Requests[0].Contains("重新取舍"),
+            Require(repairedDetail.Requests.Count == 1 && repairedDetail.Requests[0].Contains("【单字段篇幅整理】"),
                 "细节草稿失败后恢复只补这一项，不从最初生成再循环");
             var cachedDetail = new AgentSequenceLlm();
             Await(Method("CompleteDetailAsync"), context, cachedDetail, "bounded-detail", "stamp", detailMessages,
@@ -222,7 +226,7 @@ internal static partial class Program
             var logType = assembly.GetType("TraceSoul2.Migrate.ReplayCallLogRecord", true);
             var parallelTasks = Enumerable.Range(0, 64).Select(i => Task.Run(() => {
                 var body = "并发细节" + i;
-                Await(detailMethod, context, new AgentSequenceLlm(TraceJson.ToJson(new { detail = body })),
+                Await(detailMethod, context, new AgentSequenceLlm(TraceJson.ToJson(new { detail = new string('长', 300) }), TraceJson.ToJson(new { text = body })),
                     "parallel-detail-" + i, "parallel-source", detailMessages, System.Threading.CancellationToken.None);
                 var record = Activator.CreateInstance(logType);
                 logType.GetProperty("Id").SetValue(record, "parallel-" + i);
@@ -309,13 +313,32 @@ internal static partial class Program
             Await(formation, context, store.LoadPairIdentity(), completedCompare, comparisonDay,
                 new List<EventIndexRecord>(), new List<EventEntryRecord>(), comparisonSources, comparisonSource);
             Require(completedCompare.Requests.Count == 0, "已提交认知检查点重复续做零调用");
+            var budgetProbe = new SelectionProbeLlm { Reply = _ => "{}" };
+            var budget = (ILlmClient)Activator.CreateInstance(assembly.GetType("TraceSoul2.Migrate.ReviewBudgetClient", true),
+                budgetProbe, (Action<int, string>)((_, _) => { }));
+            for (var i = 0; i < 256; i++) budget.CompleteJsonAsync(new List<DeepSeekMessageData> { new("user", "budget") }).GetAwaiter().GetResult();
+            var exhausted = false;
+            try { budget.CompleteJsonAsync(new List<DeepSeekMessageData> { new("user", "budget") }).GetAwaiter().GetResult(); }
+            catch (InvalidOperationException error) { exhausted = error.GetType().Name == "ReviewProsePendingException"; }
+            Require(exhausted && budgetProbe.Requests.Count == 256, "逻辑请求达到预算后不再调用模型，转为可恢复待整理");
+
+            // A pure prose failure is persisted as deferred by the real entrypoint.
+            const string deferredDay = "2020-08-30";
+            Seed(deferredDay, 1);
+            var overlongEvent = new AgentSequenceLlm(Event(new string('长', 200), deferredDay + "-0"),
+                TraceJson.ToJson(new { text = new string('长', 200) }));
+            Run(deferredDay, overlongEvent);
+            var pendingState = TraceSoul2.Host.DailyBuildHistory.ReadStates(Path.Combine(directory, "migration.db")).Single(x => x.DayKey == deferredDay);
+            Require(pendingState.Status == "deferred" && pendingState.RetryCount == 1 && pendingState.NextRetryUnixMs > DateTimeOffset.UtcNow.ToUnixTimeMilliseconds() &&
+                overlongEvent.Requests.Count == 2, "实际日入口持续超长保存退避状态，不标done或failed，不重复整批请求");
+
             var ladder = assembly.GetType("TraceSoul2.Migrate.DayLadderLogic", true);
             var rankType = assembly.GetType("TraceSoul2.Migrate.LadderRankOutputData", true);
             string RankError(string raw) => (string)ladder.GetMethod("RankError", BindingFlags.NonPublic | BindingFlags.Static).Invoke(null,
-                new object[] { JsonSerializer.Deserialize(raw, rankType, new JsonSerializerOptions { IncludeFields = true }), 3, 3 });
+                new object[] { JsonSerializer.Deserialize(raw, rankType, new JsonSerializerOptions { IncludeFields = true }), 3, 3, true });
             Require(RankError("{\"items\":[{\"index_alias\":\"i1\"},{\"index_alias\":\"i1\"}]}") != null &&
                 RankError("{\"items\":[{\"index_alias\":\"foreign\"}]}") != null &&
-                RankError(TraceJson.ToJson(new { items = new[] { new { index_alias = "i1", reason = new string('长', 61) } } })) != null,
+                RankError(TraceJson.ToJson(new { items = new[] { new { index_alias = "i1", reason = new string('长', 121) } } })) != null,
                 "榜单拒绝重复/未知指针和超长原因，不静默重复上榜或截断条件");
             var rankCandidates = Enumerable.Range(0, 150).Select(i => new CognitionSliceRecord {
                 Id = "rank-node-" + i, Summary = "独立认识" + i + "：" + new string('条', 85) + "；仅在明确约定时成立，拒绝时不适用。",
@@ -338,6 +361,38 @@ internal static partial class Program
             Require(seenRankCandidates.Count == 150 && rankResult.Single().RefId == "rank-node-149" &&
                 rankResult[0].Label == rankCandidates[^1].Summary && rankProbe.Requests.All(x => x.Length < 9000),
                 "实际日榜150项全部参与分批比较，末项也可入围，长认识的条件不被80字截掉，模型输入有界");
+            // Failure between moving a winner and writing its receipt must roll back both tiers.
+            using (var db = new SQLite.SQLiteConnection(path))
+            {
+                db.Insert(new EventIndexRecord { Id = "promotion-source", Status = "active", EventSummary = "可追溯的晋升测试" });
+                db.Execute("CREATE TRIGGER fail_ladder_receipt BEFORE INSERT ON plugin_documents WHEN NEW.PluginId='ladder-receipt-v1' BEGIN SELECT RAISE(ABORT, 'injected receipt failure'); END");
+            }
+            migrationType.GetMethod("ReplaceLadder").Invoke(migration, new object[] { "day", "2020-08-24", new List<LadderItemRecord> {
+                new() { RefId = "promotion-source", RefKind = "event", ListKind = "event", Label = "可追溯的晋升测试", Reason = "测试" } } });
+            var promotion = new AgentSequenceLlm("{\"items\":[{\"index_alias\":\"i1\",\"reason\":\"值得记住\"}]}");
+            var rolledBack = false;
+            try { Await(ladder.GetMethod("PromoteAsync"), context, store.LoadPairIdentity(), "2020-08-31", promotion); }
+            catch (Exception) { rolledBack = true; }
+            using (var db = new SQLite.SQLiteConnection(path))
+            {
+                Require(rolledBack && db.ExecuteScalar<int>("SELECT COUNT(*) FROM ladder_items WHERE RefId='promotion-source' AND Tier='day'") == 1 &&
+                    db.ExecuteScalar<int>("SELECT COUNT(*) FROM ladder_items WHERE RefId='promotion-source' AND Tier='week'") == 0,
+                    "晋升收据写入失败时上层替换与下层移除共同回滚");
+                db.Execute("DROP TRIGGER fail_ladder_receipt");
+            }
+            var cachedPromotion = new AgentSequenceLlm();
+            Await(ladder.GetMethod("PromoteAsync"), context, store.LoadPairIdentity(), "2020-08-31", cachedPromotion);
+            Await(ladder.GetMethod("PromoteAsync"), context, store.LoadPairIdentity(), "2020-08-31", cachedPromotion);
+            using (var db = new SQLite.SQLiteConnection(path))
+            {
+                Require(promotion.Requests.Count == 1 && cachedPromotion.Requests.Count == 0 &&
+                    db.ExecuteScalar<int>("SELECT COUNT(*) FROM ladder_items WHERE RefId='promotion-source' AND Tier='week'") == 1 &&
+                    db.ExecuteScalar<int>("SELECT COUNT(*) FROM ladder_items WHERE RefId='promotion-source' AND Tier='day'") == 0,
+                    "提交失败复用排序结果，提交成功复用收据；上下层不重复且不重复调用");
+                db.Execute("UPDATE event_indexes SET EventSummary='原始事件已修订' WHERE Id='promotion-source'");
+            }
+            Require(Rejected(() => Await(ladder.GetMethod("PromoteAsync"), context, store.LoadPairIdentity(), "2020-08-31", cachedPromotion)),
+                "来源修订后拒绝使用旧晋升收据");
             Require(Rejected(() => builder.GetMethod("DedupeCognitions").Invoke(null, new object[] { context })),
                 "旧文字相似度去重入口停用，不能把不同条件或反证合掉来掩盖累积");
             Console.WriteLine("Daily core progress checks passed: targeted drafts, restart, atomic writes, detail and cognition resume, source and legacy guards.");

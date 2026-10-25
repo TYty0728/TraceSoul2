@@ -159,7 +159,24 @@ exit 1
     return result
 
 
-def stop_host(container, pid):
+def maintenance_request(base_url, cookie, method, lease=None):
+    if not base_url or not cookie:
+        raise ValueError("维护入口及会话 Cookie 未配置，拒绝停止服务。使用 --console-url 和 TRACESOUL2_MAINTENANCE_COOKIE。")
+    if lease is not None and not re.fullmatch(r"[a-f0-9]{32}", lease):
+        raise ValueError("维护租约格式无效。")
+    request = urllib.request.Request(base_url.rstrip("/") + "/maintenance" + ("/" + lease if lease else ""),
+                                     data=b"" if method == "POST" else None,
+                                     headers={"Cookie": cookie, "Accept": "application/json"}, method=method)
+    with urllib.request.urlopen(request, timeout=2100) as response:
+        result = json.load(response)
+    if method == "POST" and (result.get("ready") is not True or not re.fullmatch(r"[a-f0-9]{32}", result.get("lease", ""))):
+        raise RuntimeError("未取得覆盖复盘至交接的维护租约，拒绝停止服务。")
+    return result.get("lease")
+
+
+def stop_host(container, pid, lease=None):
+    if not lease or not re.fullmatch(r"[a-f0-9]{32}", lease):
+        raise ValueError("停止 Host 前必须取得维护租约。")
     # slim images lack /bin/kill: use the shell builtin and pass PID as an argument.
     if not pid.isdigit() or int(pid) <= 1:
         raise ValueError("无效的 Host PID。")
@@ -171,6 +188,7 @@ def main():
     parser.add_argument("--root", default=os.getcwd(), help="contains compose.yaml and runtime/")
     parser.add_argument("--version", default="latest", help="0.1.7 or latest")
     parser.add_argument("--container", default="tracesoul2")
+    parser.add_argument("--console-url", help="authenticated Host URL; old versions without maintenance API are refused")
     args = parser.parse_args()
     root = Path(args.root).resolve()
     bundle = (root / "runtime").resolve()
@@ -226,54 +244,63 @@ def main():
         shutil.copy2(source, runner / source.name)
     if not (runner / "TraceSoul2.Updater.dll").is_file():
         raise ValueError("安装包缺少外置更新器。")
-    pid = host_pid(args.container)
-    log = updates / "update.log"
-    offset = log.stat().st_size if log.exists() else 0
-    command = ["docker", "exec", "-d", args.container, "dotnet",
-               "/opt/tracesoul2/Data/updates/runner/" + runner_id + "/TraceSoul2.Updater.dll",
-               "--pid", pid, "--source", "/opt/tracesoul2/" + stage.name,
-               "--target", "/opt/tracesoul2/App", "--home", "/opt/tracesoul2/Data",
-               "--plugins", "/opt/tracesoul2/Plugins", "--version", version]
-    subprocess.run(command, check=True)
+    cookie = os.environ.get("TRACESOUL2_MAINTENANCE_COOKIE", "")
+    lease = maintenance_request(args.console_url, cookie, "POST")
+    try:
+        pid = host_pid(args.container)
+        log = updates / "update.log"
+        offset = log.stat().st_size if log.exists() else 0
+        command = ["docker", "exec", "-d", args.container, "dotnet",
+                   "/opt/tracesoul2/Data/updates/runner/" + runner_id + "/TraceSoul2.Updater.dll",
+                   "--pid", pid, "--source", "/opt/tracesoul2/" + stage.name,
+                   "--target", "/opt/tracesoul2/App", "--home", "/opt/tracesoul2/Data",
+                   "--plugins", "/opt/tracesoul2/Plugins", "--version", version]
+        subprocess.run(command, check=True)
 
-    def recent_log():
-        if not log.exists():
-            return ""
-        with log.open("rb") as stream:
-            stream.seek(offset)
-            return stream.read().decode("utf-8", errors="replace")
+        def recent_log():
+            if not log.exists():
+                return ""
+            with log.open("rb") as stream:
+                stream.seek(offset)
+                return stream.read().decode("utf-8", errors="replace")
 
-    # Do not kill Host until the updater has passed its own path/package validation.
-    for _ in range(20):
-        time.sleep(0.5)
-        recent = recent_log()
-        if "更新失败" in recent:
-            raise RuntimeError(recent)
-        if "等待旧宿主退出" in recent:
-            break
-    else:
-        raise RuntimeError("未确认更新器准备就绪；旧宿主未停止，请检查 Data/updates/update.log。")
-    started = time.strftime("%Y-%m-%dT%H:%M:%SZ", time.gmtime())
-    stop_host(args.container, pid)
-    print("更新器已就绪，已请求旧宿主退出；正在等待新版启动…", flush=True)
-    for _ in range(90):
-        time.sleep(2)
-        recent = recent_log()
-        if "更新失败" in recent or "已回滚旧版" in recent:
-            raise RuntimeError(recent)
+        # Do not kill Host until the updater has passed its own path/package validation.
+        for _ in range(20):
+            time.sleep(0.5)
+            recent = recent_log()
+            if "更新失败" in recent:
+                raise RuntimeError(recent)
+            if "等待旧宿主退出" in recent:
+                break
+        else:
+            raise RuntimeError("未确认更新器准备就绪；旧宿主未停止，请检查 Data/updates/update.log。")
+        started = time.strftime("%Y-%m-%dT%H:%M:%SZ", time.gmtime())
+        stop_host(args.container, pid, lease)
+        print("更新器已就绪，已请求旧宿主退出；正在等待新版启动…", flush=True)
+        for _ in range(90):
+            time.sleep(2)
+            recent = recent_log()
+            if "更新失败" in recent or "已回滚旧版" in recent:
+                raise RuntimeError(recent)
+            try:
+                installed = json.loads((bundle / "App/tracesoul2.install.json").read_text(encoding="utf-8-sig"))
+                if installed.get("version") != version or host_pid(args.container) == pid:
+                    continue
+                logs = subprocess.run(["docker", "logs", "--since", started, "--tail", "200", args.container], capture_output=True, text=True)
+                if "TraceSoul2 Host  v" + version not in logs.stdout + logs.stderr:
+                    continue
+                print(recent)
+                print("更新成功：v{} 已运行。数据、插件配置和旧版本备份均保留。请强制刷新 WebUI。".format(version))
+                return
+            except (OSError, ValueError, RuntimeError):
+                pass
+        raise RuntimeError("未能确认新版在三分钟内启动；请检查 Data/updates/update.log 和 docker compose logs，勿重复安装。")
+    finally:
         try:
-            installed = json.loads((bundle / "App/tracesoul2.install.json").read_text(encoding="utf-8-sig"))
-            if installed.get("version") != version or host_pid(args.container) == pid:
-                continue
-            logs = subprocess.run(["docker", "logs", "--since", started, "--tail", "200", args.container], capture_output=True, text=True)
-            if "TraceSoul2 Host  v" + version not in logs.stdout + logs.stderr:
-                continue
-            print(recent)
-            print("更新成功：v{} 已运行。数据、插件配置和旧版本备份均保留。请强制刷新 WebUI。".format(version))
-            return
-        except (OSError, ValueError, RuntimeError):
-            pass
-    raise RuntimeError("未能确认新版在三分钟内启动；请检查 Data/updates/update.log 和 docker compose logs，勿重复安装。")
+            maintenance_request(args.console_url, cookie, "DELETE", lease)
+        except (OSError, ValueError, urllib.error.URLError):
+            # A successful handoff destroys the old process's lease. Never release a different process's lease.
+            print("旧维护租约可能已随宿主退出释放；若旧版仍运行，请在认证维护接口核对租约。", file=sys.stderr)
 
 
 if __name__ == "__main__":

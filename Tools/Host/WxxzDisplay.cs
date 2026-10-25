@@ -119,6 +119,14 @@ public sealed class WxxzDisplay
             failed=!success;phase=failed?"error":thinking?"thinking":"idle";revision++;
         }
     }
+    public void Rest(Ticket ticket,string expressionId)
+    {
+        lock(sync)
+        {
+            if(!Current(ticket))return;
+            subtitle="";image=expressionId;phase="idle";revision++;
+        }
+    }
     public Snapshot Read(string name,WxxzAttention.Snapshot attention,WxxzVoiceMonitor.Snapshot monitor,bool wake)
     {
         lock(sync)
@@ -127,7 +135,7 @@ public sealed class WxxzDisplay
             var state=session==null?"offline":monitor?.state=="faulted"?"error":monitor?.state=="stopping"?"paused"
                 :failed?"error":phase=="speaking"?"speaking":thinking || phase=="synthesizing"?"thinking"
                 :call==null?"paused":wake && attention.state=="standby"?"standby"
-                :capture!=null?"listening":wake && attention.state=="focused"?"focused":"listening";
+                :wake && attention.state=="focused"?"focused":"listening";
             var remaining=session!=null && call!=null && wake?attention.focusRemainingMs:0;
             return new Snapshot(1,revision,session,call,name,state,phase,
                 state is "offline" or "paused"?"":subtitle,state is "offline" or "paused"?null:image,

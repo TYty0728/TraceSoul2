@@ -103,18 +103,26 @@ namespace TraceSoul2.Host
             }
         }
 
-        public object StartInstall(Action onReady, Func<string, CancellationToken, Task> archiveBeforeHandoff)
+        public object StartInstall(Action onReady, Func<string, CancellationToken, Task> archiveBeforeHandoff,
+            Func<CancellationToken, Task<IDisposable>> acquireMaintenance = null)
         {
             if (archiveBeforeHandoff == null) throw new ArgumentNullException(nameof(archiveBeforeHandoff));
             BeginInstallProgress();
+            // Reserve synchronously, before returning to the caller.
+            var reservation = acquireMaintenance?.Invoke(CancellationToken.None);
+            if (reservation != null) SetInstallProgress("waiting_review", 0, "正在等待当前复盘保存进度；维护期间不会启动新复盘。");
             _ = Task.Run(async () =>
             {
+                IDisposable maintenance = null;
                 try
                 {
+                    if (reservation != null) maintenance = await reservation;
                     await InstallAsync(CancellationToken.None, archiveBeforeHandoff);
                     onReady();
+                    maintenance = null; // Held until the old process exits.
                 }
-                catch (Exception exception) { FailInstallProgress(exception.Message); }
+                catch (Exception exception) { maintenance?.Dispose(); maintenance = null; FailInstallProgress(exception.Message); }
+                finally { maintenance?.Dispose(); }
             });
             return new { started = true, message = "已开始后台安装；页面会持续显示进度，刷新页面不会中止下载。" };
         }

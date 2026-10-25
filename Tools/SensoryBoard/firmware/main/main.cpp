@@ -1,6 +1,7 @@
 #include <cstdio>
 #include <cstring>
 #include <cmath>
+#include <atomic>
 #include "board.h"
 #include "cJSON.h"
 #include "driver/usb_serial_jtag.h"
@@ -14,6 +15,7 @@
 #include "terminal.h"
 #include "esp_system.h"
 #include "freertos/semphr.h"
+#include "freertos/stream_buffer.h"
 
 static SemaphoreHandle_t output_lock;
 struct OutputGuard {
@@ -32,9 +34,9 @@ static uint32_t checksum(const uint8_t *p, size_t n) {
     return hash;
 }
 static void reply(TerminalLink &link, uint32_t id, const char *status, size_t received = 0, const char *error = "") {
-    char line[1000];
-    char state[360],touch_state[180],ui_state[220]; network_status(state,sizeof(state));board_touch_status(touch_state,sizeof(touch_state));native_ui_status(ui_state,sizeof(ui_state));
-    int n = snprintf(line, sizeof(line), "{\"protocol\":1,\"firmware\":\"0.4.6\",\"id\":%lu,\"status\":\"%s\",\"received\":%u,\"frames\":%lu,\"plays\":%lu,\"uptime_ms\":%llu,\"error\":\"%s\",\"local_mic_paused\":%s,%s,%s,%s}\n",
+    char line[1300];
+    char state[360],touch_state[180],ui_state[400]; network_status(state,sizeof(state));board_touch_status(touch_state,sizeof(touch_state));native_ui_status(ui_state,sizeof(ui_state));
+    int n = snprintf(line, sizeof(line), "{\"protocol\":1,\"firmware\":\"0.4.8\",\"audio_stream_version\":1,\"id\":%lu,\"status\":\"%s\",\"received\":%u,\"frames\":%lu,\"plays\":%lu,\"uptime_ms\":%llu,\"error\":\"%s\",\"local_mic_paused\":%s,%s,%s,%s}\n",
         (unsigned long)id, status, (unsigned)received, (unsigned long)frames, (unsigned long)plays,
         (unsigned long long)(esp_timer_get_time() / 1000), error, board_mic_paused()?"true":"false", state, touch_state,ui_state);
     if(n<0||n>=(int)sizeof(line)){link.closed=true;return;}
@@ -121,6 +123,77 @@ static bool stream_microphone(TerminalLink &link, uint32_t id, uint8_t *pcm, siz
     }
     return false; // A limit is not a successful final utterance.
 }
+struct AudioStream {
+    StreamBufferHandle_t buffer;
+    SemaphoreHandle_t done;
+    size_t size;
+    std::atomic<bool> abort{false}, failed{false};
+};
+static void play_stream(void *argument) {
+    auto *stream=static_cast<AudioStream *>(argument);
+    uint8_t block[CHUNK]; unsigned epoch=0;
+    bool ok=board_audio_begin(&epoch)==ESP_OK;
+    size_t played=0;
+    while(ok && played<stream->size && !stream->abort.load()) {
+        size_t want=stream->size-played<CHUNK?stream->size-played:CHUNK;
+        size_t n=xStreamBufferReceive(stream->buffer,block,want,pdMS_TO_TICKS(1000));
+        ok=n>0 && n%2==0 && board_audio_write(block,n,epoch)==ESP_OK;
+        played+=n;
+    }
+    ok=ok && !stream->abort.load() && played==stream->size;
+    if(board_audio_end(ok)!=ESP_OK)ok=false;
+    stream->failed.store(!ok);
+    xSemaphoreGive(stream->done);
+    vTaskDelete(nullptr);
+}
+// One playback transaction, bounded ring buffer, no page or 8-second restarts.
+// Each wire packet is checksummed before it can reach the speaker.
+static void stream_audio(TerminalLink &link,uint32_t id,uint8_t *buffer,size_t size,uint32_t expected) {
+    StaticStreamBuffer_t storage;
+    AudioStream stream;
+    stream.size=size;
+    stream.buffer=xStreamBufferCreateStatic(MAX_PAYLOAD,1,buffer,&storage);
+    stream.done=xSemaphoreCreateBinary();
+    auto *block=static_cast<uint8_t *>(heap_caps_malloc(CHUNK+4,MALLOC_CAP_8BIT));
+    if(!stream.buffer || !stream.done || !block) {
+        if(stream.buffer)vStreamBufferDelete(stream.buffer);
+        if(stream.done)vSemaphoreDelete(stream.done);
+        free(block); reply(link,id,"error",0,"audio_memory_unavailable"); return;
+    }
+    reply(link,id,"ready");
+    size_t received=0;uint32_t hash=2166136261u;bool started=false;
+    const char *error="";
+    while(received<size) {
+        size_t n=size-received<CHUNK?size-received:CHUNK;
+        if(!read_exact(link,block,n+4)){error="audio_transfer_timeout";break;}
+        uint32_t packet=(uint32_t)block[n]|((uint32_t)block[n+1]<<8)|((uint32_t)block[n+2]<<16)|((uint32_t)block[n+3]<<24);
+        if(checksum(block,n)!=packet){error="audio_packet_checksum";break;}
+        for(size_t i=0;i<n;i++)hash=(hash^block[i])*16777619u;
+        if(received+n==size && hash!=expected){error="checksum_mismatch";break;}
+        size_t sent=0;int64_t deadline=esp_timer_get_time()+5000000;
+        while(xStreamBufferSpacesAvailable(stream.buffer)<n && !stream.failed.load() && esp_timer_get_time()<deadline)
+            vTaskDelay(pdMS_TO_TICKS(10));
+        if(xStreamBufferSpacesAvailable(stream.buffer)>=n && !stream.failed.load())
+            sent=xStreamBufferSend(stream.buffer,block,n,0);
+        if(sent!=n || stream.failed.load()){error="audio_stream_stopped";break;}
+        received+=n;
+        // Prefill about 1.4 seconds. The ring absorbs transport jitter thereafter.
+        if(!started && (received>=131072 || received==size)) {
+            started=xTaskCreate(play_stream,"audio-output",8192,&stream,5,nullptr)==pdPASS;
+            if(!started){error="audio_task_unavailable";break;}
+        }
+        reply(link,id,"chunk",received);
+    }
+    if(*error)stream.abort.store(true);
+    if(started) {
+        // At most the bounded 10-second ring plus drain remains after upload.
+        xSemaphoreTake(stream.done,portMAX_DELAY);
+        if(!*error && stream.failed.load())error="audio_stream_stopped";
+    }
+    vStreamBufferDelete(stream.buffer);vSemaphoreDelete(stream.done);free(block);
+    if(*error) {reply(link,id,"error",received,error);link.closed=link.tls!=nullptr;}
+    else {plays++;reply(link,id,"done",received);}
+}
 void terminal_run(TerminalLink &link) {
     auto *payload=(uint8_t *)heap_caps_malloc(MAX_PAYLOAD,MALLOC_CAP_SPIRAM|MALLOC_CAP_8BIT);
     if(!payload){link.closed=true;return;}
@@ -172,6 +245,7 @@ void terminal_run(TerminalLink &link) {
         }
         bool hello = !strcmp(op->valuestring, "hello");
         bool frame = !strcmp(op->valuestring, "frame");
+        bool scene = !strcmp(op->valuestring, "scene");
         bool audio = !strcmp(op->valuestring, "audio");
         bool setup = !link.tls && !strcmp(op->valuestring,"wifi_setup");
         if(!strcmp(op->valuestring,"touch_test") || !strcmp(op->valuestring,"touch_stop")){
@@ -179,6 +253,29 @@ void terminal_run(TerminalLink &link) {
         }
         if (!link.tls && !strcmp(op->valuestring,"reboot")) { cJSON_Delete(json); reply(link,id,"ready"); vTaskDelay(pdMS_TO_TICKS(200)); esp_restart(); }
         if (hello) { cJSON_Delete(json); reply(link, id, "ready"); continue; }
+        if(!strcmp(op->valuestring,"ui")){
+            uint32_t phase=0,focus=0,countdown=0;
+            bool valid=uint_field(json,"phase",&phase)&&phase<=7&&uint_field(json,"focus_ms",&focus)&&focus<=30000&&
+                uint_field(json,"countdown",&countdown)&&countdown<=10;
+            cJSON_Delete(json);
+            if(!valid){reply(link,id,"error",0,"bad_ui_state");continue;}
+            native_ui_phase(phase,focus);
+            reply(link,id,"ready");
+            if(countdown){
+                native_ui_countdown(countdown);
+                int64_t until=esp_timer_get_time()+int64_t(countdown)*1000000;
+                while(esp_timer_get_time()<until&&!board_mic_paused())vTaskDelay(pdMS_TO_TICKS(20));
+                native_ui_countdown(0);
+            }
+            reply(link,id,"done");continue;
+        }
+        if (!strcmp(op->valuestring,"audio_stream")) {
+            bool valid=uint_field(json,"size",&size) && size>0 && size<=48000*2*120 && size%2==0 &&
+                uint_field(json,"checksum",&expected);
+            cJSON_Delete(json);
+            if(!valid){reply(link,id,"error",0,"bad_payload_spec");continue;}
+            stream_audio(link,id,payload,size,expected);continue;
+        }
         if (!strcmp(op->valuestring, "listen")) {
             auto *notice=cJSON_GetObjectItemCaseSensitive(json,"notice");
             bool valid_notice=!notice||(cJSON_IsString(notice)&&(!strcmp(notice->valuestring,"")||
@@ -219,10 +316,10 @@ void terminal_run(TerminalLink &link) {
             continue;
         }
         bool valid = uint_field(json, "size", &size) && uint_field(json, "checksum", &expected) &&
-            ((setup && size > 0 && size <= 7000) || (frame && size == FRAME_BYTES) || (audio && size > 0 && size <= MAX_PAYLOAD && size % 2 == 0));
+            ((setup && size > 0 && size <= 7000) || (scene && size>=12 && size<=MAX_PAYLOAD) || (frame && size == FRAME_BYTES) || (audio && size > 0 && size <= MAX_PAYLOAD && size % 2 == 0));
         auto *art=cJSON_GetObjectItemCaseSensitive(json,"artwork");
-        bool artwork=frame&&cJSON_IsTrue(art);
-        if(art&&(!frame||!cJSON_IsBool(art)))valid=false;
+        bool artwork=(frame||scene)&&cJSON_IsTrue(art);
+        if(art&&(!(frame||scene)||!cJSON_IsBool(art)))valid=false;
         cJSON_Delete(json);
         if (!valid) { reply(link, id, "error", 0, "bad_payload_spec"); continue; }
         reply(link, id, "ready");
@@ -240,9 +337,9 @@ void terminal_run(TerminalLink &link) {
             memset(payload,0,size);
             reply(link,id,saved?"done":"error",received,saved?"":"wifi_config_invalid"); continue;
         }
-        esp_err_t err = frame ? native_ui_frame(payload,artwork) : board_audio(payload, size);
+        esp_err_t err = scene ? native_ui_scene(payload,size,artwork) : frame ? native_ui_frame(payload,artwork) : board_audio(payload, size);
         if (err != ESP_OK) { reply(link, id, "error", received, "output_failed"); continue; }
-        if (frame) frames++; else plays++;
+        if (frame||scene) frames++; else plays++;
         reply(link, id, "done", received);
     }
     heap_caps_free(payload);

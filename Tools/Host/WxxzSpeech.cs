@@ -14,7 +14,11 @@ namespace TraceSoul2.Host;
 public sealed class WxxzSpeech
 {
     public sealed record WakeAudio(byte[] Audio, string Cache, long ElapsedMs, long? SynthesisMs, long? AudioMs);
-    public bool SupportsWakeCache => settings.engine == "qwen_local";
+    public bool SupportsWakeCache => settings.engine is "qwen_local" or "remote";
+    private sealed record RemoteWakeEntry(string Key, byte[] Audio, long? AudioMs);
+    private RemoteWakeEntry remoteWakeEntry;
+    private readonly SemaphoreSlim wakeCacheGate = new(1, 1);
+    private long settingsRevision;
     public sealed class Settings
     {
         public string engine { get; set; } = "system";
@@ -91,6 +95,8 @@ public sealed class WxxzSpeech
         try { File.WriteAllText(temporary, JsonSerializer.Serialize(value)); File.Move(temporary, path, true); }
         finally { if (File.Exists(temporary)) File.Delete(temporary); }
         settings = JsonSerializer.Deserialize<Settings>(JsonSerializer.Serialize(value));
+        Interlocked.Increment(ref settingsRevision);
+        Volatile.Write(ref remoteWakeEntry, null);
     }
     private JsonDocument ReadRemote()
     {
@@ -153,13 +159,22 @@ public sealed class WxxzSpeech
         => SynthesizeResultAsync(text, token, true);
     private async Task<WakeAudio> SynthesizeResultAsync(string text, CancellationToken token, bool wake)
     {
-        try { return await SynthesizeCoreAsync(text, token, wake); }
+        var acquired = false;
+        try
+        {
+            if (wake) { await wakeCacheGate.WaitAsync(token); acquired = true; }
+            return await SynthesizeCoreAsync(text, token, wake);
+        }
         catch (HttpRequestException) { throw new InvalidOperationException("语音接口连接失败；未重试或切换音色。"); }
         catch (OperationCanceledException) when (!token.IsCancellationRequested)
         { throw new InvalidOperationException("语音合成超时；未重试或播放。"); }
+        finally { if (acquired) wakeCacheGate.Release(); }
     }
     private async Task<WakeAudio> SynthesizeCoreAsync(string text, CancellationToken token, bool wake)
     {
+        var started = System.Diagnostics.Stopwatch.StartNew();
+        var settings = this.settings;
+        var revision = Interlocked.Read(ref settingsRevision);
         if (settings.engine == "system") return new(null, "unsupported", 0, null, null);
         if (wake && (text?.Length ?? 0) > 30) throw new InvalidOperationException("唤醒应答不能超过30字。");
         if (string.IsNullOrWhiteSpace(text) || text.Length > (settings.engine == "qwen_local" ? 240 : 500))
@@ -190,17 +205,25 @@ public sealed class WxxzSpeech
         if (!Uri.TryCreate(url, UriKind.Absolute, out var endpoint) || endpoint.UserInfo.Length > 0 ||
             !(endpoint.Scheme == "https" || endpoint.Scheme == "http" && endpoint.IsLoopback))
             throw new InvalidOperationException("语音接口应使用HTTPS或本机回环HTTP地址。");
+        // Keep one bounded, validated wake clip per Soul in memory. Re-read the
+        // actual connection before reuse; credentials and cache keys never leave the Host.
+        var remoteCache = wake && settings.engine == "remote";
+        var cacheKey = remoteCache ? Convert.ToHexString(System.Security.Cryptography.SHA256.HashData(
+            Encoding.UTF8.GetBytes(JsonSerializer.Serialize(new { url, key, model, voice, proxy, text,
+                revision })))) : null;
+        var saved = Volatile.Read(ref remoteWakeEntry);
+        if (remoteCache && saved?.Key == cacheKey)
+            return new((byte[])saved.Audio.Clone(), "hit", started.ElapsedMilliseconds, 0, saved.AudioMs);
         using var handler = handlerFactory?.Invoke() ?? new HttpClientHandler {
             AllowAutoRedirect = false, UseProxy = proxy.Length > 0,
             Proxy = proxy.Length > 0 ? new WebProxy(proxy) : null };
         using var client = new HttpClient(handler) { Timeout = TimeSpan.FromSeconds(120) };
         using var request = new HttpRequestMessage(HttpMethod.Post, endpoint);
-        var cacheRequested = wake && SupportsWakeCache;
+        var cacheRequested = wake && settings.engine == "qwen_local";
         if (cacheRequested) request.Headers.Add("X-TraceSoul-Wake-Cache", "v1");
         if (key.Length > 0) request.Headers.Authorization = new AuthenticationHeaderValue("Bearer", key);
         request.Content = new StringContent(JsonSerializer.Serialize(new {
             model, input = text, voice, response_format = "wav" }), Encoding.UTF8, "application/json");
-        var started = System.Diagnostics.Stopwatch.StartNew();
         using var response = await client.SendAsync(request, HttpCompletionOption.ResponseHeadersRead, token);
         if (!response.IsSuccessStatusCode)
             throw new InvalidOperationException("语音合成返回HTTP " + (int)response.StatusCode + "；未重试或切换音色。");
@@ -217,7 +240,7 @@ public sealed class WxxzSpeech
         var bytes = audio.ToArray();
         if (bytes.Length < 44 || Encoding.ASCII.GetString(bytes, 0, 4) != "RIFF" || Encoding.ASCII.GetString(bytes, 8, 4) != "WAVE")
             throw new InvalidOperationException("语音接口未返回WAV；未播放或回退。");
-        string cache = "unsupported";
+        string cache = remoteCache ? "miss" : "unsupported";
         if (cacheRequested && response.Headers.TryGetValues("X-TraceSoul-Wake-Cache", out var values))
         {
             var value = string.Join("", values);
@@ -225,6 +248,8 @@ public sealed class WxxzSpeech
         }
         long? Metric(string name) => response.Headers.TryGetValues(name, out var fields) &&
             long.TryParse(string.Join("", fields), out var number) && number >= 0 ? number : null;
-        return new(bytes, cache, started.ElapsedMilliseconds, Metric("X-Synthesis-Ms"), Metric("X-Audio-Ms"));
+        var audioMs = Metric("X-Audio-Ms");
+        if (remoteCache) Volatile.Write(ref remoteWakeEntry, new(cacheKey, (byte[])bytes.Clone(), audioMs));
+        return new(bytes, cache, started.ElapsedMilliseconds, Metric("X-Synthesis-Ms"), audioMs);
     }
 }

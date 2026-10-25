@@ -24,6 +24,7 @@ namespace TraceSoul2.Migrate
             public List<string> EntryIds = new();
             public string SourceStamp;
             public bool Ranked;
+            public bool DayRanked;
             public bool ReviewDone;
             public bool EmptyDay;
             public bool DaySummaryPending;

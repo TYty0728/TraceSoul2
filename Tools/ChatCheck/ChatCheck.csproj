@@ -21,6 +21,8 @@
     <ProjectReference Include="../../ExternalPlugins/RealtimeCall/TraceSoul2.Plugin.RealtimeCall.csproj" />
     <Compile Include="RealtimeCallChecks.cs" />
     <Compile Include="Program.cs" />
+    <Compile Include="ReviewReliabilityChecks.cs" />
+    <Compile Include="../Host/ReviewMaintenanceGate.cs" Link="ReviewMaintenanceGate.cs" />
     <Compile Include="BackupArchiveChecks.cs" />
     <Compile Include="RuntimePathRepairChecks.cs" />
     <Compile Include="../Host/BackupArchiveFormat.cs" Link="BackupArchiveFormat.cs" />

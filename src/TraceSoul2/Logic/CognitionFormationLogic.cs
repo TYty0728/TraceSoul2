@@ -8,6 +8,18 @@ namespace TraceSoul2.Logic
     /// <summary>日构建认知输出只可引用此次实际提供的原始经历，不用最后一句代替所有依据。</summary>
     public static class CognitionFormationLogic
     {
+        public static IEnumerable<ReviewWorkLogic.TextPart> TextParts(IEnumerable<BrainCognitionWriteData> writes)
+        {
+            var i = 0;
+            foreach (var item in writes)
+            {
+                var path = "cognitions[" + i++ + "].";
+                yield return new(path + "summary", 600, () => item.summary, v => item.summary = v);
+                yield return new(path + "about", 160, () => item.about, v => item.about = v);
+                yield return new(path + "scope", 300, () => item.scope, v => item.scope = v);
+                yield return new(path + "exceptions", 300, () => item.exceptions, v => item.exceptions = v);
+            }
+        }
         public static List<MomentRecord> SelectEvidence(IEnumerable<MomentRecord> moments)
         {
             var result = new List<MomentRecord>();
@@ -31,7 +43,7 @@ namespace TraceSoul2.Logic
 
         /// <summary>与写入校验共用规则；只返回字段路径和修正要求，不回显正文或未知ID。</summary>
         public static string ValidationError(IEnumerable<BrainCognitionWriteData> writes, IReadOnlyList<MomentRecord> evidence,
-            IReadOnlyList<CognitionSliceRecord> existing, IReadOnlyList<LifeTagRecord> tags)
+            IReadOnlyList<CognitionSliceRecord> existing, IReadOnlyList<LifeTagRecord> tags, bool checkLength = true)
         {
             if (writes == null) return "cognitions 必须是数组；无变化请显式输出 []，不能省略或填 null。";
             var list = writes.ToList();
@@ -71,7 +83,7 @@ namespace TraceSoul2.Logic
                 if (w.operation == "create" || w.operation == "revise")
                 {
                     if (string.IsNullOrWhiteSpace(w.summary)) return path + ".summary 必须是非空的完整理解。";
-                    if (w.summary.Length > 600) return path + ".summary 当前" + w.summary.Length + "字，最多600字；请保留范围和例外，重新写短。";
+                    if (checkLength && w.summary.Length > 600) return path + ".summary 当前" + w.summary.Length + "字，最多600字；请保留范围和例外，重新写短。";
                     if (w.domains == null || w.domains.Count == 0 || w.domains.Count > 4)
                         return path + ".domains 必须为 user/world/ass/relation 的非空子集，最多4项。";
                 }
@@ -85,9 +97,9 @@ namespace TraceSoul2.Logic
                     return path + ".confidence 必须为0～1的有限数字。";
                 if (float.IsNaN(w.strength) || w.strength < 0 || w.strength > 1)
                     return path + ".strength 必须为0～1的有限数字。";
-                if ((w.about?.Length ?? 0) > 160) return path + ".about 当前" + w.about.Length + "字，最多160字；请重新写短。";
-                if ((w.scope?.Length ?? 0) > 300) return path + ".scope 当前" + w.scope.Length + "字，最多300字；请重新写短。";
-                if ((w.exceptions?.Length ?? 0) > 300) return path + ".exceptions 当前" + w.exceptions.Length + "字，最多300字；请重新写短。";
+                if (checkLength && (w.about?.Length ?? 0) > 160) return path + ".about 当前" + w.about.Length + "字，最多160字；请重新写短。";
+                if (checkLength && (w.scope?.Length ?? 0) > 300) return path + ".scope 当前" + w.scope.Length + "字，最多300字；请重新写短。";
+                if (checkLength && (w.exceptions?.Length ?? 0) > 300) return path + ".exceptions 当前" + w.exceptions.Length + "字，最多300字；请重新写短。";
                 if (w.operation == "link")
                 {
                     // An otherwise valid self-link has no effect; the store ignores it without

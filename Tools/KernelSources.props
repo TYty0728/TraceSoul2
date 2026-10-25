@@ -104,4 +104,8 @@
     <Compile Include="$(MSBuildThisFileDirectory)../src/TraceSoul2/Memory/MemoryRecallEngine.cs" />
     <Compile Include="$(MSBuildThisFileDirectory)../src/TraceSoul2/Memory/EntryEmbedder.cs" />
   </ItemGroup>
+  <ItemGroup>
+    <Compile Include="$(MSBuildThisFileDirectory)../src/TraceSoul2/Logic/ReviewWorkLogic.cs" />
+  </ItemGroup>
+  <ItemGroup><Compile Include="$(MSBuildThisFileDirectory)../src/TraceSoul2/Logic/ReviewExecutionLease.cs" /></ItemGroup>
 </Project>

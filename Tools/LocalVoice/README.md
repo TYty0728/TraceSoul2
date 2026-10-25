@@ -4,6 +4,8 @@
 
 独立的 Qwen3-TTS 0.6B Base 音色克隆服务，面向 Windows + NVIDIA GPU。只负责把文字读成语音，不启动 TraceSoul2 Host、不连接 QQ、不自动录音，也不改现有云端供应商。合成时只使用本地模型，没有按字符或按时长的云端 TTS 调用费用；现有心智模型若仍走 API，其费用和延迟仍然存在。
 
+模型由本服务的 Python/PyTorch 从运行目录的 `models/Qwen3-TTS-12Hz-0.6B-Base` 直接加载，不经过 Ollama，也不使用 Ollama 的模型仓库。清理 Ollama 模型不影响这套独立保存的 TTS 权重；角色参考音频与音色选择保存在同一运行目录的 `voices/`。
+
 模型：[Qwen 官方仓库](https://github.com/QwenLM/Qwen3-TTS)，权重固定到 `5d83992436eae1d760afd27aff78a71d676296fc`。Python 3.12、PyTorch/Torchaudio 2.8.0 CUDA 12.8、qwen-tts 0.1.1；不用 Windows 上额外编译的 FlashAttention，采用 PyTorch SDPA。第一次安装下载约6GB的权重和GPU依赖，解压及缓存会占用更多空间。
 
 ## 安装、启动与试听
