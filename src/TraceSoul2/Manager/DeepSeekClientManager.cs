@@ -122,10 +122,17 @@ namespace TraceSoul2.Manager
             {
                 if (json)
                 {
+                    // Long conversational histories can pull JSON-mode DeepSeek back into plain speech.
+                    // Keep the original prefix intact and restate only the wire format at the request boundary.
+                    // Never mutate the caller's list: the same turn may next be sent to another provider.
+                    var jsonMessages = new List<DeepSeekMessageData>(messages ?? new List<DeepSeekMessageData>());
+                    if (jsonMessages.Count == 0 || jsonMessages[jsonMessages.Count - 1]?.role != "user" ||
+                        jsonMessages[jsonMessages.Count - 1]?.content != CorePrompts.Transport.DeepSeekJsonOutput)
+                        jsonMessages.Add(new DeepSeekMessageData("user", CorePrompts.Transport.DeepSeekJsonOutput));
                     return TraceJson.ToJson(new DeepSeekChatRequestData
                     {
                         model = model,
-                        messages = messages,
+                        messages = jsonMessages,
                         response_format = useJsonResponseFormat ? new DeepSeekResponseFormatData() : null,
                         thinking = new DeepSeekThinkingData
                         {

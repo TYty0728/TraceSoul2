@@ -7,6 +7,11 @@ namespace TraceSoul2.Prompts
     /// </summary>
     public static class CorePrompts
     {
+        public static class Transport
+        {
+            public const string DeepSeekJsonOutput = "【本次输出格式】这不是新的对话输入。请继续处理上面的任务，并严格按前文给定的字段结构输出一个完整 JSON 对象；首个非空白字符是 {，最后一个非空白字符是 }。正文放入对应字符串字段，不要在 JSON 外直接说话，不要 Markdown，不要只输出空白。";
+        }
+
         public static void Write(StringBuilder builder, string text)
         {
             if (builder == null || string.IsNullOrEmpty(text)) return;

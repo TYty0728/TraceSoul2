@@ -12,6 +12,7 @@ using TraceSoul2.Logic;
 using TraceSoul2.Manager;
 using TraceSoul2.Plugins;
 using TraceSoul2.Plugins.Builtin;
+using TraceSoul2.Prompts;
 
 internal static partial class Program
 {
@@ -25,6 +26,7 @@ internal static partial class Program
         {
             await CheckFallbackWireAsync(root);
             await CheckGlmJsonWireAsync(root);
+            await CheckDeepSeekJsonBoundaryAsync();
             await CheckFallbackClientBoundaryAsync();
             await CheckFallbackKernelAsync();
             CheckFallbackConfiguration(root);
@@ -39,6 +41,72 @@ internal static partial class Program
         }
         finally { Directory.Delete(root, true); }
         Console.WriteLine("Main model fallback checks passed: GLM JSON/text wire format and repair, three-stage wire bounds, cancellation, continuity, safe failures and persisted choices.");
+    }
+
+    private static async Task CheckDeepSeekJsonBoundaryAsync()
+    {
+        var messages = new List<DeepSeekMessageData> {
+            new DeepSeekMessageData("system", "stable identity"),
+            new DeepSeekMessageData("user", "earlier turn"),
+            new DeepSeekMessageData("assistant", "earlier plain speech"),
+            new DeepSeekMessageData("user", "Return JSON matching the given schema."),
+            new DeepSeekMessageData("user", new string('x', 12000)),
+            new DeepSeekMessageData("user", "current turn") };
+        var before = JsonSerializer.Serialize(messages, new JsonSerializerOptions { IncludeFields = true });
+        var expected = JsonDocument.Parse(before);
+        var config = new DeepSeekConfigData { BaseUrl = "https://api.deepseek.com", Model = "deepseek-flash",
+            Type = "openai_chat_completion", ThinkingEnabled = true, ReasoningEffort = "low", MaxTokens = 8192 };
+        foreach (var protocolFormat in new[] { true, false })
+        foreach (var thinking in new[] { true, false })
+        {
+            config.ThinkingEnabled = thinking;
+            using var wire = JsonDocument.Parse(DeepSeekClientManager.BuildChatRequestJson(config, messages, 1f, true, protocolFormat));
+            var root = wire.RootElement;
+            var sent = root.GetProperty("messages");
+            Require(sent.GetArrayLength() == messages.Count + 1 &&
+                sent[messages.Count].GetProperty("content").GetString() == CorePrompts.Transport.DeepSeekJsonOutput,
+                "DeepSeek首次及协议降级JSON请求带明确队尾格式要求，思考开关不影响约束");
+            for (var i = 0; i < messages.Count; i++)
+                Require(sent[i].GetRawText() == expected.RootElement[i].GetRawText(),
+                    "DeepSeek队尾约束保留身份、历史、任务、纠正反馈的原始前缀");
+            Require(root.GetProperty("max_tokens").GetInt32() == 8192 &&
+                root.GetProperty("thinking").GetProperty("type").GetString() == (thinking ? "enabled" : "disabled"),
+                "输出约束不修改思考参数或token上限");
+        }
+        using (var text = JsonDocument.Parse(DeepSeekClientManager.BuildChatRequestJson(config, messages, 1f, false, false)))
+            Require(text.RootElement.GetProperty("messages").GetArrayLength() == messages.Count,
+                "DeepSeek普通文字调用不能添加JSON要求");
+        var guarded = new List<DeepSeekMessageData>(messages) {
+            new DeepSeekMessageData("user", CorePrompts.Transport.DeepSeekJsonOutput) };
+        using (var repeated = JsonDocument.Parse(DeepSeekClientManager.BuildChatRequestJson(config, guarded, 1f, true, true)))
+            Require(repeated.RootElement.GetProperty("messages").GetArrayLength() == guarded.Count,
+                "重复组装不叠加相同格式尾注");
+        foreach (var model in new[] { "glm-5.2", "compatible-test", "kimi-k3" })
+        {
+            config.BaseUrl = model == "kimi-k3" ? "https://api.moonshot.cn/v1" : "https://example.invalid/v1";
+            config.Model = model;
+            using var other = JsonDocument.Parse(DeepSeekClientManager.BuildChatRequestJson(config, messages, 1f, true, true));
+            Require(other.RootElement.GetProperty("messages").GetArrayLength() == messages.Count,
+                "其他供应商不接收DeepSeek专用格式尾注");
+        }
+        Require(before == JsonSerializer.Serialize(messages, new JsonSerializerOptions { IncludeFields = true }),
+            "格式约束不写回调用方消息，切备用及后续轮次不污染");
+        using var deepseek = new FailureHttpServer(200,
+            "{\"choices\":[{\"message\":{\"content\":\"   \"},\"finish_reason\":\"stop\"}]}");
+        using var backup = new FailureHttpServer(200, FallbackOk);
+        var first = new DeepSeekClientManager(new DeepSeekConfigData { BaseUrl = deepseek.Url, Type = "deepseek",
+            Model = "deepseek-flash", ApiKey = "test", EmptyContentRetries = 1 }, singleAttempt: true);
+        var second = new DeepSeekClientManager(new DeepSeekConfigData { BaseUrl = backup.Url,
+            Model = "compatible-test", ApiKey = "test" }, singleAttempt: true);
+        var route = new MainModelFallbackClient(new ILlmClient[] { first, second });
+        Require((await route.CompleteJsonAsync(messages)).Contains("ok") && deepseek.Calls == 1 && backup.Calls == 1,
+            "DeepSeek补格式后仍空白时仅一次请求后切备用，不增加重试");
+        using var primaryRequest = JsonDocument.Parse(deepseek.Requests.Single());
+        using var backupRequest = JsonDocument.Parse(backup.Requests.Single());
+        Require(primaryRequest.RootElement.GetProperty("messages").GetArrayLength() == messages.Count + 1 &&
+            backupRequest.RootElement.GetProperty("messages").GetArrayLength() == messages.Count,
+            "实际HTTP仅DeepSeek携带格式尾注，备用沿用原始上下文");
+        expected.Dispose();
     }
 
     private static LlmProviderStore MakeFallbackStore(string path, params (string Id, string Url, string Type)[] providers)
