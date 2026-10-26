@@ -337,11 +337,11 @@ namespace TraceSoul2.Logic
                     content = content,
                     source_refs = (old?.source_refs ?? new List<string>()).Concat(item.source_refs ?? new List<string>())
                         .Append("moment:" + sourceMomentId).Distinct().TakeLast(12).ToList(),
-                    UpdatedUnixMs = nowUnixMs
+                    UpdatedUnixMs = old?.UpdatedUnixMs > 0 ? old.UpdatedUnixMs : nowUnixMs
                 });
                 if (result.Count == 3) break;
             }
-            return result;
+            return PruneAttention(result, nowUnixMs, nowUnixMs);
         }
 
         private static List<AttentionItemData> CloneAttention(IEnumerable<AttentionItemData> source)

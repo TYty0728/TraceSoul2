@@ -20,8 +20,10 @@ namespace TraceSoul2.Plugins.Builtin
     /// 出站把规范表达翻译成 send_group_msg / send_private_msg，并回传规范「已发送」事件（保证入库）。
     /// 平台的消息格式差异全部收在适配器里，插件只负责连接与收发。
     /// </summary>
-    public sealed class OneBotPlatformAdapter : ITracePlatformAdapter
+    public sealed class OneBotPlatformAdapter : ITracePlatformAdapter, ITraceOutboundCapabilities
     {
+        public bool SupportsOutbound(string kind) => kind is TraceOutboundKinds.Text or TraceOutboundKinds.Image or
+            TraceOutboundKinds.Voice or TraceOutboundKinds.Sticker;
         private readonly OneBotPlatformPlugin owner;
 
         public OneBotPlatformAdapter(OneBotPlatformPlugin owner)

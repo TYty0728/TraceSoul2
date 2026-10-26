@@ -4,6 +4,25 @@ using TraceSoul2.Data;
 
 namespace TraceSoul2.Plugins
 {
+    /// <summary>平台声明实际支持的规范出站类型；能力插件不猜测设备的媒体能力。</summary>
+    public interface ITraceOutboundCapabilities
+    {
+        bool SupportsOutbound(string kind);
+    }
+
+    public static class TracePlatformOutput
+    {
+        public static ITracePlatformAdapter Find(TraceTurnContext context, string kind)
+        {
+            var platform = context?.Environment?.PlatformId;
+            if (string.IsNullOrWhiteSpace(platform)) return null;
+            foreach (var adapter in context.Services.PlatformAdapters)
+                if (adapter?.PlatformId == platform && adapter is ITraceOutboundCapabilities supported && supported.SupportsOutbound(kind))
+                    return adapter;
+            return null;
+        }
+    }
+
     /// <summary>出站表达的规范消息结构：与平台无关；平台适配器负责翻译成平台自己的动作。</summary>
     public sealed class TraceOutboundMessageData
     {

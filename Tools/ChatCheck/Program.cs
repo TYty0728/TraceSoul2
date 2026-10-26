@@ -20,6 +20,8 @@ internal static partial class Program
     private static void Main(string[] args)
     {
         SQLitePCL.Batteries_V2.Init();
+        if (args.Contains("--camera-transport")) { RunCameraTransportChecksAsync().GetAwaiter().GetResult(); return; }
+        if (args.Contains("--turn-maintenance")) { RunTurnMaintenanceChecksAsync().GetAwaiter().GetResult(); return; }
         if (args.Contains("--cognition-comparison")) { RunCognitionComparisonChecksAsync().GetAwaiter().GetResult(); return; }
         if (args.Length == 3 && args[0] == "--cognition-comparison-replay") { RunCognitionComparisonReplay(args[1], args[2]); return; }
         if (args.Contains("--review-reliability")) { RunReviewReliabilityChecksAsync().GetAwaiter().GetResult(); return; }
@@ -132,6 +134,8 @@ internal static partial class Program
         RunOneBotSessionMemoryCheck();
         RunQqTypingChecksAsync().GetAwaiter().GetResult();
         RunQqDeliveryAndCameraContextCheck();
+        RunCameraTransportChecksAsync().GetAwaiter().GetResult();
+        RunTurnMaintenanceChecksAsync().GetAwaiter().GetResult();
         RunExpressorImageRoutingCheck();
         RunAutomaticPhotoChecksAsync().GetAwaiter().GetResult();
         RunMindAtmosphereCheck();

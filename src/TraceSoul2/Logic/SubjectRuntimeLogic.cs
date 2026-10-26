@@ -147,6 +147,24 @@ namespace TraceSoul2.Logic
             }
         }
 
+        public static bool CommitMaintenance(TraceTurnContext turn, long expectedRevision, long expectedRuntimeRevision,
+            InnerRuntimeWriteData changes, long observedUnixMs)
+        {
+            if (turn.Services.Storage is not SqliteMemoryManager store) return false;
+            var root = PuzzleViewLogic.Root(turn);
+            var current = Read(store, root);
+            var local = store.LoadOrCreateInnerRuntime(root);
+            if (current.Revision != expectedRevision || local.Revision != expectedRuntimeRevision) return false;
+            var next = InnerLifeLogic.Reduce(local, changes, turn.Moment.Id, observedUnixMs);
+            SubjectFragment Fragment(string text) => new() { Text = text, Context = turn.ConversationId,
+                Visibility = turn.Environment.Visibility, MomentId = turn.Moment.Id, UpdatedUnixMs = observedUnixMs };
+            current.Attention = Fragment(TraceJson.ToJson(next.Attention));
+            if (changes.ongoing_activity != null && next.OngoingActivity != local.OngoingActivity)
+                current.Scene = Fragment(next.OngoingActivity);
+            current.Revision++;
+            return store.TrySaveSubject(root, expectedRevision, current, next);
+        }
+
         public static bool CommitReview(SqliteMemoryManager store, string root, long expectedRevision,
             InnerRuntimeData next, InnerRuntimeWriteData changes)
         {

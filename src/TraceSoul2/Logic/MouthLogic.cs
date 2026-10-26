@@ -41,6 +41,9 @@ namespace TraceSoul2.Logic
             return string.Equals(facetId, "qq.reply.channel", StringComparison.Ordinal);
         }
 
+        public static string BodyOf(TraceContributionDescriptorData item, TraceTurnContext turn)
+            => item?.BodyId == BodyIds.ReplyTarget ? BodyOfPlugin(turn?.Environment?.PlatformId) : BodyOf(item);
+
         public static string BodyOf(TraceContributionDescriptorData item)
         {
             if (item != null && !string.IsNullOrWhiteSpace(item.BodyId))

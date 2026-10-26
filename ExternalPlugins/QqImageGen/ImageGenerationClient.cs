@@ -1,7 +1,6 @@
 using System;
 using System.Collections.Generic;
 using System.Diagnostics;
-using System.IO;
 using System.Linq;
 using System.Net;
 using System.Net.Http;
@@ -20,18 +19,8 @@ namespace TraceSoul2.ExternalPlugins
         public string BaseUrl;
         public string Model;
         public List<string> ApiKeys = new List<string>();
-        public string ApiFormat = "auto";
-        public string ApiMode = "auto";
         public string Proxy;
-        public string SafetySettings = "BLOCK_NONE";
-        public string ImageSize = "2K";
-        public string StandardSize = "1024x1024";
         public int TimeoutSeconds = 600;
-        public int MaxRetries = 3;
-        public int PollIntervalSeconds = 5;
-        public bool EnableThinking;
-        public bool LogRequestBody;
-        public bool Debug;
     }
 
     internal sealed class GeneratedImageData
@@ -51,26 +40,22 @@ namespace TraceSoul2.ExternalPlugins
 
     internal sealed class ImageGenerationClient : IDisposable
     {
-        private static readonly Regex VersionSuffix = new Regex(@"/v\d+(?:beta\d*)?/?$",
-            RegexOptions.IgnoreCase | RegexOptions.Compiled);
-        private static readonly Regex DataUriRegex = new Regex(
-            @"data:image/(?<mime>png|jpeg|jpg|webp|gif);base64,(?<data>[A-Za-z0-9+/=\s]+)",
-            RegexOptions.IgnoreCase | RegexOptions.Compiled);
-        private static readonly Regex MarkdownUrlRegex = new Regex(
-            @"!\[[^\]]*\]\((?<url>https?://[^\s\)]+)\)", RegexOptions.IgnoreCase | RegexOptions.Compiled);
-        private static readonly Regex HttpUrlRegex = new Regex(
-            @"https?://[^\s\)\]\""']{20,}", RegexOptions.IgnoreCase | RegexOptions.Compiled);
-
         private readonly ImageGenerationSettings settings;
         private readonly TracePluginServices services;
         private readonly string traceId;
         private readonly HttpClient http;
 
-        public ImageGenerationClient(ImageGenerationSettings settings, TracePluginServices services, string traceId)
+        public ImageGenerationClient(ImageGenerationSettings settings, TracePluginServices services, string traceId,
+            HttpMessageHandler messageHandler = null)
         {
             this.settings = settings ?? throw new ArgumentNullException(nameof(settings));
             this.services = services;
             this.traceId = traceId;
+            if (messageHandler != null)
+            {
+                http = new HttpClient(messageHandler) { Timeout = Timeout.InfiniteTimeSpan };
+                return;
+            }
             var handler = new HttpClientHandler();
             if (!string.IsNullOrWhiteSpace(settings.Proxy))
             {
@@ -94,11 +79,10 @@ namespace TraceSoul2.ExternalPlugins
                 return Failed("缺少 base_url 或 model。");
 
             services?.LogTiming(traceId, "TA的相机 上游生成开始", detail:
-                "model=" + settings.Model + "｜format=" + (IsGemini() ? "gemini" : "openai") +
-                "｜modes=" + string.Join(",", IsGemini() ? new[] { "native" } : ResolveOpenAiModes()) +
+                "model=" + settings.Model + "｜interface=images" +
                 "｜refs=" + (references?.Count ?? 0) + "｜aspect=" + (aspectRatio ?? string.Empty));
             var timer = Stopwatch.StartNew();
-            var result = await GenerateOnceAsync(prompt, references ?? new List<ReferenceImageData>(),
+            var result = await GenerateOpenAiStandardAsync(prompt, references ?? new List<ReferenceImageData>(),
                 aspectRatio, keys[0], cancellationToken);
             services?.LogTiming(traceId, result.Success ? "生图上游完成" : "生图上游未完成",
                 timer.ElapsedMilliseconds,
@@ -107,7 +91,7 @@ namespace TraceSoul2.ExternalPlugins
             if (result.Success) return result;
             if (UpstreamUnavailable(result.Error))
                 services?.LogTiming(traceId, "TA的相机 上游未返回，已停止", detail: Truncate(result.Error, 400));
-            return Failed(string.IsNullOrWhiteSpace(result.Error) ? "上游未返回。" : result.Error);
+            return Failed(string.IsNullOrWhiteSpace(result.Error) ? "上游未返回。" : result.Error, result.Protocol);
         }
 
         internal static bool UpstreamUnavailable(string error)
@@ -123,165 +107,49 @@ namespace TraceSoul2.ExternalPlugins
             return false;
         }
 
-        internal static bool WrongEndpoint(string error)
-        {
-            if (string.IsNullOrWhiteSpace(error)) return false;
-            return error.IndexOf("HTTP 404", StringComparison.Ordinal) >= 0 ||
-                error.IndexOf("HTTP 405", StringComparison.Ordinal) >= 0 ||
-                error.IndexOf("HTTP 501", StringComparison.Ordinal) >= 0;
-        }
+        private bool IsGptImage() =>
+            (settings.Model ?? string.Empty).IndexOf("gpt-image", StringComparison.OrdinalIgnoreCase) >= 0 ||
+            (settings.Model ?? string.Empty).IndexOf("chatgpt-image", StringComparison.OrdinalIgnoreCase) >= 0;
 
-        private async Task<ImageGenerationResult> GenerateOnceAsync(
-            string prompt,
-            IReadOnlyList<ReferenceImageData> references,
-            string aspectRatio,
-            string apiKey,
-            CancellationToken cancellationToken)
+        private string ResolveStandardSize(string aspectRatio)
         {
-            if (IsGemini()) return await GenerateGeminiAsync(prompt, references, aspectRatio, apiKey, cancellationToken);
-
-            var modes = ResolveOpenAiModes();
-            var errors = new List<string>();
-            foreach (var mode in modes)
+            if (!IsGptImage()) return "1024x1024";
+            var ratio = (aspectRatio ?? string.Empty).Split(':');
+            if (ratio.Length != 2 || !int.TryParse(ratio[0], out var width) ||
+                !int.TryParse(ratio[1], out var height) || width <= 0 || height <= 0)
+                return "auto";
+            if (width == height) return "1024x1024";
+            if ((settings.Model ?? string.Empty).IndexOf("gpt-image-2", StringComparison.OrdinalIgnoreCase) >= 0)
             {
-                ImageGenerationResult result;
-                if (mode == "async")
-                    result = await GenerateOpenAiAsyncTaskAsync(prompt, references, aspectRatio, apiKey, cancellationToken);
-                else if (mode == "sync")
-                    result = await GenerateOpenAiChatAsync(prompt, references, apiKey, cancellationToken);
-                else
-                    result = await GenerateOpenAiStandardAsync(prompt, references, apiKey, cancellationToken);
-                if (result.Success) return result;
-                errors.Add(result.Protocol + "：" + result.Error);
-                if (UpstreamUnavailable(result.Error))
-                {
-                    services?.LogTiming(traceId, "TA的相机 上游未返回，已停止", detail: Truncate(result.Error, 400));
-                    return result;
-                }
-                if (!WrongEndpoint(result.Error)) return result;
+                // A 1536px long edge stays within GPT Image 2/2.5 pixel limits for ratios up to 3:1.
+                var scale = (double)Math.Max(width, height) / Math.Min(width, height);
+                if (scale > 3) return "auto";
+                var shortEdge = (int)Math.Round(1536 / scale / 16) * 16;
+                return width > height ? "1536x" + shortEdge : shortEdge + "x1536";
             }
-            return new ImageGenerationResult
-            {
-                Protocol = "openai-fallbacks",
-                Error = string.Join("；", errors)
-            };
-        }
-
-        private List<string> ResolveOpenAiModes()
-        {
-            var configured = (settings.ApiMode ?? "auto").Trim().ToLowerInvariant();
-            if (configured == "async" || configured == "sync" || configured == "standard")
-                return new List<string> { configured };
-            var model = (settings.Model ?? string.Empty).ToLowerInvariant();
-            if (model.Contains("gpt-image") || model.Contains("生图"))
-                return new List<string> { "async", "standard", "sync" };
-            return new List<string> { "standard", "sync", "async" };
-        }
-
-        private bool IsGemini()
-        {
-            var format = (settings.ApiFormat ?? "auto").Trim().ToLowerInvariant();
-            if (format == "gemini") return true;
-            if (format == "openai") return false;
-            return (settings.Model ?? string.Empty).IndexOf("gemini", StringComparison.OrdinalIgnoreCase) >= 0;
-        }
-
-        private async Task<ImageGenerationResult> GenerateOpenAiAsyncTaskAsync(
-            string prompt,
-            IReadOnlyList<ReferenceImageData> references,
-            string aspectRatio,
-            string apiKey,
-            CancellationToken cancellationToken)
-        {
-            var payload = new Dictionary<string, object>
-            {
-                { "model", settings.Model }, { "prompt", prompt }
-            };
-            if (!string.IsNullOrWhiteSpace(aspectRatio)) payload["aspect_ratio"] = aspectRatio;
-            if (references.Count > 0)
-                payload["images"] = references.Select(ToDataUri).ToList();
-            var url = CleanBase() + "/v1/videos";
-            var response = await SendJsonAsync(HttpMethod.Post, url, apiKey, payload, false, cancellationToken);
-            if (!response.Success) return Failed(response.Error, "openai-async");
-            var roots = ParseRoots(response.Body, response.ContentType, out var parseError);
-            if (roots.Count == 0) return Failed(parseError, "openai-async");
-            var root = roots.Last();
-            var status = GetString(root, "status");
-            if (string.Equals(status, "failed", StringComparison.OrdinalIgnoreCase))
-                return Failed(ExtractApiError(root), "openai-async");
-            if (string.Equals(status, "queued", StringComparison.OrdinalIgnoreCase) ||
-                string.Equals(status, "in_progress", StringComparison.OrdinalIgnoreCase))
-            {
-                var taskId = GetString(root, "id");
-                if (string.IsNullOrWhiteSpace(taskId)) return Failed("任务响应没有 id。", "openai-async");
-                services?.LogTiming(traceId, "TA的相机 异步任务开始轮询", detail:
-                    "task=" + taskId + "｜status=" + status);
-                return await PollOpenAiTaskAsync(taskId, apiKey, cancellationToken);
-            }
-            var extracted = await ExtractImagesAsync(roots, apiKey, "openai-async", cancellationToken);
-            return extracted.Success ? extracted : Failed("任务响应中没有图片。" + extracted.Error, "openai-async");
-        }
-
-        private async Task<ImageGenerationResult> PollOpenAiTaskAsync(
-            string taskId,
-            string apiKey,
-            CancellationToken cancellationToken)
-        {
-            var started = Stopwatch.StartNew();
-            var url = CleanBase() + "/v1/videos/" + Uri.EscapeDataString(taskId);
-            var interval = Math.Max(2, Math.Min(30, settings.PollIntervalSeconds));
-            string lastStatus = string.Empty;
-            while (started.Elapsed < TimeSpan.FromSeconds(settings.TimeoutSeconds))
-            {
-                var response = await SendJsonAsync(HttpMethod.Get, url, apiKey, null, false, cancellationToken);
-                if (!response.Success)
-                    return Failed(response.Error, "openai-async");
-                var roots = ParseRoots(response.Body, response.ContentType, out var parseError);
-                if (roots.Count == 0)
-                    return Failed(string.IsNullOrWhiteSpace(parseError) ? "轮询响应无法解析。" : parseError, "openai-async");
-                var root = roots.Last();
-                var status = GetString(root, "status");
-                var progress = GetNumberText(root, "progress");
-                services?.LogTiming(traceId, "TA的相机 异步任务轮询", detail:
-                    "task=" + taskId + "｜status=" + status + "｜progress=" + progress +
-                    "｜waited=" + (int)started.Elapsed.TotalSeconds + "s");
-                if (string.Equals(status, "completed", StringComparison.OrdinalIgnoreCase))
-                {
-                    services?.LogTiming(traceId, "TA的相机 异步任务完成", detail:
-                        "task=" + taskId + "｜waited=" + (int)started.Elapsed.TotalSeconds + "s");
-                    var extracted = await ExtractImagesAsync(roots, apiKey, "openai-async", cancellationToken);
-                    return extracted.Success ? extracted : Failed("任务完成但没有图片：" + extracted.Error, "openai-async");
-                }
-                if (string.Equals(status, "failed", StringComparison.OrdinalIgnoreCase))
-                    return Failed(ExtractApiError(root), "openai-async");
-                lastStatus = status;
-                var dynamicInterval = started.Elapsed < TimeSpan.FromMinutes(1) ? interval : interval * 2;
-                await Task.Delay(TimeSpan.FromSeconds(Math.Min(30, dynamicInterval)), cancellationToken);
-            }
-            return Failed("任务轮询超时（" + settings.TimeoutSeconds + "秒，最后状态=" + lastStatus + "）。",
-                "openai-async");
+            return width > height ? "1536x1024" : "1024x1536";
         }
 
         private async Task<ImageGenerationResult> GenerateOpenAiStandardAsync(
             string prompt,
             IReadOnlyList<ReferenceImageData> references,
+            string aspectRatio,
             string apiKey,
             CancellationToken cancellationToken)
         {
             if (references.Count > 0)
-            {
-                var edit = await GenerateOpenAiEditAsync(prompt, references, apiKey, cancellationToken);
-                if (edit.Success || !WrongEndpoint(edit.Error)) return edit;
-            }
+                return await GenerateOpenAiEditAsync(prompt, references, aspectRatio, apiKey, cancellationToken);
             var payload = new Dictionary<string, object>
             {
                 { "model", settings.Model }, { "prompt", prompt }, { "n", 1 },
-                { "size", settings.StandardSize }, { "response_format", "b64_json" }
+                { "size", ResolveStandardSize(aspectRatio) }
             };
+            // GPT Image always returns b64_json and does not accept response_format.
+            if (!IsGptImage()) payload["response_format"] = "b64_json";
             var response = await SendJsonAsync(HttpMethod.Post, NormalizeOpenAiBase() + "/images/generations",
-                apiKey, payload, false, cancellationToken);
+                apiKey, payload, cancellationToken);
             if (!response.Success) return Failed(response.Error, "openai-images");
-            var roots = ParseRoots(response.Body, response.ContentType, out var parseError);
+            var roots = ParseRoots(response.Body, out var parseError);
             if (roots.Count == 0) return Failed(parseError, "openai-images");
             var extracted = await ExtractImagesAsync(roots, apiKey, "openai-images", cancellationToken);
             return extracted.Success ? extracted : Failed("响应中没有 b64_json/url。" + extracted.Error, "openai-images");
@@ -290,6 +158,7 @@ namespace TraceSoul2.ExternalPlugins
         private async Task<ImageGenerationResult> GenerateOpenAiEditAsync(
             string prompt,
             IReadOnlyList<ReferenceImageData> references,
+            string aspectRatio,
             string apiKey,
             CancellationToken cancellationToken)
         {
@@ -299,20 +168,22 @@ namespace TraceSoul2.ExternalPlugins
                 {
                     content.Add(new StringContent(settings.Model), "model");
                     content.Add(new StringContent(prompt), "prompt");
-                    content.Add(new StringContent(settings.StandardSize), "size");
-                    content.Add(new StringContent("b64_json"), "response_format");
+                    content.Add(new StringContent(ResolveStandardSize(aspectRatio)), "size");
+                    content.Add(new StringContent("1"), "n");
+                    if (!IsGptImage()) content.Add(new StringContent("b64_json"), "response_format");
                     for (var i = 0; i < references.Count; i++)
                     {
                         var part = new ByteArrayContent(references[i].Bytes);
                         part.Headers.ContentType = new MediaTypeHeaderValue(references[i].MimeType ?? "image/png");
-                        content.Add(part, i == 0 ? "image" : "image[]", references[i].FileName ?? ("ref" + i + ".png"));
+                        content.Add(part, references.Count == 1 ? "image" : "image[]", references[i].FileName ?? ("ref" + i + ".png"));
                     }
                     var response = await SendContentAsync(HttpMethod.Post, NormalizeOpenAiBase() + "/images/edits",
-                        apiKey, content, false, cancellationToken);
+                        apiKey, content, cancellationToken);
                     if (!response.Success) return Failed(response.Error, "openai-edits");
-                    var roots = ParseRoots(response.Body, response.ContentType, out var parseError);
+                    var roots = ParseRoots(response.Body, out var parseError);
                     if (roots.Count == 0) return Failed(parseError, "openai-edits");
-                    return await ExtractImagesAsync(roots, apiKey, "openai-edits", cancellationToken);
+                    var extracted = await ExtractImagesAsync(roots, apiKey, "openai-edits", cancellationToken);
+                    return extracted.Success ? extracted : Failed("响应中没有 b64_json/url。" + extracted.Error, "openai-edits");
                 }
             }
             catch (Exception exception)
@@ -321,105 +192,16 @@ namespace TraceSoul2.ExternalPlugins
             }
         }
 
-        private async Task<ImageGenerationResult> GenerateOpenAiChatAsync(
-            string prompt,
-            IReadOnlyList<ReferenceImageData> references,
-            string apiKey,
-            CancellationToken cancellationToken)
-        {
-            var parts = new List<object> { new { type = "text", text = prompt } };
-            for (var i = 0; i < references.Count; i++)
-            {
-                parts.Add(new { type = "text", text = ReferenceLabel(references[i], i) });
-                parts.Add(new
-                {
-                    type = "image_url", image_url = new { url = ToDataUri(references[i]) }
-                });
-            }
-            var payload = new
-            {
-                model = settings.Model,
-                messages = new[] { new { role = "user", content = parts } }
-            };
-            var response = await SendJsonAsync(HttpMethod.Post, NormalizeOpenAiBase() + "/chat/completions",
-                apiKey, payload, false, cancellationToken);
-            if (!response.Success) return Failed(response.Error, "openai-chat");
-            var roots = ParseRoots(response.Body, response.ContentType, out var parseError);
-            if (roots.Count == 0) return Failed(parseError, "openai-chat");
-            var extracted = await ExtractImagesAsync(roots, apiKey, "openai-chat", cancellationToken);
-            return extracted.Success ? extracted : Failed("聊天响应中没有图片。" + extracted.Error, "openai-chat");
-        }
-
-        private async Task<ImageGenerationResult> GenerateGeminiAsync(
-            string prompt,
-            IReadOnlyList<ReferenceImageData> references,
-            string aspectRatio,
-            string apiKey,
-            CancellationToken cancellationToken)
-        {
-            var parts = new List<object> { new { text = prompt } };
-            for (var i = 0; i < references.Count; i++)
-            {
-                parts.Add(new { text = ReferenceLabel(references[i], i) });
-                parts.Add(new
-                {
-                    inline_data = new
-                    {
-                        mime_type = references[i].MimeType ?? "image/png",
-                        data = Convert.ToBase64String(references[i].Bytes)
-                    }
-                });
-            }
-            var imageConfig = new Dictionary<string, object>();
-            if (!string.IsNullOrWhiteSpace(aspectRatio)) imageConfig["aspectRatio"] = aspectRatio;
-            if (!string.IsNullOrWhiteSpace(settings.ImageSize) &&
-                settings.Model.IndexOf("gemini-3", StringComparison.OrdinalIgnoreCase) >= 0)
-                imageConfig["imageSize"] = settings.ImageSize;
-            var generationConfig = new Dictionary<string, object>
-            {
-                { "responseModalities", new[] { "TEXT", "IMAGE" } }
-            };
-            if (imageConfig.Count > 0) generationConfig["imageConfig"] = imageConfig;
-            if (settings.EnableThinking) generationConfig["thinkingConfig"] = new { thinkingBudget = 8192 };
-            var safety = new List<object>();
-            foreach (var category in new[]
-                     {
-                         "HARM_CATEGORY_HARASSMENT", "HARM_CATEGORY_HATE_SPEECH",
-                         "HARM_CATEGORY_SEXUALLY_EXPLICIT", "HARM_CATEGORY_DANGEROUS_CONTENT",
-                         "HARM_CATEGORY_CIVIC_INTEGRITY"
-                     })
-                safety.Add(new { category, threshold = settings.SafetySettings });
-            var payload = new
-            {
-                contents = new[] { new { parts } },
-                generationConfig,
-                safetySettings = safety
-            };
-            var url = CleanBase() + "/v1beta/models/" + Uri.EscapeDataString(settings.Model) + ":generateContent";
-            var response = await SendJsonAsync(HttpMethod.Post, url, apiKey, payload, true, cancellationToken);
-            if (!response.Success) return Failed(response.Error, "gemini-native");
-            var roots = ParseRoots(response.Body, response.ContentType, out var parseError);
-            if (roots.Count == 0) return Failed(parseError, "gemini-native");
-            var block = FindSafetyBlock(roots);
-            if (block.Length > 0) return Failed("安全审核拦截：" + block, "gemini-native");
-            var extracted = await ExtractImagesAsync(roots, apiKey, "gemini-native", cancellationToken);
-            return extracted.Success ? extracted : Failed("响应中没有 inlineData：" + extracted.Error, "gemini-native");
-        }
-
         private async Task<ApiResponse> SendJsonAsync(
             HttpMethod method,
             string url,
             string apiKey,
             object payload,
-            bool googleKey,
             CancellationToken cancellationToken)
         {
             var json = payload == null ? null : JsonSerializer.Serialize(payload);
-            if (settings.LogRequestBody && json != null)
-                services?.LogTiming(traceId, "TA的相机 请求概况", detail:
-                    "model=" + settings.Model + "｜body_chars=" + json.Length + "｜图片及请求正文已省略");
             HttpContent content = json == null ? null : new StringContent(json, Encoding.UTF8, "application/json");
-            return await SendContentAsync(method, url, apiKey, content, googleKey, cancellationToken);
+            return await SendContentAsync(method, url, apiKey, content, cancellationToken);
         }
 
         private async Task<ApiResponse> SendContentAsync(
@@ -427,7 +209,6 @@ namespace TraceSoul2.ExternalPlugins
             string url,
             string apiKey,
             HttpContent content,
-            bool googleKey,
             CancellationToken cancellationToken)
         {
             var requestTimer = Stopwatch.StartNew();
@@ -437,8 +218,7 @@ namespace TraceSoul2.ExternalPlugins
             using (var request = new HttpRequestMessage(method, url))
             {
                 timeout.CancelAfter(TimeSpan.FromSeconds(settings.TimeoutSeconds));
-                if (googleKey) request.Headers.TryAddWithoutValidation("x-goog-api-key", apiKey);
-                else request.Headers.Authorization = new AuthenticationHeaderValue("Bearer", apiKey);
+                request.Headers.Authorization = new AuthenticationHeaderValue("Bearer", apiKey);
                 request.Content = content;
                 try
                 {
@@ -486,7 +266,24 @@ namespace TraceSoul2.ExternalPlugins
         {
             var result = new ImageGenerationResult { Protocol = protocol };
             var urls = new List<string>();
-            foreach (var root in roots) Walk(root, string.Empty, result.Images, urls);
+            foreach (var root in roots)
+            {
+                if (root.ValueKind != JsonValueKind.Object ||
+                    !root.TryGetProperty("data", out var data) || data.ValueKind != JsonValueKind.Array) continue;
+                var format = GetString(root, "output_format");
+                var mime = format == "jpeg" ? "image/jpeg" : format == "webp" ? "image/webp" : "image/png";
+                foreach (var item in data.EnumerateArray())
+                {
+                    var base64 = GetString(item, "b64_json");
+                    if (base64.Length > 0) AddBase64(base64, mime, "b64_json", result.Images);
+                    else
+                    {
+                        var url = GetString(item, "url");
+                        if (Uri.TryCreate(url, UriKind.Absolute, out var uri) &&
+                            (uri.Scheme == "https" || uri.Scheme == "http")) urls.Add(url);
+                    }
+                }
+            }
             foreach (var url in urls.Distinct(StringComparer.Ordinal))
             {
                 var downloaded = await DownloadAsync(url, apiKey, cancellationToken);
@@ -500,81 +297,6 @@ namespace TraceSoul2.ExternalPlugins
                 "protocol=" + protocol + "｜inline=" + result.Images.Count + "｜urls=" + urls.Count +
                 (string.IsNullOrWhiteSpace(result.Error) ? string.Empty : "｜error=" + Truncate(result.Error, 400)));
             return result;
-        }
-
-        private void Walk(JsonElement element, string propertyName,
-            List<GeneratedImageData> images, List<string> urls)
-        {
-            if (element.ValueKind == JsonValueKind.Object)
-            {
-                if (TryInlineImage(element, images)) return;
-                foreach (var property in element.EnumerateObject())
-                {
-                    var name = property.Name;
-                    if (name.Equals("b64_json", StringComparison.OrdinalIgnoreCase) &&
-                        property.Value.ValueKind == JsonValueKind.String)
-                    {
-                        AddBase64(property.Value.GetString(), "image/png", "b64_json", images);
-                        continue;
-                    }
-                    if ((name.Equals("url", StringComparison.OrdinalIgnoreCase) ||
-                         name.Equals("image_url", StringComparison.OrdinalIgnoreCase)) &&
-                        property.Value.ValueKind == JsonValueKind.String)
-                    {
-                        AddUrlOrData(property.Value.GetString(), urls, images);
-                        continue;
-                    }
-                    Walk(property.Value, name, images, urls);
-                }
-                return;
-            }
-            if (element.ValueKind == JsonValueKind.Array)
-            {
-                foreach (var item in element.EnumerateArray()) Walk(item, propertyName, images, urls);
-                return;
-            }
-            if (element.ValueKind == JsonValueKind.String &&
-                (propertyName.Equals("content", StringComparison.OrdinalIgnoreCase) ||
-                 propertyName.Equals("text", StringComparison.OrdinalIgnoreCase) ||
-                 propertyName.Equals("output", StringComparison.OrdinalIgnoreCase)))
-                ExtractFromText(element.GetString(), images, urls);
-        }
-
-        private static bool TryInlineImage(JsonElement element, List<GeneratedImageData> images)
-        {
-            JsonElement inline;
-            if (!(element.TryGetProperty("inline_data", out inline) || element.TryGetProperty("inlineData", out inline)) ||
-                inline.ValueKind != JsonValueKind.Object) return false;
-            var mime = GetString(inline, "mime_type");
-            if (mime.Length == 0) mime = GetString(inline, "mimeType");
-            var data = GetString(inline, "data");
-            AddBase64(data, mime.Length == 0 ? "image/png" : mime, "inlineData", images);
-            return data.Length > 0;
-        }
-
-        private static void ExtractFromText(string text, List<GeneratedImageData> images, List<string> urls)
-        {
-            if (string.IsNullOrWhiteSpace(text)) return;
-            foreach (Match match in DataUriRegex.Matches(text))
-                AddBase64(match.Groups["data"].Value, "image/" + match.Groups["mime"].Value.Replace("jpg", "jpeg"),
-                    "data-uri", images);
-            foreach (Match match in MarkdownUrlRegex.Matches(text)) urls.Add(match.Groups["url"].Value);
-            if (urls.Count == 0)
-                foreach (Match match in HttpUrlRegex.Matches(text))
-                {
-                    var url = match.Value.TrimEnd('.', ',', '，', '。');
-                    if (!url.EndsWith(".json", StringComparison.OrdinalIgnoreCase) &&
-                        !url.EndsWith(".html", StringComparison.OrdinalIgnoreCase)) urls.Add(url);
-                }
-        }
-
-        private static void AddUrlOrData(string value, List<string> urls, List<GeneratedImageData> images)
-        {
-            if (string.IsNullOrWhiteSpace(value)) return;
-            if (value.StartsWith("data:image/", StringComparison.OrdinalIgnoreCase))
-                ExtractFromText(value, images, urls);
-            else if (Uri.TryCreate(value, UriKind.Absolute, out var uri) &&
-                     (uri.Scheme == Uri.UriSchemeHttp || uri.Scheme == Uri.UriSchemeHttps)) urls.Add(value);
         }
 
         private static void AddBase64(string value, string mime, string source, List<GeneratedImageData> images)
@@ -632,80 +354,22 @@ namespace TraceSoul2.ExternalPlugins
             return uri.GetLeftPart(UriPartial.Path);
         }
 
-        private static List<JsonElement> ParseRoots(string body, string contentType, out string error)
+        private static List<JsonElement> ParseRoots(string body, out string error)
         {
             error = string.Empty;
             var roots = new List<JsonElement>();
-            body = (body ?? string.Empty).Trim();
-            if (body.Length == 0) { error = "响应正文为空。"; return roots; }
-            var isStream = (contentType ?? string.Empty).IndexOf("event-stream", StringComparison.OrdinalIgnoreCase) >= 0 ||
-                           body.StartsWith("data:", StringComparison.OrdinalIgnoreCase);
-            if (!isStream)
+            if (string.IsNullOrWhiteSpace(body)) { error = "响应正文为空。"; return roots; }
+            try
             {
-                try
-                {
-                    using (var doc = JsonDocument.Parse(body)) roots.Add(doc.RootElement.Clone());
-                    return roots;
-                }
-                catch (Exception exception)
-                {
-                    error = "JSON 解析失败：" + exception.Message + "｜body=" + Truncate(body, 300);
-                    return roots;
-                }
+                using (var doc = JsonDocument.Parse(body)) roots.Add(doc.RootElement.Clone());
             }
-            foreach (var line in body.Split(new[] { '\r', '\n' }, StringSplitOptions.RemoveEmptyEntries))
-            {
-                var trimmed = line.Trim();
-                if (!trimmed.StartsWith("data:", StringComparison.OrdinalIgnoreCase)) continue;
-                var json = trimmed.Substring(5).Trim();
-                if (json.Length == 0 || json == "[DONE]") continue;
-                try { using (var doc = JsonDocument.Parse(json)) roots.Add(doc.RootElement.Clone()); }
-                catch { }
-            }
-            if (roots.Count == 0) error = "SSE 响应没有可解析的 JSON 事件。";
+            catch (JsonException) { error = "图片接口未返回标准 JSON。"; }
             return roots;
         }
-
-        private string CleanBase()
-        {
-            return VersionSuffix.Replace((settings.BaseUrl ?? string.Empty).Trim().TrimEnd('/'), string.Empty);
-        }
-
         private string NormalizeOpenAiBase()
         {
             var root = (settings.BaseUrl ?? string.Empty).Trim().TrimEnd('/');
             return Regex.IsMatch(root, @"/v\d+(?:beta\d*)?$", RegexOptions.IgnoreCase) ? root : root + "/v1";
-        }
-
-        private static string ToDataUri(ReferenceImageData image)
-        {
-            return "data:" + (image.MimeType ?? "image/png") + ";base64," + Convert.ToBase64String(image.Bytes);
-        }
-
-        private static string ReferenceLabel(ReferenceImageData image, int index)
-        {
-            return "[参考图" + (index + 1) + "｜分类=" + (image.Category ?? "未分类") +
-                   "｜用途=" + (image.Role ?? "辅助") + "]";
-        }
-
-        private static string FindSafetyBlock(IEnumerable<JsonElement> roots)
-        {
-            foreach (var root in roots)
-            {
-                if (root.ValueKind != JsonValueKind.Object) continue;
-                if (root.TryGetProperty("promptFeedback", out var feedback) && feedback.ValueKind == JsonValueKind.Object)
-                {
-                    var reason = GetString(feedback, "blockReason");
-                    if (reason.Length > 0) return reason;
-                }
-                if (root.TryGetProperty("candidates", out var candidates) && candidates.ValueKind == JsonValueKind.Array &&
-                    candidates.GetArrayLength() > 0)
-                {
-                    var reason = GetString(candidates[0], "finishReason");
-                    if (reason == "SAFETY" || reason == "BLOCKED" || reason == "PROHIBITED_CONTENT") return reason;
-                }
-            }
-            return string.Empty;
         }
 
         private static string ExtractApiError(JsonElement root)
@@ -737,12 +401,6 @@ namespace TraceSoul2.ExternalPlugins
         {
             return root.ValueKind == JsonValueKind.Object && root.TryGetProperty(name, out var value) &&
                    value.ValueKind == JsonValueKind.String ? value.GetString() ?? string.Empty : string.Empty;
-        }
-
-        private static string GetNumberText(JsonElement root, string name)
-        {
-            return root.ValueKind == JsonValueKind.Object && root.TryGetProperty(name, out var value)
-                ? value.ToString() : string.Empty;
         }
 
         private static ImageGenerationResult Failed(string error, string protocol = "configuration")

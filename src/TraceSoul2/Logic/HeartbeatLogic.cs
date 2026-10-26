@@ -28,6 +28,11 @@ namespace TraceSoul2.Logic
 
         private static readonly Random Random = new Random();
 
+        // 用户谈到“心跳”仍是用户消息；只有非人类输入的到期事件才走主动入口。
+        public static bool IsHeartbeatTurn(TraceSoul2.Plugins.TraceTurnContext turn)
+            => turn?.Moment?.SourcePluginId == PluginId && !MomentTypes.IsObservation(turn.Moment.Type) &&
+                !EnvironmentLogic.IsHumanInput(turn) && IsHeartbeatContent(turn.Moment.Content);
+
         public static bool IsHeartbeatContent(string content)
         {
             var value = (content ?? string.Empty).Trim();

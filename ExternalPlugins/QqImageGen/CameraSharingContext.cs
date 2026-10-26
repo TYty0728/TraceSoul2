@@ -33,7 +33,7 @@ namespace TraceSoul2.ExternalPlugins
         {
             if (Build(turn, minimum, maximum).Length == 0) return false;
             var cycle = GetCycle(turn, minimum, maximum);
-            turn.Services.Storage.SavePluginDocument("qq.imagegen", "sharing-check:" + turn.ConversationId + ":" + Session(turn),
+            turn.Services.Storage.SavePluginDocument("qq.imagegen", "sharing-check:" + Scope(turn),
                 JsonSerializer.Serialize(cycle.CountedThrough));
             // 判断无论分享、略过或失败均消费机会；下一轮门槛立即抽取并持久化。
             GetCycle(turn, minimum, maximum);
@@ -47,14 +47,14 @@ namespace TraceSoul2.ExternalPlugins
             if (minimum > maximum) (minimum, maximum) = (maximum, minimum);
             var storage = turn.Services.Storage;
             var session = Session(turn);
-            var suffix = turn.ConversationId + ":" + session;
+            var suffix = Scope(turn);
             var raw = storage.LoadPluginDocument("qq.imagegen", "sharing-cycle:" + suffix);
             var cycle = string.IsNullOrEmpty(raw) ? null : JsonSerializer.Deserialize<SharingCycle>(raw);
             var original = cycle == null ? null : JsonSerializer.Serialize(cycle);
             var checkedRaw = storage.LoadPluginDocument("qq.imagegen", "sharing-check:" + suffix);
             var checkedAt = string.IsNullOrEmpty(checkedRaw) ? 0 : JsonSerializer.Deserialize<long>(checkedRaw);
             var imageAt = storage.GetRecentOperationalEvents(turn.ConversationId, 200)
-                .Where(x => x.Kind == OperationalEventKindValues.OutboundImage && x.SourcePluginId == "builtin.onebot" &&
+                .Where(x => x.Kind == OperationalEventKindValues.OutboundImage && x.SourcePluginId == (turn.Environment?.PlatformId ?? "builtin.onebot") &&
                     (session.Length == 0 || SessionKey(x.PayloadJson) == session))
                 .Select(x => x.CreatedUnixMs).DefaultIfEmpty(0).Max();
             var anchor = Math.Max(checkedAt, imageAt);
@@ -70,6 +70,7 @@ namespace TraceSoul2.ExternalPlugins
             var pair = storage.LoadPairIdentity();
             var fresh = storage.GetRecentDialogueMoments(turn.ConversationId, 200)
                 .Where(x => pair.IsCompanionMoment(x.Role) && x.CreatedUnixMs > cycle.CountedThrough &&
+                    (turn.Environment == null || x.SourcePluginId == turn.Environment.PlatformId) &&
                     (session.Length == 0 || SessionKey(x.PayloadJson) == session)).ToList();
             cycle.Count += fresh.Count;
             if (fresh.Count > 0) cycle.CountedThrough = fresh.Max(x => x.CreatedUnixMs);
@@ -78,8 +79,19 @@ namespace TraceSoul2.ExternalPlugins
             return cycle;
         }
 
+        private static string Scope(TraceTurnContext turn)
+        {
+            var platform = turn.Environment?.PlatformId;
+            // QQ 原键保留；新平台各自统计本地输出机会，不借最近QQ会话。
+            var prefix = string.IsNullOrEmpty(platform) || platform == "builtin.onebot" ? "" : platform + ":";
+            return turn.ConversationId + ":" + prefix + Session(turn);
+        }
+
         private static string Session(TraceTurnContext turn)
         {
+            if (turn.Environment != null)
+                return string.IsNullOrWhiteSpace(turn.Environment.SessionId) ? string.Empty :
+                    turn.Environment.SessionType + ":" + turn.Environment.SessionId;
             var session = SessionKey(turn.Moment?.PayloadJson);
             return session.Length > 0 ? session :
                 SessionKey(turn.Services.Storage.LoadPluginDocument("builtin.onebot", "last_session"));

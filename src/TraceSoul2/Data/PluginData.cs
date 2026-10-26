@@ -164,6 +164,8 @@ namespace TraceSoul2.Data
 
     public static class BodyIds
     {
+        /// <summary>通用表达能力绑定本轮已确认目标，由内核生成实际身体标识。</summary>
+        public const string ReplyTarget = "runtime.reply-target";
         public const string Console = "console";
         public const string Qq = "onebot";
         /// <summary>游戏身体：game-session 平台（自研 WS 桥）。平台 id 与归属键同形。</summary>
@@ -247,7 +249,8 @@ namespace TraceSoul2.Data
 
         public static string PlatformOf(string pluginId, string platformId)
         {
-            if (!string.IsNullOrWhiteSpace(platformId)) return platformId.Trim();
+            // 显式空字符串表示通用能力；只有旧插件未声明时才按历史命名推断。
+            if (platformId != null) return platformId.Trim();
             pluginId = pluginId ?? string.Empty;
             if (pluginId == "builtin.onebot" ||
                 pluginId.StartsWith("qq.", StringComparison.OrdinalIgnoreCase))
@@ -269,7 +272,7 @@ namespace TraceSoul2.Data
         public string Description { get; set; }
         /// <summary>kernel / platform / organ。空则按 Id 推断。</summary>
         public string Role { get; set; }
-        /// <summary>器官所属平台（onebot 等）。内核为空。</summary>
+        /// <summary>器官所属平台（onebot 等）；空字符串为通用能力，null 兼容旧名称推断。</summary>
         public string PlatformId { get; set; }
         public bool Enabled { get; set; }
         public string LoadError { get; set; }

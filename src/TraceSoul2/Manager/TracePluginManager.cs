@@ -156,7 +156,7 @@ namespace TraceSoul2.Manager
             return callables.Values
                 .Where(x => EnvironmentLogic.CanUse(turn, x.Descriptor) && x.IsAvailable(turn) && !IsDormantPlugin(x.Descriptor.PluginId))
                 .Where(x => x.Descriptor.Kind != TraceContributionKindValues.Effector ||
-                            string.IsNullOrWhiteSpace(x.Descriptor.BodyId) || MouthLogic.IsBodyLive(x.Descriptor.BodyId, turn))
+                            string.IsNullOrWhiteSpace(x.Descriptor.BodyId) || MouthLogic.IsBodyLive(MouthLogic.BodyOf(x.Descriptor, turn), turn))
                 .Select(x => Bind(x.Descriptor, turn)).OrderBy(x => x.Id, StringComparer.Ordinal).ToList();
         }
 
@@ -233,7 +233,7 @@ namespace TraceSoul2.Manager
                 ParametersJsonSchema = Format(source.ParametersJsonSchema),
                 OutputJsonSchema = Format(source.OutputJsonSchema),
                 Boundary = Format(source.Boundary),
-                BodyId = source.BodyId,
+                BodyId = source.BodyId == BodyIds.ReplyTarget && turn != null ? MouthLogic.BodyOf(source, turn) : source.BodyId,
                 BodyTier = source.BodyTier,
                 BodyScale = source.BodyScale,
                 Organ = source.Organ,
@@ -429,7 +429,7 @@ namespace TraceSoul2.Manager
             services.LogTiming(turn == null ? null : turn.TraceId,
                 "能力执行开始 " + contribution.Descriptor.Id);
             var executionId = services.Executions.Start(turn?.ConversationId ?? string.Empty, call,
-                MouthLogic.BodyOf(contribution.Descriptor), cancellationToken, EnvironmentLogic.Observation(turn?.Environment));
+                MouthLogic.BodyOf(contribution.Descriptor, turn), cancellationToken, EnvironmentLogic.Observation(turn?.Environment));
             call.execution_id = executionId;
             try
             {

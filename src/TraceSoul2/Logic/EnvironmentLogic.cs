@@ -178,10 +178,10 @@ namespace TraceSoul2.Logic
             if (turn?.Environment == null || descriptor == null || descriptor.Kind != TraceContributionKindValues.Effector ||
                 descriptor.Id == "dialogue.print") return true;
             // A physical-body turn cannot fall through to QQ tools/media (or vice versa).
-            if (turn.Environment.PlatformId == "wxxz" || MouthLogic.BodyOf(descriptor) == "wxxz")
-                return turn.Environment.AudienceConfirmed && MouthLogic.BodyOf(descriptor) == MouthLogic.BodyOfPlugin(turn.Environment.PlatformId);
+            if (turn.Environment.PlatformId == "wxxz" || MouthLogic.BodyOf(descriptor, turn) == "wxxz")
+                return turn.Environment.AudienceConfirmed && MouthLogic.BodyOf(descriptor, turn) == MouthLogic.BodyOfPlugin(turn.Environment.PlatformId);
             if (!IsPublic(turn) && MouthLogic.OrganOf(descriptor) is not (BodyOrganValues.Text or BodyOrganValues.Voice or BodyOrganValues.Image or BodyOrganValues.Sticker)) return true;
-            var body = MouthLogic.BodyOf(descriptor);
+            var body = MouthLogic.BodyOf(descriptor, turn);
             if (string.IsNullOrWhiteSpace(body)) return true;
             return turn.Environment.AudienceConfirmed && body == MouthLogic.BodyOfPlugin(turn.Environment.PlatformId);
         }

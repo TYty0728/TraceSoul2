@@ -56,7 +56,19 @@ namespace TraceSoul2.Logic
             var pair = storage.LoadPairIdentity();
             var last = storage.GetRecentDialogueMoments(turn.ConversationId, 2)
                 .LastOrDefault(x => x.Id != turn.Moment?.Id && (pair.IsHumanMoment(x.Role) || pair.IsCompanionMoment(x.Role)));
-            if (last != null) builder.Append("上次交流：").Append(Timestamp(last.CreatedUnixMs)).AppendLine("（北京时间）。");
+            if (last != null)
+            {
+                builder.Append("上次交流：").Append(Timestamp(last.CreatedUnixMs)).AppendLine("（北京时间）。");
+                if (HeartbeatLogic.IsHeartbeatTurn(turn) && last.CreatedUnixMs > 0 &&
+                    now.ToUnixTimeMilliseconds() >= last.CreatedUnixMs)
+                {
+                    var minutes = (now.ToUnixTimeMilliseconds() - last.CreatedUnixMs) / 60000;
+                    builder.Append("距上次交流已过：").Append(minutes == 0 ? "不足1分钟" : minutes + "分钟")
+                        .AppendLine("。这是历史交流的间隔，不代表对方的活动持续了这么久。");
+                    if (pair.IsCompanionMoment(last.Role))
+                        builder.AppendLine("最近一条可见交流是我已经发出的表达；它及此前用户发言均属历史，本次不需要补答。");
+                }
+            }
 
             var carried = new StringBuilder();
             var life = EnvironmentLogic.IsPublic(turn) ? null : turn.Services.LifeState?.Load(LifeStateLogic.Scope(turn));
@@ -193,8 +205,8 @@ namespace TraceSoul2.Logic
             if (EnvironmentLogic.IsHumanInput(turn)) return turn.RequiresExpression
                 ? source + "\n【本轮】对方正在对我说话，需要回应。结合当前环境和关系选择内容与方式。\n"
                 : source + "\n【本轮】听到在场者交谈，可以参与，也可以继续旁听。\n";
-            if (HeartbeatLogic.IsHeartbeatContent(turn.Moment?.Content))
-                return "\n【本轮】\n" + AgentLoopPrompts.Heartbeat + "\n";
+            if (HeartbeatLogic.IsHeartbeatTurn(turn))
+                return "\n【本轮：主动醒来】\n" + AgentLoopPrompts.Heartbeat + "\n";
             return source + "\n【本轮】后台事件唤醒；根据实际变化判断是否需要行动或表达。\n";
         }
     }

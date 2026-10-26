@@ -168,7 +168,7 @@ internal static partial class Program
                 PluginId = "runtime.execution", Role = "system_event", Environment = EnvironmentLogic.Observation(environment) });
             Require(continuedBoard.PlatformId == "wxxz", "开发板明确请求产生的执行回执保留本轮来源，不冒充主动联系");
             var boardCallsBeforeWake = transport.Paths.Count;
-            var autonomous = new AgentSequenceLlm("{\"step\":\"finish\",\"reply\":\"主动联系只通过QQ\"}");
+            var autonomous = new AgentSequenceLlm("{\"step\":\"finish\",\"heartbeat_intent\":\"想分享此刻的心情\",\"reply\":\"主动联系只通过QQ\"}");
             await new KernelLogic(store, autonomous, manager).ProcessPluginEventAsync(root, new PluginEventData {
                 PluginId = "builtin.time", Role = "system_event", IsOperational = true, Wake = KernelWakeValues.Mind,
                 Content = HeartbeatLogic.BuildContent("稍后想分享"), Environment = EnvironmentLogic.Observation(environment) });

@@ -18,10 +18,8 @@ internal static partial class Program
         Require(ImageGenerationClient.UpstreamUnavailable("请求超时（600秒）。") &&
             ImageGenerationClient.UpstreamUnavailable("HTTP 502：bad gateway") &&
             ImageGenerationClient.UpstreamUnavailable("HttpRequestException：连接被重置") &&
-            !ImageGenerationClient.UpstreamUnavailable("HTTP 404：not found") &&
-            ImageGenerationClient.WrongEndpoint("HTTP 405：method") &&
-            !ImageGenerationClient.WrongEndpoint("HTTP 500：upstream"),
-            "上游未返回时停止重开，只有接口不存在才换模式");
+            !ImageGenerationClient.UpstreamUnavailable("HTTP 404：not found"),
+            "识别上游不可用；标准图片请求失败后不重开或换模式");
         RunRandomCameraIntervalCheck();
         var path = Path.Combine(Path.GetTempPath(), "tracesoul2-qq-delivery-" + Guid.NewGuid().ToString("N") + ".sqlite3");
         try
@@ -141,6 +139,12 @@ internal static partial class Program
                     Directory.CreateDirectory(path + ".data");
                     File.WriteAllText(Path.Combine(path + ".data", "config.json"), "{\"sharing_min_replies\":6,\"sharing_max_replies\":6}");
                     manager.RegisterExternal(camera, pluginDataDirectory: path + ".data");
+                    EnvironmentLogic.SaveSettings(store, new EnvironmentSettings { OwnerAccounts = new() {
+                        new() { PlatformId = "builtin.onebot", UserId = "123" } } });
+                    turn = new TraceTurnContext("qq-delivery", moment, new List<MomentRecord>(), 9, true, services,
+                        environment: new EnvironmentSnapshotData { RootConversationId = "qq-delivery", ContextConversationId = "qq-delivery",
+                            PlatformId = "builtin.onebot", Visibility = "private", SessionType = "private", SessionId = "123",
+                            SpeakerId = "123", AudienceConfirmed = true, SpeakerIsOwner = true });
                     moment.Content = "今天过得怎么样";
                     var agent = new AgentSequenceLlm("{\"step\":\"finish\",\"reply\":\"在听呢。\"}");
                     new AgentLoopLogic(agent).RunAsync(turn, "", () => manager.GetAvailableActionCatalog(turn),

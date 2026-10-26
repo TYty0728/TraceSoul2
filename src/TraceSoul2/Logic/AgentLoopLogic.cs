@@ -29,6 +29,7 @@ namespace TraceSoul2.Logic
             Func<CancellationToken, Task> refreshContext = null)
         {
             var stable = BuildStable(turn);
+            var heartbeatTurn = HeartbeatLogic.IsHeartbeatTurn(turn);
             var history = new List<object>();
             var pendingState = new AgentTurnStateLogic();
             var appliedGoals = new List<AgentGoalUpdateData>();
@@ -47,8 +48,7 @@ namespace TraceSoul2.Logic
                     AgentPromptContextLogic.Executions(turn);
                 if (history.Count > 0) dynamic += AgentPromptContextLogic.Results(history);
                 dynamic += AgentPromptContextLogic.PendingState(pendingState.Values);
-                dynamic += "\n本轮表达受理情况：" + (responded ? "已受理，无需重复追加。" : "尚未受理。") +
-                    "已提案状态由程序保留，后续只需填写修订。";
+                dynamic += AgentPromptContextLogic.ExpressionStatus(turn, responded);
                 if (!EnvironmentLogic.IsHumanInput(turn))
                     dynamic += (MomentTypes.IsPerception(turn.Moment?.Type)
                         ? "\n【当前感知，不是对方发言】\n" : "\n【当前运行事件，不是对方发言】\n") + MomentTypes.ForPrompt(turn.Moment);
@@ -61,7 +61,7 @@ namespace TraceSoul2.Logic
                 IReadOnlyCollection<string> providedFields = null;
                 var output = await DeepSeekStructuredOutputLogic.CompleteAsync<AgentOutputData>(llm, messages,
                     null, AgentLoopPrompts.Invalid, token, LlmContextPackLogic.BuildPromptCacheKey(llm, turn.ConversationId),
-                    value => ValidationError(value.ToRuntime(), turn.RequiresExpression && !responded, round == MaxActionRounds) ??
+                    value => ValidationError(value.ToRuntime(), !heartbeatTurn && turn.RequiresExpression && !responded, round == MaxActionRounds) ??
                         GoalMemoryLogic.ValidationError(turn, value.goal_updates),
                     (_, fields) => providedFields = fields);
                 pendingState.Update(output, providedFields);
@@ -69,6 +69,20 @@ namespace TraceSoul2.Logic
                 var step = output.ToRuntime();
                 step.state_fields = pendingState.Values.Keys.ToList();
                 MindLogic.Normalize(step);
+                // 主动表达必须来自本轮形成的意图。缺失时不追加审核/纠正调用，也不先执行媒体副作用。
+                // 意图通过 pendingState 在同轮检索/行动之间继承，显式清空可撤回。
+                if (heartbeatTurn && string.IsNullOrWhiteSpace(step.heartbeat_intent) &&
+                    (step.step == "finish" && !string.IsNullOrWhiteSpace(step.reply) ||
+                     step.actions?.Any(call => catalog.Any(x => x.Id == call.capability_id &&
+                         (IsConversationalExpression(x) || x.Kind == TraceContributionKindValues.Effector &&
+                             MouthLogic.OrganOf(x) is BodyOrganValues.Qzone or BodyOrganValues.Sticker))) == true))
+                {
+                    step.step = "wait";
+                    step.reply = string.Empty;
+                    step.refine = false;
+                    step.actions = new();
+                    turn.Services.LogTiming(turn.TraceId, "主动轮未形成联系意图，本轮保持安静");
+                }
                 // 明确反馈在执行或发送前落库；后续行动失败也不会抹掉已经听取的调整。
                 GoalMemoryLogic.Apply(turn, step.goal_updates);
                 appliedGoals.AddRange(step.goal_updates ?? new());

@@ -684,6 +684,7 @@
       <button class="nav-item" data-section="memory" onclick="showSection('memory')"><span class="ic">🧭</span>记忆</button>
       <div class="nav-group">连接与能力</div>
       <button class="nav-item" data-section="platform" onclick="showSection('platform')"><span class="ic">🔌</span>身体与感官</button>
+      <a class="nav-item" href="/webui/" target="_blank" rel="noopener" style="text-decoration:none" title="在新标签页打开 QQ 登录与管理"><span class="ic">🐧</span>NapCat 管理 ↗</a>
       <button class="nav-item" data-section="brain" onclick="showSection('brain')"><span class="ic">🧠</span>大脑 · LLM</button>
       <button class="nav-item" data-section="plugins" onclick="showSection('plugins')"><span class="ic">🧩</span>能力与插件</button>
       <div class="nav-group">维护</div>
@@ -1053,7 +1054,7 @@
           </div>
         </div>
         <div class="box" id="expressionPanel"><h2>共用表情库</h2>
-          <p class="muted">QQ 与小智共用图片、42个心情标签和可扩展的用途语义。全库按用途与心情综合评分，直接选择最高分，不设最低分门槛。这里预览的就是本轮评分与选图，不发送消息、不连接设备。</p>
+          <p class="muted">QQ 与小智共用图片、42个心情标签和可扩展的用途语义。先保留用途分接近最高分的一批图，再选其中心情最匹配的图。这里预览的就是本轮评分与选图，不发送消息、不连接设备。</p>
           <button id="expressionLoad" onclick="loadExpressions()">查看图库与标签</button>
           <button id="expressionReload" onclick="reloadExpressions()">重新加载图库配置</button>
           <div id="expressionState" class="muted" role="status" aria-live="polite">尚未加载。</div>
@@ -1219,6 +1220,7 @@
         </div>
         <div class="box">
           <h2>QQ 平台（OneBot v11 / NapCat）配置</h2>
+          <p><a href="/webui/" target="_blank" rel="noopener">打开 NapCat 管理页 ↗</a><span class="muted"> · 扫码登录、查看 QQ 状态；请使用 NapCat 的管理密码。</span></p>
           <p id="onebotHint" class="muted">加载中…</p>
           <div class="row">
             <div><label>启用</label>
@@ -1267,7 +1269,7 @@
             <span class="spacer"></span>
             <button class="primary" onclick="rescanExternal()">重新扫描</button>
           </div>
-          <p class="muted" style="margin-top:0">按平台与能力管理插件，点齿轮填写专属配置。模型和声音供应商在「大脑 · LLM」管理，设备连接与声纹在「身体与感官」管理。</p>
+          <p class="muted" style="margin-top:0">Agent 自循环负责回应与行动；感官把文字、声音和画面转成经历；QQ、开发板等平台负责连接和收发。相机等通用插件独立提供能力，使用本轮平台输出。模型供应商在「大脑 · LLM」，设备与感官在「身体与感官」管理。</p>
           <div id="pluginsBox" class="muted">加载中…</div>
         </div>
       </section>
@@ -1615,11 +1617,11 @@
       const semanticValue=expressionSemanticDrafts.has(asset.id)?expressionSemanticDrafts.get(asset.id):(asset.semanticTags||[]).join('、');
       return '<article style="border:1px solid '+(selected?'#648d70':'var(--border,#ddd)')+';border-radius:12px;padding:12px;min-width:0;overflow-wrap:anywhere">'+
         '<img loading="lazy" src="/expressions/assets/'+asset.id+'" alt="'+esc(asset.name)+'" style="width:100%;height:130px;object-fit:contain" />'+
-        '<div>'+esc(asset.name)+'</div><div class="muted">'+(selected?'本轮选中 · ':'')+(candidate?'第'+candidate.rank+'名 · '+candidate.score.toFixed(3):'尚未匹配')+'</div>'+
-        (candidate?'<small class="muted">用途 '+Number(candidate.semanticScore||0).toFixed(3)+' · 心情 '+Number(candidate.emotionScore||0).toFixed(3)+(candidate.eligible===false?' · 图片不可用':'')+'</small><br>':'')+
+        '<div>'+esc(asset.name)+'</div><div class="muted">'+(selected?'本轮选中 · ':'')+(candidate?(candidate.reason==='semantic_not_shortlisted'?'用途未入围':'第'+candidate.rank+'名 · '+candidate.score.toFixed(3)):'尚未匹配')+'</div>'+
+        (candidate?'<small class="muted">用途 '+Number(candidate.semanticScore||0).toFixed(3)+(candidate.reason==='semantic_not_shortlisted'?' · 未计算本轮心情匹配':' · 心情 '+Number(candidate.emotionScore||0).toFixed(3))+(candidate.reason==='image_unavailable'?' · 图片不可用':'')+'</small><br>':'')+
         '<small class="muted">'+(labels||'首次计算后显示心情得分')+'</small>'+
         '<label style="display:block;margin-top:12px">用途标签<input id="expressionSemantic-'+asset.id+'" maxlength="550" value="'+esc(semanticValue)+'" placeholder="睡觉、困了、晚安" oninput="expressionSemanticDrafts.set(\''+asset.id+'\',this.value)" /></label>'+
-        '<small class="muted">用途标签参与综合评分，不作为准入门槛；每张图单独保存，可新增词语。</small><br>'+
+        '<small class="muted">先按用途筛候选，再按心情选图；每张图单独保存，可新增词语。</small><br>'+
         '<button style="margin:8px 6px 0 0" onclick="showExpressionMotion(\''+asset.id+'\')">预览动感</button>'+
         '<button data-expression-semantic-save onclick="saveExpressionSemantics(\''+asset.id+'\')">保存用途标签</button></article>';
     }).join('');
@@ -1642,7 +1644,7 @@
       $('expressionTags').textContent=expressionCatalog.tags.map(t=>t.tag).join(' · ');
       $('expressionSemantics').textContent=(expressionCatalog.semanticTags||[]).join(' · ');
       expressionCards(null);
-      $('expressionState').textContent=expressionCatalog.tags.length+'个心情标签 · '+(expressionCatalog.semanticTags||[]).length+'个用途标签 · '+expressionCatalog.assets.length+'张图片 · 直接选最高分 · '+(expressionCatalog.model||'语义模型尚未就绪');
+      $('expressionState').textContent=expressionCatalog.tags.length+'个心情标签 · '+(expressionCatalog.semanticTags||[]).length+'个用途标签 · '+expressionCatalog.assets.length+'张图片 · 用途筛选后选心情最高分 · '+(expressionCatalog.model||'语义模型尚未就绪');
     });
   }
   async function reloadExpressions() {
@@ -1663,11 +1665,11 @@
       if(expressionCatalog.revision!==match.revision)throw Error('图库已被重新加载，请重新计算');
       expressionCards(match);
       $('expressionTags').innerHTML=match.tags.map((t,i)=>'<span style="padding:4px 8px;border-radius:8px;background:'+(i<n?'#e8efe5':'var(--bg,#f4f4f4)')+'">'+esc(t.tag)+' '+t.score.toFixed(3)+'</span>').join('');
-      $('expressionSemantics').textContent=(match.semanticMode==='combined'?'用途与心情综合评分：':'心情评分：')+(match.semanticTags||[]).slice(0,6).map(t=>t.tag+' '+t.score.toFixed(3)).join(' · ');
+      $('expressionSemantics').textContent=(match.semanticMode==='semantic_first'?'先按用途筛选，再按心情排名：':match.semanticMode==='combined'?'用途与心情综合评分：':'心情评分：')+(match.semanticTags||[]).slice(0,6).map(t=>t.tag+' '+t.score.toFixed(3)).join(' · ');
       const excluded=(match.semanticTags||[]).filter(t=>t.excluded);
       if(excluded.length)$('expressionSemantics').textContent+='；更接近排除语义：'+excluded.map(t=>t.tag).join('、');
-      const reasons={empty_expression:'尚未填写表达',embedding_unavailable:'本地语义模型未就绪',empty_library:'图库为空',images_unavailable:'图库图片均不可用'};
-      $('expressionState').textContent=(match.status==='matched'?'已选出最高分表情':('无法选图：'+(reasons[match.reason]||match.reason)))+' · 心情前'+match.topTags+'个标签 · 无最低分门槛。仅预览，未发送。';
+      const reasons={empty_expression:'尚未填写表达',embedding_unavailable:'本地语义模型未就绪',empty_library:'图库为空',images_unavailable:'本轮候选图片均不可用'};
+      $('expressionState').textContent=(match.status==='matched'?'已选出候选中心情最高分表情':('无法选图：'+(reasons[match.reason]||match.reason)))+' · 心情前'+match.topTags+'个标签 · 无绝对最低分门槛。仅预览，未发送。';
     });
   }
   async function saveExpressionSemantics(id) {
@@ -3772,7 +3774,7 @@
       title.style.alignItems = "center";
       title.style.gap = "8px";
       const plat = g.platform || {};
-      title.innerHTML = "平台 · " + esc(platformLabel(g.key, plat.displayName)) +
+      title.innerHTML = g.key === "other" ? "通用插件 · 跨平台能力" : "平台 · " + esc(platformLabel(g.key, plat.displayName)) +
         (plat.enabled === false ? " <span class='pill off'>未启用</span>" : " <span class='pill on'>平台</span>");
       if (plat.configurable || plat.id === "builtin.onebot") {
         const gear = document.createElement("button");

@@ -22,6 +22,14 @@ namespace TraceSoul2.Logic
         private readonly ExpressorLogic expressor;
         private readonly TracePluginManager plugins;
         private DeferredTurnWork deferredWork;
+        private DeferredTurnWork stateMaintenanceWork;
+
+        public DeferredTurnWork TakeStateMaintenanceWork()
+        {
+            var work = stateMaintenanceWork;
+            stateMaintenanceWork = null;
+            return work;
+        }
 
         public TracePluginManager Plugins { get { return plugins; } }
 
@@ -331,6 +339,8 @@ namespace TraceSoul2.Logic
                 CreatedUnixMs = DateTimeOffset.UtcNow.ToUnixTimeMilliseconds()
             });
             plugins.Services.LogTiming(turn.TraceId, "轮次审查落库完成", reviewTimer.ElapsedMilliseconds);
+            try { stateMaintenanceWork = TurnMaintenanceLogic.Prepare(turn, mindDecision as AgentStepData); }
+            catch (Exception error) { plugins.Services.LogTiming(turn.TraceId, "轮后关注整理未安排", detail: error.GetType().Name); }
             // 图片优先；整理概览留给没有其他轮后工作的轮次，避免拖延已准备的图片发送。
             if (deferredWork == null)
             {
@@ -867,7 +877,7 @@ namespace TraceSoul2.Logic
                     await first(sendCt);
                     await second(sendCt);
                 };
-            });
+            }, maintenance: previous.Maintenance && next.Maintenance);
         }
 
         private static bool IsImageGenerator(BrainCapabilityCallData extra)
@@ -1405,8 +1415,7 @@ namespace TraceSoul2.Logic
             if (EnvironmentLogic.IsPublic(turn)) return;
             if (turn == null || turn.Services == null || turn.Services.Storage == null) return;
             var runtime = SubjectRuntimeLogic.Current(turn);
-            var heartbeatTurn = HeartbeatLogic.IsHeartbeatContent(
-                turn.Moment == null ? string.Empty : turn.Moment.Content);
+            var heartbeatTurn = HeartbeatLogic.IsHeartbeatTurn(turn);
             if (runtime.Asleep || (decision != null && decision.sleep))
             {
                 if (runtime.Idle)

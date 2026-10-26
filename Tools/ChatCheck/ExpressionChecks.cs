@@ -109,6 +109,7 @@ internal static partial class Program
             await CheckExpressionRankedDelivery(library);
             await CheckExpressionQqMerge(library,missing);
             await CheckExpressionSemantics(root,palette);
+            await CheckExpressionSemanticShortlist(root,palette);
             File.WriteAllBytes(Path.Combine(folder,"happy.png"),new byte[]{9});
             try {library.ReadImage(match.selectedId);throw new Exception("changed image accepted");}catch(InvalidOperationException){}
             var next=await library.MatchAsync(new(){text="开心"},default);
@@ -141,12 +142,12 @@ internal static partial class Program
         foreach(var name in new[]{"sleep.png","sweat.png","happy.png"})File.WriteAllBytes(Path.Combine(folder,name),new byte[]{1,2,3});
         var library=new ExpressionLibrary(palette,data,"unused",()=>new SemanticEncoder(),schema);
         var sleep=await library.MatchAsync(new(){text="[sleep]",mood="开心"},default);
-        Require(sleep.status=="matched"&&sleep.semanticMode=="combined"&&sleep.candidates[0].name=="sleep.png","用途与心情综合评分，睡觉用途高分图胜出");
-        Require(sleep.candidates.All(c=>c.eligible)&&sleep.candidates.Count==3,"整库参与评分，不因用途不一致预先排除");
+        Require(sleep.status=="matched"&&sleep.semanticMode=="semantic_first"&&sleep.candidates[0].name=="sleep.png","用途先筛选，睡觉用途图胜出");
+        Require(sleep.candidates.Count(c=>c.eligible)==1&&sleep.candidates.Count==3&&sleep.candidates.Where(c=>!c.eligible).All(c=>c.reason=="semantic_not_shortlisted"&&c.emotionScore==0),"未入围图保留用途分，但不计算本轮情绪匹配");
         var sweat=await library.MatchAsync(new(){text="[sweat]"},default);
         Require(sweat.status=="matched"&&sweat.candidates[0].name=="sweat.png","流汗用途选流汗图");
         var happy=await library.MatchAsync(new(){text="开心"},default);
-        Require(happy.status=="matched"&&happy.candidates[0].name=="happy.png"&&happy.candidates.All(c=>c.eligible),"开心图按综合分胜出，其他图保留各自评分");
+        Require(happy.status=="matched"&&happy.candidates[0].name=="happy.png"&&happy.candidates.All(c=>c.eligible),"用途全零时保留所有并列候选，按心情选图");
         var bye=await library.MatchAsync(new(){text="[bye]",mood="开心"},default);
         Require(bye.status=="matched"&&bye.selectedId==bye.candidates[0].id&&bye.candidates.Count==3,"用途缺图时仍从全库选最高分，不落空");
         Require((await library.MatchAsync(new(){mood="[sleep]"},default)).semanticMode=="emotion","仅感受摘要不参与用途评分");
@@ -176,7 +177,58 @@ internal static partial class Program
         var legacyLibrary=new ExpressionLibrary(palette,legacy,"unused",()=>new SemanticEncoder(),schema);
         var legacyMatch=await legacyLibrary.MatchAsync(new(){text="[sleep]",mood="开心"},default);
         Require(legacyMatch.status=="matched"&&legacyMatch.semanticMode=="emotion"&&legacyMatch.candidates[0].name=="happy.png","完全未标注的旧图库保持原心情匹配行为");
-        Console.WriteLine("Expression semantics checks passed: continuous purpose/mood scores, whole-library ranking, no minimum cutoff, exclusions, editable tags and atomic backup.");
+        Console.WriteLine("Expression semantics checks passed: purpose shortlist, emotion ranking, tied/zero purpose scores, exclusions, editable tags and atomic backup.");
+    }
+    private sealed class ShortlistEncoder : IEmbeddingService
+    {
+        public string ModelId=>"shortlist-fixture";
+        public Task<float[]> EmbedAsync(string text,CancellationToken token=default)
+        {
+            token.ThrowIfCancellationRequested();
+            float similarity=text.Contains("[near]")?0.97f:text.Contains("[edge]")?0.96f:
+                text.Contains("[outside]")?0.959f:text.Contains("[far]")?0.94f:text.Contains("[purpose]")?1f:-1f;
+            if(similarity>=0)return Task.FromResult(new[]{0f,similarity,(float)Math.Sqrt(1-similarity*similarity),0f});
+            return Task.FromResult(text.Contains("开心")?new[]{1f,0f,0f,0f}:new[]{0f,0f,0f,1f});
+        }
+    }
+    private static async Task CheckExpressionSemanticShortlist(string root,string palette)
+    {
+        var data=Path.Combine(root,"shortlist-data");var folder=Path.Combine(data,"emojis","default");Directory.CreateDirectory(folder);
+        File.WriteAllText(Path.Combine(data,"config.json"),"{\"personas\":[\"default\"]}");
+        var schema=Path.Combine(root,"shortlist-semantics.json");
+        File.WriteAllText(schema,"{\"schema_version\":1,\"tags\":[]}");
+        var labels=JsonDocument.Parse(File.ReadAllText(palette)).RootElement.GetProperty("categories").EnumerateArray()
+            .SelectMany(c=>c.GetProperty("tags").EnumerateArray().Select(t=>t.GetString())).ToArray();
+        object Entry(string purpose,double happy,double worried)=>new{description="fixture",semantic_tags=new[]{purpose},
+            tag_scores=labels.ToDictionary(t=>t,t=>t=="开心"?happy:t=="不安"?worried:0d)};
+        File.WriteAllText(Path.Combine(folder,"emoji_index.json"),JsonSerializer.Serialize(new Dictionary<string,object>{
+            ["purpose.png"]=Entry("[purpose]",0,1),["near.png"]=Entry("[near]",0.6,0.8),
+            ["edge.png"]=Entry("[edge]",0,1),["outside.png"]=Entry("[outside]",1,0),["far.png"]=Entry("[far]",1,0)}));
+        foreach(var name in new[]{"purpose","near","edge","outside","far"})File.WriteAllBytes(Path.Combine(folder,name+".png"),new byte[]{1,2,3});
+        var library=new ExpressionLibrary(palette,data,"unused",()=>new ShortlistEncoder(),schema);
+        var match=await library.MatchAsync(new(){text="[purpose]",mood="开心",topTags=1},default);
+        var best=match.candidates.Single(c=>c.name=="purpose.png");var near=match.candidates.Single(c=>c.name=="near.png");
+        var far=match.candidates.Single(c=>c.name=="far.png");
+        Require(match.selectedId==near.id&&near.emotionScore>best.emotionScore&&near.semanticScore<best.semanticScore,
+            "用途相近的一批图中，以情绪匹配重新排序，不直接选用途第一名");
+        Require(0.75*far.semanticScore+0.25>0.75*near.semanticScore+0.25*near.emotionScore&&!far.eligible&&far.emotionScore==0,
+            "旧混合分会胜出的用途较差/情绪完美图，不能越过用途筛选");
+        Require(match.candidates.Single(c=>c.name=="edge.png").eligible&&!match.candidates.Single(c=>c.name=="outside.png").eligible,
+            "最高用途分相差0.04包含边界，刚超出窗口则不入围");
+        var noMood=await library.MatchAsync(new(){text="[purpose]",topTags=1},default);
+        Require(noMood.candidates.Where(c=>c.eligible).Select(c=>c.id).OrderBy(x=>x).SequenceEqual(match.candidates.Where(c=>c.eligible).Select(c=>c.id).OrderBy(x=>x)),
+            "感受只影响第二阶段，不能改变用途候选集合");
+        var delivery=new CountingExpressions{Inner=library};delivery.Unreadable.Add(near.id);
+        var fallback=ExpressionSelection.ReadHighest(delivery,match,default);
+        Require(fallback.HasValue&&match.candidates.Single(c=>c.id==fallback.Value.id).eligible&&fallback.Value.id!=near.id,
+            "交付时首图失效，只顺位选择本轮已入围图片");
+        foreach(var candidate in match.candidates.Where(c=>c.eligible))delivery.Unreadable.Add(candidate.id);
+        Require(ExpressionSelection.ReadHighest(delivery,match,default)==null,"入围图片全失效，不越过用途筛选改发未入围图");
+        foreach(var candidate in match.candidates.Where(c=>c.eligible))File.WriteAllBytes(Path.Combine(folder,candidate.name),new byte[]{9});
+        var broken=await library.MatchAsync(new(){text="[purpose]",mood="开心"},default);
+        Require(broken.status=="skipped"&&broken.reason=="images_unavailable"&&broken.selectedId==null&&
+            broken.candidates.Count(c=>c.reason=="semantic_not_shortlisted")==2,"匹配阶段候选全失效如实返回，不扩大用途范围");
+        Console.WriteLine("Expression shortlist checks passed: semantic band/boundary, emotion reranking, mood isolation and bounded delivery fallback.");
     }
     private static async Task CheckExpressionBodies(IExpressionLibrary library)
     {

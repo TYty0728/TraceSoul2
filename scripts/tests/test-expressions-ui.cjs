@@ -8,7 +8,7 @@ const esc=s=>String(s).replace(/[&<>"']/g,c=>({'&':'&amp;','<':'&lt;','>':'&gt;'
 const id='a'.repeat(64);let failure=false,pending=null;const calls=[];
 const reducedMotion={matches:false,addEventListener(name,fn){this.change=fn;}};
 const catalog={tags:[{tag:'开心'},{tag:'不安'}],semanticTags:['睡觉','晚安'],assets:[{id,name:'<img onerror="evil()">',semanticTags:['<用途>'],requiresSemanticMatch:true,tags:[{tag:'开心',score:.9}]},{id:'../private',name:'bad',tags:[]}],topTags:1,threshold:.55,model:'fixture'};
-const sandbox={$ ,esc,matchMedia:()=>reducedMotion,document:{querySelectorAll:()=>[]},api:async(path,method,body)=>{calls.push({path,method,body});if(pending)await pending;if(failure)throw Error('模拟错误');return path.endsWith('/preview')?{status:'matched',selectedId:id,topTags:1,threshold:0,semanticThreshold:0,semanticMode:'combined',semanticTags:[{tag:'睡觉',score:.8}],tags:[{tag:'<开心>',score:.9}],candidates:[{id,score:.99,semanticScore:.8,emotionScore:.4,eligible:true}]}:catalog;}};
+const sandbox={$ ,esc,matchMedia:()=>reducedMotion,document:{querySelectorAll:()=>[]},api:async(path,method,body)=>{calls.push({path,method,body});if(pending)await pending;if(failure)throw Error('模拟错误');return path.endsWith('/preview')?{status:'matched',selectedId:id,topTags:1,threshold:0,semanticThreshold:0,semanticMode:'semantic_first',semanticTags:[{tag:'睡觉',score:.8}],tags:[{tag:'<开心>',score:.9}],candidates:[{id,score:.99,semanticScore:.8,emotionScore:.4,eligible:true}]}:catalog;}};
 vm.createContext(sandbox);vm.runInContext(html.slice(html.indexOf('  /* Shared expression preview:'),html.indexOf('  /* End shared expression preview. */')),sandbox);
 (async()=>{
   await sandbox.loadExpressions();
@@ -20,13 +20,20 @@ vm.createContext(sandbox);vm.runInContext(html.slice(html.indexOf('  /* Shared e
   await sandbox.previewExpression();
   assert.match($('expressionState').textContent,/最高分/);assert.match($('expressionGallery').innerHTML,/本轮选中/);
   assert.match($('expressionTags').innerHTML,/&lt;开心&gt;/);
-  assert.match($('expressionSemantics').textContent,/用途与心情综合评分：睡觉 0.800/);
-  assert.match($('expressionGallery').innerHTML,/不作为准入门槛/);
-  assert.match($('expressionState').textContent,/无最低分门槛/);
+  assert.match($('expressionSemantics').textContent,/先按用途筛选，再按心情排名：睡觉 0.800/);
+  assert.match($('expressionGallery').innerHTML,/先按用途筛候选，再按心情选图/);
+  assert.match($('expressionState').textContent,/无绝对最低分门槛/);
   assert.match($('expressionGallery').innerHTML,/&lt;用途&gt;/);
   assert.equal($('expressionMotionImage').src,'/expressions/assets/'+id);
   assert.equal($('expressionMotionImage').dataset.sway,'on');
   reducedMotion.matches=true;reducedMotion.change();assert.equal($('expressionMotionImage').dataset.sway,'off');assert.match($('expressionMotionState').textContent,/减少动态/);reducedMotion.matches=false;reducedMotion.change();
+  sandbox.expressionCards({candidates:[{id,score:0,semanticScore:.3,emotionScore:0,eligible:false,reason:'semantic_not_shortlisted'}]});
+  assert.match($('expressionGallery').innerHTML,/用途未入围/);
+  assert.match($('expressionGallery').innerHTML,/未计算本轮心情匹配/);
+  assert.doesNotMatch($('expressionGallery').innerHTML,/图片不可用/);
+  sandbox.expressionCards({candidates:[{id,score:.9,semanticScore:.8,emotionScore:.9,eligible:false,reason:'image_unavailable'}]});
+  assert.match($('expressionGallery').innerHTML,/图片不可用/);
+  sandbox.showExpressionMotion(id);
   const motionRequests=calls.length;
   $('expressionMotionAmount').value='80';$('expressionMotionPeriod').value='150';sandbox.configureExpressionMotion();
   assert.equal($('expressionMotionImage').style.values['--hop-height'],'9.6px');

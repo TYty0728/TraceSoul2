@@ -18,6 +18,17 @@ namespace TraceSoul2.Logic
             Encoder = System.Text.Encodings.Web.JavaScriptEncoder.UnsafeRelaxedJsonEscaping
         };
 
+        public static string ExpressionStatus(TraceTurnContext turn, bool responded)
+        {
+            var status = HeartbeatLogic.IsHeartbeatTurn(turn)
+                ? (responded ? "本次主动表达已受理，无需重复追加。" : "本次主动醒来尚未选择联系；没有新消息等待回复，可以保持安静。")
+                : EnvironmentLogic.IsHumanInput(turn)
+                    ? (responded ? "本轮表达已受理，无需重复追加。" : turn.RequiresExpression
+                        ? "本轮新消息尚未回应。" : "本轮在场交流尚未选择参与，可以继续旁听。")
+                    : (responded ? "本轮表达已受理，无需重复追加。" : "本轮观察或运行事件尚未选择表达，可以保持安静。");
+            return "\n" + status + "已提案状态由程序保留，后续只需填写修订。";
+        }
+
         public static string Context(TraceTurnContext turn)
         {
             var builder = new StringBuilder(RuntimeContextLogic.State(turn));

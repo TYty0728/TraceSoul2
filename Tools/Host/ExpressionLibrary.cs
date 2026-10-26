@@ -15,6 +15,7 @@ namespace TraceSoul2.Host;
 
 public sealed class ExpressionLibrary : IExpressionLibrary
 {
+    private const double SemanticCandidateWindow=0.04;
     private sealed record Tag(string Name,string Category);
     private sealed record Asset(string Id,string Name,string Path,string Description,string[] Legacy,Dictionary<string,double> Manual,string Hash,string Index,string[] Semantics);
     private sealed record Semantic(string Name,string Cue,bool Required,string[] Exclusions);
@@ -140,7 +141,7 @@ public sealed class ExpressionLibrary : IExpressionLibrary
         foreach(var label in assets.SelectMany(a=>a.Semantics).Distinct(StringComparer.Ordinal))
             if(!semantics.Any(s=>s.Name==label))semantics.Add(new(label,label,true,Array.Empty<string>()));
         if(semantics.Count>256)throw new InvalidOperationException("表情语义标签最多256个。");
-        revision=Hash(JsonSerializer.Serialize(new{tags,semantics,assets=assets.Select(a=>new{a.Id,a.Description,a.Legacy,a.Manual,a.Hash,a.Semantics}),threshold,topTags,semanticThreshold}));
+        revision=Hash(JsonSerializer.Serialize(new{matching="semantic_first",semanticCandidateWindow=SemanticCandidateWindow,tags,semantics,assets=assets.Select(a=>new{a.Id,a.Description,a.Legacy,a.Manual,a.Hash,a.Semantics}),threshold,topTags,semanticThreshold}));
     }
     public ExpressionCatalog Catalog()
     {
@@ -259,10 +260,16 @@ public sealed class ExpressionLibrary : IExpressionLibrary
                     var denied=semanticExclusions[i].Select(v=>Cos(vector,v)).DefaultIfEmpty(0).Max();
                     return new SemanticTagScore{tag=s.Name,similarity=similarity,exclusionScore=denied,excluded=denied>similarity,score=denied>similarity?0:similarity};})
                     .OrderByDescending(s=>s.score).ThenBy(s=>s.tag,StringComparer.Ordinal).ToList();
-            // Score every asset continuously. Neither a low score nor a missing
-            // purpose annotation removes an image from the ranking.
-            var combined=result.semanticTags.Count>0&&assets.Any(a=>a.Semantics.Length>0);
-            result.semanticMode=combined?"combined":"emotion";
+            var semanticFirst=result.semanticTags.Count>0&&assets.Any(a=>a.Semantics.Length>0);
+            result.semanticMode=semanticFirst?"semantic_first":"emotion";
+            var semanticScores=assets.Select(asset=>result.semanticTags
+                .Where(s=>asset.Semantics.Contains(s.tag,StringComparer.Ordinal))
+                .Select(s=>s.excluded?-Math.Max(0,s.exclusionScore-s.similarity):s.score).DefaultIfEmpty(0).Max()).ToArray();
+            // Keep every tie in the leading semantic band. Emotion cannot promote
+            // an unrelated image, and a uniformly weak signal still has candidates.
+            var bestSemantic=semanticScores.Max();
+            // Embeddings use floats; tolerate their rounding at the band boundary.
+            var shortlisted=semanticScores.Select(score=>!semanticFirst||bestSemantic-score<=SemanticCandidateWindow+1e-6).ToArray();
             if(!string.IsNullOrWhiteSpace(query.mood)&&!string.IsNullOrWhiteSpace(query.text))
             {
                 var mood=await encoder.EmbedAsync(query.mood,token);
@@ -273,16 +280,18 @@ public sealed class ExpressionLibrary : IExpressionLibrary
             var q=tags.Select(t=>(float)(selected.FirstOrDefault(s=>s.tag==t.Name)?.score??0)).ToArray();
             for(var i=0;i<assets.Count;i++)
             {
-                var weights=profiles[i].Select(t=>(float)t.score).ToArray();
-                var emotionScore=weights.Any(v=>v>0)&&q.Any(v=>v>0)?Math.Max(0,Cos(q,weights)):0;
-                var relevant=result.semanticTags.Where(s=>assets[i].Semantics.Contains(s.tag,StringComparer.Ordinal));
-                var semanticScore=relevant.Select(s=>s.excluded?-Math.Max(0,s.exclusionScore-s.similarity):s.score).DefaultIfEmpty(0).Max();
-                var score=combined?0.75*semanticScore+0.25*emotionScore:emotionScore;
-                result.candidates.Add(new(){id=assets[i].Id,name=assets[i].Name,score=score,emotionScore=emotionScore,semanticScore=semanticScore,eligible=true,
-                    reason=combined?"combined_score":"emotion_score"});
+                double emotionScore=0;
+                if(shortlisted[i])
+                {
+                    var weights=profiles[i].Select(t=>(float)t.score).ToArray();
+                    emotionScore=weights.Any(v=>v>0)&&q.Any(v=>v>0)?Math.Max(0,Cos(q,weights)):0;
+                }
+                result.candidates.Add(new(){id=assets[i].Id,name=assets[i].Name,score=emotionScore,emotionScore=emotionScore,
+                    semanticScore=semanticScores[i],eligible=shortlisted[i],
+                    reason=!shortlisted[i]?"semantic_not_shortlisted":semanticFirst?"shortlisted_emotion_score":"emotion_score"});
             }
-            result.candidates=result.candidates.OrderByDescending(a=>a.score).ThenBy(a=>a.id,StringComparer.Ordinal).ToList();
-            foreach(var candidate in result.candidates)
+            result.candidates=result.candidates.OrderByDescending(a=>a.eligible).ThenByDescending(a=>a.score).ThenBy(a=>a.id,StringComparer.Ordinal).ToList();
+            foreach(var candidate in result.candidates.Where(c=>c.eligible))
             {
                 token.ThrowIfCancellationRequested();
                 try {ReadImage(candidate.id);}

@@ -29,33 +29,17 @@ namespace TraceSoul2.ExternalPlugins
         private readonly List<string> configApiKeys = new List<string>();
         private string configBaseUrl = string.Empty;
         private string configModel = string.Empty;
-        private string apiFormat = "auto";
-        private string apiMode = "auto";
         private string proxy = string.Empty;
-        private string safetySettings = "BLOCK_NONE";
-        private string imageSize = "2K";
-        private string standardSize = "1024x1024";
-        private string defaultAspectRatio = "4:3";
-        private string defaultMode = "auto";
-        private string selfieMode = "lockface";
         private string stylePrompt = string.Empty;
         private string characterDetails = string.Empty;
         private readonly List<string> characterCategories = new List<string>();
         private readonly List<string> characterRefUrls = new List<string>();
         private int sharingMinReplies = CameraSharingContext.DefaultMinReplies;
         private int sharingMaxReplies = CameraSharingContext.DefaultMaxReplies;
-        private int timeoutSeconds = 600;
-        private int maxRetries = 3;
-        private int pollIntervalSeconds = 5;
-        private int maxRefsPerCategory = 4;
-        private int maxReferenceImages = 12;
-        private int cleanupDelaySeconds = 600;
-        private bool aiDecideAspectRatio = true;
-        private bool strictReferenceMode;
-        private bool enableThinking;
-        private bool failureFallbackText = true;
-        private bool logRequestBody;
-        private bool debug;
+        private const int timeoutSeconds = 600;
+        private const int maxRefsPerCategory = 4;
+        private const int maxReferenceImages = 12;
+        private const int cleanupDelaySeconds = 600;
         private string dataDirectory = string.Empty;
         private TracePluginServices services;
         private ReferenceLibrary references;
@@ -71,12 +55,12 @@ namespace TraceSoul2.ExternalPlugins
         public TracePluginMetadataData Metadata { get; } = new TracePluginMetadataData
         {
             Id = PluginId,
-            DisplayName = "QQ 相机与生图",
-            Version = "2.3.3",
+            DisplayName = "相机与生图",
+            Version = "2.3.4",
             Author = "TraceSoul2",
             Role = PluginRoleValues.Organ,
-            PlatformId = BodyIds.Qq,
-            Description = "完整相机器官：自拍、锁脸参考、服饰参考、画图、改图、URL 发图及多协议生图。"
+            PlatformId = string.Empty,
+            Description = "完整相机器官：自拍、锁脸参考、服饰参考、画图、改图、URL 发图及标准图片接口生图。"
         };
 
         public void Register(TracePluginContext context)
@@ -206,34 +190,13 @@ namespace TraceSoul2.ExternalPlugins
                 ReplaceList(configApiKeys, ReadStrings(root, "api_keys"));
                 configBaseUrl = ReadString(root, "base_url") ?? configBaseUrl;
                 configModel = ReadString(root, "model") ?? configModel;
-                apiFormat = (ReadString(root, "image_api_format") ?? apiFormat).ToLowerInvariant();
-                apiMode = (ReadString(root, "api_mode") ?? apiMode).ToLowerInvariant();
-                defaultMode = (ReadString(root, "default_mode") ?? defaultMode).ToLowerInvariant();
-                defaultAspectRatio = ReadString(root, "aspect_ratio") ?? defaultAspectRatio;
-                selfieMode = (ReadString(root, "selfie_mode") ?? selfieMode).ToLowerInvariant();
                 stylePrompt = ReadString(root, "style_prompt") ?? stylePrompt;
                 characterDetails = ReadString(root, "character_details") ?? characterDetails;
                 ReplaceList(characterCategories, ReadStrings(root, "character_categories"));
                 ReplaceList(characterRefUrls, ReadStrings(root, "character_ref_urls"));
-                imageSize = ReadString(root, "image_size") ?? imageSize;
-                standardSize = ReadString(root, "standard_size") ?? ReadString(root, "size") ?? standardSize;
-                safetySettings = ReadString(root, "safety_settings") ?? safetySettings;
                 proxy = ReadString(root, "proxy") ?? proxy;
                 sharingMinReplies = ReadInt(root, "sharing_min_replies", sharingMinReplies, 1, 1000);
                 sharingMaxReplies = ReadInt(root, "sharing_max_replies", sharingMaxReplies, 1, 1000);
-                timeoutSeconds = ReadInt(root, "timeout", timeoutSeconds, 30, 1800);
-                maxRetries = ReadInt(root, "max_retry_attempts", maxRetries, 1, 10);
-                pollIntervalSeconds = ReadInt(root, "poll_interval", pollIntervalSeconds, 2, 30);
-                maxRefsPerCategory = ReadInt(root, "max_refs_per_category", maxRefsPerCategory, 1, 12);
-                maxReferenceImages = ReadInt(root, "max_reference_images", maxReferenceImages, 1, 24);
-                cleanupDelaySeconds = ReadInt(root, "cleanup_delay_seconds", cleanupDelaySeconds, 30, 7200);
-                aiDecideAspectRatio = ReadBool(root, "ai_decide_aspect_ratio", aiDecideAspectRatio);
-                strictReferenceMode = ReadBool(root, "strict_reference_mode",
-                    ReadBool(root, "strict_ref_mode", strictReferenceMode));
-                enableThinking = ReadBool(root, "enable_thinking", enableThinking);
-                failureFallbackText = ReadBool(root, "failure_fallback_text", failureFallbackText);
-                logRequestBody = ReadBool(root, "log_request_body", logRequestBody);
-                debug = ReadBool(root, "debug", debug);
             }
         }
 
@@ -251,19 +214,9 @@ namespace TraceSoul2.ExternalPlugins
                 Model = !string.IsNullOrWhiteSpace(configModel) ? configModel : endpoint?.Model,
                 ApiKeys = keys.Where(x => !string.IsNullOrWhiteSpace(x)).Select(x => x.Trim())
                     .Distinct(StringComparer.Ordinal).ToList(),
-                ApiFormat = apiFormat,
-                ApiMode = apiMode,
                 Proxy = string.IsNullOrWhiteSpace(proxy) ? endpoint?.Proxy : proxy,
-                SafetySettings = safetySettings,
-                ImageSize = imageSize,
-                StandardSize = standardSize,
                 TimeoutSeconds = endpoint != null && endpoint.TimeoutSeconds > 0 ?
-                    Math.Max(timeoutSeconds, endpoint.TimeoutSeconds) : timeoutSeconds,
-                MaxRetries = maxRetries,
-                PollIntervalSeconds = pollIntervalSeconds,
-                EnableThinking = enableThinking,
-                LogRequestBody = logRequestBody,
-                Debug = debug
+                    Math.Max(timeoutSeconds, endpoint.TimeoutSeconds) : timeoutSeconds
             };
         }
 
@@ -374,16 +327,16 @@ namespace TraceSoul2.ExternalPlugins
                         x.Category + "/" + x.Role + "/" + x.FileName))) +
                     "｜count=" + selected.Count);
                 context.Services.LogTiming(context.TraceId, "TA的相机 最终描述", detail:
-                    TruncateForLog(finalPrompt, logRequestBody ? 1600 : 500));
+                    TruncateForLog(finalPrompt, 500));
                 if (settings.ApiKeys.Count == 0 || string.IsNullOrWhiteSpace(settings.BaseUrl) ||
                     string.IsNullOrWhiteSpace(settings.Model))
                     throw new InvalidOperationException("生图供应商未配置完整（base_url、model、api_key）。");
                 context.Services.LogTiming(context.TraceId, "TA的相机 本次请求运行参数", detail:
                     "model=" + settings.Model + "｜base_url=" + SafeEndpoint(settings.BaseUrl) +
-                    "｜api_mode=" + settings.ApiMode + "｜format=" + settings.ApiFormat +
+                    "｜interface=images" +
                     "｜api_key_count=" + settings.ApiKeys.Count + "｜api_key_len=" +
                     string.Join(",", settings.ApiKeys.Select(x => x == null ? 0 : x.Length)) +
-                    "｜timeout=" + settings.TimeoutSeconds + "s｜retries=" + settings.MaxRetries);
+                    "｜timeout=" + settings.TimeoutSeconds + "s");
 
                 using (var client = new ImageGenerationClient(settings, context.Services, context.TraceId))
                 {
@@ -402,25 +355,12 @@ namespace TraceSoul2.ExternalPlugins
                     return await SendFileListAsync(paths, mode, context, cancellationToken, timer);
                 }
             }
+            catch (OperationCanceledException) when (cancellationToken.IsCancellationRequested) { throw; }
             catch (Exception exception)
             {
                 var detail = ExceptionDetail(exception);
-                context.Services.LogTiming(context.TraceId, "QQ 相机生成发送失败", timer.ElapsedMilliseconds, detail);
-                if (!send || !failureFallbackText)
-                    return new TraceCapabilityResultData
-                    {
-                        Status = "failed",
-                        Summary = "生图失败：" + detail,
-                        Payload = string.Empty
-                    };
-                var fallback = await FindAdapter(context).SendAsync(new TraceOutboundMessageData
-                {
-                    Kind = TraceOutboundKinds.Text,
-                    Text = "（照片刚才没有成功发出来：" + detail + "）"
-                }, context, cancellationToken);
-                fallback.Status = "failed";
-                fallback.Summary = "生图失败，已明确告知：" + detail;
-                return fallback;
+                context.Services.LogTiming(context.TraceId, "相机生成发送失败", timer.ElapsedMilliseconds, detail);
+                return new TraceCapabilityResultData { Status = "failed", Summary = "生图或发送失败：" + detail };
             }
         }
 
@@ -437,7 +377,7 @@ namespace TraceSoul2.ExternalPlugins
             }, context, cancellationToken);
             context.Services.LogTiming(context.TraceId, "TA的相机 网络图片发送完成", detail:
                 "url=" + TruncateForLog(url, 180) + "｜status=" + (result?.Status ?? "null"));
-            result.Summary = "已把指定 URL 图片发送到当前 QQ 会话。";
+            if (result?.Status == "success") result.Summary = "已把指定 URL 图片发送到本轮会话。";
             return result;
         }
 
@@ -447,7 +387,7 @@ namespace TraceSoul2.ExternalPlugins
             return new TraceCapabilityResultData
             {
                 Status = paths.Count == 0 ? "failed" : "success",
-                Summary = "QQ 相机已生成 " + paths.Count + " 张，待发送（" + mode + " / " + protocol + "）。",
+                Summary = "相机已生成 " + paths.Count + " 张，待发送（" + mode + " / " + protocol + "）。",
                 Payload = string.Join("\n", paths)
             };
         }
@@ -480,18 +420,18 @@ namespace TraceSoul2.ExternalPlugins
                     Kind = TraceOutboundKinds.Image,
                     File = path
                 }, context, cancellationToken);
-                context.Services.LogTiming(context.TraceId, "TA的相机 QQ 图片发送完成", detail:
+                context.Services.LogTiming(context.TraceId, "TA的相机 平台图片发送完成", detail:
                     "status=" + (last?.Status ?? "null") + "｜summary=" +
                     TruncateForLog(last?.Summary, 300));
                 if (last == null || !string.Equals(last.Status, "success", StringComparison.Ordinal))
-                    return last ?? new TraceCapabilityResultData { Status = "failed", Summary = "QQ 图片发送没有返回结果。" };
+                    return last ?? new TraceCapabilityResultData { Status = "failed", Summary = "平台图片发送没有返回结果。" };
                 if (LooksLikeLocalFile(path)) ScheduleDelete(path);
             }
             last = last ?? new TraceCapabilityResultData { Status = "success" };
             last.Status = "success";
-            last.Summary = "QQ 相机已发送 " + paths.Count + " 张图片（" + mode + "）。";
+            last.Summary = "相机已发送 " + paths.Count + " 张图片（" + mode + "）。";
             last.Payload = JsonSerializer.Serialize(new { mode, images = paths.Count });
-            context.Services.LogTiming(context.TraceId, "QQ 相机发送完成", timer.ElapsedMilliseconds,
+            context.Services.LogTiming(context.TraceId, "相机发送完成", timer.ElapsedMilliseconds,
                 "mode=" + mode + "｜images=" + paths.Count);
             return last;
         }
@@ -827,15 +767,14 @@ namespace TraceSoul2.ExternalPlugins
                                   Regex.IsMatch(prompt,
                                       @"人物|角色|人像|女孩|男孩|女人|男人|面孔|脸部|穿着|衣服|自拍|阿循|循循",
                                       RegexOptions.IgnoreCase);
-            var locksFace = selfieMode == "lockface" || selfieMode.IndexOf("锁", StringComparison.Ordinal) >= 0;
-            if (hasCharacterReference && (strictReferenceMode || locksFace))
+            if (hasCharacterReference)
                 prompt = AppearanceDetails.Replace(prompt, string.Empty);
 
             var builder = new System.Text.StringBuilder();
             if (mode == "selfie")
             {
                 builder.Append(QqImageGenPrompts.Selfie);
-                if (locksFace && hasCharacterReference)
+                if (hasCharacterReference)
                     builder.Append(QqImageGenPrompts.LockFace);
             }
             else if (mode == "photo")
@@ -886,7 +825,7 @@ namespace TraceSoul2.ExternalPlugins
 
         private string NormalizeMode(string requested, string prompt, TraceTurnContext context)
         {
-            var value = string.IsNullOrWhiteSpace(requested) ? defaultMode : requested.Trim().ToLowerInvariant();
+            var value = string.IsNullOrWhiteSpace(requested) ? "auto" : requested.Trim().ToLowerInvariant();
             if (value == "selfie" || value == "photo" || value == "draw" || value == "edit" ||
                 value == "url" || value == "auto")
                 return value;
@@ -902,7 +841,7 @@ namespace TraceSoul2.ExternalPlugins
                 return requested.Trim();
             if (string.Equals(mode, "selfie", StringComparison.OrdinalIgnoreCase))
                 return "3:4";
-            return aiDecideAspectRatio ? string.Empty : defaultAspectRatio;
+            return string.Empty;
         }
 
         private async Task<List<ReferenceImageData>> LoadInboundImagesAsync(
@@ -957,7 +896,7 @@ namespace TraceSoul2.ExternalPlugins
                     }
                     catch (Exception exception)
                     {
-                        if (debug) services?.LogTiming(context.TraceId, "入站参考图读取失败", detail: SafeMessage(exception));
+                        services?.LogTiming(context.TraceId, "入站参考图读取失败", detail: SafeMessage(exception));
                     }
                 }
             }
@@ -1016,9 +955,8 @@ namespace TraceSoul2.ExternalPlugins
 
         private static ITracePlatformAdapter FindAdapter(TraceTurnContext context)
         {
-            var adapter = context?.Services?.PlatformAdapters?.FirstOrDefault(x =>
-                x != null && string.Equals(x.PlatformId, "builtin.onebot", StringComparison.Ordinal));
-            if (adapter == null) throw new InvalidOperationException("QQ 平台适配器不可用。 ");
+            var adapter = TracePlatformOutput.Find(context, TraceOutboundKinds.Image);
+            if (adapter == null) throw new InvalidOperationException("本轮平台没有可用的图片发送能力。");
             return adapter;
         }
 
@@ -1099,13 +1037,6 @@ namespace TraceSoul2.ExternalPlugins
                 ? Math.Max(min, Math.Min(max, parsed)) : fallback;
         }
 
-        private static bool ReadBool(JsonElement root, string key, bool fallback)
-        {
-            return root.TryGetProperty(key, out var value) &&
-                   (value.ValueKind == JsonValueKind.True || value.ValueKind == JsonValueKind.False)
-                ? value.GetBoolean() : fallback;
-        }
-
         private static string SafeMessage(Exception exception)
         {
             var message = exception?.Message ?? "未知错误";
@@ -1141,16 +1072,17 @@ namespace TraceSoul2.ExternalPlugins
             public TraceContributionDescriptorData Descriptor { get; } = new TraceContributionDescriptorData
             {
                 Id = "qq.imagegen.generate", Kind = TraceContributionKindValues.Effector,
-                DisplayName = "QQ 相机/生图", Description = QqImageGenPrompts.EffectorDescription,
+                DisplayName = "相机/生图", Description = QqImageGenPrompts.EffectorDescription,
                 WhenToUse = QqImageGenPrompts.AgentUsage,
                 WhenNotToUse = QqImageGenPrompts.AgentBoundary,
-                Provides = "expression.qq.imagegen",
+                Provides = "expression.imagegen",
                 Boundary = QqImageGenPrompts.EffectorBoundary,
-                BodyId = BodyIds.Qq, BodyTier = BodyTierValues.Chat, Organ = BodyOrganValues.Image,
+                BodyId = BodyIds.ReplyTarget, BodyTier = BodyTierValues.Chat, Organ = BodyOrganValues.Image,
                 ParametersJsonSchema = "{prompt:string,mode?:selfie|photo|draw|edit|url,refs?:string,aspect_ratio?:string,url?:string,dispatch?:all|generate|send|release,files?:string}",
                 HasExternalSideEffect = true
             };
-            public bool IsAvailable(TraceTurnContext context) => context != null && owner.IsReady(context.Services);
+            public bool IsAvailable(TraceTurnContext context) => context != null && owner.IsReady(context.Services) &&
+                TracePlatformOutput.Find(context, TraceOutboundKinds.Image) != null;
             public Task<TraceCapabilityResultData> ExecuteAsync(BrainCapabilityCallData call,
                 TraceTurnContext context, CancellationToken token) => owner.DispatchImageAsync(call, context, token);
         }

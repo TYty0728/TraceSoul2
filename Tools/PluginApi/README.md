@@ -1,6 +1,10 @@
 # TraceSoul2.PluginApi
 
-TraceSoul2 运行时插件的契约（源码 **1.16.0**）。正式资产状态见 [版本说明](../../docs/RELEASES.md)。
+TraceSoul2 运行时插件的契约（源码 **1.17.0**）。正式资产状态见 [版本说明](../../docs/RELEASES.md)。
+
+## 1.17 起
+
+新增可选 `ITraceOutboundCapabilities`、`TracePlatformOutput.Find` 与 `BodyIds.ReplyTarget`，通用媒体能力按原轮环境绑定平台。未声明媒体支持的平台不会被通用相机选择。`PlatformId` 显式空串表示通用能力，null 才兼容旧包的名称推断。没有增加旧适配器必须实现的方法；新版相机引用新增共享类型，必须与 Host/PluginApi 配套更新。
 
 ## 1.16 起
 

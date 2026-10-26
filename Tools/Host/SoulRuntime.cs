@@ -48,6 +48,11 @@ namespace TraceSoul2.Host
         private readonly Channel<KernelLogic.DeferredTurnWork> maintenanceTurns =
             Channel.CreateUnbounded<KernelLogic.DeferredTurnWork>(new UnboundedChannelOptions { SingleReader = true, SingleWriter = false });
         private readonly Task maintenanceWorker;
+        // 连续聊天只保留最新快照；正在执行的一份由提交版本检查防止倒写。
+        private readonly Channel<KernelLogic.DeferredTurnWork> stateMaintenanceTurns =
+            Channel.CreateBounded<KernelLogic.DeferredTurnWork>(new BoundedChannelOptions(1) {
+                SingleReader = true, SingleWriter = false, FullMode = BoundedChannelFullMode.DropOldest });
+        private readonly Task stateMaintenanceWorker;
         private readonly RecentEventLog eventLog = new RecentEventLog();
         private readonly Queue<PluginEventData> pendingBackground = new Queue<PluginEventData>();
         private readonly SqliteVectorManager vectorStore;
@@ -168,6 +173,7 @@ namespace TraceSoul2.Host
             else Emit("本次进程暂停自动日构建、后台活动和启动整理，手动对话与开发板仍可使用。");
             deferredWorker = Task.Run(() => RunDeferredTurnLoopAsync(deferredTurns.Reader, deferredCts.Token));
             maintenanceWorker = Task.Run(() => RunDeferredTurnLoopAsync(maintenanceTurns.Reader, deferredCts.Token));
+            stateMaintenanceWorker = Task.Run(() => RunDeferredTurnLoopAsync(stateMaintenanceTurns.Reader, deferredCts.Token));
             Emit("host 已启动");
         }
 
@@ -811,6 +817,7 @@ namespace TraceSoul2.Host
                         cancellationToken, HistoryWindowAlign);
                 }
                 deferred = chat.TakeDeferredWork();
+                QueueStateMaintenance(chat.TakeStateMaintenanceWork());
                 Providers.Protection.ObserveTurnFailures(result);
                 LastTurn = result;
                 foreach (var memoryResult in result.ContributionResults
@@ -865,6 +872,7 @@ namespace TraceSoul2.Host
                             ? ConversationId : source.ConversationId,
                         source, HistoryWindowMax, cancellationToken, HistoryWindowAlign);
                     QueueDeferredTurn(chat.TakeDeferredWork());
+                    QueueStateMaintenance(chat.TakeStateMaintenanceWork());
                     Providers.Protection.ObserveTurnFailures(result);
                     LastTurn = result;
                     RebuildOntology();
@@ -921,6 +929,7 @@ namespace TraceSoul2.Host
                 var result = await chat.ProcessPluginEventAsync(
                     ConversationId, source, HistoryWindowMax, cancellationToken, HistoryWindowAlign);
                 QueueDeferredTurn(chat.TakeDeferredWork());
+                QueueStateMaintenance(chat.TakeStateMaintenanceWork());
                 Providers.Protection.ObserveTurnFailures(result);
                 LastTurn = result;
                 RebuildOntology();
@@ -965,6 +974,11 @@ namespace TraceSoul2.Host
                 QueueDeferredTurn(work);
             }
             catch (Exception error) { EmitTiming("startup-reading", "启动时阅读篇幅未安排", 0, error.GetType().Name); }
+        }
+
+        private void QueueStateMaintenance(KernelLogic.DeferredTurnWork work)
+        {
+            if (work != null && !disposed) stateMaintenanceTurns.Writer.TryWrite(work);
         }
 
         private void QueueDeferredTurn(KernelLogic.DeferredTurnWork work)
@@ -1330,9 +1344,11 @@ namespace TraceSoul2.Host
             WxxzMonitor?.Dispose();
             try { deferredTurns.Writer.TryComplete(); } catch { /* ignored */ }
             try { maintenanceTurns.Writer.TryComplete(); } catch { /* ignored */ }
+            try { stateMaintenanceTurns.Writer.TryComplete(); } catch { /* ignored */ }
             try { deferredCts.Cancel(); } catch { /* ignored */ }
             try { deferredWorker?.Wait(TimeSpan.FromSeconds(2)); } catch { /* ignored */ }
             try { maintenanceWorker?.Wait(TimeSpan.FromSeconds(2)); } catch { /* ignored */ }
+            try { stateMaintenanceWorker?.Wait(TimeSpan.FromSeconds(2)); } catch { /* ignored */ }
             deferredCts.Dispose();
             try { externalPlugins?.Dispose(); } catch { /* ignored */ }
             Plugins.Dispose();
