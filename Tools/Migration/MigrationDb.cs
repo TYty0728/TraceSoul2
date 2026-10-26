@@ -13,13 +13,19 @@ namespace TraceSoul2.Migrate
     {
         private readonly SQLiteConnection connection;
         private readonly SQLiteConnection brain;
-        private readonly object brainWriteGate = new object();
+        private readonly object brainWriteGate;
         private readonly object callLogGate = new object();
         private string activeReviewAttempt;
         public string DataDirectory { get; }
 
         public MigrationDb(string migrationDbPath, string brainframePath)
+            : this(migrationDbPath, brainframePath, new object()) { }
+
+        public MigrationDb(string migrationDbPath, string brainframePath, object brainWriteGate)
         {
+            // Core transactions and prose checkpoints use different connections to the same database.
+            // Share the Store monitor so parallel detail completion cannot contend with its own writes.
+            this.brainWriteGate = brainWriteGate ?? throw new ArgumentNullException(nameof(brainWriteGate));
             var dir = Path.GetDirectoryName(Path.GetFullPath(migrationDbPath));
             DataDirectory = dir;
             if (!string.IsNullOrWhiteSpace(dir)) Directory.CreateDirectory(dir);

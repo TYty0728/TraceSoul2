@@ -368,15 +368,18 @@ namespace TraceSoul2.Manager
         public string LoadPluginDocument(string pluginId, string documentKey)
         {
             var id = Required(pluginId, "pluginId") + ":" + Required(documentKey, "documentKey");
-            var row = connection.Find<PluginDocumentRecord>(id);
-            return row == null ? string.Empty : row.Json ?? string.Empty;
+            lock (this)
+            {
+                var row = connection.Find<PluginDocumentRecord>(id);
+                return row == null ? string.Empty : row.Json ?? string.Empty;
+            }
         }
 
         public void SavePluginDocument(string pluginId, string documentKey, string json)
         {
             pluginId = Required(pluginId, "pluginId");
             documentKey = Required(documentKey, "documentKey");
-            connection.InsertOrReplace(new PluginDocumentRecord
+            lock (this) connection.InsertOrReplace(new PluginDocumentRecord
             {
                 Id = pluginId + ":" + documentKey,
                 PluginId = pluginId,

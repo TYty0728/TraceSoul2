@@ -29,7 +29,7 @@ internal static partial class Program
         {
             context = (IDisposable)Activator.CreateInstance(contextType);
             actualStore = Activator.CreateInstance(storeType, path);
-            migration = Activator.CreateInstance(migrationType, Path.Combine(directory, "migration.db"), path);
+            migration = Activator.CreateInstance(migrationType, Path.Combine(directory, "migration.db"), path, actualStore);
             contextType.GetProperty("Store").SetValue(context, actualStore);
             contextType.GetProperty("Migration").SetValue(context, migration);
             contextType.GetProperty("Providers").SetValue(context, Activator.CreateInstance(

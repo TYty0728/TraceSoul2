@@ -49,7 +49,7 @@ namespace TraceSoul2.Migrate
             // 迁移复盘跨度大，扩大候选窗口，防止早期事实被新事实挤出唤醒候选。
             context.Store.CandidateWindow = 2000;
             context.Migration = new MigrationDb(
-                Path.Combine(dataDir, "migration.sqlite3"), context.BrainframePath);
+                Path.Combine(dataDir, "migration.sqlite3"), context.BrainframePath, context.Store);
             context.Vectors = new SqliteVectorManager(
                 Path.Combine(dataDir, "tracesoul2-vectors.sqlite3"));
             context.Providers = new LlmProviderStore(Path.Combine(dataDir, "llm-providers.json"));

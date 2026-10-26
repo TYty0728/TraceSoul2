@@ -28,7 +28,7 @@ internal static partial class Program
             var actualStore = Activator.CreateInstance(storeType, db);
             contextType.GetProperty("Store").SetValue(context, actualStore);
             contextType.GetProperty("CognitionEncoder").SetValue(context, new FakeEncoder());
-            var migration = Activator.CreateInstance(migrationType, Path.Combine(dir, "migration.db"), db);
+            var migration = Activator.CreateInstance(migrationType, Path.Combine(dir, "migration.db"), db, actualStore);
             contextType.GetProperty("Migration").SetValue(context, migration);
             var store = (IMemoryStore)actualStore;
             store.SavePairIdentity("本人", "同伴", "称呼");
