@@ -16,6 +16,8 @@ import urllib.error
 import urllib.request
 
 calls = []
+maintenance_calls = []
+maintenance_received = threading.Event()
 
 
 class Upstream(BaseHTTPRequestHandler):
@@ -24,9 +26,19 @@ class Upstream(BaseHTTPRequestHandler):
 
     def do_POST(self):
         body = json.loads(self.rfile.read(int(self.headers['Content-Length'])))
-        calls.append((self.path, body))
-        success = self.path.startswith('/tertiary/')
-        result = {'choices': [{'message': {'content': json.dumps({'step': 'finish', 'reply': 'offline fallback ok'})},
+        # The private turn now also schedules an independent, bounded state update.
+        # Keep it observable without counting it as another dialogue fallback attempt.
+        maintenance = any(m.get('role') == 'system' and
+            m.get('content', '').startswith('整理本轮之后仍然相关的关注和共同文字场景。')
+            for m in body.get('messages', []))
+        if maintenance:
+            maintenance_calls.append((self.path, body))
+            maintenance_received.set()
+        else:
+            calls.append((self.path, body))
+        success = maintenance or self.path.startswith('/tertiary/')
+        content = {'attention': [], 'scene': None} if maintenance else {'step': 'finish', 'reply': 'offline fallback ok'}
+        result = {'choices': [{'message': {'content': json.dumps(content)},
                                'finish_reason': 'stop'}]} if success else {'error': {'message': 'private-upstream-detail'}}
         raw = json.dumps(result).encode()
         self.send_response(200 if success else 503)
@@ -114,18 +126,22 @@ def main():
                     assert api('/providers/main-fallbacks') == choices
                     api('/providers/main-fallbacks', 'PUT', {'secondary': choices['tertiary'], 'tertiary': choices['tertiary']}, expected=400)
                     assert api('/providers/main-fallbacks') == choices
-                    assert not calls, 'Saving choices must not call a model'
+                    assert not calls and not maintenance_calls, 'Saving choices must not call a model'
                     api('/identity/pair', 'PUT', {'username': 'Test user', 'assname': 'Test soul'})
                     result = api('/moments', 'POST', {'content': 'Isolated fallback check'})
                     assert result['reply'] == 'offline fallback ok'
                     assert [p for p, _ in calls] == ['/default/chat/completions', '/secondary/chat/completions', '/tertiary/chat/completions']
                     assert all(body['messages'] == calls[0][1]['messages'] for _, body in calls)
+                    assert maintenance_received.wait(5), 'Private turn must schedule its independent state update'
+                    assert len(maintenance_calls) == 1, 'State update must not repeat the dialogue fallback chain'
+                    assert maintenance_calls[0][1]['messages'] != calls[0][1]['messages']
                     assert api('/providers/slots')['chat']['providerId'] == 'default'
                     assert not api('/runtime/failures'), 'Recovered inference must not send a failure notification'
                     api('/providers/main-fallbacks', 'PUT', {'secondary': {}, 'tertiary': {}})
                     assert not api('/providers/main-fallbacks')['secondary']['providerId']
                     assert len(calls) == 3
-                    print('Temporary Host fallback checks passed: auth, atomic settings, no save-time calls, three-stage inference and original context.')
+                    assert len(maintenance_calls) == 1
+                    print('Temporary Host fallback checks passed: auth, atomic settings, no save-time calls, three-stage inference, original context and independent state update.')
                 finally:
                     process.terminate()
                     try:
