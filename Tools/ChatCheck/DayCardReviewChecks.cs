@@ -238,24 +238,12 @@ internal static partial class Program
             if (messages.Last().content.Contains("【单字段篇幅整理】")) return TraceJson.ToJson(new { text = longRelation ? new string('长', 745) : "当前关系认识及必要条件" });
             using var json = JsonDocument.Parse(messages.Last().content);
             var input = json.RootElement;
-            if (system.Contains("自动身份·认识归并"))
+            if (system.Contains("日复盘·直接更新卡片"))
             {
-                var ids = input.GetProperty("cognitions").EnumerateArray().Select(x => x.GetProperty("Id").GetString()).ToArray();
-                if (interruptHabit && ids.Contains("h")) throw new TimeoutException("synthetic interruption");
-                return ReorganizationAssessment(ids);
-            }
-            if (system.Contains("自动身份·变化判断"))
-            {
-                var ids = input.GetProperty("current_understandings")[0].GetProperty("cognition_ids").EnumerateArray().Select(x => x.GetString()).ToArray();
-                return TraceJson.ToJson(new { basis_ids = ids, effect = change ? "changed" : "unchanged", reason = change ? "认识形成" : "已有认识保持贴切", deltas = change
-                    ? new object[] { new { kind = "add", before = "", after = "有依据的当前认识", cognition_ids = ids } } : Array.Empty<object>() });
-            }
-            if (system.Contains("自动身份·当前认识成稿"))
-            {
-                Require(!messages.Last().content.Contains("old_card") && !messages.Last().content.Contains("原卡"), "自动成稿没有递归旧正文输入");
-                var ids = input.GetProperty("understandings")[0].GetProperty("cognition_ids").EnumerateArray().Select(x => x.GetString()).ToArray();
-                return TraceJson.ToJson(new { body = longRelation && input.GetProperty("slot").GetString() == "relation" ? new string('长', 745) : "当前关系认识及必要条件",
-                    change = "认识变化", understanding_indices = new[] { 0 }, cognition_ids = ids });
+                if (interruptHabit && input.GetProperty("slot").GetString() == "expression_habit") throw new TimeoutException("synthetic interruption");
+                Require(input.TryGetProperty("current_card", out _) && input.TryGetProperty("events", out _), "卡片直接读取当前摘要与当天产物");
+                return DailyCardReply(longRelation && input.GetProperty("slot").GetString() == "relation" ? new string('长', 745) :
+                    "当前关系认识及必要条件：" + input.GetProperty("cognitions")[0].GetProperty("Summary").GetString(), effect: change ? "changed" : "unchanged");
             }
             if (system.Contains("日终内心")) return "{\"cards\":[],\"inner_narrative\":\"这一天留下平静的感受\",\"inner_mood\":\"平静\"}";
             throw new InvalidOperationException("Unexpected automatic stage");
@@ -277,7 +265,7 @@ internal static partial class Program
                 db.Execute("UPDATE plugin_documents SET Json=json_set(Json, '$.NextAttemptUnixMs', 0) WHERE PluginId=?", ReviewWorkLogic.StoreId);
             longRelation = false; stages.Clear();
             Run(day, new SelectionProbeLlm { Reply = Reply });
-            Require(stages.Count == 1 && stages.Single().Contains("当前认识成稿") && DailyBuildHistory.ReadStates(history).Single().Status == "done" &&
+            Require(stages.Count == 1 && stages.Single().Contains("直接更新卡片") && DailyBuildHistory.ReadStates(history).Single().Status == "done" &&
                 store.LoadIdentityCards("tracesoul2").Single(x => x.Slot == "expression_habit").Revision == habit.Revision,
                 "实际Migration跨进程续做仅重成稿，不重复归并/变化判断/其他卡或已提交内心");
             stages.Clear(); Run(day, new AgentSequenceLlm()); Require(stages.Count == 0, "完成日不重复整理");
@@ -299,7 +287,7 @@ internal static partial class Program
             const string stale = "2020-08-23"; Checkpoint(stale);
             using (var db = new SQLite.SQLiteConnection(path)) db.Execute("UPDATE cognition_slices SET Summary='需要重新判断的关系认识' WHERE Id='r'");
             var edit = new SelectionProbeLlm { Reply = messages => {
-                if (messages[0].content.Contains("当前认识成稿")) store.SaveIdentityCard("tracesoul2", "relation", "本人刚刚修改的正文", "");
+                if (messages[0].content.Contains("直接更新卡片")) store.SaveIdentityCard("tracesoul2", "relation", "本人刚刚修改的正文", "");
                 return Reply(messages);
             } };
             rejected = false; try { Run(stale, edit); } catch (InvalidOperationException) { rejected = true; }

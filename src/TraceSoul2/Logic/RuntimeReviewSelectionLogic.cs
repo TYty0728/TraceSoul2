@@ -149,8 +149,10 @@ namespace TraceSoul2.Logic
 
         private static string NominationError(Nomination output, int count, bool checkLength = true)
         {
-            if (output?.events == null || output.events.Count == 0 || output.events.Count > 6)
-                return "events 必须是1～6项事件候选，不是成稿。";
+            // Six is a nomination target, not a provenance constraint. The following selection owns the final limit.
+            // Preserve valid extra candidates for semantic selection instead of failing the entire day at seven.
+            if (output?.events == null || output.events.Count == 0 || output.events.Count > 80)
+                return "events必须是非空候选数组，单批最多80项；建议合并提名1～6项，不是成稿。";
             var allowed = Enumerable.Range(1, count).Select(i => "s" + i).ToHashSet(StringComparer.Ordinal);
             for (var i = 0; i < output.events.Count; i++)
             {
@@ -162,8 +164,9 @@ namespace TraceSoul2.Logic
                     item.source_ids.Distinct(StringComparer.Ordinal).Count() != item.source_ids.Count || item.source_ids.Any(x => !allowed.Contains(x)))
                     return path + ".source_ids 必须引用本批真实s编号，不能重复或引用其他环境与批次。";
             }
-            return checkLength && output.events.Sum(x => x.summary.Length) > DirectoryBudget
-                ? "候选目录正文合计超过720字；只写变化与结果，不写成稿。" : null;
+            return checkLength && (output.events.Any(x => x.summary.Length > DirectoryBudget) ||
+                output.events.Sum(x => x.summary.Length) > Math.Max(DirectoryBudget, output.events.Count * 120))
+                ? "候选描述过长：单项不得超过720字，目录总预算为每项120字（至少720字）；只写变化与结果，不写成稿。" : null;
         }
 
         private static IEnumerable<List<RuntimeSliceRecord>> Batches(List<RuntimeSliceRecord> scope)

@@ -175,17 +175,22 @@ namespace TraceSoul2.Logic
         public static void ValidateProposal(Draft draft, bool checkLength = true)
         {
             var p = draft.proposal;
-            if (p == null || string.IsNullOrWhiteSpace(p.body) || (checkLength && p.body.Length > IdentityCardSlotValues.BodyLimit(draft.slot)) ||
-                string.IsNullOrWhiteSpace(p.change) || p.understanding_indices == null || p.understanding_indices.Count == 0 ||
+            if (p == null || string.IsNullOrWhiteSpace(p.body)) throw new IdentityReorganizationException("body必须为非空身份正文。");
+            if (checkLength && p.body.Length > IdentityCardSlotValues.BodyLimit(draft.slot))
+                throw new IdentityReorganizationException("body当前" + p.body.Length + "字，最多" + IdentityCardSlotValues.BodyLimit(draft.slot) + "字。");
+            if (string.IsNullOrWhiteSpace(p.change)) throw new IdentityReorganizationException("change必须说明本次认识变化。");
+            if (p.understanding_indices == null || p.understanding_indices.Count == 0 ||
                 p.understanding_indices.Distinct().Count() != p.understanding_indices.Count ||
-                p.understanding_indices.Any(i => i < 0 || i >= draft.understandings.Count) ||
-                p.cognition_ids == null || p.cognition_ids.Count is < 1 or > 12 || p.cognition_ids.Distinct().Count() != p.cognition_ids.Count)
-                throw new IdentityReorganizationException("身份候选正文、长度、变化说明或依据无效；已保存归并进度。");
+                p.understanding_indices.Any(i => i < 0 || i >= draft.understandings.Count))
+                throw new IdentityReorganizationException("understanding_indices必须是非空、不重复的当前认识编号，范围0～" + (draft.understandings.Count - 1) + "。");
+            if (p.cognition_ids == null || p.cognition_ids.Count == 0 || p.cognition_ids.Distinct().Count() != p.cognition_ids.Count)
+                throw new IdentityReorganizationException("cognition_ids必须为非空、不重复的真实依据。");
             var ids = p.understanding_indices.SelectMany(i => draft.understandings[i].cognition_ids).ToHashSet();
             if (p.cognition_ids.Any(id => !ids.Contains(id))) throw new IdentityReorganizationException("身份候选引用了未归入正文认识的依据。");
             if (p.understanding_indices.Any(i => !draft.understandings[i].cognition_ids.Intersect(p.cognition_ids).Any()))
                 throw new IdentityReorganizationException("正文所列认识缺少直接支持依据。");
         }
+
         public static Draft Apply(SqliteMemoryManager store, string root, string slot, string id)
         {
             var draft = Read(store, root, slot);

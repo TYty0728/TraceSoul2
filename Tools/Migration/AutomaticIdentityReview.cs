@@ -29,13 +29,19 @@ namespace TraceSoul2.Migrate
         {
             var llm = context.RequireLlm();
             var pending = new List<string>();
+            var core = LoadCoreCheckpoint(context, day);
+            var material = core == null ? null : new IdentityEvolutionLogic.DayMaterial {
+                source_ids = core.MomentIds,
+                events = context.Migration.GetEntriesByIndexIds(core.IndexIds).Where(e => core.EntryIds.Contains(e.Id))
+                    .Select(e => new IdentityEvolutionLogic.DayEvent { id = e.Id, summary = e.Summary, source_id = e.SourceMomentId }).ToList()
+            };
             foreach (var slot in IdentityReorganizationLogic.Slots)
             {
                 if (emptyDay) break;
                 context.Migration.SetReviewStage("身份：" + slot);
                 try {
                     var state = await IdentityEvolutionLogic.EvaluateAsync(context.Store, MigrationContext.ConversationId,
-                        slot, day, llm, CancellationToken.None);
+                        slot, day, llm, CancellationToken.None, material);
                     if (state?.pending == true) pending.Add(slot);
                     else IdentityEvolutionLogic.Commit(context.Store, MigrationContext.ConversationId, slot, state);
                 } catch (ReviewProsePendingException) { pending.Add(slot); }

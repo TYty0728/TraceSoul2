@@ -32,7 +32,8 @@ namespace TraceSoul2.Manager
             IEnumerable<string> cognitionIds, string sourceMomentId)
         {
             var ids = (cognitionIds ?? Array.Empty<string>()).Distinct().ToList();
-            if (ids.Count == 0 || ids.Count > 12) throw new InvalidOperationException("成长摘要必须引用 1～12 条认知依据。");
+            // Provenance is stored separately from prose; complete semantic groups must not be reduced to a sample.
+            if (ids.Count == 0 || ids.Count > 1000) throw new InvalidOperationException("成长摘要必须有完整认知依据，且不超过单槽1000条处理容量。");
             IdentityCardRecord result = null;
             connection.RunInTransaction(() =>
             {

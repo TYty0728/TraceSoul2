@@ -112,13 +112,13 @@ internal static partial class Program
                     source_ids = new[] { "s" + i } }).ToList() });
             string Rewrite(string text) => TraceJson.ToJson(new { text });
             Seed("nomination-repair", "nomination-repair", 24);
-            var nominationRepair = new AgentSequenceLlm(Nominations(8, 6), Nominations(6, 6), Rewrite("重写后的必要变化e6"),
+            var nominationRepair = new AgentSequenceLlm(Nominations(8, 6), Rewrite("重写后的必要变化e6"), Pick("i1", "i2", "i3", "i4", "i5", "i6"),
                 "{\"summary\":\"少数重要事件的当天回望。\"}");
             Require(await RuntimeSliceLogic.ReviewDayAsync(store, nominationRepair, "nomination-repair", day) == 24 &&
-                nominationRepair.Requests.Count == 4 && nominationRepair.Requests[1].Contains("1～6项") &&
-                nominationRepair.Requests[2].Contains("【单字段篇幅整理】") && !nominationRepair.Requests[2].Contains(longDraft) &&
+                nominationRepair.Requests.Count == 4 && nominationRepair.Requests[1].Contains("【单字段篇幅整理】") &&
+                nominationRepair.Requests[2].Contains("复盘候选入围") && !nominationRepair.Requests[1].Contains(longDraft) &&
                 nominationRepair.Requests[3].Contains("已合格事件目录1") && nominationRepair.Requests[3].Contains("重写后的必要变化e6"),
-                "结构先纠正，超长字段从完整依据单独提炼，合格字段保留");
+                "多出的合法提名直接交给入围选择，只有超长字段重写，合格字段保留");
             Seed("nomination-resume", "nomination-resume", 13);
             var shortFailure = new AgentSequenceLlm(Nominations(2, 1), Rewrite(longDraft));
             var failed = false;

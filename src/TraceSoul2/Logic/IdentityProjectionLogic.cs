@@ -60,7 +60,7 @@ namespace TraceSoul2.Logic
                 foreach (var card in cards.Where(x => !x.Pinned && Current(x, nodes)))
                 {
                     var state = IdentityEvolutionLogic.Read(sql, PuzzleViewLogic.Root(turn), card.Slot);
-                    if (state?.cardStamp != PuzzleViewLogic.Stamp(card)) continue;
+                    if (state?.cardStamp != PuzzleViewLogic.Stamp(card) || state.policy >= 3) continue;
                     var current = nodes.Where(x => PuzzleDomains.Live(x.Status) && x.IdentitySlot == card.Slot && x.MemoryVisibility != "public" &&
                         (string.IsNullOrEmpty(x.ContextConversationId) || x.ContextConversationId == PuzzleViewLogic.Root(turn)));
                     if (state.sourcesStamp != IdentityEvolutionLogic.SourcesStamp(current)) continue;

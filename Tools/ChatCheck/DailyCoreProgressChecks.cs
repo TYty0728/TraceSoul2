@@ -114,13 +114,13 @@ internal static partial class Program
                     "中途失败保留首批事件和标签");
             var tagCounts = store.GetActiveLifeTags().ToDictionary(x => x.Id, x => x.ActivationCount);
             context.Dispose(); context = null; Open();
-            var next = new AgentSequenceLlm(Event("末批补齐安排", day + "-18"), "{\"detail\":\"测试细节原文\"}",
-                "{\"detail\":\"测试细节原文\"}", "{\"cognitions\":[]}");
+            var next = new AgentSequenceLlm(Event("末批补齐安排", day + "-18"),
+                "{\"items\":[{\"id\":\"d0\",\"detail\":\"测试细节原文\"},{\"id\":\"d1\",\"detail\":\"测试细节原文\"}]}", "{\"cognitions\":[]}");
             Require(Rejected(() => Run(day, next)), "模拟在后续身份阶段停止");
             using (var db = new SQLite.SQLiteConnection(path))
                 Require(db.Table<EventEntryRecord>().Count() == 2 && db.Table<EventEntryRecord>().ToList().All(x => x.Detail == "测试细节原文") &&
-                    db.Table<EventIndexRecord>().Count() == 2 && next.Requests.Count == 5,
-                    "重启从第二批续做，首批事件不重复，细节各生成一次，认知完成后保存核心");
+                    db.Table<EventIndexRecord>().Count() == 2 && next.Requests.Count == 4,
+                    "重启从第二批续做，首批事件不重复，两条细节合为一次请求并分别保存，认知完成后保存核心");
             Require(!string.IsNullOrEmpty(store.LoadPluginDocument("daily-review-recovery-v1", "core:" + day)),
                 "身份失败前核心检查点已经持久化");
             foreach (var tag in store.GetActiveLifeTags().Where(x => tagCounts.ContainsKey(x.Id)))
@@ -250,7 +250,8 @@ internal static partial class Program
                 event_writes = refusalSources.Select((sourceMoment, i) => new { event_focus = "独立测试事件" + i,
                     source_moment_ids = new[] { sourceMoment.Id }, event_summary = "测试事件" + i,
                     entry_summary = "当时记录的事件" + i, new_tag_names = new[] { "计划核对" } }).ToArray() });
-            var refusalRun = new AgentSequenceLlm(twoEvents, "抱歉，我无法满足这个请求。", "{\"detail\":\"同批正常细节\"}");
+            var refusalRun = new AgentSequenceLlm(twoEvents,
+                "{\"items\":[{\"id\":\"d0\",\"detail\":\"抱歉，我无法满足这个请求。\"},{\"id\":\"d1\",\"detail\":\"同批正常细节\"}]}");
             Require(Rejected(() => Run(refusalDay, refusalRun)), "模拟内容兜底完成后在认知阶段中断");
             using (var db = new SQLite.SQLiteConnection(path))
             {
@@ -395,7 +396,45 @@ internal static partial class Program
                 "来源修订后拒绝使用旧晋升收据");
             Require(Rejected(() => builder.GetMethod("DedupeCognitions").Invoke(null, new object[] { context })),
                 "旧文字相似度去重入口停用，不能把不同条件或反证合掉来掩盖累积");
-            Console.WriteLine("Daily core progress checks passed: targeted drafts, restart, atomic writes, detail and cognition resume, source and legacy guards.");
+            // Batch generation retains per-item drafts, so later batch failure never replays completed model work.
+            var batchSources = Seed("2020-10-01", 36);
+            var batchSource = Source("2020-10-01", batchSources);
+            var workType = builder.GetNestedType("DetailWork", BindingFlags.NonPublic);
+            var workList = (System.Collections.IList)Activator.CreateInstance(typeof(List<>).MakeGenericType(workType));
+            for (var i = 0; i < 36; i++)
+            {
+                var workItem = Activator.CreateInstance(workType);
+                workType.GetField("Entry").SetValue(workItem, new EventEntryRecord { Id = "batch-" + i });
+                workType.GetField("Key").SetValue(workItem, "batch-" + i);
+                workType.GetField("Stamp").SetValue(workItem, "source-" + i);
+                workType.GetField("Messages").SetValue(workItem, new List<DeepSeekMessageData> {
+                    new("system", "独立原件-" + i), new("user", "只整理这件事") });
+                workList.Add(workItem);
+            }
+            var batchCalls = 0;
+            string BatchReply(List<DeepSeekMessageData> request)
+            {
+                using var input = JsonDocument.Parse(request[1].content);
+                Require(input.RootElement.GetArrayLength() == 6, "每批六条独立任务，输出与来源按id对应");
+                return TraceJson.ToJson(new { items = input.RootElement.EnumerateArray().Select(x => new {
+                    id = x.GetProperty("id").GetString(), detail = x.GetProperty("task")[0].GetProperty("content").GetString() + "的细节" }) });
+            }
+            var batchInterrupted = new SelectionProbeLlm { Reply = request => {
+                if (++batchCalls == 2) throw new IOException("模拟第二批网络中断"); return BatchReply(request); } };
+            try { Await(Method("PrepareDetailBatchesAsync"), context, batchSource, batchInterrupted, workList, System.Threading.CancellationToken.None); }
+            catch (IOException) { }
+            Require(!string.IsNullOrEmpty(store.LoadPluginDocument("daily-core-progress-v1", "batch-5:draft")) &&
+                string.IsNullOrEmpty(store.LoadPluginDocument("daily-core-progress-v1", "batch-6:draft")), "后批失败时前六项草稿已保存");
+            context.Dispose(); context = null; Open();
+            var batchResume = new SelectionProbeLlm { Reply = BatchReply };
+            Await(Method("PrepareDetailBatchesAsync"), context, batchSource, batchResume, workList, System.Threading.CancellationToken.None);
+            Require(batchResume.Requests.Count == 5 && Enumerable.Range(0, 36).All(i =>
+                store.LoadPluginDocument("daily-core-progress-v1", "batch-" + i + ":draft").Contains("独立原件-" + i + "的细节")),
+                "36条细节只需6次成功请求，跨进程续做剩余5批且结果逐项对应");
+            var batchCached = new AgentSequenceLlm();
+            Await(Method("PrepareDetailBatchesAsync"), context, batchSource, batchCached, workList, System.Threading.CancellationToken.None);
+            Require(batchCached.Requests.Count == 0, "已合批生成的草稿恢复零重复模型调用");
+            Console.WriteLine("Daily core progress checks passed: targeted drafts, restart, atomic writes, batched detail and cognition resume, source and legacy guards.");
         }
         finally { context?.Dispose(); Directory.Delete(directory, true); }
     }

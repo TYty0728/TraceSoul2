@@ -330,10 +330,11 @@ namespace TraceSoul2.Migrate
             var detailCalls = 0;
             var pendingDetails = 0;
             context.Migration.SetReviewStage("细节生成");
-            await ProtectedParallelWork.RunAsync(dayEntries, 4, async (entry, detailToken) =>
+            var detailWork = new List<DetailWork>();
+            foreach (var entry in dayEntries)
             {
                 List<MomentRecord> evidence;
-                if (!evidenceByEntry.TryGetValue(entry.Id, out evidence)) return;
+                if (!evidenceByEntry.TryGetValue(entry.Id, out evidence)) continue;
                 var index = dayIndexes.FirstOrDefault(x => x.Id == entry.IndexId);
                 var indexLine = index == null ? string.Empty
                     : index.TimeLabel + "（" + index.DayKindLabel + "）·" + index.PlaceLabel + "·"
@@ -341,7 +342,7 @@ namespace TraceSoul2.Migrate
                 var detailKey = ProgressKey(dayKey, progress.Generation, "detail", entry.Id);
                 var detailStamp = Digest(new { Source = SourceStamp(context, evidence.Select(x => x.Id)),
                     indexLine, entry.Summary, personalityCard, userProfileCard });
-                if (RestoreDetail(context, progress, detailKey, detailStamp, entry)) return;
+                if (RestoreDetail(context, progress, detailKey, detailStamp, entry)) continue;
                 var prompt = ReplayPrompts.BuildDetailPrompt(
                     pair, personalityCard, userProfileCard, evidence, indexLine, entry.Summary, 0, 200);
                 var messages = new List<DeepSeekMessageData>
@@ -349,6 +350,15 @@ namespace TraceSoul2.Migrate
                     new DeepSeekMessageData("system", prompt),
                     new DeepSeekMessageData("user", CorePrompts.Migration.DetailUser)
                 };
+                detailWork.Add(new DetailWork { Entry = entry, Key = detailKey, Stamp = detailStamp, Messages = messages });
+            }
+            await PrepareDetailBatchesAsync(context, progress, llm, detailWork, CancellationToken.None);
+            await ProtectedParallelWork.RunAsync(detailWork, 4, async (work, detailToken) =>
+            {
+                var entry = work.Entry;
+                var detailKey = work.Key;
+                var detailStamp = work.Stamp;
+                var messages = work.Messages;
                 var contentRejected = false;
                 try { entry.Detail = await CompleteDetailAsync(context, llm, detailKey, detailStamp, messages, detailToken); }
                 catch (ReviewProsePendingException) { Interlocked.Increment(ref pendingDetails); return; }
