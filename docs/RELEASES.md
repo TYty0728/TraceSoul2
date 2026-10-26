@@ -8,9 +8,11 @@
 - 通用相机绑定原轮平台的图片输出能力，不跨平台回退QQ；补齐Agent、感官、平台与插件边界说明。PluginApi升级1.17.0，Host与官方插件配套重建。
 - 表情选择先按用途筛选候选，再按当下心情排序；控制台新增同源NapCat管理入口。
 
-产品0.1.77，PluginApi1.17.0，相机2.3.4；Release全解决方案、完整ChatCheck/Prompt布局、实际Migration、CoreCheck、表情/runtime页面与发布隐私检查通过，24项既有相机测试警告、0错误。公开发布验收待完成。本次发布不部署服务器、不恢复日构建或调用真实模型。
+产品0.1.77，PluginApi1.17.0，相机2.3.4；Release全解决方案、完整ChatCheck/Prompt布局、实际Migration、CoreCheck、表情/runtime页面与发布隐私检查通过，24项既有相机测试警告、0错误。公开发布验收通过。本次发布不部署服务器、不恢复日构建或调用真实模型。
 
 发布过程：v0.1.76标签已保留，但未生成Release；发布CI发现旧Host备用链测试把独立轮后整理请求算作对话重试。测试现分别核对原三路备用调用与一次状态整理，并确认保存配置不调用模型；实际Host与全部页面回归通过，顺延v0.1.77发布。
+
+发布确认：[v0.1.77](https://github.com/TYty0728/TraceSoul2/releases/tag/v0.1.77)／源码28e0401已公开，[发布CI40285267875](https://github.com/TYty0728/TraceSoul2/actions/runs/40285267875)完整回归、Docker升级/数据保留、源码镜像启动及三平台打包全部成功。匿名latest=v0.1.77，三平台ZIP公开可访问，侧车SHA-256与GitHub digest一致，SDK1.17.0实际下载摘要通过；范围读取三包确认版本、轮后整理、共享媒体契约、标准相机请求及通用身份模板，无运行资料。未完整下载三包。win-x64 `c8d53e830e702efd84492f5e06eb393366918f5e3f90ac4d1e25079d7867a6e1`； linux-x64 `bd8ebc416913b7ebcb996f47855bd88863b4b7c72635ac3cddd883c50eeb6af7`； linux-arm64 `0e5e08b768a425a09e2963cedb3ebd91ae056b430f458e1b1f8f1b5a591c6211`；
 
 ## 0.1.75（2026-10-25）
 
