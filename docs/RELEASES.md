@@ -6,7 +6,9 @@
 - 事件观察改用本批短编号 source_refs 和已有事件 index_ref，由程序严格校验并映射真实来源入库；纠错反馈包含具体字段、非法编号和有效范围。
 - 兼容旧观察草稿和检查点，保留已完成批次；新增并发回滚隔离、跨批编号映射、非法引用纠正和新旧草稿恢复回归。
 
-产品0.1.80，PluginApi1.17.0与官方插件版本不变。本地完整ChatCheck、Prompt布局、实际Migration和Host构建通过；发布验收进行中。本次不部署服务器、不恢复日构建或调用真实模型。
+产品0.1.80，PluginApi1.17.0与官方插件版本不变。本地完整ChatCheck、Prompt布局、实际Migration和Host构建通过；公开发布验收通过。本次不部署服务器、不恢复日构建或调用真实模型。
+
+发布确认：[v0.1.80](https://github.com/TYty0728/TraceSoul2/releases/tag/v0.1.80)／源码1df9cfa已公开，[发布CI40812912424](https://github.com/TYty0728/TraceSoul2/actions/runs/40812912424)完整回归、Docker升级/数据保留、源码镜像启动和三平台打包全部成功。匿名latest=v0.1.80，三平台ZIP公开可访问，侧车SHA-256与GitHub digest一致，SDK1.17.0实际下载摘要通过；范围读包确认版本、短编号映射、通用模板及无运行资料。未完整下载三包、部署服务器或恢复日构建。win-x64 `40972d73cb54263c5d907a73efaa407754c4fd1b1f1b2ce7cff00183f9cbd151`；linux-x64 `d8115260e9c5ab84b14f04f1dc7f27e86f54db65bc214f504af9a3cf1b8c0e3f`；linux-arm64 `1d37c782784a5b1fa7ff0a26799fa5358e4a388bc052f8e1e051c82bab2f7fa5`。
 
 ## 0.1.79（2026-10-27）
 
