@@ -58,10 +58,10 @@ internal static partial class Program
             catch (InvalidOperationException) { return true; }
         }
         string Repair(string body, string id = "append:0") => TraceJson.ToJson(new { text = body });
-        string Event(string summary, string sourceId) => TraceJson.ToJson(new {
+        string Event(string summary, int sourceRef = 1) => TraceJson.ToJson(new {
             perception_summary = "记录这段测试经历", new_tags = new[] { new {
                 name = "计划核对", definition = "共同检查计划", domain_ids = new[] { "relation" }, dimension_ids = new[] { "predicate" } } },
-            event_writes = new[] { new { event_focus = "核对安排的新进展", source_moment_ids = new[] { sourceId }, event_summary = summary, entry_summary = "共同检查安排", new_tag_names = new[] { "计划核对" } } } });
+            event_writes = new[] { new { event_focus = "核对安排的新进展", source_refs = new[] { sourceRef }, event_summary = summary, entry_summary = "共同检查安排", new_tag_names = new[] { "计划核对" } } } });
         void Run(string day, AgentSequenceLlm llm)
         {
             contextType.GetProperty("Llm").SetValue(context, llm);
@@ -107,20 +107,23 @@ internal static partial class Program
             // Real pipeline, interruption after one committed observation, then process restart.
             const string day = "2020-08-11";
             Seed(day, 19);
-            var interrupted = new AgentSequenceLlm(Event("首批共同核对安排", day + "-0"));
+            var interrupted = new AgentSequenceLlm(Event("首批共同核对安排"));
             Require(Rejected(() => Run(day, interrupted)), "第二事件批失败应停止当日流程");
             using (var db = new SQLite.SQLiteConnection(path))
                 Require(db.Table<EventEntryRecord>().Count() == 1 && db.Table<LifeTagRecord>().Count() > 0,
                     "中途失败保留首批事件和标签");
             var tagCounts = store.GetActiveLifeTags().ToDictionary(x => x.Id, x => x.ActivationCount);
             context.Dispose(); context = null; Open();
-            var next = new AgentSequenceLlm(Event("末批补齐安排", day + "-18"),
+            var next = new AgentSequenceLlm(Event("末批补齐安排"),
                 "{\"items\":[{\"id\":\"d0\",\"detail\":\"测试细节原文\"},{\"id\":\"d1\",\"detail\":\"测试细节原文\"}]}", "{\"cognitions\":[]}");
             Require(Rejected(() => Run(day, next)), "模拟在后续身份阶段停止");
             using (var db = new SQLite.SQLiteConnection(path))
                 Require(db.Table<EventEntryRecord>().Count() == 2 && db.Table<EventEntryRecord>().ToList().All(x => x.Detail == "测试细节原文") &&
+                    db.Table<EventEntryRecord>().ToList().Select(x => x.SourceMomentId).ToHashSet().SetEquals(new[] { day + "-0", day + "-18" }) &&
                     db.Table<EventIndexRecord>().Count() == 2 && next.Requests.Count == 4,
-                    "重启从第二批续做，首批事件不重复，两条细节合为一次请求并分别保存，认知完成后保存核心");
+                    "重启从第二批续做，短编号1按各批映射不同真实ID，首批不重复，细节合批并保存核心");
+            Require(!interrupted.Requests[0].Contains(day + "-0") && interrupted.Requests[0].Contains("1｜") &&
+                interrupted.Requests[0].Contains("18｜"), "事件观察仅展示本批短编号，不要求模型复制真实来源ID");
             Require(!string.IsNullOrEmpty(store.LoadPluginDocument("daily-review-recovery-v1", "core:" + day)),
                 "身份失败前核心检查点已经持久化");
             foreach (var tag in store.GetActiveLifeTags().Where(x => tagCounts.ContainsKey(x.Id)))
@@ -192,11 +195,71 @@ internal static partial class Program
             probeSources[0].Content = "只属于饮水事件的原句";
             probeSources[1].Content = "只属于修电脑事件的原句";
             string Structure(string raw) => (string)Method("ObservationStructureError").Invoke(null, new object[] {
-                JsonSerializer.Deserialize(raw, eventType, new JsonSerializerOptions { IncludeFields = true }), probeSources, new List<EventIndexRecord>() });
-            Require(Structure(Event("只记饮水", probeSources[0].Id)) == null &&
-                Structure(Event("引用批外来源", "foreign")) != null &&
+                JsonSerializer.Deserialize(raw, eventType, new JsonSerializerOptions { IncludeFields = true }), probeSources, new List<EventIndexRecord>(), 2 });
+            Require(Structure(Event("只记饮水")) == null &&
+                Structure(Event("引用批外来源", 3)).Contains("event_writes[0].source_refs[0]=3") &&
+                Structure(Event("零编号", 0)) != null && Structure(Event("负编号", -1)) != null &&
+                Structure(Event("重复编号").Replace("[1]", "[1,1]")).Contains("重复") &&
                 Structure("{\"perception_summary\":\"测试\",\"event_writes\":[{\"event_summary\":\"一件事\",\"entry_summary\":\"一件事\"}]}") != null,
-                "新事件必须逐项引用本批原句，缺失和批外引用均拒绝");
+                "短编号拒绝缺失、零、负、越界和重复，并定位具体出错项");
+            var mapped = JsonSerializer.Deserialize(TraceJson.ToJson(new { perception_summary = "测试映射",
+                event_writes = new[] { new { event_focus = "新增", event_summary = "新增事件", entry_summary = "新增事件", source_refs = new[] { 2, 1 } } },
+                event_appends = new[] { new { event_focus = "追加", entry_summary = "已有事件的新进展", source_refs = new[] { 2 }, index_ref = 1 } } }),
+                eventType, new JsonSerializerOptions { IncludeFields = true });
+            var candidate = new EventIndexRecord { Id = "real-index-id", EventSummary = "已有事件" };
+            Require(Method("ObservationStructureError").Invoke(null, new object[] { mapped, probeSources, new List<EventIndexRecord> { candidate }, 2 }) == null,
+                "新建和追加事件的两类短编号均通过来源校验");
+            using (var parsed = JsonDocument.Parse(JsonSerializer.Serialize(mapped, eventType, new JsonSerializerOptions { IncludeFields = true })))
+            {
+                var writes = parsed.RootElement.GetProperty("event_writes")[0].GetProperty("source_moment_ids");
+                var append = parsed.RootElement.GetProperty("event_appends")[0];
+                Require(writes[0].GetString() == probeSources[1].Id && writes[1].GetString() == probeSources[0].Id &&
+                    append.GetProperty("index_alias").GetString() == candidate.Id &&
+                    append.GetProperty("source_moment_ids")[0].GetString() == probeSources[1].Id,
+                    "模型序号准确映射回真实来源和索引，数据库不保存临时编号作为外键");
+            }
+            Require(((string)Method("ObservationStructureError").Invoke(null, new object[] {
+                mapped, probeSources, new List<EventIndexRecord>(), 2 })).Contains("index_ref=1"), "无候选不能追加到猜测索引");
+            var legacyOutput = JsonSerializer.Deserialize(TraceJson.ToJson(new { perception_summary = "旧草稿",
+                event_writes = new[] { new { event_focus = "旧事件", event_summary = "旧事件", entry_summary = "旧事件", source_moment_ids = new[] { probeSources[0].Id } } } }),
+                eventType, new JsonSerializerOptions { IncludeFields = true });
+            Require(Method("ObservationStructureError").Invoke(null, new object[] { legacyOutput, probeSources, new List<EventIndexRecord>(), 1 }) == null &&
+                Method("ObservationStructureError").Invoke(null, new object[] { legacyOutput, probeSources, new List<EventIndexRecord>(), 2 }) != null,
+                "旧草稿继续接受真实编号，新协议不能绕过短编号校验");
+            var shortPrompt = (string)replay.GetMethod("BuildEventObservationPrompt").Invoke(null, new object[] {
+                store.LoadPairIdentity(), probeSources, null, new List<EventIndexRecord> { candidate }, new List<LifeTagRecord>(), "上午", "工作日", null });
+            Require(!shortPrompt.Contains(probeSources[0].Id) && !shortPrompt.Contains(probeSources[1].Id) &&
+                !shortPrompt.Contains(candidate.Id) && shortPrompt.Contains("source_refs") && shortPrompt.Contains("index_ref"),
+                "新提示同时隐藏来源和事件索引长ID，使用各自表内整数编号");
+
+            var shortSources = Seed("2020-08-31", 2);
+            var shortSource = Source("2020-08-31", shortSources);
+            var shortState = Activator.CreateInstance(stateType);
+            var corrected = new AgentSequenceLlm(Event("错误来源", 3), Event("正确来源", 2));
+            Await(Method("CompleteObservationAsync"), context, corrected, shortSource, "short-ref-draft", shortState,
+                messages, shortSources, new List<EventIndexRecord>());
+            Require(corrected.Requests.Count == 2 && corrected.Requests[1].Contains("event_writes[0].source_refs[0]=3") &&
+                corrected.Requests[1].Contains("1～2"), "实际纠错请求明确给出出错路径、序号和有效范围");
+            var shortSaved = store.LoadPluginDocument("daily-core-progress-v1", "short-ref-draft");
+            context.Dispose(); context = null; Open();
+            var restoredShort = JsonSerializer.Deserialize(shortSaved, stateType, new JsonSerializerOptions { IncludeFields = true });
+            var shortResume = new AgentSequenceLlm();
+            Await(Method("CompleteObservationAsync"), context, shortResume, shortSource, "short-ref-draft", restoredShort,
+                messages, shortSources, new List<EventIndexRecord>());
+            using (var doc = JsonDocument.Parse(store.LoadPluginDocument("daily-core-progress-v1", "short-ref-draft")))
+                Require(shortResume.Requests.Count == 0 && doc.RootElement.GetProperty("SourceVersion").GetInt32() == 2 &&
+                    doc.RootElement.GetProperty("Output").GetProperty("event_writes")[0].GetProperty("source_moment_ids")[0].GetString() == shortSources[1].Id,
+                    "新协议草稿重启零请求恢复，真实来源映射保留");
+            var oldState = Activator.CreateInstance(stateType);
+            stateType.GetField("SourceVersion").SetValue(oldState, 1);
+            // Use a pre-upgrade output whose source is in the unchanged recovery batch.
+            oldState.GetType().GetField("Output").SetValue(oldState, JsonSerializer.Deserialize(TraceJson.ToJson(new {
+                perception_summary = "旧版草稿", event_writes = new[] { new { event_focus = "旧事件", event_summary = "旧事件",
+                    entry_summary = "旧事件", source_moment_ids = new[] { shortSources[0].Id } } } }), eventType, new JsonSerializerOptions { IncludeFields = true }));
+            var oldCalls = new AgentSequenceLlm();
+            Await(Method("CompleteObservationAsync"), context, oldCalls, shortSource, "legacy-ref-draft", oldState,
+                messages, shortSources, new List<EventIndexRecord>());
+            Require(oldCalls.Requests.Count == 0, "旧版真实ID草稿升级后原样复用，不强制按新协议重跑");
             var selectedSources = (List<MomentRecord>)Method("ResolveEventSources").Invoke(null,
                 new object[] { new List<string> { probeSources[0].Id }, probeSources });
             var detailPrompt = (string)replay.GetMethod("BuildDetailPrompt").Invoke(null, new object[] {
@@ -248,7 +311,7 @@ internal static partial class Program
             var twoEvents = TraceJson.ToJson(new { perception_summary = "两件测试事件", new_tags = new[] { new {
                 name = "计划核对", definition = "共同检查计划", domain_ids = new[] { "relation" }, dimension_ids = new[] { "predicate" } } },
                 event_writes = refusalSources.Select((sourceMoment, i) => new { event_focus = "独立测试事件" + i,
-                    source_moment_ids = new[] { sourceMoment.Id }, event_summary = "测试事件" + i,
+                    source_refs = new[] { i + 1 }, event_summary = "测试事件" + i,
                     entry_summary = "当时记录的事件" + i, new_tag_names = new[] { "计划核对" } }).ToArray() });
             var refusalRun = new AgentSequenceLlm(twoEvents,
                 "{\"items\":[{\"id\":\"d0\",\"detail\":\"抱歉，我无法满足这个请求。\"},{\"id\":\"d1\",\"detail\":\"同批正常细节\"}]}");
@@ -326,7 +389,7 @@ internal static partial class Program
             // A pure prose failure is persisted as deferred by the real entrypoint.
             const string deferredDay = "2020-08-30";
             Seed(deferredDay, 1);
-            var overlongEvent = new AgentSequenceLlm(Event(new string('长', 200), deferredDay + "-0"),
+            var overlongEvent = new AgentSequenceLlm(Event(new string('长', 200)),
                 TraceJson.ToJson(new { text = new string('长', 200) }));
             Run(deferredDay, overlongEvent);
             var pendingState = TraceSoul2.Host.DailyBuildHistory.ReadStates(Path.Combine(directory, "migration.db")).Single(x => x.DayKey == deferredDay);

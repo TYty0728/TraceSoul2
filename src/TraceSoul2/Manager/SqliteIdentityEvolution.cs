@@ -1,3 +1,4 @@
+using System.Runtime.CompilerServices;
 using System;
 using System.Linq;
 using TraceSoul2.Data;
@@ -8,6 +9,7 @@ namespace TraceSoul2.Manager
 {
     public sealed partial class SqliteMemoryManager
     {
+        [MethodImpl(MethodImplOptions.Synchronized)]
         public void CommitPublicExperienceChecked(System.Collections.Generic.IEnumerable<string> ids,
             System.Collections.Generic.IEnumerable<BrainCognitionWriteData> writes, Action validate)
         {
@@ -16,6 +18,7 @@ namespace TraceSoul2.Manager
                 validate(); CommitPublicExperience(ids, writes);
             });
         }
+        [MethodImpl(MethodImplOptions.Synchronized)]
         public void CommitIdentityEvolution(string root, string slot, IdentityEvolutionLogic.State state)
         {
             connection.RunInTransaction(() => {

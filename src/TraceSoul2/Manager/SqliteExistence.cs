@@ -1,3 +1,4 @@
+using System.Runtime.CompilerServices;
 using System;
 using System.Collections.Generic;
 using System.Linq;
@@ -9,6 +10,7 @@ namespace TraceSoul2.Manager
 {
     public sealed partial class SqliteMemoryManager
     {
+        [MethodImpl(MethodImplOptions.Synchronized)]
         public bool TrySaveSubject(string root, long expectedRevision, SubjectState state, InnerRuntimeData local = null)
         {
             var saved = false;
@@ -28,6 +30,7 @@ namespace TraceSoul2.Manager
             return saved;
         }
 
+        [MethodImpl(MethodImplOptions.Synchronized)]
         public IdentityCardRecord SaveDerivedIdentityCard(string conversationId, string slot, string body,
             IEnumerable<string> cognitionIds, string sourceMomentId)
         {
@@ -54,6 +57,7 @@ namespace TraceSoul2.Manager
             return result;
         }
 
+        [MethodImpl(MethodImplOptions.Synchronized)]
         public void SetIdentityPinned(string conversationId, string slot, bool pinned)
         {
             var card = LoadIdentityCards(conversationId).Single(x => x.Slot == slot);
@@ -61,15 +65,18 @@ namespace TraceSoul2.Manager
             connection.Update(card);
         }
 
+        [MethodImpl(MethodImplOptions.Synchronized)]
         public List<string> GetUnbuiltPublicMemoryDayKeysBefore(long endMs) => connection.QueryScalars<string>(
             "SELECT DISTINCT strftime('%Y-%m-%d', datetime(CreatedUnixMs/1000, 'unixepoch', '+8 hours', '-4 hours')) " +
             "FROM moments WHERE CreatedUnixMs<? AND MemoryVisibility='public' AND (MemoryStatus IS NULL OR MemoryStatus NOT IN ('built','operational')) ORDER BY 1", endMs);
 
+        [MethodImpl(MethodImplOptions.Synchronized)]
         public List<MomentRecord> GetPublicMomentsInRange(long startMs, long endMs, int take = 200) => connection.Table<MomentRecord>()
             .Where(x => x.MemoryVisibility == "public" && x.CreatedUnixMs >= startMs && x.CreatedUnixMs < endMs &&
                 (x.MemoryStatus == null || (x.MemoryStatus != "built" && x.MemoryStatus != "operational")))
             .OrderBy(x => x.CreatedUnixMs).Take(Math.Clamp(take, 1, 200)).ToList();
 
+        [MethodImpl(MethodImplOptions.Synchronized)]
         public void CommitPublicExperience(IEnumerable<string> sourceIds, IEnumerable<BrainCognitionWriteData> writes)
         {
             var ids = sourceIds.Distinct().ToList();
@@ -94,6 +101,7 @@ namespace TraceSoul2.Manager
             });
         }
 
+        [MethodImpl(MethodImplOptions.Synchronized)]
         public void MarkPublicMomentsBuilt(IEnumerable<string> ids)
         {
             connection.RunInTransaction(() =>

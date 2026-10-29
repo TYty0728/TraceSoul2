@@ -159,18 +159,18 @@ namespace TraceSoul2.Migrate
             EnsureCoreProgress(context, source);
             if (state.Output == null)
             {
-                state.SourceVersion = chunk == null ? 0 : 1;
+                state.SourceVersion = chunk == null ? 0 : 2;
                 state.Output = await DeepSeekStructuredOutputLogic.CompleteAsync<ReplayPrompts.DayEventOutputData>(
                     llm, messages, null, "事件观察输出缺少 perception_summary。", CancellationToken.None,
-                    validationError: x => ObservationStructureError(x, chunk, candidates), includeInvalidResponse: false);
+                    validationError: x => ObservationStructureError(x, chunk, candidates, state.SourceVersion), includeInvalidResponse: false);
             }
-            var structureError = ObservationStructureError(state.Output, state.SourceVersion == 0 ? null : chunk, candidates);
+            var structureError = ObservationStructureError(state.Output, state.SourceVersion == 0 ? null : chunk, candidates, state.SourceVersion);
             if (structureError != null) throw new InvalidOperationException(structureError);
             EnsureCoreProgress(context, source);
             // The validated structure and all good fields survive a failed prose repair.
             context.Store.SavePluginDocument(CoreProgressDocuments, key, TraceJson.ToJson(state));
             state.Output = await ReviewWorkLogic.CompleteAsync<ReplayPrompts.DayEventOutputData>(context.Store,
-                key + ":prose", llm, messages, x => ObservationStructureError(x, state.SourceVersion == 0 ? null : chunk, candidates),
+                key + ":prose", llm, messages, x => ObservationStructureError(x, state.SourceVersion == 0 ? null : chunk, candidates, state.SourceVersion),
                 ObservationParts, CancellationToken.None, state.Output);
             EnsureCoreProgress(context, source);
             context.Store.SavePluginDocument(CoreProgressDocuments, key, TraceJson.ToJson(state));
@@ -203,13 +203,58 @@ namespace TraceSoul2.Migrate
             return chunk.Where(x => ids.Contains(x.Id)).ToList();
         }
 
-        private static string ObservationStructureError(ReplayPrompts.DayEventOutputData output,
+        private static string MapObservationReferences(ReplayPrompts.DayEventOutputData output,
             List<MomentRecord> chunk, List<EventIndexRecord> candidates)
+        {
+            string Check(List<int> refs, string path)
+            {
+                if (refs == null || refs.Count == 0) return path + "不能为空；请选择本批1～" + chunk.Count + "的整数序号。";
+                for (var j = 0; j < refs.Count; j++)
+                {
+                    if (refs[j] < 1 || refs[j] > chunk.Count)
+                        return path + "[" + j + "]=" + refs[j] + "越界；本批只允许1～" + chunk.Count + "，不可引用其他批次。";
+                    if (refs.Take(j).Contains(refs[j]))
+                        return path + "[" + j + "]=" + refs[j] + "重复；同一项的来源序号须去重。";
+                }
+                return null;
+            }
+            List<string> RealIds(List<int> refs) => refs.Select(x => chunk[x - 1].Id).ToList();
+            for (var i = 0; i < output.event_writes.Count; i++)
+            {
+                var item = output.event_writes[i];
+                if (item == null) return "event_writes[" + i + "]不能为null。";
+                var error = Check(item.source_refs, "event_writes[" + i + "].source_refs");
+                if (error != null) return error;
+                item.source_moment_ids = RealIds(item.source_refs);
+            }
+            for (var i = 0; i < output.event_appends.Count; i++)
+            {
+                var item = output.event_appends[i];
+                if (item == null) return "event_appends[" + i + "]不能为null。";
+                var error = Check(item.source_refs, "event_appends[" + i + "].source_refs");
+                if (error != null) return error;
+                var count = candidates?.Count ?? 0;
+                if (item.index_ref < 1 || item.index_ref > count)
+                    return "event_appends[" + i + "].index_ref=" + item.index_ref +
+                        (count == 0 ? "无效；本批没有已有索引候选，请使用event_writes。" : "越界；已有索引候选只允许1～" + count + "。");
+                item.source_moment_ids = RealIds(item.source_refs);
+                item.index_alias = candidates[item.index_ref - 1].Id;
+            }
+            return null;
+        }
+
+        private static string ObservationStructureError(ReplayPrompts.DayEventOutputData output,
+            List<MomentRecord> chunk, List<EventIndexRecord> candidates, int sourceVersion = 1)
         {
             if (string.IsNullOrWhiteSpace(output?.perception_summary)) return "perception_summary必须非空。";
             if (chunk == null) return null; // Existing drafts retain their original, explicitly legacy scope.
             if (output.event_writes == null || output.event_appends == null) return "event_writes和event_appends须为数组。";
             if (output.event_writes.Count + output.event_appends.Count > 12) return "本批事件最多12项；只记录新事实与转折。";
+            if (sourceVersion >= 2)
+            {
+                var referenceError = MapObservationReferences(output, chunk, candidates);
+                if (referenceError != null) return referenceError;
+            }
             var seen = new HashSet<string>(StringComparer.Ordinal);
             foreach (var item in output.event_writes)
             {

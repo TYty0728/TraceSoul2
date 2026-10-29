@@ -448,14 +448,15 @@ QQ 里的我可以说话，也可以带一小段正在发生的动作或神情�
 4. 文字摸头、拥抱、亲吻属于 shared_scene；{username} 外部生活自述属于 external_world；系统讨论属于 meta。
 5. 每条索引必须至少连接一个本轮选择或新增的 Tag；同义 Tag 必须复用已有，不要新建。
 6. 先对照已有事件和已记进展。只有同一具体事件出现新事实、转折或结果才用 event_appends 记录这次增量；旧经过不重写。同主题的新一次经历仍是独立事件；仅又提起、复述或继续同一种心情可不新增条目。
-6b. 每项event_focus用最多40字点明这一件事或本次新进展。source_moment_ids必须引用本批确实支撑这一件事的原始编号，不能把整批无关对话挂到每一项；后续细节只读取这些原句。多件事可以共享确实相关的原句。
+6b. 每项event_focus用最多40字点明这一件事或本次新进展。source_refs填写本批连续证据前的整数序号（从1开始），例如[1,3]；每项至少选择一条，不重复，不引用批外序号，不输出原始长ID。只选择确实支撑这一件事的原句，不能把整批无关对话挂到每一项；后续细节只读取这些原句。多件事可以共享确实相关的原句。
+6c. 追加已有事件时，index_ref填写「已有事件索引候选」中的整数序号；它与source_refs属于两张独立的表，不能混用。所有短编号仅在当前请求有效，程序负责对应真实记录。
 7. 没有值得构筑的事时 event_writes=[] 且 event_appends=[]。
 8. 新 Tag 的 domain_ids 只能填 {assname} / {username} / 我们 / 世界。dimension_ids 只能从 owner/subject/about/predicate/object/scope/context/quality/time/place/affect/goal/state/realm/modality/source 选择。";
             public const string EventEvidenceHeader = "本批连续证据（同一天片段）：";
             public const string EventTimePrefix = "程序给定的时间维度（索引的时间字段由程序填写，你不需要输出时间）：";
             public const string EventLayer3Header = "第三层候选 Top10（Tag ID 必须原样完整复制，含 concept.life. 前缀）：";
             public const string EventFrequentTagsHeader = "已有高频 Tag（新增前必须比对；同义主题直接选择复用）：";
-            public const string EventIndexCandidatesHeader = "已有事件索引候选（同主题延续用 event_appends 追加，index_alias 只填别名）：";
+            public const string EventIndexCandidatesHeader = "已有事件索引候选（同一具体事件延续用 event_appends 追加，index_ref填本表整数序号）：";
             public const string EventJsonSchema = @"只输出 JSON：
 {
   ""perception_summary"": ""对本批证据的一句话中性整理"",
@@ -471,7 +472,7 @@ QQ 里的我可以说话，也可以带一小段正在发生的动作或神情�
   }],
   ""event_writes"": [{
     ""event_focus"": ""这一件事，最多40字"",
-    ""source_moment_ids"": [""本批支持这件事的原始MomentID""],
+    ""source_refs"": [1],
     ""tag_ids"": [""已选候选ID""],
     ""new_tag_names"": [""已选新增Tag名""],
     ""place"": ""地点，如 公司楼下；没有则空字符串"",
@@ -481,7 +482,7 @@ QQ 里的我可以说话，也可以带一小段正在发生的动作或神情�
     ""entry_summary"": ""本条目的客观一句话，最多80字"",
     ""realm"": ""external_world|shared_scene|meta|explicit_fiction""
   }],
-  ""event_appends"": [{""index_alias"": ""已有索引ID"", ""event_focus"": ""本次新进展，最多40字"", ""source_moment_ids"": [""本批支持新进展的原始MomentID""], ""entry_summary"": ""本次新增事实或转折""}]
+  ""event_appends"": [{""index_ref"": 1, ""event_focus"": ""本次新进展，最多40字"", ""source_refs"": [1], ""entry_summary"": ""本次新增事实或转折""}]
 }";
 
             public const string DetailRole = "你是 {assname}。下面是你今天经历的一件小事，请为它写一段「细节记录」。";

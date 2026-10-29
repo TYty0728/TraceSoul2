@@ -1,3 +1,4 @@
+using System.Runtime.CompilerServices;
 using System;
 using System.Collections.Generic;
 using System.Linq;
@@ -9,6 +10,7 @@ namespace TraceSoul2.Manager
 {
     public sealed partial class SqliteMemoryManager
     {
+        [MethodImpl(MethodImplOptions.Synchronized)]
         public void AppendDayTrajectory(string conversationId, string sourceMomentId, string text)
         {
             if (string.IsNullOrWhiteSpace(text)) return;
@@ -80,6 +82,7 @@ namespace TraceSoul2.Manager
             catch (Exception ex) when (ex is JsonException or InvalidOperationException or KeyNotFoundException) { return null; }
         }
 
+        [MethodImpl(MethodImplOptions.Synchronized)]
         public List<DayTrajectoryEntryRecord> GetDayTrajectoryEntries(string context, string day, bool includeRetired = false)
         {
             connection.RunInTransaction(() => RecoverDayTrajectory(context, day));

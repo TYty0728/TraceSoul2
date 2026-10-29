@@ -392,9 +392,11 @@ namespace TraceSoul2.Manager
                     "面输出应用开始 " + facet.Descriptor.Id);
                 BrainFacetOutputData output;
                 byId.TryGetValue(facet.Descriptor.Id, out output);
+                var applied = false;
                 try
                 {
                     var result = await facet.ApplyOutputAsync(output, turn, cancellationToken);
+                    applied = true;
                     if (result == null) continue;
                     result.CallId = "facet:" + facet.Descriptor.Id;
                     result.CapabilityId = facet.Descriptor.Id;
@@ -403,11 +405,18 @@ namespace TraceSoul2.Manager
                     result.Payload = result.Payload ?? string.Empty;
                     turn.Workspace.Results.Add(result);
                 }
+                catch
+                {
+                    applied = false;
+                    services.LogTiming(turn == null ? null : turn.TraceId,
+                        "面输出应用失败 " + facet.Descriptor.Id,
+                        timer.ElapsedMilliseconds);
+                    throw;
+                }
                 finally
                 {
-                    services.LogTiming(turn == null ? null : turn.TraceId,
-                        "面输出应用完成 " + facet.Descriptor.Id,
-                        timer.ElapsedMilliseconds);
+                    if (applied) services.LogTiming(turn == null ? null : turn.TraceId,
+                        "面输出应用完成 " + facet.Descriptor.Id, timer.ElapsedMilliseconds);
                 }
             }
         }

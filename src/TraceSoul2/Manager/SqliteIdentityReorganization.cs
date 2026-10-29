@@ -1,3 +1,4 @@
+using System.Runtime.CompilerServices;
 using System;
 using System.Collections.Generic;
 using System.Linq;
@@ -9,14 +10,17 @@ namespace TraceSoul2.Manager
 {
     public sealed partial class SqliteMemoryManager
     {
+        [MethodImpl(MethodImplOptions.Synchronized)]
         public List<CognitionSliceRecord> ReadIdentityReorganizationNodes()
         {
             if (connection.Table<CognitionSliceRecord>().Count() > 5000)
                 throw new IdentityReorganizationException("认知总量超过重整容量，已停止，未省略来源。");
             return GetCognitionNodes(5000);
         }
+        [MethodImpl(MethodImplOptions.Synchronized)]
         public List<CognitionEvidenceRecord> ReadIdentityReorganizationEvidence(IEnumerable<string> ids)
             => ids.Distinct().SelectMany(id => connection.Table<CognitionEvidenceRecord>().Where(x => x.CognitionId == id).ToList()).ToList();
+        [MethodImpl(MethodImplOptions.Synchronized)]
         public void CommitIdentityReorganization(IdentityReorganizationLogic.Draft draft, Action validate)
         {
             connection.RunInTransaction(() => {

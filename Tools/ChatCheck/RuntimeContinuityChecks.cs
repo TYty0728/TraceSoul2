@@ -14,6 +14,7 @@ internal static partial class Program
 {
     private static async Task RunRuntimeContinuityChecksAsync()
     {
+        await CheckStoreConcurrencyAsync();
         await CheckUnifiedRuntimeAsync();
         var path = Path.Combine(Path.GetTempPath(), "runtime-continuity-" + Guid.NewGuid().ToString("N") + ".db");
         const string root = "continuity", day = "2026-09-20";
@@ -113,5 +114,68 @@ internal static partial class Program
         }
         finally { File.Delete(path); }
         Console.WriteLine("Runtime continuity checks passed: omission/clear, mood, facts, persisted decisions, trajectory recovery, replay, scope, restart and day boundary.");
+    }
+
+    private static async Task CheckStoreConcurrencyAsync()
+    {
+        var path = Path.Combine(Path.GetTempPath(), "store-concurrency-" + Guid.NewGuid().ToString("N") + ".db");
+        const string root = "concurrency", day = "2026-10-28";
+        try
+        {
+            using (var store = new SqliteMemoryManager(path))
+            {
+                var time = MemoryDayLogic.StartOf(day).AddHours(2).ToUnixTimeMilliseconds();
+                for (var i = 0; i < 200; i++) store.SaveMoment(new MomentRecord {
+                    Id = "source-" + i, ConversationId = root, Role = "user", Content = "并发测试", CreatedUnixMs = time + i });
+                using var start = new System.Threading.ManualResetEventSlim();
+                var workers = Enumerable.Range(0, 4).Select(worker => Task.Factory.StartNew(() => {
+                    start.Wait();
+                    for (var i = 0; i < 200; i++)
+                    {
+                        if (worker == 0) store.AppendDayTrajectory(root, "source-" + i, "轨迹" + i);
+                        else if (worker == 1) store.SavePluginDocument("test", "item-" + i, "独立文档" + i);
+                        else store.GetDayTrajectoryEntries(root, day);
+                    }
+                }, System.Threading.CancellationToken.None, TaskCreationOptions.LongRunning, TaskScheduler.Default)).ToArray();
+                start.Set();
+                await Task.WhenAll(workers).WaitAsync(TimeSpan.FromSeconds(30));
+                Require(store.GetDayTrajectoryEntries(root, day).Count == 200 &&
+                    Enumerable.Range(0, 200).All(i => store.LoadPluginDocument("test", "item-" + i) == "独立文档" + i),
+                    "轨迹读取恢复、追加与普通文档写入并发800次均完成且不丢数据");
+
+                // A plain INSERT from another worker must not join a transaction that rolls back.
+                using var entered = new System.Threading.ManualResetEventSlim();
+                using var release = new System.Threading.ManualResetEventSlim();
+                using var writerStarted = new System.Threading.ManualResetEventSlim();
+                var rollback = Task.Factory.StartNew(() => {
+                    try { store.CommitPublicExperienceChecked(Array.Empty<string>(), Array.Empty<BrainCognitionWriteData>(), () => {
+                        store.SavePluginDocument("test", "rolled-back", "临时内容");
+                        entered.Set();
+                        if (!release.Wait(TimeSpan.FromSeconds(10))) throw new TimeoutException("测试释放超时");
+                        throw new InvalidOperationException("injected rollback");
+                    }); }
+                    catch (InvalidOperationException ex) when (ex.Message == "injected rollback") { }
+                }, TaskCreationOptions.LongRunning);
+                Require(entered.Wait(TimeSpan.FromSeconds(10)), "事务已进入测试回滚点");
+                var writer = Task.Factory.StartNew(() => {
+                    writerStarted.Set(); store.SavePluginDocument("test", "independent", "必须保留");
+                }, TaskCreationOptions.LongRunning);
+                bool blocked;
+                try
+                {
+                    Require(writerStarted.Wait(TimeSpan.FromSeconds(10)), "并行普通写入已启动");
+                    blocked = !writer.Wait(100);
+                }
+                finally { release.Set(); }
+                await Task.WhenAll(rollback, writer).WaitAsync(TimeSpan.FromSeconds(15));
+                Require(blocked && string.IsNullOrEmpty(store.LoadPluginDocument("test", "rolled-back")) &&
+                    store.LoadPluginDocument("test", "independent") == "必须保留",
+                    "事务外普通写入不能混入另一线程事务，失败回滚只撤销本事务数据");
+            }
+            using var reopened = new SqliteMemoryManager(path);
+            Require(reopened.GetDayTrajectoryEntries(root, day).Count == 200 &&
+                reopened.LoadPluginDocument("test", "independent") == "必须保留", "并发提交结果重启后完整保留");
+        }
+        finally { File.Delete(path); }
     }
 }

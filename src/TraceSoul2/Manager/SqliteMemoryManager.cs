@@ -1,3 +1,4 @@
+using System.Runtime.CompilerServices;
 using System;
 using System.Collections.Generic;
 using System.IO;
@@ -14,6 +15,11 @@ namespace TraceSoul2.Manager
     /// </summary>
     public sealed partial class SqliteMemoryManager : IMemoryStore, ICognitionGraphStore, IDisposable
     {
+        // All public database operations across the partial files are synchronous and
+        // Synchronized: they acquire this instance's reentrant monitor for the entire
+        // operation, including transaction release and query materialization. This is
+        // also the monitor used by MigrationDb's cross-connection commit boundary.
+        // Never return deferred database queries or perform network/async work here.
         private readonly SQLiteConnection connection;
 
         public string DatabasePath { get; private set; }
@@ -41,6 +47,7 @@ namespace TraceSoul2.Manager
             }
         }
 
+        [MethodImpl(MethodImplOptions.Synchronized)]
         public void SaveMoment(MomentRecord moment)
         {
             if (moment == null) throw new ArgumentNullException("moment");
@@ -54,6 +61,7 @@ namespace TraceSoul2.Manager
             connection.Insert(moment);
         }
 
+        [MethodImpl(MethodImplOptions.Synchronized)]
         public List<MomentRecord> GetMomentFeed(int take, string type = null, string platform = null)
         {
             if (take <= 0) return new List<MomentRecord>();
@@ -66,11 +74,13 @@ namespace TraceSoul2.Manager
                 .OrderBy(x => x.CreatedUnixMs).ThenBy(x => string.IsNullOrEmpty(x.ParentMomentId) ? 0 : 1).ToList();
         }
 
+        [MethodImpl(MethodImplOptions.Synchronized)]
         public List<string> GetMomentPlatforms() => connection.Query<MomentRecord>(
             "SELECT DISTINCT SourcePlatform FROM moments WHERE SourcePlatform IS NOT NULL AND SourcePlatform!='' " +
             "AND (MemoryStatus IS NULL OR MemoryStatus!='operational') ORDER BY SourcePlatform")
             .Select(x => x.SourcePlatform).ToList();
 
+        [MethodImpl(MethodImplOptions.Synchronized)]
         public void SaveOperationalEvent(OperationalEventRecord operationalEvent)
         {
             if (operationalEvent == null) throw new ArgumentNullException("operationalEvent");
@@ -80,6 +90,7 @@ namespace TraceSoul2.Manager
             connection.Insert(operationalEvent);
         }
 
+        [MethodImpl(MethodImplOptions.Synchronized)]
         public List<MomentRecord> GetRecentMoments(string conversationId, int take)
         {
             if (take <= 0) return new List<MomentRecord>();
@@ -93,6 +104,7 @@ namespace TraceSoul2.Manager
                 .ToList();
         }
 
+        [MethodImpl(MethodImplOptions.Synchronized)]
         public int CountDialogueMoments(string conversationId)
         {
             return connection.ExecuteScalar<int>(
@@ -102,6 +114,7 @@ namespace TraceSoul2.Manager
                 conversationId ?? string.Empty);
         }
 
+        [MethodImpl(MethodImplOptions.Synchronized)]
         public List<MomentRecord> GetRecentDialogueMoments(string conversationId, int take)
         {
             if (take <= 0) return new List<MomentRecord>();
@@ -115,6 +128,7 @@ namespace TraceSoul2.Manager
                 .ToList();
         }
 
+        [MethodImpl(MethodImplOptions.Synchronized)]
         public List<OperationalEventRecord> GetRecentOperationalEvents(string conversationId, int take)
         {
             if (take <= 0) return new List<OperationalEventRecord>();
@@ -127,6 +141,7 @@ namespace TraceSoul2.Manager
                 .ToList();
         }
 
+        [MethodImpl(MethodImplOptions.Synchronized)]
         public List<MomentRecord> GetLegacyPrivateDialogue(string root, long from, long through)
         {
             var prefix = root + ":environment:";
@@ -144,6 +159,7 @@ namespace TraceSoul2.Manager
                 .Take(6).OrderBy(m => m.CreatedUnixMs).ToList();
         }
 
+        [MethodImpl(MethodImplOptions.Synchronized)]
         public List<TurnReviewRecord> GetRecentTurnReviews(string conversationId, int take)
         {
             if (take <= 0) return new List<TurnReviewRecord>();
@@ -156,6 +172,7 @@ namespace TraceSoul2.Manager
                 .ToList();
         }
 
+        [MethodImpl(MethodImplOptions.Synchronized)]
         public void SeedLifeTags(IEnumerable<VectorIndexNode> ontology)
         {
             var now = DateTimeOffset.UtcNow.ToUnixTimeMilliseconds();
@@ -197,6 +214,7 @@ namespace TraceSoul2.Manager
             });
         }
 
+        [MethodImpl(MethodImplOptions.Synchronized)]
         public List<LifeTagRecord> GetActiveLifeTags()
         {
             return connection.Table<LifeTagRecord>()
@@ -205,6 +223,7 @@ namespace TraceSoul2.Manager
                 .ToList();
         }
 
+        [MethodImpl(MethodImplOptions.Synchronized)]
         public List<LifeTagRouteRecord> GetLifeTagRoutes(string tagId)
         {
             if (string.IsNullOrWhiteSpace(tagId)) return new List<LifeTagRouteRecord>();
@@ -213,6 +232,7 @@ namespace TraceSoul2.Manager
                 .ToList();
         }
 
+        [MethodImpl(MethodImplOptions.Synchronized)]
         public List<LifeTagExampleRecord> GetLifeTagExamples(string tagId)
         {
             if (string.IsNullOrWhiteSpace(tagId)) return new List<LifeTagExampleRecord>();
@@ -223,6 +243,7 @@ namespace TraceSoul2.Manager
                 .ToList();
         }
 
+        [MethodImpl(MethodImplOptions.Synchronized)]
         public List<FactSliceRecord> GetFactCandidates(IEnumerable<string> tagIds, int take)
         {
             if (take <= 0) return new List<FactSliceRecord>();
@@ -249,6 +270,7 @@ namespace TraceSoul2.Manager
                 .ToList();
         }
 
+        [MethodImpl(MethodImplOptions.Synchronized)]
         public List<CognitionSliceRecord> GetCognitionCandidates(IEnumerable<string> tagIds, int take)
         {
             if (take <= 0) return new List<CognitionSliceRecord>();
@@ -274,6 +296,7 @@ namespace TraceSoul2.Manager
                 .ToList();
         }
 
+        [MethodImpl(MethodImplOptions.Synchronized)]
         public List<CognitionCueRecord> GetCognitionCues(string cognitionId)
         {
             if (string.IsNullOrWhiteSpace(cognitionId)) return new List<CognitionCueRecord>();
@@ -283,6 +306,7 @@ namespace TraceSoul2.Manager
                 .ToList();
         }
 
+        [MethodImpl(MethodImplOptions.Synchronized)]
         public Dictionary<string, List<string>> GetFactTagIds(IEnumerable<string> factIds)
         {
             var wanted = new HashSet<string>(factIds ?? Enumerable.Empty<string>());
@@ -302,6 +326,7 @@ namespace TraceSoul2.Manager
             return result;
         }
 
+        [MethodImpl(MethodImplOptions.Synchronized)]
         public Dictionary<string, List<string>> GetCognitionTagIds(IEnumerable<string> cognitionIds)
         {
             var wanted = new HashSet<string>(cognitionIds ?? Enumerable.Empty<string>());
@@ -321,6 +346,7 @@ namespace TraceSoul2.Manager
             return result;
         }
 
+        [MethodImpl(MethodImplOptions.Synchronized)]
         public List<CognitionCueRecallData> FindCognitionsByCue(string text, int take)
         {
             var hits = new List<CognitionCueRecallData>();
@@ -346,6 +372,7 @@ namespace TraceSoul2.Manager
             return hits;
         }
 
+        [MethodImpl(MethodImplOptions.Synchronized)]
         public bool LoadPluginEnabled(string pluginId, bool defaultValue)
         {
             pluginId = Required(pluginId, "pluginId");
@@ -355,6 +382,7 @@ namespace TraceSoul2.Manager
             return defaultValue;
         }
 
+        [MethodImpl(MethodImplOptions.Synchronized)]
         public void SavePluginEnabled(string pluginId, bool enabled)
         {
             connection.InsertOrReplace(new PluginStateRecord
@@ -365,6 +393,7 @@ namespace TraceSoul2.Manager
             });
         }
 
+        [MethodImpl(MethodImplOptions.Synchronized)]
         public string LoadPluginDocument(string pluginId, string documentKey)
         {
             var id = Required(pluginId, "pluginId") + ":" + Required(documentKey, "documentKey");
@@ -375,6 +404,7 @@ namespace TraceSoul2.Manager
             }
         }
 
+        [MethodImpl(MethodImplOptions.Synchronized)]
         public void SavePluginDocument(string pluginId, string documentKey, string json)
         {
             pluginId = Required(pluginId, "pluginId");
@@ -389,6 +419,7 @@ namespace TraceSoul2.Manager
             });
         }
 
+        [MethodImpl(MethodImplOptions.Synchronized)]
         public InnerRuntimeData LoadOrCreateInnerRuntime(string conversationId)
         {
             conversationId = RuntimeRoot(Required(conversationId, "conversationId"));
@@ -401,6 +432,7 @@ namespace TraceSoul2.Manager
             return created;
         }
 
+        [MethodImpl(MethodImplOptions.Synchronized)]
         public void SaveInnerRuntime(InnerRuntimeData nextRuntime)
         {
             if (nextRuntime == null) throw new ArgumentNullException("nextRuntime");
@@ -415,6 +447,7 @@ namespace TraceSoul2.Manager
                 ? environment.RootConversationId : context;
         }
 
+        [MethodImpl(MethodImplOptions.Synchronized)]
         public List<CognitionSliceRecord> CommitCognitions(
             string triggerMomentId,
             IEnumerable<BrainCognitionWriteData> mutations)
@@ -434,6 +467,7 @@ namespace TraceSoul2.Manager
             return changed;
         }
 
+        [MethodImpl(MethodImplOptions.Synchronized)]
         public List<CognitionSliceRecord> CommitCognitionsWithCheckpoint(string triggerMomentId,
             IEnumerable<BrainCognitionWriteData> mutations, string pluginId, string key,
             Action validate, Func<List<CognitionSliceRecord>, string> checkpoint)
@@ -449,12 +483,14 @@ namespace TraceSoul2.Manager
             return changed;
         }
 
+        [MethodImpl(MethodImplOptions.Synchronized)]
         public void SaveTurnReview(TurnReviewRecord review)
         {
             if (review == null) throw new ArgumentNullException("review");
             connection.Insert(review);
         }
 
+        [MethodImpl(MethodImplOptions.Synchronized)]
         public List<LadderItemRecord> GetAllLadderItems()
         {
             return connection.Table<LadderItemRecord>()
@@ -465,6 +501,7 @@ namespace TraceSoul2.Manager
                 .ToList();
         }
 
+        [MethodImpl(MethodImplOptions.Synchronized)]
         public List<EventIndexRecord> GetActiveEventIndexes()
         {
             return connection.Table<EventIndexRecord>()
@@ -473,6 +510,7 @@ namespace TraceSoul2.Manager
                 .ToList();
         }
 
+        [MethodImpl(MethodImplOptions.Synchronized)]
         public List<EventEntryRecord> GetEventEntriesByIndexIds(IEnumerable<string> indexIds)
         {
             var wanted = new HashSet<string>(indexIds ?? Enumerable.Empty<string>(), StringComparer.Ordinal);
@@ -483,12 +521,14 @@ namespace TraceSoul2.Manager
                 .ToList();
         }
 
+        [MethodImpl(MethodImplOptions.Synchronized)]
         public void SaveEventIndex(EventIndexRecord index)
         {
             if (index == null) throw new ArgumentNullException("index");
             connection.Insert(index);
         }
 
+        [MethodImpl(MethodImplOptions.Synchronized)]
         public void AppendEventEntry(EventEntryRecord entry)
         {
             if (entry == null) throw new ArgumentNullException("entry");
@@ -496,6 +536,7 @@ namespace TraceSoul2.Manager
         }
 
         /// <summary>把给定 moment 标记为已归档（built），返回实际更新的行数。</summary>
+        [MethodImpl(MethodImplOptions.Synchronized)]
         public int MarkMomentsBuilt(IEnumerable<string> momentIds)
         {
             var ids = (momentIds ?? Enumerable.Empty<string>())
@@ -512,11 +553,13 @@ namespace TraceSoul2.Manager
         }
 
         /// <summary>读取某记忆日的轨迹。旧日样本只能在对应日复盘成功后显式退出，不能在跨日时抢先删除。</summary>
+        [MethodImpl(MethodImplOptions.Synchronized)]
         public DayTrajectoryRecord LoadDayTrajectory(string dayKey)
         {
             return connection.Find<DayTrajectoryRecord>(dayKey);
         }
 
+        [MethodImpl(MethodImplOptions.Synchronized)]
         public void SaveDayTrajectory(string dayKey, string text)
         {
             connection.InsertOrReplace(new DayTrajectoryRecord
@@ -528,6 +571,7 @@ namespace TraceSoul2.Manager
         }
 
         /// <summary>读取今日新识便签（fromUnixMs = 当日 04:00 边界起算），按时间正序。</summary>
+        [MethodImpl(MethodImplOptions.Synchronized)]
         public List<TodayNewItemRecord> GetTodayNewItems(string conversationId, long fromUnixMs, int take)
         {
             return connection.Table<TodayNewItemRecord>()
@@ -538,6 +582,7 @@ namespace TraceSoul2.Manager
         }
 
         /// <summary>读取指定记忆日的全部今日新识，供日终完整复盘使用；不做展示层数量截断。</summary>
+        [MethodImpl(MethodImplOptions.Synchronized)]
         public List<TodayNewItemRecord> GetTodayNewItemsByDay(string conversationId, string dayKey)
         {
             return connection.Table<TodayNewItemRecord>()
@@ -547,6 +592,7 @@ namespace TraceSoul2.Manager
         }
 
         /// <summary>日终复盘成功后的提交动作：退出已经被完整消费的临时日样本。</summary>
+        [MethodImpl(MethodImplOptions.Synchronized)]
         public void RetireDayRuntimeSamples(string conversationId, string dayKey)
         {
             connection.RunInTransaction(() =>
@@ -561,6 +607,7 @@ namespace TraceSoul2.Manager
         }
 
         /// <summary>找出截止边界前仍未被日终管线消费的记忆日，供 Host 重启补偿。</summary>
+        [MethodImpl(MethodImplOptions.Synchronized)]
         public List<string> GetUnbuiltMemoryDayKeysBefore(long endUnixMs)
         {
             return connection.QueryScalars<string>(
@@ -571,6 +618,7 @@ namespace TraceSoul2.Manager
         }
 
         /// <summary>批量写入今日新识便签：同日同内容去重；返回实际新增条数。</summary>
+        [MethodImpl(MethodImplOptions.Synchronized)]
         public int AddTodayNewItems(
             string conversationId,
             IEnumerable<string> contents,
@@ -605,6 +653,7 @@ namespace TraceSoul2.Manager
         }
 
         /// <summary>第四层五个交叉维度的当前全部取值（小词汇表，供记忆神经子代理选择定位）。</summary>
+        [MethodImpl(MethodImplOptions.Synchronized)]
         public EventDimensionValuesData GetEventIndexDimensionValues()
         {
             var values = new EventDimensionValuesData();
@@ -629,6 +678,7 @@ namespace TraceSoul2.Manager
         /// 按子代理定位过滤第四层索引：概念取并集，其余维度取并集，各维度之间取交集；
         /// 某维度集合为空表示不按该维度过滤。
         /// </summary>
+        [MethodImpl(MethodImplOptions.Synchronized)]
         public List<EventIndexRecord> GetEventIndexesByFilter(
             IEnumerable<string> conceptIds,
             IEnumerable<string> timeLabels,
@@ -699,6 +749,7 @@ namespace TraceSoul2.Manager
             }
         }
 
+        [MethodImpl(MethodImplOptions.Synchronized)]
         public PairIdentity LoadPairIdentity()
         {
             var record = connection.Find<PairIdentityRecord>(PairIdentity.DefaultId);
@@ -706,6 +757,7 @@ namespace TraceSoul2.Manager
             return PairIdentity.FromStored(record.Username, record.Assname, record.CallName);
         }
 
+        [MethodImpl(MethodImplOptions.Synchronized)]
         public PairIdentity SavePairIdentity(string username, string assname, string callName)
         {
             var next = PairIdentity.Create(username, assname, callName);
@@ -733,6 +785,7 @@ namespace TraceSoul2.Manager
             return next;
         }
 
+        [MethodImpl(MethodImplOptions.Synchronized)]
         public List<MomentRecord> GetMomentsSince(string conversationId, long fromUnixMs, int take)
         {
             if (take <= 0) return new List<MomentRecord>();
@@ -745,6 +798,7 @@ namespace TraceSoul2.Manager
                 .ToList();
         }
 
+        [MethodImpl(MethodImplOptions.Synchronized)]
         public List<IdentityCardRecord> LoadIdentityCards(string conversationId)
         {
             conversationId = Required(conversationId, "conversationId");
@@ -785,6 +839,7 @@ namespace TraceSoul2.Manager
             return result;
         }
 
+        [MethodImpl(MethodImplOptions.Synchronized)]
         public IdentityCardRecord SaveIdentityCard(
             string conversationId, string slot, string body, string sourceMomentId)
         {
@@ -832,6 +887,7 @@ namespace TraceSoul2.Manager
             return card;
         }
 
+        [MethodImpl(MethodImplOptions.Synchronized)]
         public List<IdentityCardRecord> ApplyIdentityReview(
             string conversationId, string sourceMomentId, IdentityReviewOutputData output)
         {
@@ -846,6 +902,7 @@ namespace TraceSoul2.Manager
             return changed;
         }
 
+        [MethodImpl(MethodImplOptions.Synchronized)]
         public BasePersonalityRecord LoadOrCreateBasePersonality(string conversationId)
         {
             conversationId = Required(conversationId, "conversationId");
@@ -862,6 +919,7 @@ namespace TraceSoul2.Manager
             return record;
         }
 
+        [MethodImpl(MethodImplOptions.Synchronized)]
         public BasePersonalityRecord SaveBasePersonality(string conversationId, string narrative)
         {
             var record = LoadOrCreateBasePersonality(conversationId);
@@ -875,6 +933,7 @@ namespace TraceSoul2.Manager
             return record;
         }
 
+        [MethodImpl(MethodImplOptions.Synchronized)]
         public MemoryObservationCommitData CommitMemoryObservation(
             MomentRecord sourceMoment,
             string subagentId,
@@ -979,21 +1038,25 @@ namespace TraceSoul2.Manager
             return new MemoryObservationCommitData(selected, written, awakened, ontologyChanged);
         }
 
+        [MethodImpl(MethodImplOptions.Synchronized)]
         public int CountMoments(string conversationId)
         {
             return connection.Table<MomentRecord>().Count(x => x.ConversationId == conversationId);
         }
 
+        [MethodImpl(MethodImplOptions.Synchronized)]
         public int CountFacts()
         {
             return connection.Table<FactSliceRecord>().Count(x => x.Status == "active");
         }
 
+        [MethodImpl(MethodImplOptions.Synchronized)]
         public int CountCognitions()
         {
             return connection.Table<CognitionSliceRecord>().Count(x => x.Status == "active");
         }
 
+        [MethodImpl(MethodImplOptions.Synchronized)]
         public void Dispose()
         {
             connection.Dispose();

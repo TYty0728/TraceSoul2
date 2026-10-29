@@ -1,3 +1,4 @@
+using System.Runtime.CompilerServices;
 using System;
 using System.Collections.Generic;
 using System.Linq;
@@ -8,15 +9,18 @@ namespace TraceSoul2.Manager
 {
     public sealed partial class SqliteMemoryManager
     {
+        [MethodImpl(MethodImplOptions.Synchronized)]
         public List<CognitionSliceRecord> GetCognitionNodes(int take) => connection.Table<CognitionSliceRecord>()
             .OrderByDescending(x => x.UpdatedUnixMs).Take(Math.Max(0, Math.Min(5000, take))).ToList();
 
+        [MethodImpl(MethodImplOptions.Synchronized)]
         public List<CognitionSliceRecord> GetCognitionReviewCandidates(string scope, bool isPublic) => connection.Query<CognitionSliceRecord>(
             "SELECT * FROM cognition_slices WHERE Status IN ('active','weakened') AND " +
             (isPublic ? "MemoryVisibility = 'public' AND ContextConversationId = ? " :
                 "COALESCE(MemoryVisibility, '') <> 'public' AND (COALESCE(ContextConversationId, '') = '' OR ContextConversationId = ?) ") +
             "ORDER BY UpdatedUnixMs DESC, Id LIMIT 5000", scope ?? "");
 
+        [MethodImpl(MethodImplOptions.Synchronized)]
         public List<CognitionEdgeRecord> GetCognitionEdges(IEnumerable<string> nodeIds)
         {
             var result = new Dictionary<string, CognitionEdgeRecord>();
@@ -26,6 +30,7 @@ namespace TraceSoul2.Manager
             return result.Values.ToList();
         }
 
+        [MethodImpl(MethodImplOptions.Synchronized)]
         public List<CognitionEvidenceRecord> GetCognitionEvidence(IEnumerable<string> nodeIds)
         {
             var result = new List<CognitionEvidenceRecord>();
@@ -42,6 +47,7 @@ namespace TraceSoul2.Manager
             return result;
         }
 
+        [MethodImpl(MethodImplOptions.Synchronized)]
         public List<MomentRecord> GetEvidenceMoments(IEnumerable<string> momentIds) =>
             (momentIds ?? Array.Empty<string>()).Distinct().Take(256)
             .Select(id => connection.Find<MomentRecord>(id)).Where(x => x != null && x.MemoryStatus != "operational").ToList();

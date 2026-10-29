@@ -15,6 +15,7 @@ namespace TraceSoul2.Migrate
         public sealed class EventWriteItemData
         {
             public string event_focus;
+            public List<int> source_refs = new();
             public List<string> source_moment_ids = new();
             public List<string> tag_ids = new List<string>();
             public List<string> new_tag_names = new List<string>();
@@ -30,7 +31,9 @@ namespace TraceSoul2.Migrate
         public sealed class EventAppendItemData
         {
             public string event_focus;
+            public List<int> source_refs = new();
             public List<string> source_moment_ids = new();
+            public int index_ref;
             public string index_alias;
             public string entry_summary;
         }
@@ -100,8 +103,8 @@ namespace TraceSoul2.Migrate
             CorePrompts.Write(builder, pair.Apply(CorePrompts.Migration.EventRules));
             builder.AppendLine();
             builder.AppendLine(CorePrompts.Migration.EventEvidenceHeader);
-            foreach (var moment in chunk)
-                builder.AppendLine("- " + FormatMoment(moment, pair));
+            for (var i = 0; i < chunk.Count; i++)
+                builder.AppendLine("- " + FormatMoment(chunk[i], pair, (i + 1).ToString(System.Globalization.CultureInfo.InvariantCulture)));
             builder.AppendLine();
             builder.AppendLine(CorePrompts.Migration.EventTimePrefix + periodLabel + "（" + dayKindLabel + "）");
             builder.AppendLine();
@@ -119,9 +122,10 @@ namespace TraceSoul2.Migrate
             builder.AppendLine(CorePrompts.Migration.EventIndexCandidatesHeader);
             var candidates = (indexCandidates ?? new List<EventIndexRecord>());
             if (candidates.Count == 0) builder.AppendLine(CorePrompts.Migration.Empty);
-            else foreach (var candidate in candidates)
+            else for (var i = 0; i < candidates.Count; i++)
             {
-                builder.AppendLine("- " + candidate.Id + " | " + candidate.EventSummary + " | " + candidate.TimeLabel + " | " + candidate.PlaceLabel + " | " + candidate.MoodLabel);
+                var candidate = candidates[i];
+                builder.AppendLine("- " + (i + 1) + " | " + candidate.EventSummary + " | " + candidate.TimeLabel + " | " + candidate.PlaceLabel + " | " + candidate.MoodLabel);
                 foreach (var entry in (priorEntries ?? new()).Where(x => x.IndexId == candidate.Id)
                     .OrderByDescending(x => x.CreatedUnixMs).Take(3).Reverse())
                     builder.AppendLine("  已记进展：" + entry.Summary);
@@ -309,12 +313,12 @@ namespace TraceSoul2.Migrate
             return builder.ToString();
         }
 
-        private static string FormatMoment(MomentRecord moment, PairIdentity pair)
+        private static string FormatMoment(MomentRecord moment, PairIdentity pair, string reference = null)
         {
             var time = DateTimeOffset.FromUnixTimeMilliseconds(moment.CreatedUnixMs)
                 .ToOffset(MigrationContext.ChinaOffset).ToString("HH:mm");
             var content = (moment.Content ?? string.Empty).Replace('\n', ' ');
-            return moment.Id + "｜" + time + " " + pair.LabelForRole(moment.Role) + "：" + content;
+            return (reference ?? moment.Id) + "｜" + time + " " + pair.LabelForRole(moment.Role) + "：" + content;
         }
     }
 }

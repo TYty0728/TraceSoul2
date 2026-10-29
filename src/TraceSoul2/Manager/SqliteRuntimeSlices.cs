@@ -1,3 +1,4 @@
+using System.Runtime.CompilerServices;
 using System;
 using System.Collections.Generic;
 using System.Linq;
@@ -10,6 +11,7 @@ namespace TraceSoul2.Manager
 {
     public sealed partial class SqliteMemoryManager
     {
+        [MethodImpl(MethodImplOptions.Synchronized)]
         public void AppendRuntimeSlice(RuntimeSliceRecord slice)
         {
             if (slice == null || string.IsNullOrWhiteSpace(slice.MomentId) || string.IsNullOrWhiteSpace(slice.SnapshotJson))
@@ -34,22 +36,27 @@ namespace TraceSoul2.Manager
             }); // 同轮重放保留最初切片；新来源使旧成稿失效。
         }
 
+        [MethodImpl(MethodImplOptions.Synchronized)]
         public List<RuntimeSliceRecord> GetRuntimeSlices(string root, string day, bool pendingOnly = false) =>
             connection.Table<RuntimeSliceRecord>().Where(x => x.RootConversationId == root && x.DayKey == day)
                 .OrderBy(x => x.CreatedUnixMs).ThenBy(x => x.Id).ToList()
                 .Where(x => !pendingOnly || string.IsNullOrEmpty(x.ReviewId)).ToList();
 
+        [MethodImpl(MethodImplOptions.Synchronized)]
         public List<RuntimeSliceRecord> GetRuntimeSlicesForMoments(IEnumerable<string> ids) =>
             ids.Distinct().Select(x => connection.Find<RuntimeSliceRecord>("runtime:" + x)).Where(x => x != null).ToList();
 
+        [MethodImpl(MethodImplOptions.Synchronized)]
         public List<string> GetUnreviewedRuntimeDayKeysBefore(long endMs) => connection.QueryScalars<string>(
             "SELECT DISTINCT DayKey FROM runtime_slices WHERE CreatedUnixMs<? AND (ReviewId IS NULL OR ReviewId='') " +
             "UNION SELECT DayKey FROM runtime_day_summaries WHERE FirstUnixMs<? AND IsCurrent=0 ORDER BY DayKey", endMs, endMs);
 
+        [MethodImpl(MethodImplOptions.Synchronized)]
         public List<RuntimeDayReviewRecord> GetRuntimeDayReviews(string root, string day) =>
             connection.Table<RuntimeDayReviewRecord>().Where(x => x.RootConversationId == root && x.DayKey == day)
                 .OrderBy(x => x.FirstUnixMs).ThenBy(x => x.Id).ToList();
 
+        [MethodImpl(MethodImplOptions.Synchronized)]
         public List<RuntimeDayReviewRecord> GetRuntimeReviewCandidates(string root, string publicContext = null)
         {
             var summaryQuery = connection.Table<RuntimeDaySummaryRow>().Where(x => x.RootConversationId == root);
@@ -69,13 +76,16 @@ namespace TraceSoul2.Manager
                 .OrderByDescending(x => x.FirstUnixMs).Take(1000).ToList();
         }
 
+        [MethodImpl(MethodImplOptions.Synchronized)]
         public List<RuntimeDayReviewRecord> GetRuntimeDaySummaries(string root, string day) =>
             connection.Table<RuntimeDaySummaryRow>().Where(x => x.RootConversationId == root && x.DayKey == day && x.IsCurrent)
                 .OrderBy(x => x.FirstUnixMs).ToList().Select(ToReview).ToList();
 
+        [MethodImpl(MethodImplOptions.Synchronized)]
         public bool HasPendingRuntimeDaySummary(string root, string day) =>
             connection.Table<RuntimeDaySummaryRow>().Any(x => x.RootConversationId == root && x.DayKey == day && !x.IsCurrent);
 
+        [MethodImpl(MethodImplOptions.Synchronized)]
         public void BeginRuntimeDaySummary(RuntimeDayReviewRecord review)
         {
             if (connection.Table<RuntimeDaySummaryRow>().Any(x => x.RootConversationId == review.RootConversationId &&
@@ -85,6 +95,7 @@ namespace TraceSoul2.Manager
                 FirstUnixMs = review.FirstUnixMs });
         }
 
+        [MethodImpl(MethodImplOptions.Synchronized)]
         public void CommitRuntimeDaySummary(IEnumerable<string> reviewIds, string summary)
         {
             if (string.IsNullOrWhiteSpace(summary) || summary.Length > RuntimeSliceLogic.DaySummaryAccept)
@@ -136,6 +147,7 @@ namespace TraceSoul2.Manager
             DayKey = row.DayKey, MemoryVisibility = row.MemoryVisibility, Summary = row.Summary,
             SliceIdsJson = row.SliceIdsJson, MomentIdsJson = row.MomentIdsJson, FirstUnixMs = row.FirstUnixMs, CreatedUnixMs = row.CreatedUnixMs };
 
+        [MethodImpl(MethodImplOptions.Synchronized)]
         public RuntimeDayReviewRecord CommitRuntimeSliceReview(IEnumerable<string> sourceIds, string summary)
         {
             if (string.IsNullOrWhiteSpace(summary))
@@ -165,6 +177,7 @@ namespace TraceSoul2.Manager
             return result;
         }
 
+        [MethodImpl(MethodImplOptions.Synchronized)]
         public void ReleaseRuntimeDayReviews(IEnumerable<string> reviewIds)
         {
             connection.RunInTransaction(() =>
