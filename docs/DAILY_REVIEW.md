@@ -41,4 +41,4 @@
 
 本轮 `Test-Review.ps1 -Configuration Debug`、实际 Migration 新回归、完整 ChatCheck（含 `--prompt-layout`）、Host/Migration 构建与 `git diff --check` 均通过。Host/Migration 为零警告、零错误；ChatCheck 构建仍有既有相机类型重复编译警告。
 
-本轮为本地实现与离线验证；未部署服务器、未接续旧生产复盘、未验证真实供应商下的整日语义质量与运行时延。
+已随 0.1.81 发布，云端全量回归、容器升级与三平台公开包验收通过；未部署服务器、未接续旧生产复盘、未验证真实供应商下的整日语义质量与运行时延。

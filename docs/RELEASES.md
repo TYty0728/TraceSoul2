@@ -8,8 +8,10 @@
 
 加入通用 Codex 文本桥接、Host 实验预设与离线回归，包含桌面 CLI 更新后的路径重新定位。服务器连接地址、密钥、登录凭据和角色数据不随源码或更新包发布。桥接仍需用户电脑及私有连接在线。
 
-本地完整 ChatCheck/Prompt、实际 Migration 四步回归、进程强杀恢复、三个事务边界故障注入、BGE 事件召回及桥接 9 项测试通过；250 条合成对话形成 53 件长摘要事件的夹具使用 11 次模型调用。实际模型整日质量与时延未验收。产品版本 0.1.81，PluginApi 1.17.0 不变。公开发布验收进行中；不部署服务器或恢复日构建。
+本地完整 ChatCheck/Prompt、实际 Migration 四步回归、进程强杀恢复、三个事务边界故障注入、BGE 事件召回及桥接 9 项测试通过；250 条合成对话形成 53 件长摘要事件的夹具使用 11 次模型调用。实际模型整日质量与时延未验收。产品版本 0.1.81，PluginApi 1.17.0 不变。公开发布验收通过；未部署服务器或恢复日构建。
 
+
+发布确认：[v0.1.81](https://github.com/TYty0728/TraceSoul2/releases/tag/v0.1.81)／源码05b3623，[发布CI41007839093](https://github.com/TYty0728/TraceSoul2/actions/runs/41007839093)完整回归、Docker升级/数据保留、源码镜像启动和三平台打包成功。匿名latest、三平台公开访问、侧车SHA-256与GitHub digest、SDK实际下载摘要均通过。额外范围读包因下载超时未完成，未完整下载三包或部署服务器。win-x64 `15eb4cbcc1f6f973686bc4fdd1b299f9646b9fb6dbc3dc6c40bff829634fa69e`；linux-x64 `605bfb39aa81a4576307f2e11b9af5e53d6364f16de039689f84cd1afa9ef05f`；linux-arm64 `2746f84edcfcf56da9cc74d1f0558b1d2a73361b64dbdde2b1acb2c9ffce1fef`。
 
 ## 0.1.80（2026-10-29）
 
