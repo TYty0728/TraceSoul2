@@ -4,7 +4,7 @@ using System.Text;
 using System.Text.Json;
 using TraceSoul2.Host;
 
-internal static class Program
+internal static partial class Program
 {
     private static readonly byte[] Payload = Encoding.ASCII.GetBytes("abcdefgh");
     private static ReleaseAsset Asset => new ReleaseAsset
@@ -29,11 +29,17 @@ internal static class Program
     private static async Task Main(string[] args)
     {
         if (args.Length == 1 && args[0] == "--live") { await LiveCheck(); return; }
+        if (args.Length == 7 && args[0] == "--materialize-incremental")
+        {
+            await IncrementalPackage.PrepareAsync(args[1], args[2], args[3], args[4], args[5], args[6], default);
+            return;
+        }
         var root = Path.Combine(Path.GetTempPath(), "tracesoul2-download-test-" + Guid.NewGuid().ToString("N"));
         Directory.CreateDirectory(root);
         try
         {
             await ServiceCheck(root);
+            await IncrementalChecks(root);
             await ArchiveHandoffFailureCheck(root);
             var file = Path.Combine(root, "api.zip");
             using (var http = new HttpClient(new Handler((request, _) =>

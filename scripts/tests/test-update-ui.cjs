@@ -36,6 +36,11 @@ function setup() {
   let s = setup();
   s.state = s.sandbox.state;
   s.eval("renderUpdateStatus(state)");
+  s.sandbox.state.latest.incrementalAvailable = true;
+  s.sandbox.state.latest.downloadBytes = 1024 * 1024;
+  s.sandbox.state.latest.fullDownloadBytes = 80 * 1024 * 1024;
+  s.eval("renderUpdateStatus(state)");
+  assert.match(s.nodes.get("updateStatus").textContent, /增量下载.*完整包.*短暂重启/);
   s.sandbox.state.install = { phase: "connecting", inProgress: true, version: "0.1.7", percent: 5, message: "GitHub API 连接中" };
   s.eval("renderUpdateStatus(state)");
   assert.equal(s.nodes.get("updateProgressBar").style.width, "5%");

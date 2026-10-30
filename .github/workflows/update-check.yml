@@ -31,12 +31,15 @@ jobs:
           dotnet Tools/Updater/bin/Release/net8.0/TraceSoul2.Updater.dll --self-test
           dotnet Tools/UpdateCheck/bin/Release/net8.0/UpdateCheck.dll
           python3 -m unittest discover -s scripts/tests -p test_update_server.py
+          python3 -m unittest discover -s scripts/tests -p test_incremental.py
           node scripts/tests/test-update-ui.cjs
           node scripts/tests/test-daily-build-ui.cjs
           node scripts/tests/test-provider-slots-ui.cjs
       - name: Build real Linux package
         shell: pwsh
         run: ./scripts/Publish-Release.ps1 -Runtime linux-x64
+      - name: Verify real package incremental round trip
+        run: python3 scripts/tests/check-incremental-package.py artifacts/*/tracesoul2-linux-x64-v*.zip Tools/UpdateCheck/bin/Release/net8.0/UpdateCheck.dll
       - name: Upgrade a live Docker Host and verify data preservation
         run: python3 scripts/tests/test-docker-bootstrap.py
       - name: Build source Docker image and verify fresh headless startup

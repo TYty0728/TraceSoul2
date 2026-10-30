@@ -147,30 +147,35 @@ namespace TraceSoul2.Host
             var extractedRoot = Path.Combine(downloadRoot, "package-" + runId);
             Directory.CreateDirectory(downloadRoot);
             Directory.CreateDirectory(extractedRoot);
-            var zipPath = Path.Combine(downloadRoot, release.ZipName);
-
-            await downloader.DownloadAsync(release.Zip, zipPath, p => ReportDownload(p, false), cancellationToken);
-            SetInstallProgress("verifying", 78, "正在下载并核对 SHA-256 文件…");
-            var shaPath = zipPath + ".sha256";
-            await downloader.DownloadAsync(release.Sha, shaPath, p => ReportDownload(p, true), cancellationToken);
-            var shaText = await File.ReadAllTextAsync(shaPath, cancellationToken);
-            var expectedHashMatch = Sha256Pattern.Match(shaText ?? string.Empty);
-            if (!expectedHashMatch.Success)
+            var incremental = false;
+            if (release.DeltaZip != null)
             {
-                ReleaseDownloader.Quarantine(shaPath);
-                throw new InvalidOperationException("Release 的 SHA-256 文件格式无效。");
+                try
+                {
+                    SetInstallProgress("preparing", 5, "已找到增量包，只下载变化的文件…");
+                    var deltaPath = await DownloadVerifiedAsync(downloadRoot, release.DeltaName, release.DeltaZip, release.DeltaSha, cancellationToken);
+                    var deltaRoot = Path.Combine(downloadRoot, "incremental-" + runId);
+                    SetInstallProgress("extracting", 84, "正在复用本地未变化文件，并核对目标版本清单…");
+                    await IncrementalPackage.PrepareAsync(deltaPath, installRoot, deltaRoot,
+                        TraceHome.HostVersion(), release.Version, CurrentRuntimeIdentifier(), cancellationToken);
+                    ValidateReleasePackage(deltaRoot, release.Version);
+                    extractedRoot = deltaRoot;
+                    incremental = true;
+                }
+                catch (Exception error) when (error is IOException || error is InvalidDataException || error is HttpRequestException ||
+                    error is InvalidOperationException || error is JsonException || error is KeyNotFoundException || error is FormatException)
+                {
+                    // No live file has changed. A damaged baseline or unavailable delta
+                    // uses the existing full package path once, never a chain of patches.
+                    SetInstallProgress("preparing", 5, "增量包暂不可用或本地文件不匹配，改用完整更新包…");
+                }
             }
-            SetInstallProgress("verifying", 80, "正在计算更新包 SHA-256…");
-            var actualHash = await ComputeSha256Async(zipPath, cancellationToken);
-            if (!string.Equals(actualHash, expectedHashMatch.Value, StringComparison.OrdinalIgnoreCase))
+            if (!incremental)
             {
-                ReleaseDownloader.Quarantine(zipPath);
-                ReleaseDownloader.Quarantine(shaPath);
-                throw new InvalidOperationException("更新包 SHA-256 校验失败，已拒绝安装。");
+                var zipPath = await DownloadVerifiedAsync(downloadRoot, release.ZipName, release.Zip, release.Sha, cancellationToken);
+                SetInstallProgress("extracting", 84, "校验通过，正在安全解压更新包…");
+                ExtractZipSafely(zipPath, extractedRoot);
             }
-
-            SetInstallProgress("extracting", 84, "校验通过，正在安全解压更新包…");
-            ExtractZipSafely(zipPath, extractedRoot);
             SetInstallProgress("validating", 90, "正在验证程序与官方插件清单…");
             ValidateReleasePackage(extractedRoot, release.Version);
 
@@ -254,7 +259,10 @@ namespace TraceSoul2.Host
                     release.PageUrl,
                     release.PublishedUtc,
                     updateAvailable = IsNewer(release.Version, current),
-                    release.ZipName
+                    release.ZipName,
+                    incrementalAvailable = release.DeltaZip != null,
+                    downloadBytes = release.DeltaZip?.Size ?? release.Zip.Size,
+                    fullDownloadBytes = release.Zip.Size
                 }
             };
         }
@@ -307,6 +315,22 @@ namespace TraceSoul2.Host
                     var shaAsset = ParseAsset(repository, sha, 64 * 1024);
                     var identity = repository + "|" + zipAsset.ApiUrl + "|" + zipAsset.Size + "|" + StringOf(zip, "updated_at") +
                         "|" + shaAsset.ApiUrl + "|" + shaAsset.Size + "|" + StringOf(sha, "updated_at");
+                    var deltaName = "tracesoul2-" + runtime + "-v" + version + "-from-v" + TraceHome.HostVersion() + ".delta.zip";
+                    var delta = assets.FirstOrDefault(x => StringOf(x, "name") == deltaName);
+                    var deltaSha = assets.FirstOrDefault(x => StringOf(x, "name") == deltaName + ".sha256");
+                    ReleaseAsset deltaAsset = null, deltaShaAsset = null;
+                    if (delta.ValueKind != JsonValueKind.Undefined && deltaSha.ValueKind != JsonValueKind.Undefined)
+                    {
+                        try
+                        {
+                            deltaAsset = ParseAsset(repository, delta, ReleaseDownloader.MaxPackageBytes);
+                            deltaShaAsset = ParseAsset(repository, deltaSha, 64 * 1024);
+                            if (deltaAsset.Size >= zipAsset.Size) { deltaAsset = null; deltaShaAsset = null; }
+                            else identity += "|" + deltaAsset.ApiUrl + "|" + deltaAsset.Size + "|" + StringOf(delta, "updated_at") +
+                                "|" + deltaShaAsset.ApiUrl + "|" + deltaShaAsset.Size + "|" + StringOf(deltaSha, "updated_at");
+                        }
+                        catch (InvalidOperationException) { deltaAsset = null; deltaShaAsset = null; }
+                    }
                     return new ReleaseInfo
                     {
                         Version = version,
@@ -316,10 +340,35 @@ namespace TraceSoul2.Host
                         ZipName = zipName,
                         Zip = zipAsset,
                         Sha = shaAsset,
+                        DeltaName = deltaName,
+                        DeltaZip = deltaAsset,
+                        DeltaSha = deltaShaAsset,
                         CacheKey = Convert.ToHexString(SHA256.HashData(System.Text.Encoding.UTF8.GetBytes(identity))).ToLowerInvariant()
                     };
                 }
             }
+        }
+
+        private async Task<string> DownloadVerifiedAsync(string directory, string name, ReleaseAsset zip, ReleaseAsset sha, CancellationToken token)
+        {
+            var zipPath = Path.Combine(directory, name);
+            await downloader.DownloadAsync(zip, zipPath, p => ReportDownload(p, false), token);
+            SetInstallProgress("verifying", 78, "正在下载并核对 SHA-256 文件…");
+            var shaPath = zipPath + ".sha256";
+            await downloader.DownloadAsync(sha, shaPath, p => ReportDownload(p, true), token);
+            var match = Sha256Pattern.Match(await File.ReadAllTextAsync(shaPath, token));
+            if (!match.Success)
+            {
+                ReleaseDownloader.Quarantine(shaPath);
+                throw new InvalidOperationException("Release 的 SHA-256 文件格式无效。");
+            }
+            SetInstallProgress("verifying", 80, "正在计算更新包 SHA-256…");
+            if (!string.Equals(await ComputeSha256Async(zipPath, token), match.Value, StringComparison.OrdinalIgnoreCase))
+            {
+                ReleaseDownloader.Quarantine(zipPath); ReleaseDownloader.Quarantine(shaPath);
+                throw new InvalidOperationException("更新包 SHA-256 校验失败，已拒绝安装。");
+            }
+            return zipPath;
         }
 
         private async Task<bool> RepositoryIsPubliclyReadableAsync(
@@ -622,6 +671,9 @@ namespace TraceSoul2.Host
             public string ZipName;
             public ReleaseAsset Zip;
             public ReleaseAsset Sha;
+            public string DeltaName;
+            public ReleaseAsset DeltaZip;
+            public ReleaseAsset DeltaSha;
             public string CacheKey;
         }
 

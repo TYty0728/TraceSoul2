@@ -1,7 +1,8 @@
 param(
     [string]$ExpectedVersion = '',
     [string]$Runtime = 'win-x64',
-    [switch]$SelfContained
+    [switch]$SelfContained,
+    [string]$BaseManifestDirectory = ''
 )
 
 $ErrorActionPreference = 'Stop'
@@ -102,6 +103,15 @@ $installManifest = [ordered]@{
     bundledPlugins = @($bundledPlugins | ForEach-Object { $_.Name })
 }
 $installManifest | ConvertTo-Json | Set-Content -LiteralPath (Join-Path $packageRoot 'tracesoul2.install.json') -Encoding utf8NoBOM
+
+$inventoryArguments = @((Join-Path $PSScriptRoot 'build_incremental.py'), '--package', $packageRoot,
+    '--output', $artifactRoot, '--runtime', $Runtime, '--version', $version)
+if ($BaseManifestDirectory) {
+    $baseInventory = Join-Path $BaseManifestDirectory ($Runtime + '.json')
+    if (Test-Path -LiteralPath $baseInventory) { $inventoryArguments += @('--base', $baseInventory) }
+}
+python @inventoryArguments
+if ($LASTEXITCODE -ne 0) { throw '增量更新文件清单生成失败。' }
 
 $zipName = "tracesoul2-$Runtime-v$version.zip"
 $zipPath = Join-Path $artifactRoot $zipName

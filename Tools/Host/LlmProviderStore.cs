@@ -445,7 +445,7 @@ namespace TraceSoul2.Host
         public ILlmClient CreateClient(string id, string model, bool? thinkingOverride)
             => CreateConfiguredClient(id, model, thinkingOverride, false);
 
-        private ILlmClient CreateConfiguredClient(string id, string model, bool? thinkingOverride, bool review)
+        private ILlmClient CreateConfiguredClient(string id, string model, bool? thinkingOverride, bool review, bool reviewAttempt = false)
         {
             lock (gate)
             {
@@ -465,7 +465,7 @@ namespace TraceSoul2.Host
                 ILlmClient client = LlmProviderCatalog.IsGeminiNative(item.type)
                     ? new GeminiClientManager(config, singleAttempt: review)
                     : new DeepSeekClientManager(config, singleAttempt: review);
-                if (review) client = new ReviewTransportClient(client);
+                if (reviewAttempt) client = new ReviewTransportClient(client);
                 return new ProtectedLlmClient(client, Protection, review);
             }
         }
@@ -543,6 +543,13 @@ namespace TraceSoul2.Host
         public ILlmClient CreateReviewClient() => CreateReviewClient(null, null);
 
         public ILlmClient CreateReviewClient(string providerOverride, string modelOverride)
+            => CreateReviewClientCore(providerOverride, modelOverride, false);
+
+        // A daily attempt owns its budget; the shared slot also serves routine maintenance.
+        public ILlmClient CreateReviewAttemptClient(string providerOverride = null, string modelOverride = null)
+            => CreateReviewClientCore(providerOverride, modelOverride, true);
+
+        private ILlmClient CreateReviewClientCore(string providerOverride, string modelOverride, bool reviewAttempt)
         {
             string providerId;
             string model;
@@ -565,7 +572,7 @@ namespace TraceSoul2.Host
                     model = null;
                 }
             }
-            return CreateConfiguredClient(providerId, model, false, true);
+            return CreateConfiguredClient(providerId, model, false, true, reviewAttempt);
         }
 
         public DeepSeekConfigData CurrentConfig()

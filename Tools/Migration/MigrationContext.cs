@@ -58,12 +58,12 @@ namespace TraceSoul2.Migrate
             context.MigrationModel = Environment.GetEnvironmentVariable("TRACESOUL2_MIGRATION_MODEL");
             if (!string.IsNullOrWhiteSpace(context.MigrationProviderId))
             {
-                context.Llm = context.Providers.CreateReviewClient(
+                context.Llm = context.Providers.CreateReviewAttemptClient(
                     context.MigrationProviderId, context.MigrationModel);
             }
             else
             {
-                context.Llm = context.Providers.CreateReviewClient();
+                context.Llm = context.Providers.CreateReviewAttemptClient();
                 if (context.Llm != null)
                 {
                     context.MigrationProviderId = context.Llm.ProviderId;

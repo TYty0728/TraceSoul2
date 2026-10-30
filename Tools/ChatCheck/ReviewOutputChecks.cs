@@ -12,8 +12,36 @@ using TraceSoul2.Manager;
 
 internal static partial class Program
 {
+    private static async Task RunReviewClientScopeChecksAsync()
+    {
+        var root = Path.Combine(Path.GetTempPath(), "review-scope-" + Guid.NewGuid().ToString("N"));
+        Directory.CreateDirectory(root);
+        try
+        {
+            const string ok = "{\"choices\":[{\"message\":{\"content\":\"{}\"},\"finish_reason\":\"stop\"}]}";
+            using var server = new FailureHttpServer(200, ok, n => n == 2 ? (200, ok) : (503, "offline"));
+            var store = new LlmProviderStore(Path.Combine(root, "providers.json"));
+            store.Upsert(new LlmProviderRecord { id = "default", model = "test", apiKey = "test", baseUrl = server.Url });
+            var shared = store.CreateReviewClient();
+            var messages = new List<DeepSeekMessageData> { new("user", "Return JSON.") };
+            using var bound = new CancellationTokenSource(TimeSpan.FromSeconds(3));
+            try { await shared.CompleteJsonAsync(messages, bound.Token); throw new Exception("Expected HTTP failure"); }
+            catch (InvalidOperationException error) when (error.Message.Contains("503")) { }
+            Require(server.Calls == 1, "Routine maintenance must not enter daily retry cooldown");
+            Require(await shared.CompleteJsonAsync(messages, bound.Token) == "{}" && server.Calls == 2,
+                "The same shared client must recover on its next independent task");
+            using var cancel = new CancellationTokenSource(TimeSpan.FromMilliseconds(300));
+            try { await store.CreateReviewAttemptClient().CompleteJsonAsync(messages, cancel.Token); throw new Exception("Expected cooldown cancellation"); }
+            catch (OperationCanceledException) when (cancel.IsCancellationRequested) { }
+            Require(server.Calls == 3, "Daily attempts retain bounded cooldown, without nested provider retries");
+            Console.WriteLine("Review client scope passed: routine failure/recovery and daily cooldown isolation.");
+        }
+        finally { Directory.Delete(root, true); }
+    }
+
     private static async Task RunReviewOutputChecksAsync()
     {
+        await RunReviewClientScopeChecksAsync();
         await RunContentRejectionChecksAsync();
         await RunUnifiedMainModelChecksAsync();
         await RunJevRouteChecksAsync();

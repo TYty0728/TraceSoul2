@@ -62,6 +62,7 @@ jobs:
           dotnet Tools/UpdateCheck/bin/Release/net8.0/UpdateCheck.dll
           python -m unittest discover -s scripts/tests -p test_update_server.py
           python -m unittest discover -s scripts/tests -p test_publish_privacy.py
+          python -m unittest discover -s scripts/tests -p test_incremental.py
           python scripts/tests/test-identity-reorganization-host.py
           python scripts/tests/test-main-fallback-host.py
           python scripts/tests/test-backups-host.py Tools/Host/bin/Release/net8.0/TraceSoul2.Host.dll
@@ -85,9 +86,10 @@ jobs:
         run: |
           $ErrorActionPreference = 'Stop'
           $PSNativeCommandUseErrorActionPreference = $true
-          pwsh scripts/Publish-Release.ps1 -ExpectedVersion '${{ steps.version.outputs.version }}' -Runtime win-x64
-          pwsh scripts/Publish-Release.ps1 -ExpectedVersion '${{ steps.version.outputs.version }}' -Runtime linux-x64
-          pwsh scripts/Publish-Release.ps1 -ExpectedVersion '${{ steps.version.outputs.version }}' -Runtime linux-arm64
+          python scripts/fetch_incremental_base.py --repository '${{ github.repository }}' --output artifacts/incremental-base
+          pwsh scripts/Publish-Release.ps1 -ExpectedVersion '${{ steps.version.outputs.version }}' -Runtime win-x64 -BaseManifestDirectory artifacts/incremental-base
+          pwsh scripts/Publish-Release.ps1 -ExpectedVersion '${{ steps.version.outputs.version }}' -Runtime linux-x64 -BaseManifestDirectory artifacts/incremental-base
+          pwsh scripts/Publish-Release.ps1 -ExpectedVersion '${{ steps.version.outputs.version }}' -Runtime linux-arm64 -BaseManifestDirectory artifacts/incremental-base
 
       - name: Create GitHub Release
         shell: pwsh

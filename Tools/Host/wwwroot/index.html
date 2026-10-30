@@ -4834,6 +4834,11 @@
     else if (!latest) text += "；尚未检查正式版本";
     else if (latest.updateAvailable) text += "；发现 v" + latest.version;
     else text += "；已是最新正式版";
+    if (latest && latest.updateAvailable && latest.downloadBytes) {
+      text += "；" + (latest.incrementalAvailable ? "增量下载 " : "完整包下载 ") + formatUpdateBytes(latest.downloadBytes);
+      if (latest.incrementalAvailable) text += "（完整包 " + formatUpdateBytes(latest.fullDownloadBytes) + "）";
+      text += "，安装后短暂重启";
+    }
     if (!updateData.installable) text += "；当前是开发目录，只能检查，不能原地安装";
     if (updateData.error) text += "；" + updateData.error;
     if (progress.inProgress) text += "；" + (progress.message || "正在安装更新");
