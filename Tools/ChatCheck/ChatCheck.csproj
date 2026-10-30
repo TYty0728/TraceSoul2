@@ -58,6 +58,7 @@
     <Compile Include="ReviewOutputChecks.cs" />
     <Compile Include="ContentRejectionChecks.cs" />
     <Compile Include="../Host/LlmProviderStore.cs" Link="LlmProviderStore.cs" />
+    <Compile Include="../Host/ReviewTransportClient.cs" Link="ReviewTransportClient.cs" />
     <Compile Include="../Host/MainModelFallbackClient.cs" Link="MainModelFallbackClient.cs" />
     <Compile Include="MainModelFallbackChecks.cs" />
     <Compile Include="IdentityReorganizationChecks.cs" />

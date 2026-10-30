@@ -152,6 +152,8 @@ namespace TraceSoul2.Host
             if (error is MissingFieldException || error is MissingMethodException || error is TypeLoadException)
                 return "程序组件版本不一致或缺失，请核对 Host 与共享 DLL";
             var message = error?.Message ?? "";
+            if (message.StartsWith("复盘网络保护已停止请求", StringComparison.Ordinal))
+                return "复盘网络补试次数或保护时间已耗尽；检查点保留，请检查连接后手动恢复";
             if (message.Contains("空 content", StringComparison.Ordinal)) return "模型返回空白正文";
             if ((message.Contains("检查点", StringComparison.Ordinal) &&
                     (message.Contains("已修订", StringComparison.Ordinal) || message.Contains("已变化", StringComparison.Ordinal) ||

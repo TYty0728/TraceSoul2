@@ -31,4 +31,4 @@ migrate live
 ./scripts/Test-Review.ps1
 ```
 
-脚本构建真实 Migration 程序，使用模拟 LLM、临时数据库以及独立子进程故障注入。不会加载正式角色或消耗真实模型 API。另执行完整 ChatCheck 和 Host 构建验证周边功能。
+脚本构建真实 Migration 程序，使用模拟 LLM、临时数据库以及独立子进程故障注入。不会加载正式角色或消耗真实模型 API。按改动补充 Host 构建与相关专项；完整回归由发布 CI 执行，已通过的检查不重复运行。

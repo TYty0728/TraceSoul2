@@ -67,7 +67,7 @@ def validate(body, models):
 
 
 class CodexRunner:
-    def __init__(self, executable, timeout=180):
+    def __init__(self, executable, timeout=540):
         self.executable, self.timeout = executable, timeout
 
     def __call__(self, body):
@@ -147,11 +147,12 @@ class Jobs:
     """Persist only result/status and input hash. Never persist the input prompt.
 
     Same input reuses success for ten minutes. Failed/unknown work is held for
-    sixty seconds; interrupted work waits four minutes for the child deadline.
+    sixty seconds; interrupted work waits for the child deadline plus a minute.
     This bounds immediate HTTP retry storms, not exactly-once inference.
     """
     def __init__(self, path, runner, concurrency=1):
         self.path, self.runner = str(path), runner
+        self.running_ttl = max(240, getattr(runner, 'timeout', 180) + 60)
         if not 1 <= concurrency <= 8:
             raise ValueError('Concurrency must be between 1 and 8')
         self.gate = threading.BoundedSemaphore(concurrency)
@@ -168,12 +169,12 @@ class Jobs:
                 # Reserve the hash atomically across concurrent HTTP workers.
                 db.execute('BEGIN IMMEDIATE')
                 row = db.execute('SELECT status,result,updated FROM jobs WHERE id=?', (key,)).fetchone()
-                ttl = {'done': 600, 'running': 240, 'failed': 60}
+                ttl = {'done': 600, 'running': self.running_ttl, 'failed': 60}
                 if row and time.time() - row[2] < ttl.get(row[0], 240):
                     if row[0] == 'done':
                         return row[1]
                     raise BridgeError(503, 'codex_retry_cooldown')
-                db.execute('DELETE FROM jobs WHERE updated < ?', (time.time() - 600,))
+                db.execute('DELETE FROM jobs WHERE updated < ?', (time.time() - max(600, self.running_ttl),))
                 db.execute('INSERT OR REPLACE INTO jobs VALUES (?,?,?,?)',
                            (key, 'running', '', time.time()))
             try:

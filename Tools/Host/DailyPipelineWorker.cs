@@ -238,13 +238,14 @@ namespace TraceSoul2.Host
                 using var process = Process.Start(startInfo);
                 if (process == null) throw new InvalidOperationException("无法启动日构建进程。");
                 using var timeout = CancellationTokenSource.CreateLinkedTokenSource(cancellationToken, lifetime.Token);
-                timeout.CancelAfter(TimeSpan.FromMinutes(30));
+                // Each model request has a deadline and the review has a call limit.
+                // A slow but progressing day must not be killed by a wall-clock cap.
                 try { await process.WaitForExitAsync(timeout.Token); }
                 catch
                 {
                     if (!process.HasExited) process.Kill(entireProcessTree: true);
                     await process.WaitForExitAsync(CancellationToken.None);
-                    DailyBuildHistory.RecoverInterrupted(HistoryPath, timeout.IsCancellationRequested ? "子进程超时或服务停止，检查点保留" : "子进程被中断，检查点保留");
+                    DailyBuildHistory.RecoverInterrupted(HistoryPath, timeout.IsCancellationRequested ? "任务取消或服务停止，检查点保留" : "子进程被中断，检查点保留");
                     throw;
                 }
                 var state = DailyBuildHistory.ReadStates(HistoryPath).FirstOrDefault(x => x.DayKey == dayKey);

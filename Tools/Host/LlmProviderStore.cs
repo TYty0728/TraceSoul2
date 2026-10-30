@@ -456,10 +456,17 @@ namespace TraceSoul2.Host
                 if (LlmProviderCatalog.IsDecisions(item.type))
                     throw new InvalidOperationException("此供应商使用原生 Decisions 协议，请使用决策客户端。");
                 var config = ToConfig(item, model, thinkingOverride);
-                if (review) config.Temperature = data.reviewTemperature ?? 0.2f;
-                if (LlmProviderCatalog.IsGeminiNative(item.type))
-                    return new ProtectedLlmClient(new GeminiClientManager(config), Protection, review);
-                return new ProtectedLlmClient(new DeepSeekClientManager(config), Protection, review);
+                if (review)
+                {
+                    config.Temperature = data.reviewTemperature ?? 0.2f;
+                    config.TimeoutSeconds = 600;
+                }
+                // Review owns one retry allowance; disable provider-level nested retries.
+                ILlmClient client = LlmProviderCatalog.IsGeminiNative(item.type)
+                    ? new GeminiClientManager(config, singleAttempt: review)
+                    : new DeepSeekClientManager(config, singleAttempt: review);
+                if (review) client = new ReviewTransportClient(client);
+                return new ProtectedLlmClient(client, Protection, review);
             }
         }
 

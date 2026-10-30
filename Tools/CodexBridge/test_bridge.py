@@ -114,6 +114,29 @@ class BridgeTests(unittest.TestCase):
             finally:
                 server.shutdown(); server.server_close(); thread.join()
 
+    def test_slow_running_job_remains_reserved_across_reopen_and_other_work(self):
+        import hashlib
+        key = hashlib.sha256(json.dumps(BODY, sort_keys=True, ensure_ascii=False).encode()).hexdigest()
+        class SlowRunner:
+            timeout = 540
+            def __init__(self): self.calls = 0
+            def __call__(self, body): self.calls += 1; return '{"ok":true}'
+        with tempfile.TemporaryDirectory() as folder, patch('bridge.time.time', return_value=1000) as clock:
+            path = Path(folder) / 'jobs.sqlite'; runner = SlowRunner()
+            Jobs(path, runner)
+            with closing(sqlite3.connect(path)) as db, db:
+                db.execute('INSERT INTO jobs VALUES (?,?,?,?)', (key, 'running', '', 1000))
+            clock.return_value = 1550  # Old four-minute reservation would launch a duplicate.
+            reopened = Jobs(path, runner)
+            reopened.complete(dict(BODY, messages=[{'role': 'user', 'content': 'other task'}]))
+            with self.assertRaises(BridgeError) as error:
+                reopened.complete(BODY)
+            self.assertEqual(error.exception.code, 'codex_retry_cooldown')
+            self.assertEqual(runner.calls, 1)
+            clock.return_value = 1601
+            self.assertEqual(reopened.complete(BODY), '{"ok":true}')
+            self.assertEqual(runner.calls, 2)
+
     def test_reject_unsupported_inputs(self):
         for body in [dict(BODY, stream=True), dict(BODY, model='unlisted'),
                      dict(BODY, messages=[{'role': 'user', 'content': []}]),

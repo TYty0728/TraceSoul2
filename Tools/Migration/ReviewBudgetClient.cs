@@ -16,27 +16,20 @@ namespace TraceSoul2.Migrate
     internal sealed class ReviewBudgetClient : ILlmClient, ILlmEndpoint
     {
         private readonly ILlmClient inner;
-        private readonly Func<TimeSpan> elapsed;
         private readonly int callLimit;
-        private static readonly TimeSpan Duration = TimeSpan.FromMinutes(20);
         private int calls;
         private readonly Action<int, string> report;
         public ReviewBudgetClient(ILlmClient inner, Action<int, string> report)
-            : this(inner, report, StartClock(), 256) { }
-        private static Func<TimeSpan> StartClock()
-        {
-            var watch = System.Diagnostics.Stopwatch.StartNew();
-            return () => watch.Elapsed;
-        }
-        public ReviewBudgetClient(ILlmClient inner, Action<int, string> report, Func<TimeSpan> elapsed, int callLimit)
-        { this.inner = inner; this.report = report; this.elapsed = elapsed; this.callLimit = callLimit; }
+            : this(inner, report, 256) { }
+        public ReviewBudgetClient(ILlmClient inner, Action<int, string> report, int callLimit)
+        { this.inner = inner; this.report = report; this.callLimit = callLimit; }
         public string ProviderId => inner.ProviderId;
         public string Model => inner.Model;
         public string BaseUrl => (inner as ILlmEndpoint)?.BaseUrl;
         private void Reserve(CancellationToken token)
         {
             token.ThrowIfCancellationRequested();
-            if (elapsed() >= Duration || Interlocked.Increment(ref calls) > callLimit)
+            if (Interlocked.Increment(ref calls) > callLimit)
                 throw new ReviewBudgetYieldException();
         }
         public Task<string> CompleteJsonAsync(List<DeepSeekMessageData> messages, CancellationToken cancellationToken = default, string promptCacheKey = null)
@@ -47,8 +40,8 @@ namespace TraceSoul2.Migrate
             Reserve(cancellationToken);
             var title = System.Text.RegularExpressions.Regex.Match(messages.Count > 0 ? messages[0].content ?? "" : "", @"【([^】]{1,40})】");
             if (title.Success) report?.Invoke(calls, title.Groups[1].Value);
-            // A scheduling slice ends between requests. The provider still owns its
-            // per-request deadline; never discard a valid in-flight result at 20 minutes.
+            // Bound request count, not total wall time. Slow successful requests keep
+            // their results; transport has its own deadline and bounded retry policy.
             return await request(cancellationToken);
         }
         public Task<string> CompleteTextAsync(List<DeepSeekMessageData> messages, CancellationToken cancellationToken = default, string promptCacheKey = null)

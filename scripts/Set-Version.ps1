@@ -20,4 +20,4 @@ if ($updated -eq $text) {
     throw '没有找到 TraceSoul2Version，未修改任何文件。'
 }
 [IO.File]::WriteAllText($propsPath, $updated, [Text.UTF8Encoding]::new($false))
-Write-Host "产品版本已改为 $Version。请先完整回归，再提交并创建标签 v$Version。"
+Write-Host "产品版本已改为 $Version。请完成本次改动相关验证，再提交并创建标签 v$Version；完整回归由发布 CI 执行，已通过的本地检查无需重复。"

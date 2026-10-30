@@ -12,6 +12,9 @@ using TraceSoul2.Logic;
 using TraceSoul2.Manager;
 using TraceSoul2.Plugins;
 using TraceSoul2.Util;
+using TraceSoul2.Host;
+using System.Net;
+using System.Net.Http;
 
 internal static partial class Program
 {
@@ -175,8 +178,9 @@ internal static partial class Program
         RunDailyLargeSelectionChecks(assembly);
         RunDailyRecallCheck(assembly);
         RunDailyBudgetChecks(assembly);
+        RunReviewTransportChecks(assembly);
         RunDailyProcessRecovery(assembly);
-        Console.WriteLine("Four-step daily review passed: complete day, selected evidence, batching, empty input, restart, short references, atomic rollback, live runtime and soft budget.");
+        Console.WriteLine("Four-step daily review passed: complete day, batching, restart, atomic rollback, live runtime, call limit and bounded network recovery.");
     }
 
     private static void RunDailyRuntimeConflictCheck(Assembly assembly)
@@ -322,14 +326,14 @@ internal static partial class Program
     }
     private static void RunDailyBudgetChecks(Assembly assembly)
     {
-        var elapsed = TimeSpan.Zero;
-        var inner = new SelectionProbeLlm { Reply = _ => { elapsed = TimeSpan.FromMinutes(21); return "{}"; } };
+        var inner = new SelectionProbeLlm { Reply = _ => "{}" };
         var type = assembly.GetType("TraceSoul2.Migrate.ReviewBudgetClient", true);
-        var client = (ILlmClient)Activator.CreateInstance(type, inner, null, (Func<TimeSpan>)(() => elapsed), 10);
+        var client = (ILlmClient)Activator.CreateInstance(type, inner, null, 2);
         var messages = new List<DeepSeekMessageData> { new("system", "【1/4 提取事件】") };
-        Require(client.CompleteJsonAsync(messages).GetAwaiter().GetResult() == "{}", "在途请求跨过20分钟仍接收并交给调用方提交");
-        Require(DailyRejects(() => client.CompleteJsonAsync(messages).GetAwaiter().GetResult()) && inner.Requests.Count == 1,
-            "预算只阻止下一次派发，不能丢弃已返回结果");
+        Require(client.CompleteJsonAsync(messages).GetAwaiter().GetResult() == "{}" &&
+            client.CompleteJsonAsync(messages).GetAwaiter().GetResult() == "{}", "请求次数范围内正常接收结果");
+        Require(DailyRejects(() => client.CompleteJsonAsync(messages).GetAwaiter().GetResult()) && inner.Requests.Count == 2,
+            "请求次数上限只阻止下一次派发，不能丢弃已返回结果");
         using var f = new DailyFixture(assembly); f.Seed(2);
         var yielding = new SelectionProbeLlm { Reply = request => request[0].content.Contains("1/4") ? DailyEvents :
             throw (Exception)Activator.CreateInstance(assembly.GetType("TraceSoul2.Migrate.ReviewBudgetYieldException", true)) };
@@ -342,6 +346,109 @@ internal static partial class Program
         var resumed = new SelectionProbeLlm { Reply = DailyReply }; f.Run(resumed);
         Require(resumed.Requests.Count == 3 && db.ExecuteScalar<string>("SELECT Status FROM migration_review_state") == "done",
             "预算续做只从挑选开始，完成后清除延期状态");
+    }
+    private static void RunReviewTransportChecks(Assembly assembly)
+    {
+        var now = TimeSpan.Zero;
+        var waits = new List<TimeSpan>();
+        Func<TimeSpan, CancellationToken, Task> wait = (duration, token) => {
+            token.ThrowIfCancellationRequested(); waits.Add(duration); now += duration; return Task.CompletedTask;
+        };
+        var messages = new List<DeepSeekMessageData> { new("user", "synthetic") };
+        ILlmClient Wrap(ILlmClient inner, Func<TimeSpan, CancellationToken, Task> delay = null)
+            => (ILlmClient)Activator.CreateInstance(assembly.GetType("TraceSoul2.Host.ReviewTransportClient", true),
+                inner, (Func<TimeSpan>)(() => now), delay ?? wait, null);
+        var calls = 0;
+        var probe = new SelectionProbeLlm { Reply = _ => { calls++; throw new HttpRequestException("synthetic disconnect"); } };
+        var client = Wrap(probe);
+        InvalidOperationException exhaustedError = null;
+        try { client.CompleteJsonAsync(messages).GetAwaiter().GetResult(); }
+        catch (InvalidOperationException error) { exhaustedError = error; }
+        Require(exhaustedError != null && FailureProtection.SafeReason(exhaustedError).Contains("手动恢复") && calls == 3 &&
+            waits.SequenceEqual(new[] { TimeSpan.FromMinutes(5), TimeSpan.FromMinutes(10) }), "断网只补试两次，按5/10分钟冷却");
+        Require(DailyRejects(() => client.CompleteJsonAsync(messages).GetAwaiter().GetResult()) && calls == 3,
+            "耗尽后相同客户端再次调用也不发请求");
+
+        now = TimeSpan.Zero; waits.Clear(); calls = 0;
+        probe = new SelectionProbeLlm { Reply = _ => ++calls % 2 == 1 ? throw new TimeoutException() : "{}" };
+        client = Wrap(probe);
+        Require(client.CompleteJsonAsync(messages).GetAwaiter().GetResult() == "{}" &&
+            client.CompleteJsonAsync(messages).GetAwaiter().GetResult() == "{}" &&
+            DailyRejects(() => client.CompleteJsonAsync(messages).GetAwaiter().GetResult()) && calls == 5,
+            "各步骤共用整轮补试上限，中间成功不重置次数");
+
+        now = TimeSpan.Zero; calls = 0;
+        client = Wrap(new SelectionProbeLlm { Reply = _ => { calls++; throw new HttpRequestException(); } },
+            (_, _) => { now += TimeSpan.FromMinutes(31); return Task.CompletedTask; });
+        Require(DailyRejects(() => client.CompleteJsonAsync(messages).GetAwaiter().GetResult()) && calls == 1,
+            "睡眠或调度延迟跨过30分钟窗口后不再补发");
+
+        now = TimeSpan.Zero; calls = 0;
+        client = Wrap(new SelectionProbeLlm { Reply = _ => {
+            if (++calls == 1) throw new HttpRequestException();
+            now += TimeSpan.FromHours(1); return "{}";
+        } });
+        Require(client.CompleteJsonAsync(messages).GetAwaiter().GetResult() == "{}", "在途成功跨过故障窗口仍保留结果");
+        Require(client.CompleteJsonAsync(messages).GetAwaiter().GetResult() == "{}", "正常长复盘不受总时长窗口限制");
+
+        // Retryable HTTP responses exercise the real provider client with its inner
+        // retry disabled; the outer policy must be the only source of extra POSTs.
+        using (var server = new FailureHttpServer(503, "synthetic outage"))
+        {
+            now = TimeSpan.Zero; waits.Clear();
+            client = Wrap(new DeepSeekClientManager(new DeepSeekConfigData {
+                ApiKey = "test", BaseUrl = server.Url, Model = "test", TransientErrorRetries = 6
+            }, singleAttempt: true));
+            Require(DailyRejects(() => client.CompleteJsonAsync(messages).GetAwaiter().GetResult()) &&
+                server.Requests.Count == 3 && waits.Count == 2, "真实HTTP 503只有三次POST，没有供应商内层重试相乘");
+        }
+
+        foreach (var error in new Exception[] { new HttpRequestException("auth", null, HttpStatusCode.Unauthorized),
+            new InvalidOperationException("API 402"), new InvalidOperationException("API 502: codex_failed_check_login_or_quota"),
+            new InvalidOperationException("API 503: codex_executable_not_found"), new InvalidOperationException("API 502: codex_invalid_json"),
+            new InvalidOperationException("source_refs越界"), new JsonException("invalid JSON"), new OperationCanceledException() })
+        {
+            calls = 0; waits.Clear();
+            client = Wrap(new SelectionProbeLlm { Reply = _ => { calls++; throw error; } });
+            try { client.CompleteJsonAsync(messages).GetAwaiter().GetResult(); throw new Exception("Expected failure"); }
+            catch (Exception caught) when (ReferenceEquals(caught, error)) { }
+            Require(calls == 1 && waits.Count == 0, "鉴权/额度/配置/内容错误及取消不进入网络补试");
+        }
+        using (var cancel = new CancellationTokenSource())
+        {
+            calls = 0;
+            client = Wrap(new SelectionProbeLlm { Reply = _ => { calls++; throw new HttpRequestException(); } },
+                (_, token) => { cancel.Cancel(); token.ThrowIfCancellationRequested(); return Task.CompletedTask; });
+            try { client.CompleteJsonAsync(messages, cancel.Token).GetAwaiter().GetResult(); throw new Exception("Expected cancellation"); }
+            catch (OperationCanceledException) { }
+            Require(calls == 1, "冷却等待可取消，取消后不发下一请求");
+        }
+
+        using var f = new DailyFixture(assembly); f.Seed(2);
+        now = TimeSpan.Zero; calls = 0; waits.Clear();
+        client = Wrap(new SelectionProbeLlm { Reply = request => {
+            if (request[0].content.Contains("2/4") && ++calls == 1) throw new HttpRequestException();
+            return DailyReply(request);
+        } });
+        f.Run(client);
+        Require(f.Count("event_entries") == 2 && f.Graph.GetCognitionNodes(20).Count == 1 &&
+            f.State().RootElement.GetProperty("Done").GetBoolean() && waits.Count == 1,
+            "真实四步入口在挑选时断网后完成，不重复写入已提取事件与认知");
+
+        using var failed = new DailyFixture(assembly); failed.Seed(2);
+        now = TimeSpan.Zero; waits.Clear();
+        client = Wrap(new SelectionProbeLlm { Reply = request => request[0].content.Contains("2/4")
+            ? throw new HttpRequestException() : DailyReply(request) });
+        Require(DailyRejects(() => failed.Run(client)), "真实入口持续断网会停止而不是延期无限补做");
+        using (var db = new SQLite.SQLiteConnection(Path.Combine(failed.DirectoryPath, "migration.db")))
+            Require(db.ExecuteScalar<string>("SELECT Status FROM migration_review_state") == "failed" &&
+                db.ExecuteScalar<long>("SELECT NextRetryUnixMs FROM migration_review_state") == 0 &&
+                failed.Count("event_entries") == 2 && waits.Count == 2, "失败不安排自动续做，事件检查点保留");
+        failed.Reopen();
+        var resumed = new SelectionProbeLlm { Reply = DailyReply }; failed.Run(resumed);
+        Require(resumed.Requests.Count == 3 && !resumed.Requests.Any(x => x.Contains("1/4 提取事件")) &&
+            failed.Count("event_entries") == 2 && failed.Graph.GetCognitionNodes(20).Count == 1,
+            "手动恢复的新进程仅续做剩余步骤，不重复提取或增认知");
     }
 
     private static void RunDailyReviewPeer(string assemblyPath, string directory, string mode)
