@@ -107,40 +107,4 @@ internal static partial class Program
         Console.WriteLine("Cognition BGE check passed: packaged local model and semantic paraphrase.");
     }
 
-    private static void RunCognitionRecallMigrationChecks(System.Reflection.MethodInfo formation, IDisposable context,
-        IMemoryStore store, string day, MomentRecord source)
-    {
-        var graph = (ICognitionGraphStore)store;
-        context.GetType().GetProperty("CognitionEncoder").SetValue(context, new ReviewSemanticEncoder());
-        BrainCognitionWriteData Write(string summary, string operation = "create", string target = "") => new() {
-            operation = operation, target_id = target, summary = summary, domains = new() { "user" }, about = "口味",
-            scope = "早餐", exceptions = "聚餐另问", confidence = 0.7f, strength = 0.6f, evidence_moment_ids = new() { source.Id }
-        };
-        var old = store.CommitCognitions(source.Id, new[] { Write("他喜欢烘焙") }).Single();
-        for (var i = 0; i < 45; i++) store.CommitCognitions(source.Id, new[] { Write("无关认识" + i) });
-        var fresh = new MomentRecord { Id = "recall-fresh", ConversationId = source.ConversationId, Role = "user",
-            Content = "早餐我想吃面包", CreatedUnixMs = source.CreatedUnixMs + 1000 };
-        store.SaveMoment(fresh);
-        void Run(AgentSequenceLlm llm) => ((Task)formation.Invoke(null, new object[] { context, store.LoadPairIdentity(), llm, day,
-            new List<EventIndexRecord>(), new List<EventEntryRecord>(), new List<MomentRecord> { fresh } })).GetAwaiter().GetResult();
-        string Json(BrainCognitionWriteData write) { write.evidence_moment_ids = new() { fresh.Id }; return TraceJson.ToJson(new { cognitions = new[] { write } }); }
-        var before = graph.GetCognitionNodes(5000).Count;
-        var reinforce = new AgentSequenceLlm(Json(Write("", "reinforce", old.Id)));
-        Run(reinforce);
-        Require(reinforce.Requests.Count == 1 && reinforce.Requests[0].Contains(old.Id) && reinforce.Requests[0].Contains(old.Summary) &&
-            reinforce.Requests[0].Contains("聚餐另问") && !reinforce.Requests[0].Contains("无关认识44") &&
-            graph.GetCognitionNodes(5000).Count == before && graph.GetCognitionEvidence(new[] { old.Id }).Any(x => x.MomentId == fresh.Id),
-            "实际Migration先召回完整旧理解再补证据，超过40条也能更新原节点，不重复新增或额外调用LLM");
-        fresh = new MomentRecord { Id = "recall-revision", ConversationId = source.ConversationId, Role = "user",
-            Content = "早餐只想要不甜的面包", CreatedUnixMs = source.CreatedUnixMs + 2000 };
-        store.SaveMoment(fresh);
-        Run(new AgentSequenceLlm(Json(Write("他喜欢不甜的烘焙食品", "revise", old.Id)), TraceJson.ToJson(new { decisions = new[] { new { index = 0, kind = "revise", target_id = old.Id, before = old.Summary, after = "他喜欢不甜的烘焙食品", explanation = "偏好的条件发生变化" } } })));
-        var revised = graph.GetCognitionNodes(5000).Single(x => x.Summary == "他喜欢不甜的烘焙食品");
-        var next = new AgentSequenceLlm("{\"cognitions\":[]}"); Run(next);
-        Require(graph.GetCognitionNodes(5000).Single(x => x.Id == old.Id).Status == "superseded" &&
-            next.Requests.Single().Contains(revised.Id) && !next.Requests.Single().Contains(old.Id) &&
-            graph.GetCognitionNodes(5000).Count == before + 1,
-            "修订保留历史版本，下一批重新检索新版；无变化保持空数组");
-        context.GetType().GetProperty("CognitionEncoder").SetValue(context, new FakeEncoder());
-    }
 }

@@ -153,9 +153,6 @@ namespace TraceSoul2.Host
                 return "程序组件版本不一致或缺失，请核对 Host 与共享 DLL";
             var message = error?.Message ?? "";
             if (message.Contains("空 content", StringComparison.Ordinal)) return "模型返回空白正文";
-            if (message.Contains("缺少来源校验检查点", StringComparison.Ordinal) ||
-                message.Contains("已有细节缺少来源检查点", StringComparison.Ordinal))
-                return "旧版部分复盘结果缺少来源检查点，需核对恢复后再构建";
             if ((message.Contains("检查点", StringComparison.Ordinal) &&
                     (message.Contains("已修订", StringComparison.Ordinal) || message.Contains("已变化", StringComparison.Ordinal) ||
                      message.Contains("已缺失", StringComparison.Ordinal))) ||

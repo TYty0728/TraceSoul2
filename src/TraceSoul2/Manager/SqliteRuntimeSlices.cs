@@ -47,11 +47,6 @@ namespace TraceSoul2.Manager
             ids.Distinct().Select(x => connection.Find<RuntimeSliceRecord>("runtime:" + x)).Where(x => x != null).ToList();
 
         [MethodImpl(MethodImplOptions.Synchronized)]
-        public List<string> GetUnreviewedRuntimeDayKeysBefore(long endMs) => connection.QueryScalars<string>(
-            "SELECT DISTINCT DayKey FROM runtime_slices WHERE CreatedUnixMs<? AND (ReviewId IS NULL OR ReviewId='') " +
-            "UNION SELECT DayKey FROM runtime_day_summaries WHERE FirstUnixMs<? AND IsCurrent=0 ORDER BY DayKey", endMs, endMs);
-
-        [MethodImpl(MethodImplOptions.Synchronized)]
         public List<RuntimeDayReviewRecord> GetRuntimeDayReviews(string root, string day) =>
             connection.Table<RuntimeDayReviewRecord>().Where(x => x.RootConversationId == root && x.DayKey == day)
                 .OrderBy(x => x.FirstUnixMs).ThenBy(x => x.Id).ToList();
@@ -81,49 +76,6 @@ namespace TraceSoul2.Manager
             connection.Table<RuntimeDaySummaryRow>().Where(x => x.RootConversationId == root && x.DayKey == day && x.IsCurrent)
                 .OrderBy(x => x.FirstUnixMs).ToList().Select(ToReview).ToList();
 
-        [MethodImpl(MethodImplOptions.Synchronized)]
-        public bool HasPendingRuntimeDaySummary(string root, string day) =>
-            connection.Table<RuntimeDaySummaryRow>().Any(x => x.RootConversationId == root && x.DayKey == day && !x.IsCurrent);
-
-        [MethodImpl(MethodImplOptions.Synchronized)]
-        public void BeginRuntimeDaySummary(RuntimeDayReviewRecord review)
-        {
-            if (connection.Table<RuntimeDaySummaryRow>().Any(x => x.RootConversationId == review.RootConversationId &&
-                x.ContextConversationId == review.ContextConversationId && x.DayKey == review.DayKey && x.MemoryVisibility == review.MemoryVisibility)) return;
-            connection.Insert(new RuntimeDaySummaryRow { Id = Guid.NewGuid().ToString("N"), RootConversationId = review.RootConversationId,
-                ContextConversationId = review.ContextConversationId, DayKey = review.DayKey, MemoryVisibility = review.MemoryVisibility,
-                FirstUnixMs = review.FirstUnixMs });
-        }
-
-        [MethodImpl(MethodImplOptions.Synchronized)]
-        public void CommitRuntimeDaySummary(IEnumerable<string> reviewIds, string summary)
-        {
-            if (string.IsNullOrWhiteSpace(summary) || summary.Length > RuntimeSliceLogic.DaySummaryAccept)
-                throw new InvalidOperationException("整天回望须为1～1000字。");
-            connection.RunInTransaction(() =>
-            {
-                var ids = reviewIds.Distinct().ToList();
-                var reviews = ids.Select(id => connection.Find<RuntimeDayReviewRecord>(id)).ToList();
-                if (reviews.Count == 0 || reviews.Any(x => x == null) ||
-                    reviews.Select(x => (x.RootConversationId, x.ContextConversationId, x.DayKey, x.MemoryVisibility)).Distinct().Count() != 1)
-                    throw new InvalidOperationException("整天回望的来源须属于同一天、同一环境。");
-                var first = reviews[0];
-                var current = GetRuntimeDayReviews(first.RootConversationId, first.DayKey)
-                    .Where(x => x.ContextConversationId == first.ContextConversationId && x.MemoryVisibility == first.MemoryVisibility).ToList();
-                if (!current.Select(x => x.Id).ToHashSet().SetEquals(ids) || GetRuntimeSlices(first.RootConversationId, first.DayKey, true)
-                    .Any(x => x.ContextConversationId == first.ContextConversationId && x.MemoryVisibility == first.MemoryVisibility))
-                    throw new InvalidOperationException("整天回望期间出现新材料，保留分段整理等待再次汇总。");
-                BeginRuntimeDaySummary(first);
-                var row = connection.Table<RuntimeDaySummaryRow>().First(x => x.RootConversationId == first.RootConversationId &&
-                    x.ContextConversationId == first.ContextConversationId && x.DayKey == first.DayKey && x.MemoryVisibility == first.MemoryVisibility);
-                row.Summary = summary.Trim(); row.SourceReviewIdsJson = TraceJson.ToJson(ids);
-                row.SliceIdsJson = TraceJson.ToJson(reviews.SelectMany(x => TraceJson.FromJson<List<string>>(x.SliceIdsJson)).Distinct().ToList());
-                row.MomentIdsJson = TraceJson.ToJson(reviews.SelectMany(x => TraceJson.FromJson<List<string>>(x.MomentIdsJson)).Distinct().ToList());
-                row.FirstUnixMs = reviews.Min(x => x.FirstUnixMs); row.CreatedUnixMs = DateTimeOffset.UtcNow.ToUnixTimeMilliseconds();
-                row.IsCurrent = true; connection.Update(row);
-            });
-        }
-
         [Table("runtime_day_summaries")]
         private sealed class RuntimeDaySummaryRow
         {
@@ -147,53 +99,5 @@ namespace TraceSoul2.Manager
             DayKey = row.DayKey, MemoryVisibility = row.MemoryVisibility, Summary = row.Summary,
             SliceIdsJson = row.SliceIdsJson, MomentIdsJson = row.MomentIdsJson, FirstUnixMs = row.FirstUnixMs, CreatedUnixMs = row.CreatedUnixMs };
 
-        [MethodImpl(MethodImplOptions.Synchronized)]
-        public RuntimeDayReviewRecord CommitRuntimeSliceReview(IEnumerable<string> sourceIds, string summary)
-        {
-            if (string.IsNullOrWhiteSpace(summary))
-                throw new InvalidOperationException("切片整理不能为空。");
-            RuntimeDayReviewRecord result = null;
-            connection.RunInTransaction(() =>
-            {
-                var ids = sourceIds.Distinct().ToList();
-                var slices = ids.Select(id => connection.Find<RuntimeSliceRecord>(id)).ToList();
-                if (slices.Count == 0 || slices.Any(x => x == null) ||
-                    slices.Select(x => (x.RootConversationId, x.ContextConversationId, x.DayKey, x.MemoryVisibility)).Distinct().Count() != 1)
-                    throw new InvalidOperationException("切片复盘不能混合日期或环境。");
-                if (slices.Any(x => !string.IsNullOrEmpty(x.ReviewId)))
-                    throw new InvalidOperationException("切片已被复盘，请重新读取待处理批次。");
-                var first = slices[0];
-                result = new RuntimeDayReviewRecord { Id = Guid.NewGuid().ToString("N"), RootConversationId = first.RootConversationId,
-                    ContextConversationId = first.ContextConversationId, DayKey = first.DayKey, MemoryVisibility = first.MemoryVisibility,
-                    Summary = summary.Trim(), SliceIdsJson = TraceJson.ToJson(ids),
-                    MomentIdsJson = TraceJson.ToJson(slices.Select(x => x.MomentId).Distinct().ToList()),
-                    FirstUnixMs = slices.Min(x => x.CreatedUnixMs), CreatedUnixMs = DateTimeOffset.UtcNow.ToUnixTimeMilliseconds() };
-                connection.Insert(result);
-                foreach (var slice in slices) { slice.ReviewId = result.Id; connection.Update(slice); }
-                BeginRuntimeDaySummary(result);
-                connection.Execute("UPDATE runtime_day_summaries SET IsCurrent=0 WHERE RootConversationId=? AND ContextConversationId=? AND DayKey=? AND MemoryVisibility=?",
-                    result.RootConversationId, result.ContextConversationId, result.DayKey, result.MemoryVisibility);
-            });
-            return result;
-        }
-
-        [MethodImpl(MethodImplOptions.Synchronized)]
-        public void ReleaseRuntimeDayReviews(IEnumerable<string> reviewIds)
-        {
-            connection.RunInTransaction(() =>
-            {
-                foreach (var id in reviewIds.Distinct().Where(x => !string.IsNullOrWhiteSpace(x)))
-                {
-                    var review = connection.Find<RuntimeDayReviewRecord>(id);
-                    if (review == null) continue;
-                    foreach (var slice in connection.Table<RuntimeSliceRecord>().Where(x => x.ReviewId == id).ToList())
-                    {
-                        slice.ReviewId = null;
-                        connection.Update(slice);
-                    }
-                    connection.Delete(review);
-                }
-            });
-        }
     }
 }

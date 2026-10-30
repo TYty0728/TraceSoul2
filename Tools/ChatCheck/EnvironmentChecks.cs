@@ -36,7 +36,7 @@ internal static partial class Program
             Require(moments.Select(x => x.Id).SequenceEqual(new[] { "legacy", "private" }) &&
                 days.SequenceEqual(new[] { "2001-01-01", "2001-01-02" }),
                 "Migration 实际查询只复盘私密和旧数据，不混入公开原始证据");
-            type.GetMethod("MarkMomentsBuiltByRange").Invoke(db, range);
+            type.GetMethod("MarkReviewedMoments").Invoke(db, new object[] { moments.Select(m => m.Id) });
             using var check = new SqliteMemoryManager(brainPath);
             Require(check.GetPublicMomentsInRange(0, DateTimeOffset.UtcNow.ToUnixTimeMilliseconds()).Single().Id == "public",
                 "私密归档收尾不能顺手消费尚未整理的公开证据");

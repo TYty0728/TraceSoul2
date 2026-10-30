@@ -22,6 +22,7 @@
     <Compile Include="RealtimeCallChecks.cs" />
     <Compile Include="Program.cs" />
     <Compile Include="ReviewReliabilityChecks.cs" />
+    <Compile Include="DailyReviewPipelineChecks.cs" />
     <Compile Include="../Host/ReviewMaintenanceGate.cs" Link="ReviewMaintenanceGate.cs" />
     <Compile Include="BackupArchiveChecks.cs" />
     <Compile Include="RuntimePathRepairChecks.cs" />
@@ -45,8 +46,6 @@
     <Compile Include="UnifiedRuntimeChecks.cs" />
     <Compile Include="RuntimePresentationChecks.cs" />
     <Compile Include="DayOverviewChecks.cs" />
-    <Compile Include="DayCardReviewChecks.cs" />
-    <Compile Include="DailyCoreProgressChecks.cs" />
     <Compile Include="AgentContractChecks.cs" />
     <Compile Include="AgentPromptChecks.cs" />
     <Compile Include="HistoryPresentationChecks.cs" />

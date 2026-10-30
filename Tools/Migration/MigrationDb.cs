@@ -95,24 +95,27 @@ namespace TraceSoul2.Migrate
             DailyBuildHistory.Finish(connection, activeReviewAttempt, "done", null);
         }
 
-        public void MarkDayPending(string dayKey, IReadOnlyCollection<string> parts)
-        {
-            var reason = "事件与认知已完成；待整理：" + string.Join("、", parts.Select(x => x switch {
-                "day_summary" => "当天回望",
-                "self" => "我是谁", "other" => "对方是谁", "relation" => "我们的关系",
-                "expression_habit" => "表达习惯", "inner_narrative" => "当天感受", _ => "身份摘要" }));
-            ScheduleDeferred(dayKey, "pending", reason);
-        }
-
         public void MarkDayDeferred(string dayKey, string reason) => ScheduleDeferred(dayKey, "deferred",
             "部分派生任务待整理，原始经历及已完成检查点保留：" + reason);
 
-        public void MarkDayWaiting(string dayKey, string reason)
+        public void MarkDayYielded(string dayKey, string reason)
         {
-            var previous = GetReviewState(dayKey);
-            connection.InsertOrReplace(new ReviewStateRecord { DayKey = dayKey, Status = "waiting", Error = reason,
-                RetryCount = previous?.RetryCount ?? 0, UpdatedUnixMs = DateTimeOffset.UtcNow.ToUnixTimeMilliseconds() });
-            DailyBuildHistory.Finish(connection, activeReviewAttempt, "waiting", reason);
+            var state = GetReviewState(dayKey) ?? new ReviewStateRecord { DayKey = dayKey };
+            state.Status = "deferred"; state.Error = reason;
+            state.UpdatedUnixMs = DateTimeOffset.UtcNow.ToUnixTimeMilliseconds();
+            // Scheduling a continuation is not a failed attempt.
+            state.RetryCount = 0;
+            state.NextRetryUnixMs = DateTimeOffset.UtcNow.AddMinutes(1).ToUnixTimeMilliseconds();
+            connection.InsertOrReplace(state);
+            DailyBuildHistory.Finish(connection, activeReviewAttempt, "deferred", reason);
+        }
+
+        public void MarkReviewedMoments(IEnumerable<string> ids)
+        {
+            lock (brainWriteGate)
+                foreach (var batch in ids.Distinct().Chunk(256))
+                    brain.Execute("UPDATE moments SET MemoryStatus='built' WHERE Id IN (" +
+                        string.Join(",", batch.Select(_ => "?")) + ") AND COALESCE(MemoryStatus,'')!='operational'", batch.Cast<object>().ToArray());
         }
 
         private void ScheduleDeferred(string dayKey, string status, string reason)
@@ -283,16 +286,6 @@ namespace TraceSoul2.Migrate
                     "(CASE higher.Tier WHEN 'day' THEN 1 WHEN 'week' THEN 2 WHEN 'month' THEN 3 WHEN 'year' THEN 4 WHEN 'forever' THEN 5 ELSE 0 END) > " +
                     "(CASE ladder_items.Tier WHEN 'day' THEN 1 WHEN 'week' THEN 2 WHEN 'month' THEN 3 WHEN 'year' THEN 4 WHEN 'forever' THEN 5 ELSE 0 END)" +
                     ")");
-        }
-
-        /// <summary>把范围内的 Moment 标记为已归档（built），返回更新条数。</summary>
-        public int MarkMomentsBuiltByRange(long startMs, long endMs)
-        {
-            lock (brainWriteGate)
-                return brain.Execute(
-                    "UPDATE moments SET MemoryStatus='built' WHERE CreatedUnixMs>=? AND CreatedUnixMs<? AND COALESCE(MemoryVisibility,'private')!='public' " +
-                    "AND (MemoryStatus IS NULL OR MemoryStatus NOT IN ('built','operational'))",
-                    startMs, endMs);
         }
 
         public List<MomentRecord> GetUnclassifiedMomentsInRange(long startMs, long endMs, int take)
@@ -654,19 +647,6 @@ namespace TraceSoul2.Migrate
                 brain.InsertOrReplace(new PluginDocumentRecord { Id = pluginId + ":" + key,
                     PluginId = pluginId, DocumentKey = key, Json = json,
                     UpdatedUnixMs = DateTimeOffset.UtcNow.ToUnixTimeMilliseconds() });
-        }
-
-        public List<LifeTagRecord> GetActiveLifeTagsForCommit()
-        {
-            lock (brainWriteGate)
-                return brain.Table<LifeTagRecord>().Where(x => x.Status == "active").ToList();
-        }
-
-        public bool HasEventEntriesFrom(IEnumerable<string> momentIds)
-        {
-            var ids = momentIds.ToHashSet(StringComparer.Ordinal);
-            lock (brainWriteGate)
-                return brain.Table<EventEntryRecord>().Any(x => ids.Contains(x.SourceMomentId));
         }
 
         public void SaveEventIndex(EventIndexRecord index)

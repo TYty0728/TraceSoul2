@@ -1,0 +1,29 @@
+name: Review recovery
+on:
+  push:
+    branches: [main]
+    paths: ['src/**', 'Tools/**', 'ExternalPlugins/**', 'scripts/Test-Review.ps1', '.github/workflows/review-check.yml']
+  pull_request:
+    paths: ['src/**', 'Tools/**', 'ExternalPlugins/**', 'scripts/Test-Review.ps1', '.github/workflows/review-check.yml']
+  workflow_dispatch:
+permissions:
+  contents: read
+jobs:
+  offline-review:
+    runs-on: windows-latest
+    timeout-minutes: 20
+    steps:
+      - uses: actions/checkout@v4
+        with:
+          lfs: true
+      - uses: actions/setup-dotnet@v4
+        with:
+          dotnet-version: '8.0.x'
+      - uses: actions/setup-python@v5
+        with:
+          python-version: '3.11'
+      - name: Recovery and real Migration entry (mock models only)
+        shell: pwsh
+        run: ./scripts/Test-Review.ps1
+      - name: Codex bridge failure regression (no model calls)
+        run: python -m unittest discover -s Tools/CodexBridge -p 'test_*.py'

@@ -20,6 +20,8 @@ internal static partial class Program
     private static void Main(string[] args)
     {
         SQLitePCL.Batteries_V2.Init();
+        if (args.Length == 4 && args[0] == "--daily-review-peer") { RunDailyReviewPeer(args[1], args[2], args[3]); return; }
+        if (args.Length == 3 && args[0] == "--review-recovery-peer") { RunReviewRecoveryPeerAsync(args[1], args[2]).GetAwaiter().GetResult(); return; }
         if (args.Contains("--camera-transport")) { RunCameraTransportChecksAsync().GetAwaiter().GetResult(); return; }
         if (args.Contains("--turn-maintenance")) { RunTurnMaintenanceChecksAsync().GetAwaiter().GetResult(); return; }
         if (args.Contains("--cognition-comparison")) { RunCognitionComparisonChecksAsync().GetAwaiter().GetResult(); return; }
@@ -42,12 +44,8 @@ internal static partial class Program
         if (args.Contains("--review-selection")) { RunReviewSelectionChecksAsync().GetAwaiter().GetResult(); return; }
         if (args.Contains("--realtime-call")) { RunRealtimeCallChecksAsync().GetAwaiter().GetResult(); return; }
         if (args.Length == 2 && args[0] == "--startup-overview-host") { RunStartupOverviewHostCheckAsync(args[1]).GetAwaiter().GetResult(); return; }
-        if (args.Length == 3 && args[0] == "--oct3-review-replay") { RunOct3ReviewReplay(args[1], args[2]); return; }
         if (args.Contains("--automatic-photo")) { RunAutomaticPhotoChecksAsync().GetAwaiter().GetResult(); return; }
-        if (args.Length == 3 && args[0] == "--day-card-scope-dump") { RunDayCardScopeDumpCheck(args[1], args[2]); return; }
-        if (args.Length == 3 && args[0] == "--day-card-length-dump") { RunDayCardLengthDumpCheck(args[1], args[2]); return; }
         if (args.Contains("--runtime-presentation")) { RunRuntimePresentationChecksAsync().GetAwaiter().GetResult(); return; }
-        if (args.Length == 3 && args[0] == "--day-card-dump") { RunDayCardDumpCheck(args[1], args[2]); return; }
         if (args.Contains("--runtime-continuity")) { RunRuntimeContinuityChecksAsync().GetAwaiter().GetResult(); return; }
         if (args.Contains("--existence")) { RunExistenceChecksAsync().GetAwaiter().GetResult(); return; }
         if (args.Contains("--environment")) { RunEnvironmentChecksAsync().GetAwaiter().GetResult(); return; }

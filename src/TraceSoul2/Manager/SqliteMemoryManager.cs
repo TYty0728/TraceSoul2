@@ -484,6 +484,17 @@ namespace TraceSoul2.Manager
         }
 
         [MethodImpl(MethodImplOptions.Synchronized)]
+        public void CommitReviewCheckpoint(string pluginId, string key, Action apply, Func<string> checkpoint)
+        {
+            connection.RunInTransaction(() =>
+            {
+                connection.Execute("UPDATE plugin_documents SET UpdatedUnixMs=UpdatedUnixMs WHERE 0");
+                apply();
+                SavePluginDocument(pluginId, key, checkpoint());
+            });
+        }
+
+        [MethodImpl(MethodImplOptions.Synchronized)]
         public void SaveTurnReview(TurnReviewRecord review)
         {
             if (review == null) throw new ArgumentNullException("review");

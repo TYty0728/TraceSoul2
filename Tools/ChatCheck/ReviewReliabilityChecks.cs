@@ -1,5 +1,6 @@
 using System;
 using System.Collections.Generic;
+using System.Diagnostics;
 using System.IO;
 using System.Linq;
 using System.Threading;
@@ -24,6 +25,7 @@ internal static partial class Program
             new ReviewWorkLogic.TextPart("parts[" + i + "]", 10, () => x.parts[i], v => x.parts[i] = v));
         try
         {
+            await CheckReviewProcessRecoveryAsync(dir);
             using (var store = new SqliteMemoryManager(path))
             {
                 var llm = new AgentSequenceLlm(TraceJson.ToJson(new ProseFixture { source = "original-source-v1", parts = new() { "good", new string('x', 30), new string('y', 30) } }),
@@ -99,5 +101,68 @@ internal static partial class Program
         }
         finally { Directory.Delete(dir, true); }
         Console.WriteLine("Review reliability passed: durable field recovery, strict sources, bounded fitting, backoff, dependencies and maintenance races.");
+    }
+
+    private static async Task CheckReviewProcessRecoveryAsync(string dir)
+    {
+        Process Start(string mode)
+        {
+            var info = new ProcessStartInfo("dotnet") { UseShellExecute = false, CreateNoWindow = true };
+            info.ArgumentList.Add(typeof(Program).Assembly.Location);
+            info.ArgumentList.Add("--review-recovery-peer");
+            info.ArgumentList.Add(dir);
+            info.ArgumentList.Add(mode);
+            return Process.Start(info);
+        }
+        using (var writer = Start("write"))
+        {
+            try
+            {
+                var deadline = DateTime.UtcNow.AddSeconds(20);
+                while (!File.Exists(Path.Combine(dir, "peer-ready")) && !writer.HasExited && DateTime.UtcNow < deadline)
+                    await Task.Delay(25);
+                Require(File.Exists(Path.Combine(dir, "peer-ready")), "独立进程应先持久化草稿检查点");
+            }
+            finally
+            {
+                if (!writer.HasExited) writer.Kill(entireProcessTree: true);
+                await writer.WaitForExitAsync();
+            }
+        }
+        using var reader = Start("resume");
+        using var timeout = new CancellationTokenSource(TimeSpan.FromSeconds(20));
+        try { await reader.WaitForExitAsync(timeout.Token); }
+        finally { if (!reader.HasExited) { reader.Kill(entireProcessTree: true); await reader.WaitForExitAsync(); } }
+        Require(reader.ExitCode == 0, "杀死原进程后，新进程只修剩余字段，不重新生成已保存草稿");
+    }
+
+    private static async Task RunReviewRecoveryPeerAsync(string dir, string mode)
+    {
+        var path = Path.Combine(dir, "peer.db");
+        using var store = new SqliteMemoryManager(path);
+        var messages = new List<DeepSeekMessageData> { new("user", "original-source-v1") };
+        string Validate(ProseFixture x) => x.source == "original-source-v1" && x.parts?.Count == 2 ? null : "来源或字段不匹配";
+        IEnumerable<ReviewWorkLogic.TextPart> Parts(ProseFixture x) => x.parts.Select((_, i) =>
+            new ReviewWorkLogic.TextPart("parts[" + i + "]", 10, () => x.parts[i], v => x.parts[i] = v));
+        if (mode == "write")
+        {
+            var llm = new AgentSequenceLlm(TraceJson.ToJson(new ProseFixture { source = "original-source-v1", parts = new() { "keep", new string('x', 30) } }),
+                TraceJson.ToJson(new { text = new string('y', 30) }));
+            try { await ReviewWorkLogic.CompleteAsync<ProseFixture>(store, "peer", llm, messages, Validate, Parts); }
+            catch (ReviewProsePendingException) { }
+            Require(llm.Requests.Count == 2, "首次进程保存草稿与待补字段");
+            File.WriteAllText(Path.Combine(dir, "peer-ready"), "ready");
+            await Task.Delay(Timeout.Infinite);
+        }
+        else if (mode == "resume")
+        {
+            using (var db = new SQLite.SQLiteConnection(path))
+                db.Execute("UPDATE plugin_documents SET Json=json_set(Json, '$.NextAttemptUnixMs', 0) WHERE PluginId=?", ReviewWorkLogic.StoreId);
+            var llm = new AgentSequenceLlm("{\"text\":\"fixed\"}");
+            var result = await ReviewWorkLogic.CompleteAsync<ProseFixture>(store, "peer", llm, messages, Validate, Parts);
+            Require(llm.Requests.Count == 1 && result.parts.SequenceEqual(new[] { "keep", "fixed" }),
+                "跨进程恢复保留合格字段且只调用剩余字段一次");
+        }
+        else throw new ArgumentException("Unknown peer mode");
     }
 }

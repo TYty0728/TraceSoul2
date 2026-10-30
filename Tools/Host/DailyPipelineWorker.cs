@@ -88,14 +88,8 @@ namespace TraceSoul2.Host
                     runtime.Store.GetUnbuiltMemoryDayKeysBefore(MemoryDayLogic.CurrentStart(now).ToUnixTimeMilliseconds()),
                     DailyBuildHistory.ReadStates(HistoryPath), DailyBuildHistory.ReadAttempts(HistoryPath, target),
                     runtime.Store.GetUnbuiltPublicMemoryDayKeysBefore(MemoryDayLogic.CurrentStart(now).ToUnixTimeMilliseconds()),
-                    runtime.Store.GetUnreviewedRuntimeDayKeysBefore(MemoryDayLogic.CurrentStart(now).ToUnixTimeMilliseconds()),
                     includePendingReviews);
-                foreach (var day in plan.Days)
-                {
-                    var recovery = DailyBuildPreflight.LegacyRecoveryBlocker(
-                        Path.Combine(runtime.DataDirectory, "tracesoul2-brainframe.sqlite3"), day);
-                    if (recovery != null) plan.Blockers.Add(day + "：" + recovery);
-                }
+
             }
             catch (Exception)
             {
@@ -203,9 +197,10 @@ namespace TraceSoul2.Host
                 {
                     if (buildGate.MaintenanceRequested) { yieldedForMaintenance = true; break; }
                     if (await RunDayBuildAsync(day, token) != 0) { succeeded = false; break; }
+                    if (DailyBuildHistory.ReadStates(HistoryPath).Any(x => x.DayKey == day && x.Status != "done")) break;
                 }
                 var pending = DailyBuildHistory.ReadStates(HistoryPath).Count(x => x.Status == "pending" || x.Status == "deferred" || x.Status == "waiting");
-                runtime.Emit(yieldedForMaintenance ? "当前日进度已保存，剩余日期等待维护结束后继续。" : succeeded ? pending > 0 ? "已保存各阶段进度，仍有" + pending + "天部分派生任务待整理，将按预算补做。"
+                runtime.Emit(yieldedForMaintenance ? "当前日进度已保存，剩余日期等待维护结束后继续。" : succeeded ? pending > 0 ? "进度已保存，仍有" + pending + "天未完成；下次从未完成步骤继续。"
                     : "历史待补与目标日构建均已完成。" : "日构建队列已停止；旧日未完成，不会执行后续日期。");
             }
             catch (OperationCanceledException) when (token.IsCancellationRequested) { }

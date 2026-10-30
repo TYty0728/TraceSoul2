@@ -8,22 +8,36 @@ using TraceSoul2.Manager;
 
 namespace TraceSoul2.Migrate
 {
+    public sealed class ReviewBudgetYieldException : InvalidOperationException
+    {
+        public ReviewBudgetYieldException() : base("本轮派发预算已用完，已发请求完成保存后继续未完成步骤。") { }
+    }
+
     internal sealed class ReviewBudgetClient : ILlmClient, ILlmEndpoint
     {
         private readonly ILlmClient inner;
-        private readonly System.Diagnostics.Stopwatch elapsed = System.Diagnostics.Stopwatch.StartNew();
+        private readonly Func<TimeSpan> elapsed;
+        private readonly int callLimit;
         private static readonly TimeSpan Duration = TimeSpan.FromMinutes(20);
         private int calls;
         private readonly Action<int, string> report;
-        public ReviewBudgetClient(ILlmClient inner, Action<int, string> report) { this.inner = inner; this.report = report; }
+        public ReviewBudgetClient(ILlmClient inner, Action<int, string> report)
+            : this(inner, report, StartClock(), 256) { }
+        private static Func<TimeSpan> StartClock()
+        {
+            var watch = System.Diagnostics.Stopwatch.StartNew();
+            return () => watch.Elapsed;
+        }
+        public ReviewBudgetClient(ILlmClient inner, Action<int, string> report, Func<TimeSpan> elapsed, int callLimit)
+        { this.inner = inner; this.report = report; this.elapsed = elapsed; this.callLimit = callLimit; }
         public string ProviderId => inner.ProviderId;
         public string Model => inner.Model;
         public string BaseUrl => (inner as ILlmEndpoint)?.BaseUrl;
         private void Reserve(CancellationToken token)
         {
             token.ThrowIfCancellationRequested();
-            if (elapsed.Elapsed >= Duration || Interlocked.Increment(ref calls) > 256)
-                throw new ReviewProsePendingException("本轮已达20分钟或256次逻辑请求预算，保存进度等待补做。");
+            if (elapsed() >= Duration || Interlocked.Increment(ref calls) > callLimit)
+                throw new ReviewBudgetYieldException();
         }
         public Task<string> CompleteJsonAsync(List<DeepSeekMessageData> messages, CancellationToken cancellationToken = default, string promptCacheKey = null)
             => CompleteBoundedAsync(messages, t => inner.CompleteJsonAsync(messages, t, promptCacheKey), cancellationToken);
@@ -33,12 +47,9 @@ namespace TraceSoul2.Migrate
             Reserve(cancellationToken);
             var title = System.Text.RegularExpressions.Regex.Match(messages.Count > 0 ? messages[0].content ?? "" : "", @"【([^】]{1,40})】");
             if (title.Success) report?.Invoke(calls, title.Groups[1].Value);
-            using var timeout = CancellationTokenSource.CreateLinkedTokenSource(cancellationToken);
-            var remaining = Duration - elapsed.Elapsed;
-            timeout.CancelAfter(remaining > TimeSpan.Zero ? remaining : TimeSpan.FromMilliseconds(1));
-            try { return await request(timeout.Token); }
-            catch (OperationCanceledException) when (!cancellationToken.IsCancellationRequested && timeout.IsCancellationRequested)
-            { throw new ReviewProsePendingException("本轮已达20分钟请求预算，已保存检查点等待补做。"); }
+            // A scheduling slice ends between requests. The provider still owns its
+            // per-request deadline; never discard a valid in-flight result at 20 minutes.
+            return await request(cancellationToken);
         }
         public Task<string> CompleteTextAsync(List<DeepSeekMessageData> messages, CancellationToken cancellationToken = default, string promptCacheKey = null)
             => CompleteBoundedAsync(messages, t => inner.CompleteTextAsync(messages, t, promptCacheKey), cancellationToken);

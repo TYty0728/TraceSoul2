@@ -52,7 +52,6 @@ namespace TraceSoul2.Logic
             public string graphStamp;
             public string previousReviewStamp;
             public string cardsStamp;
-            public string recoveryHash;
             public string original;
             public string appliedCardStamp;
             public int batchesDone;
@@ -62,8 +61,6 @@ namespace TraceSoul2.Logic
             public Proposal proposal;
         }
         public static string Digest(object value) => Convert.ToHexString(SHA256.HashData(Encoding.UTF8.GetBytes(TraceJson.ToJson(value))));
-        public static string RecoveryHash(SqliteMemoryManager store, string day) => Digest(
-            store.LoadPluginDocument("daily-review-recovery-v1", "identity:" + day));
         public static List<CognitionSliceRecord> Sources(SqliteMemoryManager store, string root, string slot, bool includeWeakened = false)
             => store.ReadIdentityReorganizationNodes().Where(x => (x.Status == "active" || (includeWeakened && x.Status == "weakened")) && x.IdentitySlot == slot &&
                 x.MemoryVisibility != "public" && (string.IsNullOrEmpty(x.ContextConversationId) || x.ContextConversationId == root))
@@ -109,7 +106,7 @@ namespace TraceSoul2.Logic
             var previous = Read(store, root, slot);
             var draft = !restart && previous?.snapshot == snapshot && previous.day == day && previous.status != "applied"
                 ? previous : new Draft { id = Guid.NewGuid().ToString("N"), root = root, slot = slot, day = day,
-                    snapshot = snapshot, previousReviewStamp = ReviewStamp(store, root), graphStamp = GraphStamp(store), recoveryHash = RecoveryHash(store, day), original = card.Body };
+                    snapshot = snapshot, previousReviewStamp = ReviewStamp(store, root), graphStamp = GraphStamp(store), original = card.Body };
             if (!restart && draft.status == "ready") return draft;
             draft.status = "running"; draft.error = null; draft.batchesTotal = batches.Count; Save(store, draft);
             void Check() { token.ThrowIfCancellationRequested(); if (snapshot != Snapshot(store, root, slot))
@@ -199,7 +196,7 @@ namespace TraceSoul2.Logic
             if (draft.status != "ready") throw new IdentityReorganizationException("候选尚未生成完成。");
             ValidateProposal(draft);
             store.CommitIdentityReorganization(draft, () => {
-                if (draft.snapshot != Snapshot(store, root, slot) || draft.recoveryHash != RecoveryHash(store, draft.day))
+                if (draft.snapshot != Snapshot(store, root, slot))
                     throw new IdentityReorganizationException("身份、认知或待整理任务已变化，请重新生成。");
             });
             return draft;

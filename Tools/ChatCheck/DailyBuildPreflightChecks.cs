@@ -18,7 +18,7 @@ internal static partial class Program
             new DailyReviewState { DayKey = "2026-09-19", Status = "running" }
         };
         var plan = DailyBuildPreflight.Plan("2026-09-20", "2026-09-20",
-            new[] { "2026-09-17", "2026-09-19", "2026-09-21" }, states, Array.Empty<DailyBuildAttempt>());
+            new[] { "2026-09-19", "2026-09-21" }, states, Array.Empty<DailyBuildAttempt>());
         Require(plan.Days.SequenceEqual(new[] { "2026-09-18", "2026-09-19", "2026-09-20" }),
             "历史失败/中断日即使没有 live Moment 也必须排在目标日前；完成日和未结束日不能重复构建");
         Require(plan.HistoricalFailures.Count == 2 && plan.HistoricalFailures[0].Reason.Contains("402") &&
@@ -33,16 +33,15 @@ internal static partial class Program
         Require(success && called.SequenceEqual(plan.Days), "历史解决后才按顺序执行目标日，重复日期只执行一次");
         var empty = DailyBuildPreflight.Plan("2026-09-17", "2026-09-20", Array.Empty<string>(), states, Array.Empty<DailyBuildAttempt>());
         Require(empty.Days.Count == 0 && !empty.Ready, "已经完成的目标不能再次产生模型请求");
+        var latePrivate = DailyBuildPreflight.Plan("2026-09-17", "2026-09-20", new[] { "2026-09-17" }, states, Array.Empty<DailyBuildAttempt>());
+        Require(latePrivate.Days.SequenceEqual(new[] { "2026-09-17" }), "完成日有迟到对话时仍排入处理，旧完成标记不遮蔽新增来源");
         var publicOnly = DailyBuildPreflight.Plan("2026-09-17", "2026-09-20", Array.Empty<string>(), states,
             Array.Empty<DailyBuildAttempt>(), new[] { "2026-09-17" });
         Require(publicOnly.Days.SequenceEqual(new[] { "2026-09-17" }),
             "私密已完成日仍能单独补建后来到达的公开经历，不重跑已完成私密复盘");
-        var slicesOnly = DailyBuildPreflight.Plan("2026-09-17", "2026-09-20", Array.Empty<string>(), states,
-            Array.Empty<DailyBuildAttempt>(), pendingSlices: new[] { "2026-09-17" });
-        Require(slicesOnly.Days.SequenceEqual(new[] { "2026-09-17" }), "没有新聊天也要补齐待复盘切片，完成日的迟到切片不会丢失");
         var derived = new[] { new DailyReviewState { DayKey = "2026-09-19", Status = "pending", Error = "当天回望待整理" } };
         var automatic = DailyBuildPreflight.Plan("2026-09-20", "2026-09-20", Array.Empty<string>(), derived,
-            Array.Empty<DailyBuildAttempt>(), pendingSlices: new[] { "2026-09-19" }, includePendingReviews: false);
+            Array.Empty<DailyBuildAttempt>(), includePendingReviews: false);
         Require(automatic.HistoricalFailures.Count == 0 && automatic.PendingReviews.Count == 1 &&
             automatic.Days.SequenceEqual(new[] { "2026-09-20" }),
             "待整理正文不变成历史致命错误，未完成切片也不触发自动反复付费，下一日可继续");
@@ -62,51 +61,6 @@ internal static partial class Program
         try
         {
             Require(DailyBuildHistory.ReadStates(path).Count == 0 && !File.Exists(path), "预检不能创建或修改迁移库");
-            var brain = Path.Combine(root, "brain.sqlite3");
-            Require(DailyBuildPreflight.LegacyRecoveryBlocker(brain, "2026-09-18") == null && !File.Exists(brain),
-                "恢复预检不创建主库");
-            var started = new DateTimeOffset(2026, 9, 18, 4, 0, 0, TimeSpan.FromHours(8)).ToUnixTimeMilliseconds();
-            using (var db = new SQLiteConnection(brain))
-            {
-                db.Execute("CREATE TABLE moments (Id TEXT PRIMARY KEY, CreatedUnixMs INTEGER, MemoryVisibility TEXT, MemoryStatus TEXT)");
-                db.Execute("CREATE TABLE event_entries (Id TEXT PRIMARY KEY, SourceMomentId TEXT)");
-                db.Execute("CREATE TABLE plugin_documents (PluginId TEXT, DocumentKey TEXT, Json TEXT)");
-                db.Execute("INSERT INTO moments VALUES ('saved',?,'private','live')", started);
-                db.Execute("INSERT INTO event_entries VALUES ('legacy-partial','saved')");
-            }
-            var bytes = File.ReadAllBytes(brain);
-            Require(DailyBuildPreflight.LegacyRecoveryBlocker(brain, "2026-09-18")?.Contains("直接重跑仍会被拦住") == true &&
-                DailyBuildPreflight.LegacyRecoveryBlocker(brain, "2026-09-19") == null && bytes.SequenceEqual(File.ReadAllBytes(brain)),
-                "旧版部分事件在预检即阻断，日期隔离且主库字节不变");
-            using (var db = new SQLiteConnection(brain))
-                db.Execute("INSERT INTO plugin_documents VALUES ('daily-core-progress-v1','source:2026-09-18','{}')");
-            Require(DailyBuildPreflight.LegacyRecoveryBlocker(brain, "2026-09-18") == null,
-                "已有逐批进度不误当旧版数据，来源内容仍交迁移器严格核验");
-            using (var db = new SQLiteConnection(brain))
-            {
-                db.Execute("DELETE FROM plugin_documents");
-                db.Execute("INSERT INTO plugin_documents VALUES ('daily-review-recovery-v1','core:2026-09-18',?)", "{\"MomentIds\":[\"saved\"]}");
-            }
-            Require(DailyBuildPreflight.LegacyRecoveryBlocker(brain, "2026-09-18") == null,
-                "已有核心检查点覆盖的事件不误拦身份或排序续做");
-            using (var db = new SQLiteConnection(brain))
-            {
-                db.Execute("INSERT INTO moments VALUES ('late',?,'private','live')", started + 1);
-                db.Execute("INSERT INTO event_entries VALUES ('late-partial','late')");
-            }
-            Require(DailyBuildPreflight.LegacyRecoveryBlocker(brain, "2026-09-18") != null,
-                "核心之外的迟到来源已有事件却无进度仍须阻断，不能由旧核心绕过");
-            using (var db = new SQLiteConnection(brain)) db.Execute("UPDATE moments SET MemoryVisibility='public' WHERE Id='late'");
-            Require(DailyBuildPreflight.LegacyRecoveryBlocker(brain, "2026-09-18") == null,
-                "独立公开整理不误当私密日终旧版部分事件");
-            using (var db = new SQLiteConnection(brain))
-            {
-                db.Execute("UPDATE moments SET MemoryVisibility='private',MemoryStatus='built' WHERE Id='late'");
-                db.Execute("DELETE FROM plugin_documents");
-                db.Execute("UPDATE moments SET MemoryStatus='operational' WHERE Id='saved'");
-            }
-            Require(DailyBuildPreflight.LegacyRecoveryBlocker(brain, "2026-09-18") == null,
-                "已归档和操作记录不会触发未完成来源保护");
             using (var db = new SQLiteConnection(path))
             {
                 db.Execute("CREATE TABLE migration_review_state (DayKey TEXT PRIMARY KEY, Status TEXT, Error TEXT, UpdatedUnixMs INTEGER)");

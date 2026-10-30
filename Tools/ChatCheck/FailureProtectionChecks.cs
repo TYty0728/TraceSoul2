@@ -36,11 +36,8 @@ internal static partial class Program
                 == "模型输出超出已写明的篇幅", "篇幅失败不能被说成格式错误");
             Require(FailureProtection.SafeReason(new InvalidOperationException("语言模型连续两次返回不可用的结构化输出。首次错误：JSON 语法或字段类型错误"))
                 == "模型输出格式或必填字段校验失败", "JSON 语法失败仍报告格式问题");
-            Require(FailureProtection.SafeReason(new InvalidOperationException(DailyBuildPreflight.LegacyRecoveryRequiredMessage))
-                == "旧版部分复盘结果缺少来源检查点，需核对恢复后再构建", "旧版恢复保护不得误报模型格式错误");
-            Require(FailureProtection.SafeReason(new InvalidOperationException("已有细节缺少来源检查点，不能覆盖或重复生成。"))
-                .Contains("来源检查点") && FailureProtection.SafeReason(new InvalidOperationException("部分复盘的原始来源或身份已修订，旧输出不能提交或直接复用。"))
-                .Contains("需核对"), "恢复检查点与来源修订应展示可处理的安全分类");
+            Require(FailureProtection.SafeReason(new InvalidOperationException("复盘检查点的原始来源已缺失，不能继续提交。"))
+                .Contains("需核对"), "来源改变或缺失不能冒充模型格式错误");
             Require(!FailureProtection.SafeReason(new IOException("缺少文件 private-chat secret-key")).Contains("模型输出格式") &&
                 FailureProtection.SafeReason(new InvalidOperationException("细节输出缺少 detail")) == "模型输出格式或必填字段校验失败",
                 "缺少文件不能误报模型字段缺失，真实模型缺字段仍正确分类");

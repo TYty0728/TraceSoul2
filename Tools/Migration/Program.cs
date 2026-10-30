@@ -28,8 +28,6 @@ namespace TraceSoul2.Migrate
                     case "import": return await FullLogImporter.RunAsync(context, rest);
                     case "classify": return await RealmClassifier.RunAsync(context, rest);
                     case "build": return await DayBuilder.RunAsync(context, rest);
-                    case "cognition-backfill": return await DayBuilder.BackfillCognitionsAsync(context, rest);
-                    case "dedupe-cognitions": DayBuilder.DedupeCognitions(context); return 0;
                     case "run-all": return await FullLoopRunner.RunAsync(context, rest);
                     case "promote-all": return await PromoteAllCommand(context);
                     case "normalize-ladder": return NormalizeLadderCommand(context);
@@ -104,10 +102,6 @@ namespace TraceSoul2.Migrate
             Console.WriteLine("      用 LLM 为 unclassified Moment 批量分 Realm");
             Console.WriteLine("  build --day yyyy-MM-dd");
             Console.WriteLine("      单天构筑：多维索引 + 条目（细节浸染）→ 日终三卡复盘 + 内心同步 + 日榜");
-            Console.WriteLine("  cognition-backfill");
-            Console.WriteLine("      认知回填：逐天用当天已有事件跑认知形成并排进日榜（主线老库用，同文 create 幂等）");
-            Console.WriteLine("  dedupe-cognitions");
-            Console.WriteLine("      认知合并去重：合并同文/近义（二元组 Jaccard≥0.75）认知，保留置信度最高者");
             Console.WriteLine("  run-all --log <full_log.txt> [--from yyyy-MM-dd] [--to yyyy-MM-dd]");
             Console.WriteLine("      全量自动循环：导入全部 → 分类 → 按记忆日逐天构筑（含空天），进度写入 full_run_report.txt");
             Console.WriteLine("  promote-all");

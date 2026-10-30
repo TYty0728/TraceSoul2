@@ -17,51 +17,8 @@ internal static partial class Program
         // 读取真实 Migration DTO/Prompt，并用显式临时依赖核对夜间批处理；不加载运行配置。
         var assembly = System.Reflection.Assembly.LoadFrom(Path.GetFullPath(assemblyPath));
         RunCognitionReviewBgeChecks(Path.GetDirectoryName(assembly.Location));
-        RunDayCardReviewChecks(assembly);
-        RunDayReviewRecoveryChecks(assembly);
-        RunDailyCoreProgressChecks(assembly);
-        RunReviewSelectionMigrationChecks(assembly);
-        var prompts = assembly.GetType("TraceSoul2.Migrate.ReplayPrompts", true);
-        var outputType = prompts.GetNestedType("CognitionFormationOutputData");
-        var options = new JsonSerializerOptions { IncludeFields = true };
-        var field = outputType.GetField("cognitions");
-        Require(field.GetValue(JsonSerializer.Deserialize("{}", outputType, options)) == null,
-            "真实日构建DTO缺字段必须保持null，让输出校验触发纠正");
-        Require(((System.Collections.IList)field.GetValue(JsonSerializer.Deserialize("{\"cognitions\":[]}", outputType, options))).Count == 0,
-            "真实日构建DTO保留显式空数组");
-        var evidence = new List<MomentRecord> { new MomentRecord { Id = "visible-evidence", Role = "user", Content = "仅测试用的完整原文",
-            CreatedUnixMs = 1, Realm = TraceRealmValues.ExternalWorld, EvidenceType = EvidenceTypeValues.UserReported } };
-        var prompt = (string)prompts.GetMethod("BuildCognitionFormationPrompt").Invoke(null, new object[]
-        {
-            PairIdentity.Missing, "2026-09-27", new List<CognitionSliceRecord>(), new List<LifeTagRecord>(),
-            new List<EventIndexRecord>(), new List<EventEntryRecord>(), "他", evidence
-        });
-        Require(prompt.Contains("visible-evidence") && prompt.Contains(evidence[0].Content) && prompt.Contains("evidence_moment_ids") &&
-            prompt.Contains("user=他") && prompt.Contains("world=世界"), "真实日构建Prompt必须提供证据原文、ID及四领域规则");
-        var indexed = (string)prompts.GetMethod("BuildCognitionFormationPrompt").Invoke(null, new object[]
-        {
-            PairIdentity.Missing, "2026-09-27",
-            new List<CognitionSliceRecord> { new CognitionSliceRecord { Id = "cog-index", Summary = "我会根据对象的需要调整沟通方式",
-                Scope = "讨论计划时", Exceptions = "紧急情况先处理", About = "短对象", Domains = "ass,relation", IdentitySlot = "relation" } },
-            new List<LifeTagRecord>(),
-            new List<EventIndexRecord> { new EventIndexRecord { Id = "idx-1", TimeLabel = "晚上", PlaceLabel = "屋里",
-                PersonLabel = "她", EventSummary = "事件短句", FirstMomentId = "visible-evidence" } },
-            new List<EventEntryRecord> { new EventEntryRecord { IndexId = "idx-1", Summary = "条目短句", Detail = "细节不该进认知提示",
-                SourceMomentId = "visible-evidence" } },
-            "他", evidence
-        });
-        Require(indexed.Contains("cog-index") && indexed.Contains("短对象") && indexed.Contains("事件短句") && indexed.Contains("条目短句") &&
-            indexed.Contains("我会根据对象的需要调整沟通方式") && indexed.Contains("讨论计划时") && indexed.Contains("紧急情况先处理") &&
-            !indexed.Contains("细节不该进认知提示"),
-            "认知请求呈现召回旧理解的完整正文、范围和例外，事件仍只用定位短句及原始依据");
-        var cardType = prompts.GetNestedType("CardUpdateData");
-        Require(cardType?.GetField("cognition_ids") != null, "实际 Migration 身份摘要 DTO 必须包含认知依据");
-        var migrationPrompts = assembly.GetType("TraceSoul2.Prompts.CorePrompts+Migration", true);
-        var cardRules = (string)migrationPrompts.GetField("DayCardRules").GetRawConstantValue();
-        Require(cardRules.Contains("cognition_ids") && cardRules.Contains("cards: []") && prompt.Contains("identity_slot"),
-            "实际身份复盘和认知形成契约必须连接依据，允许无依据时不更新");
-        RunRuntimeSliceMigrationChecks(assembly);
-        Console.WriteLine("Cognition migration contract checks passed: missing-field rejection, explicit empty array and evidence prompt.");
+        RunDailyReviewPipelineChecks(assembly);
+        Console.WriteLine("Daily review Migration checks passed.");
     }
 
     private static void RunCognitionGraphChecks()

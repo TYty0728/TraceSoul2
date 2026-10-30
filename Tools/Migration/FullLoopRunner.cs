@@ -69,6 +69,11 @@ namespace TraceSoul2.Migrate
                 try
                 {
                     await DayBuilder.RunAsync(context, new[] { "--day", day });
+                    if (!context.Migration.IsDayCompleted(day))
+                    {
+                        Log("----- DAY " + day + " 已保存进度，等待续做 -----");
+                        return 0;
+                    }
                     Log("----- DAY " + day + " 完成 -----");
                     done += 1;
                 }
@@ -76,11 +81,10 @@ namespace TraceSoul2.Migrate
                 {
                     failed += 1;
                     Log("----- DAY " + day + " 失败：" + exception.Message + " -----");
+                    return 1;
                 }
             }
             Log("========== 全部完成：成功 " + done + "，跳过 " + skipped + "，失败 " + failed + " ==========");
-            Log("========== ④ 榜单晋升兜底：周/月/年/永久全周期重建 ==========");
-            await DayLadderLogic.PromoteAllAsync(context, context.RequirePair(), context.RequireLlm());
             return failed == 0 ? 0 : 1;
         }
 

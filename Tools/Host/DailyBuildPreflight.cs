@@ -127,51 +127,12 @@ namespace TraceSoul2.Host
 
     public static class DailyBuildPreflight
     {
-        public const string LegacyRecoveryRequiredMessage = "发现旧版已写入的部分事件，但缺少来源校验检查点；已停止重复构筑，请先核对并恢复已有结果。";
-
-        // Match the migration guard before reserving a real model run. Reading
-        // uses SQLite's VFS, never raw file streams in the live Host process.
-        public static string LegacyRecoveryBlocker(string brainPath, string day)
-        {
-            if (!ValidDay(day)) throw new ArgumentException("无效的记忆日。");
-            if (!File.Exists(brainPath)) return null;
-            using var db = new SQLiteConnection(brainPath, SQLiteOpenFlags.ReadOnly);
-            db.BusyTimeout = TimeSpan.FromSeconds(5);
-            bool HasTable(string name) => db.ExecuteScalar<int>(
-                "SELECT COUNT(*) FROM sqlite_master WHERE type='table' AND name=?", name) > 0;
-            if (!HasTable("moments") || !HasTable("event_entries")) return null;
-            string Document(string plugin, string key) => !HasTable("plugin_documents") ? null : db.ExecuteScalar<string>(
-                "SELECT Json FROM plugin_documents WHERE PluginId=? AND DocumentKey=? LIMIT 1", plugin, key);
-            if (!string.IsNullOrWhiteSpace(Document("daily-core-progress-v1", "source:" + day))) return null;
-            var completed = new HashSet<string>(StringComparer.Ordinal);
-            var core = Document("daily-review-recovery-v1", "core:" + day);
-            if (!string.IsNullOrWhiteSpace(core))
-            {
-                using var json = JsonDocument.Parse(core);
-                if (!json.RootElement.TryGetProperty("MomentIds", out var ids) || ids.ValueKind != JsonValueKind.Array)
-                    throw new InvalidDataException("复盘核心检查点无法读取，请先核对来源。");
-                foreach (var id in ids.EnumerateArray()) completed.Add(id.GetString());
-            }
-            var date = DateTime.ParseExact(day, "yyyy-MM-dd", CultureInfo.InvariantCulture);
-            var start = new DateTimeOffset(date.AddHours(4), TimeSpan.FromHours(8)).ToUnixTimeMilliseconds();
-            var sources = db.QueryScalars<string>(
-                "SELECT Id FROM moments WHERE CreatedUnixMs>=? AND CreatedUnixMs<? " +
-                "AND COALESCE(MemoryVisibility,'private')!='public' " +
-                "AND (MemoryStatus IS NULL OR MemoryStatus NOT IN ('built','operational'))", start, start + 86400000)
-                .Where(id => !completed.Contains(id));
-            foreach (var batch in sources.Chunk(256))
-                if (db.ExecuteScalar<int>("SELECT COUNT(*) FROM event_entries WHERE SourceMomentId IN (" +
-                    string.Join(",", batch.Select(_ => "?")) + ")", batch.Cast<object>().ToArray()) > 0)
-                    return "旧版部分复盘结果缺少来源检查点，需先核对恢复；清除错误保护后直接重跑仍会被拦住。";
-            return null;
-        }
-
         public static bool ValidDay(string day) => DateTime.TryParseExact(day, "yyyy-MM-dd", CultureInfo.InvariantCulture,
             DateTimeStyles.None, out _);
 
         public static DailyBuildPlan Plan(string target, string closedDay, IEnumerable<string> unbuilt,
             IEnumerable<DailyReviewState> states, IEnumerable<DailyBuildAttempt> attempts, IEnumerable<string> pendingPublic = null,
-            IEnumerable<string> pendingSlices = null, bool includePendingReviews = true)
+            bool includePendingReviews = true)
         {
             if (!ValidDay(target) || string.CompareOrdinal(target, closedDay) > 0)
                 throw new ArgumentException("请选择已结束的记忆日（yyyy-MM-dd），最晚为 " + closedDay + "。");
@@ -187,7 +148,7 @@ namespace TraceSoul2.Host
             foreach (var waiting in pending.Where(x => x.Status == "waiting"))
                 if (!rows.Any(x => x.Status != "done" && string.CompareOrdinal(x.DayKey, waiting.DayKey) < 0)) due.Add(waiting.DayKey);
             result.PendingReviews = pending.Select(x => new DailyBuildIssue { Day = x.DayKey,
-                Status = x.Status, Stage = x.Status == "waiting" ? "等待前置任务" : x.Status == "deferred" ? "部分派生任务待整理" : "回望或身份正文待整理", Reason = x.Error }).ToList();
+                Status = x.Status, Stage = x.Status == "waiting" ? "等待前置任务" : x.Status == "deferred" ? "已保存进度，等待续做" : "等待续做", Reason = x.Error }).ToList();
             var history = attempts.OrderByDescending(x => x.StartedUnixMs).ToList();
             result.HistoricalFailures = unfinished.Select(x => new DailyBuildIssue
             {
@@ -202,13 +163,13 @@ namespace TraceSoul2.Host
                     ? "未正常结束或仍在运行" : FailureProtection.SafeReason(new InvalidOperationException(x.Error))
             }).ToList();
             var publicOnly = (pendingPublic ?? Array.Empty<string>()).ToHashSet(StringComparer.Ordinal);
-            var publicDays = publicOnly.Concat(pendingSlices ?? Array.Empty<string>()).ToHashSet(StringComparer.Ordinal);
+            var publicDays = publicOnly;
             var unbuiltDays = unbuilt.ToHashSet(StringComparer.Ordinal);
             var pendingDays = pending.Select(x => x.DayKey).ToHashSet(StringComparer.Ordinal);
             result.Days = unbuiltDays.Concat(publicDays).Concat(unfinished.Select(x => x.DayKey))
                 .Concat(includePendingReviews ? pendingDays : due).Append(target)
                 .Where(x => ValidDay(x) && string.CompareOrdinal(x, target) <= 0 &&
-                    (!done.Contains(x) || publicDays.Contains(x)) &&
+                    (!done.Contains(x) || publicDays.Contains(x) || unbuiltDays.Contains(x)) &&
                     (includePendingReviews || !pendingDays.Contains(x) || due.Contains(x) || (pending.Any(p => p.DayKey == x && p.RetryCount == 0) && publicOnly.Contains(x))))
                 .Distinct(StringComparer.Ordinal).OrderBy(x => x, StringComparer.Ordinal).ToList();
             return result;

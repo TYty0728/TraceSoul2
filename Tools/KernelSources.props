@@ -25,7 +25,6 @@
     <Compile Include="$(MSBuildThisFileDirectory)../src/TraceSoul2/Logic/LifeReadingBudgetLogic.cs" />
     <Compile Include="$(MSBuildThisFileDirectory)../src/TraceSoul2/Logic/RuntimeSliceLogic.cs" />
     <Compile Include="$(MSBuildThisFileDirectory)../src/TraceSoul2/Logic/ReviewSelectionLogic.cs" />
-    <Compile Include="$(MSBuildThisFileDirectory)../src/TraceSoul2/Logic/RuntimeReviewSelectionLogic.cs" />
     <Compile Include="$(MSBuildThisFileDirectory)../src/TraceSoul2/Logic/EnvironmentLogic.cs" />
     <Compile Include="$(MSBuildThisFileDirectory)../src/TraceSoul2/Logic/RuntimeContextLogic.cs" />
     <Compile Include="$(MSBuildThisFileDirectory)../src/TraceSoul2/Logic/AgentOutputContractLogic.cs" />

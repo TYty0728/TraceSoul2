@@ -75,6 +75,7 @@ jobs:
           Get-ChildItem scripts/tests -Filter '*.cjs' | Sort-Object Name | ForEach-Object { node $_.FullName }
           python -m pip install 'fastapi>=0.115,<1' 'httpx>=0.27,<1' 'Pillow>=11,<13' 'soundfile>=0.13,<1' 'cryptography>=44,<50' pyserial==3.5 numpy==2.2.6
           python -m unittest discover -s Tools/DecisionRelay -p 'test_*.py'
+          python -m unittest discover -s Tools/CodexBridge -p 'test_*.py'
           python -m unittest discover -s Tools/LocalVoice -p 'test_*.py'
           python -m unittest discover -s Tools/SensoryBoard -p 'test_*.py'
           python -m unittest discover -s scripts/tests -p 'test_call_voice_filter.py'

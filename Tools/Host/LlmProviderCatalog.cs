@@ -22,6 +22,7 @@ namespace TraceSoul2.Host
             return new[]
             {
                 T("OpenAI Compatible", "openai", OpenAiChat, "https://api.openai.com/v1", "gpt-4o", 0.6f),
+                T("Codex 本地桥接（实验）", "codex-local", OpenAiChat, "http://127.0.0.1:5091/v1", "", 0.6f),
                 T("DeepSeek", "deepseek", OpenAiChat, "https://api.deepseek.com/v1", "deepseek-v4-flash", 0.3f),
                 T("智谱 GLM 官方", "zhipu-glm", OpenAiChat,
                     "https://open.bigmodel.cn/api/paas/v4", "glm-5.2", 0.6f),
