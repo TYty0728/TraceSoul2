@@ -35,9 +35,8 @@ internal static partial class Program
             Require(FailureProtection.SafeReason(new InvalidOperationException("语言模型连续 1 次返回了空 content。request_id=private")) ==
                 "模型返回空白正文", "空正文给出明确分类且不泄露供应商诊断");
             foreach (var error in new Exception[] { new MissingFieldException("private"), new MissingMethodException("private"), new TypeLoadException("private") })
-                Require(!MainModelFallbackClient.CanFallback(error) &&
-                    FailureProtection.SafeReason(new InvalidOperationException("wrapped", error)) == "程序组件版本不一致或缺失，请核对 Host 与共享 DLL",
-                    "组件装载错误不能伪装成模型异常或切备用，安全分类穿透包装");
+                Require(FailureProtection.SafeReason(new InvalidOperationException("wrapped", error)) == "程序组件版本不一致或缺失，请核对 Host 与共享 DLL",
+                    "组件装载错误的安全分类穿透包装");
         }
         finally { Directory.Delete(root, true); }
         Console.WriteLine("Main model fallback checks passed: GLM JSON/text wire format and repair, three-stage wire bounds, cancellation, continuity, safe failures and persisted choices.");
@@ -188,7 +187,29 @@ internal static partial class Program
     {
         var messages = new List<DeepSeekMessageData> { new DeepSeekMessageData("system", "same identity"),
             new DeepSeekMessageData("user", "same private turn") };
-        foreach (var firstStatus in new[] { 500, 429, 401, 402, 403, 404, 408, 200 })
+        foreach (var exhausted in new[] { false, true })
+        {
+            const string refusal = "{\"choices\":[{\"message\":{\"content\":\"\",\"refusal\":\"declined\"},\"finish_reason\":\"content_filter\"}]}";
+            using var primary = new FailureHttpServer(200, refusal);
+            using var secondary = new FailureHttpServer(200,
+                "{\"promptFeedback\":{\"blockReason\":\"SAFETY\"}}");
+            using var tertiary = new FailureHttpServer(200, exhausted ? refusal : FallbackOk);
+            var store = MakeFallbackStore(Path.Combine(root, "refusal-" + exhausted, "providers.json"),
+                ("primary", primary.Url, null), ("secondary", secondary.Url, LlmProviderCatalog.GoogleGenAi),
+                ("tertiary", tertiary.Url, null));
+            var client = store.CreateCurrentClient();
+            if (exhausted)
+            {
+                try { await client.CompleteJsonAsync(messages); throw new Exception("Expected exhausted route"); }
+                catch (MainModelFallbackException) { }
+                await ExpectFailureAsync(() => client.CompleteJsonAsync(messages));
+            }
+            else Require((await client.CompleteJsonAsync(messages)).Contains("ok"), "两种协议内容审核拒绝后三级成功");
+            Require(primary.Calls == 1 && secondary.Calls == 1 && tertiary.Calls == 1 &&
+                store.Protection.List().Count == (exhausted ? 1 : 0),
+                "审核拒绝每级一次，成功不报故障，全部失败统一报告且不重开请求");
+        }
+        foreach (var firstStatus in new[] { 500, 429, 400, 401, 402, 403, 404, 408, 422, 200 })
         {
             using var first = new FailureHttpServer(firstStatus, firstStatus == 200
                 ? "{\"choices\":[{\"message\":{\"content\":\"\"},\"finish_reason\":\"stop\"}]}"
@@ -268,10 +289,21 @@ internal static partial class Program
         try { await route.CompleteJsonAsync(messages, cancel.Token); throw new Exception("Expected cancellation"); }
         catch (OperationCanceledException) { }
         Require(second.Calls == 0, "用户取消，即使表现为网络错误也不切换");
-        first = new FallbackProbe("first", () => throw new InvalidOperationException("output schema rejected"));
-        second = new FallbackProbe("second", () => "ok");
-        await ExpectFailureAsync(() => new MainModelFallbackClient(new[] { first, second }).CompleteJsonAsync(messages));
-        Require(second.Calls == 0, "本地业务校验或未知异常不当作通道故障自动重试");
+        foreach (var error in new Exception[] { new LlmContentRejectedException(),
+            new InvalidOperationException("output schema rejected"), new Exception("unknown failure"),
+            new OperationCanceledException("provider timeout"), new MissingMethodException("component mismatch") })
+        foreach (var json in new[] { true, false })
+        {
+            first = new FallbackProbe("first", () => throw error);
+            second = new FallbackProbe("second", () => throw new LlmContentRejectedException());
+            var third = new FallbackProbe("third", () => "ok");
+            route = new MainModelFallbackClient(new[] { first, second, third });
+            var result = json ? await route.CompleteJsonAsync(messages, promptCacheKey: "cache")
+                : await route.CompleteTextAsync(messages, promptCacheKey: "cache");
+            Require(result == "ok" && first.Calls == 1 && second.Calls == 1 && third.Calls == 1 &&
+                ReferenceEquals(first.Messages, third.Messages) && third.CacheKey == "cache",
+                "模型调用的任意错误及非调用方取消均按序切换，二级拒绝继续三级：" + error.GetType().Name);
+        }
         first = new FallbackProbe("first", () => throw new JsonException("private upstream body"));
         second = new FallbackProbe("second", () => "ok");
         Require(await new MainModelFallbackClient(new[] { first, second }).CompleteJsonAsync(messages) == "ok" && second.Calls == 1,

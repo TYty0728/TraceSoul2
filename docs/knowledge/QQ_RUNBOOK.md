@@ -1,5 +1,15 @@
 # QQ 回复与照片排障
 
+## 2026-11-01 14:00：相机生图被上游拒绝，尺寸写成了 auto
+
+服务器仍是 0.1.83，阿循。链路 `174ebffc` 在 13:59:54 建立配图机会并开始后台生图，模式是 `photo`。14:00:05 画面判断为分享，带 7 张角色/服饰参考，向生图槽 `openai_2/gpt-image-2` 的 `/images/edits` 发了一次请求。该模式没有单独的宽高比，0.1.83 对无法解析的比例会把 GPT Image 的 `size` 写成 `auto`。14:00:16 上游返回 HTTP 400，正文是 `size must use the exact widthxheight format`。生成失败，图片没有发出。错误保护仍是 0 条，对话没有暂停。未改配置、未重试、未重启。
+
+## 2026-10-31 18:08：主模型内容审核标记作废了一份正常回复
+
+服务器 0.1.83，阿循。链路 `255eae88` 于 18:08:40 收到一条 QQ 文字私聊，18:08:41 已落库，18:08:42 向 `openai_2/[次]gemini-4-argon` 发出唯一一次主模型请求（20 条消息，JSON 模式）。18:08:59 返回 HTTP 200，用量为 prompt 19917、completion 235、reasoning 51。留存正文是合法行动 JSON：`step=continue`，两项行动都是 `web.search`，没有色情、犯罪、越狱或审核词。程序仍抛出 `LlmContentRejectedException`。响应文件只保存了 `message.content`，原始信封里的 `finish_reason` 或 `refusal` 没有留下，因此不能点名具体审核码。
+
+内容审核拒绝不重试，也不进入主模型备用。已配置的 `moonshot/kimi-k3` 和 `openai_3/gpt-6-astra` 这次都没有请求。正在输入随即停止，后台收件循环报出同一句「模型因内容审核拒绝本条加工」。18:09:03 发出一条 QQ 系统通知；错误保护新增非阻断的 `provider:openai_2` 报告，对话没有暂停，失败轮也不会自动重发。此前 12:17 的「对话或附加能力」报告仍在，与本轮不是同一条。无迁移进程。未改配置、未重试、未调用模型。
+
 ## 2026-10-30：0.1.81新复盘在挑选阶段遇到Codex连接异常
 
 用户更新后只读核对：服务器安装清单为0.1.81/linux-x64，异常栈进入新`DailyReviewPipeline.SelectEventBatch`。29日最新尝试在16:27:27开始、16:46:30失败，阶段为“2/4 挑选事件（本轮逻辑请求9）”，约19分3秒。前8份模型响应均HTTP200；最新异常为`HttpRequestException`，内层`HttpIOException`，外层消息为`An error occurred while sending the request.`。未取得第9次正常响应，不是本次20分钟预算让出，也没有该请求的模型字段/来源校验失败证据。

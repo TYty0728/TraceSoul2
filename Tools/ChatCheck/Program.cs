@@ -29,6 +29,7 @@ internal static partial class Program
         if (args.Contains("--review-reliability")) { RunReviewReliabilityChecksAsync().GetAwaiter().GetResult(); return; }
         if (args.Contains("--identity-evolution")) { RunIdentityEvolutionChecksAsync().GetAwaiter().GetResult(); return; }
         if (args.Contains("--identity-reorganization")) { RunIdentityReorganizationChecksAsync().GetAwaiter().GetResult(); return; }
+        if (args.Contains("--model-test")) { RunModelTestChecksAsync().GetAwaiter().GetResult(); return; }
         if (args.Contains("--main-fallback")) { RunMainModelFallbackChecksAsync().GetAwaiter().GetResult(); return; }
         if (TraceSoul2.Host.BackupArchiveService.TryRunSnapshotWorker(args, out var snapshotExit))
         { Environment.ExitCode = snapshotExit; return; }

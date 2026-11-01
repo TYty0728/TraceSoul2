@@ -751,6 +751,37 @@ app.MapPost("/providers/{id}/models", async (SoulRuntime runtime, string id, Can
     });
 });
 
+app.MapPost("/providers/{id}/model-test", async (SoulRuntime runtime, string id, ModelTestWrite body, CancellationToken token) =>
+{
+    var watch = Stopwatch.StartNew();
+    try
+    {
+        if (body == null || string.IsNullOrWhiteSpace(body.model) ||
+            body.slot is not (null or "" or "chat" or "jev" or "review" or "multimodal"))
+            return Results.BadRequest(new { error = "请选择要测试的模型。" });
+        var client = runtime.Providers.CreateTestClient(id, body.model, body.slot);
+        var messages = new List<DeepSeekMessageData> {
+            new("user", body.slot == "review" ? "Return a JSON object with ok set to true." : "Reply with only OK.") };
+        var reply = body.slot == "review"
+            ? await client.CompleteJsonAsync(messages, token)
+            : await client.CompleteTextAsync(messages, token);
+        if (string.IsNullOrWhiteSpace(reply))
+            return Results.Json(new { success = false, elapsedMs = watch.ElapsedMilliseconds, error = "模型返回空白正文" });
+        if (body.slot == "review")
+        {
+            using var document = JsonDocument.Parse(reply);
+            if (document.RootElement.ValueKind != JsonValueKind.Object)
+                throw new JsonException();
+        }
+        return Results.Json(new { success = true, elapsedMs = watch.ElapsedMilliseconds });
+    }
+    catch (ArgumentException error) { return Results.BadRequest(new { error = error.Message }); }
+    catch (Exception error)
+    {
+        return Results.Json(new { success = false, elapsedMs = watch.ElapsedMilliseconds, error = FailureProtection.SafeReason(error) });
+    }
+});
+
 app.MapPost("/providers/{id}/speech-test", async (SoulRuntime runtime, string id, SpeechTestWrite body, CancellationToken token) =>
 {
     // A browser-only preview: no Moment, main model, board output or saved voice mutation.
@@ -1557,6 +1588,7 @@ internal sealed class ProviderWrite
 }
 
 internal sealed class DecisionTestWrite { public string model { get; set; } }
+internal sealed class ModelTestWrite { public string model { get; set; } public string slot { get; set; } }
 internal sealed class SpeechTestWrite { public string text { get; set; } }
 internal sealed class WxxzDeviceControlWrite { public bool enabled { get; set; } }
 internal sealed class ExpressionSemanticsWrite { public string[] tags { get; set; } }

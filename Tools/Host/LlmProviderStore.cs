@@ -445,6 +445,31 @@ namespace TraceSoul2.Host
         public ILlmClient CreateClient(string id, string model, bool? thinkingOverride)
             => CreateConfiguredClient(id, model, thinkingOverride, false);
 
+        // Explicit connectivity probes never enter the live failure-protection or fallback chain.
+        public ILlmClient CreateTestClient(string id, string model, string slot = null)
+        {
+            lock (gate)
+            {
+                var item = Find(id);
+                if (item == null || !item.models.Any(m => m.enabled && m.id == model))
+                    throw new ArgumentException("请选择该供应商已启用的模型。");
+                if (LlmProviderCatalog.IsTts(item.type) || LlmProviderCatalog.IsDecisions(item.type))
+                    throw new ArgumentException("此模型使用专用测试入口。");
+                if (string.IsNullOrWhiteSpace(item.apiKey))
+                    throw new ArgumentException("请先保存供应商 API Key。");
+                var review = slot == "review";
+                var config = ToConfig(item, model, review || slot == "multimodal" ? false : null);
+                if (review)
+                {
+                    config.Temperature = data.reviewTemperature ?? 0.2f;
+                    config.TimeoutSeconds = 600;
+                }
+                return LlmProviderCatalog.IsGeminiNative(item.type)
+                    ? new GeminiClientManager(config, singleAttempt: true)
+                    : new DeepSeekClientManager(config, singleAttempt: true);
+            }
+        }
+
         private ILlmClient CreateConfiguredClient(string id, string model, bool? thinkingOverride, bool review, bool reviewAttempt = false)
         {
             lock (gate)

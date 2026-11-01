@@ -39,3 +39,9 @@
 同日发布更新：已随正式产品 v0.1.16 发布，三个平台完整安装包均包含 Tavily，发布 CI 与 Docker 升级验证通过。用户安装后需自行填写 Key；未替用户配置或调用真实 Tavily 服务。
 
 官方契约：[Search](https://docs.tavily.com/documentation/api-reference/endpoint/search)、[Extract](https://docs.tavily.com/documentation/api-reference/endpoint/extract)。尚未使用真实 Key 验证线上搜索质量、延迟或账户可用性。
+
+## 2026-10-30 DeepSeek 接口对照
+
+已核对 [DeepSeek Search](https://api-docs.deepseek.com/zh-cn/api/search/)、[Fetch](https://api-docs.deepseek.com/zh-cn/api/fetch/) 与[指南](https://api-docs.deepseek.com/zh-cn/guides/search/)。Search 可返回 1–50 条、长短摘要、可选正文、站点、日期及排序/权威性分数；Fetch 返回单页 Markdown。上述字段和条数比当前插件暴露得丰富，但不能据此判断实际检索质量。当前五条、每条片段 1000 字、读取 7000 字及总输出 11000 字均为本插件预算；Tavily 官方接口本身也支持搜索附正文和 Markdown 提取。
+
+此次仅核对官方文档与本地源码，未调用付费接口、未核对运行实例配置、未接入或替换供应商。中文召回、时效性、正文完整性、速度和实际成本仍需同题实测。评分不能代替事实核验，DeepSeek 文档也未承诺登录页面访问或浏览器交互。

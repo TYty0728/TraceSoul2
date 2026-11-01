@@ -875,12 +875,13 @@
         <div class="section-head"><h1>大脑 · LLM</h1><span class="muted">多种供应商同时在线；用途槽给灵魂和器官用</span></div>
         <div class="box">
           <h2>默认用途槽</h2>
+          <p class="muted">测试使用已保存的供应商配置，发起一次简短请求并显示状态。识图槽测试文字连通性；语音请使用供应商试听。</p>
           <p class="muted">主模型统一承担思考与表达。「启用模型推理」只调整该模型的推理参数，不切换供应商或模型。<b>复盘</b>给每日身份复盘和日构建用（关思考、稳 JSON）；留空则跟主模型但关掉思考。<b>识图多模态</b>专门看她发来的图，看见的结果再交给心智；留空则只知道发了图，不会假装看见。语音、生图器官可跟对应槽，也可在插件齿轮里指定供应商。</p>
           <div class="slot-grid">
-            <div><label>主模型</label><select id="slotChat"></select></div>
-            <div><label>JEV（决策）</label><select id="slotJev"></select></div>
-            <div><label>复盘</label><select id="slotReview"></select></div>
-            <div><label>识图多模态</label><select id="slotMultimodal"></select></div>
+            <div><label>主模型</label><select id="slotChat" onchange="$('slotChatTestStatus').textContent = ''"></select><button onclick="testSlotModel('slotChat', 'chat', this)">测试</button><span id="slotChatTestStatus" class="muted" role="status" aria-live="polite"></span></div>
+            <div><label>JEV（决策）</label><select id="slotJev" onchange="$('slotJevTestStatus').textContent = ''"></select><button onclick="testSlotModel('slotJev', 'jev', this)">测试</button><span id="slotJevTestStatus" class="muted" role="status" aria-live="polite"></span></div>
+            <div><label>复盘</label><select id="slotReview" onchange="$('slotReviewTestStatus').textContent = ''"></select><button onclick="testSlotModel('slotReview', 'review', this)">测试</button><span id="slotReviewTestStatus" class="muted" role="status" aria-live="polite"></span></div>
+            <div><label>识图多模态</label><select id="slotMultimodal" onchange="$('slotMultimodalTestStatus').textContent = ''"></select><button onclick="testSlotModel('slotMultimodal', 'multimodal', this)">测试</button><span id="slotMultimodalTestStatus" class="muted" role="status" aria-live="polite"></span></div>
             <div><label>语音</label><select id="slotSpeech"></select></div>
             <div><label>生图</label><select id="slotImage"></select></div>
             <div><label>&nbsp;</label><button class="primary" onclick="saveSlots()">保存槽位</button></div>
@@ -2787,6 +2788,7 @@
   let selectedProviderId = "";
   let modelRoleFilter = "";
   let decisionTestPending = false;
+  const modelTestStates = new Map();
   function isDecisionProvider(p) { return p && p.type === "openrouter_decisions"; }
   function isTtsProvider(p) { return p && p.type === "qwen_tts"; }
   let ttsPreviewUrl = null;
@@ -2985,6 +2987,7 @@
     }
     box.innerHTML = models.map(m => {
       const on = m.enabled !== false;
+      const testState = modelTestStates.get(JSON.stringify([cur.id, m.id])) || {};
       const roles = (isDecisionProvider(cur) ? ["jev"] : isTtsProvider(cur) ? ["speech"] : ROLE_KEYS).map(r =>
         `<button class="role-chip ${(m.roles || []).includes(r) ? "on" : ""}" ${isTtsProvider(cur) ? "disabled" : ""} onclick="toggleModelRole('${esc(m.id)}','${r}')">${ROLE_LABELS[r]}</button>`
       ).join("");
@@ -2993,6 +2996,7 @@
         `<div class="mid">${esc(m.id)}${cur && cur.model === m.id ? " · 该源默认" : ""}</div>` +
         `<div class="roles">${roles}</div>` +
         (isDecisionProvider(cur) ? `<button ${on && !decisionTestPending ? "" : "disabled"} onclick="testDecision('${esc(m.id)}', this)">决策测试（使用额度）</button>` : isTtsProvider(cur) ? `<button ${on ? "" : "disabled"} onclick="useSpeechModel('${esc(m.id)}')">用于语音</button>` : `<button class="icon-btn" title="设为主模型" onclick="useModel('${esc(m.id)}')">⤴</button>`) +
+        (!isDecisionProvider(cur) && !isTtsProvider(cur) ? `<button ${on && !testState.pending ? "" : "disabled"} data-provider="${esc(cur.id)}" data-model="${esc(m.id)}" onclick="testListedModel(this)">${testState.pending ? "测试中…" : "测试"}</button><span class="muted" role="status" aria-live="polite">${esc(testState.text || "")}</span>` : "") +
         `<button class="icon-btn danger" title="删除" onclick="deleteModel('${esc(m.id)}')">🗑</button>` +
         `</div>`;
     }).join("");
@@ -3081,6 +3085,40 @@
       $('ttsPreviewState').textContent = '生成完成，点击播放器试听。';
     } catch (e) { if (selectedProviderId === providerId) $('ttsPreviewState').textContent = '试听失败：' + e.message; }
     finally { ttsPreviewPending = false; $('ttsPreviewButton').disabled = false; }
+  }
+  async function probeModel(providerId, model, slot) {
+    const provider = providerCache.find(p => p.id === providerId);
+    const decision = isDecisionProvider(provider);
+    const result = await api('/providers/' + encodeURIComponent(providerId) + (decision ? '/decision-test' : '/model-test'), 'POST', { model, slot });
+    const elapsed = result.elapsedMs == null ? '' : ' · ' + (result.elapsedMs / 1000).toFixed(1) + ' 秒';
+    return result.success === false ? '失败：' + result.error + elapsed : '成功' + elapsed;
+  }
+  async function testListedModel(button) {
+    const { provider: providerId, model } = button.dataset;
+    const key = JSON.stringify([providerId, model]);
+    if (modelTestStates.get(key)?.pending) return;
+    const state = { pending: true, text: '测试中…' };
+    modelTestStates.set(key, state);
+    renderModelList();
+    try { state.text = await probeModel(providerId, model); }
+    catch (e) { state.text = '失败：' + e.message; }
+    finally { state.pending = false; renderModelList(); }
+  }
+  async function testSlotModel(selectId, slot, button) {
+    const selection = $(selectId).value;
+    const target = selection ? parseSlotValue(selection) : (slot === 'review' ? slotCache.chat : null);
+    const status = $(selectId + 'TestStatus');
+    if (!target?.providerId || !target.model) { status.textContent = '请先选择模型'; return; }
+    if (button.disabled) return;
+    button.disabled = true;
+    status.textContent = '测试中…';
+    let result;
+    try { result = await probeModel(target.providerId, target.model, slot); }
+    catch (e) { result = '失败：' + e.message; }
+    finally {
+      button.disabled = false;
+      if ($(selectId).value === selection) status.textContent = result;
+    }
   }
   async function testDecision(model, button) {
     if (decisionTestPending) return;

@@ -1,9 +1,6 @@
 using System;
 using System.Collections.Generic;
 using System.Linq;
-using System.Net.Http;
-using System.Text.Json;
-using System.Text.RegularExpressions;
 using System.Threading;
 using System.Threading.Tasks;
 using TraceSoul2.Data;
@@ -57,7 +54,8 @@ namespace TraceSoul2.Host
                     return result;
                 }
                 catch (Exception) when (token.IsCancellationRequested) { token.ThrowIfCancellationRequested(); throw; }
-                catch (Exception error) when (CanFallback(error))
+                // Any failed inference advances the route; only caller cancellation stops it.
+                catch (Exception error)
                 {
                     failures.Add(client.ProviderId + "：" + FailureProtection.SafeReason(error));
                     current++;
@@ -69,16 +67,6 @@ namespace TraceSoul2.Host
             throw new MainModelFallbackException(string.Join("；", failures));
         }
 
-        internal static bool CanFallback(Exception error)
-        {
-            if (error is TimeoutException || error is HttpRequestException || error is JsonException) return true;
-            if (error is OperationCanceledException) return false;
-            var message = error.Message ?? "";
-            return DeepSeekClientManager.IsRetryableProviderException(error) ||
-                Regex.IsMatch(message, @"(?:API|HTTP)\s*(401|402|403|404|408|425|429|5\d\d)\b", RegexOptions.IgnoreCase) ||
-                message.Contains("空 content", StringComparison.Ordinal) ||
-                message.Contains("无法解析的响应", StringComparison.Ordinal);
-        }
     }
 
     public sealed class MainModelFallbackException : InvalidOperationException
