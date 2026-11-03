@@ -8,6 +8,8 @@
 
 本地Host构建、模型同步/Decisions/TTS/主备用专项与页面脚本检查通过；完整回归、Docker升级/数据保留和三平台打包由发布CI执行。PluginApi保持1.17.0。本次不部署服务器或恢复日构建。
 
+发布确认：[v0.1.85](https://github.com/TYty0728/TraceSoul2/releases/tag/v0.1.85)／源码f75051d，[发布CI](https://github.com/TYty0728/TraceSoul2/actions/runs/41606333494)全部成功。匿名latest指向本版，三平台安装包公开HTTP200、侧车SHA-256与GitHub资产digest一致，SDK1.17.0存在。未部署服务器或恢复日构建。
+
 ## 0.1.84（2026-11-01）
 
 - 主模型调用遇到任何异常时按已配置顺序切二级、三级，包含内容审核拒绝；调用方取消仍立即结束，耗尽后统一报告，不重放工具或消息。
