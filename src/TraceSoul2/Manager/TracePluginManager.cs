@@ -242,6 +242,7 @@ namespace TraceSoul2.Manager
                 MaxContextChars = source.MaxContextChars,
                 HasInternalMutation = source.HasInternalMutation,
                 HasExternalSideEffect = source.HasExternalSideEffect,
+                RetainResultAsObservation = source.RetainResultAsObservation,
                 SupportsPublicEnvironment = source.SupportsPublicEnvironment,
                 IdleDailyCap = source.IdleDailyCap
             };
@@ -338,16 +339,12 @@ namespace TraceSoul2.Manager
                          .OrderByDescending(x => x.Descriptor.Priority))
             {
                 var timer = Stopwatch.StartNew();
-                services.LogTiming(turn == null ? null : turn.TraceId,
-                    "上下文面开始 " + facet.Descriptor.Id);
                 TraceContextBlockData block;
-                var cached = false;
                 try
                 {
                     var once = facet.Descriptor.RefreshMode != TraceFacetRefreshValues.EveryBrainStep;
                     if (once && turn.Workspace.TryGetFacetCache(facet.Descriptor.Id, out block))
                     {
-                        cached = true;
                         if (block != null) blocks.Add(block);
                         continue;
                     }
@@ -362,12 +359,18 @@ namespace TraceSoul2.Manager
                     }
                     if (once) turn.Workspace.SetFacetCache(facet.Descriptor.Id, block);
                 }
-                finally
+                catch (OperationCanceledException) when (cancellationToken.IsCancellationRequested)
                 {
-                    services.LogTiming(turn == null ? null : turn.TraceId,
-                        "上下文面完成 " + facet.Descriptor.Id,
-                        timer.ElapsedMilliseconds, cached ? "cache" : null);
+                    services.LogTiming(turn?.TraceId, "上下文读取已取消", timer.ElapsedMilliseconds, facet.Descriptor.Id);
+                    throw;
                 }
+                catch (Exception error)
+                {
+                    services.LogTiming(turn?.TraceId, "上下文读取失败", timer.ElapsedMilliseconds,
+                        facet.Descriptor.Id + "：" + error.GetType().Name + "：" + error.Message);
+                    throw;
+                }
+                services.LogDiagnostic(turn?.TraceId, "上下文已读取", timer.ElapsedMilliseconds, facet.Descriptor.Id);
             }
             turn.Workspace.ContextBlocks.Clear();
             turn.Workspace.ContextBlocks.AddRange(blocks);
@@ -388,8 +391,6 @@ namespace TraceSoul2.Manager
             foreach (var facet in facets.Values.Where(x => EnvironmentLogic.CanUse(turn, x.Descriptor) && x.IsAvailable(turn)))
             {
                 var timer = Stopwatch.StartNew();
-                services.LogTiming(turn == null ? null : turn.TraceId,
-                    "面输出应用开始 " + facet.Descriptor.Id);
                 BrainFacetOutputData output;
                 byId.TryGetValue(facet.Descriptor.Id, out output);
                 var applied = false;
@@ -404,19 +405,30 @@ namespace TraceSoul2.Manager
                     result.Summary = result.Summary ?? string.Empty;
                     result.Payload = result.Payload ?? string.Empty;
                     turn.Workspace.Results.Add(result);
+                    if (result.Status == "failed")
+                    {
+                        applied = false;
+                        services.LogTiming(turn?.TraceId, "状态更新失败 " + facet.Descriptor.Id,
+                            timer.ElapsedMilliseconds, result.Summary);
+                    }
                 }
-                catch
+                catch (OperationCanceledException) when (cancellationToken.IsCancellationRequested)
+                {
+                    services.LogTiming(turn?.TraceId, "状态更新已取消", timer.ElapsedMilliseconds, facet.Descriptor.Id);
+                    throw;
+                }
+                catch (Exception error)
                 {
                     applied = false;
                     services.LogTiming(turn == null ? null : turn.TraceId,
-                        "面输出应用失败 " + facet.Descriptor.Id,
-                        timer.ElapsedMilliseconds);
+                        "状态更新失败 " + facet.Descriptor.Id,
+                        timer.ElapsedMilliseconds, error.GetType().Name + "：" + error.Message);
                     throw;
                 }
                 finally
                 {
-                    if (applied) services.LogTiming(turn == null ? null : turn.TraceId,
-                        "面输出应用完成 " + facet.Descriptor.Id, timer.ElapsedMilliseconds);
+                    if (applied) services.LogDiagnostic(turn == null ? null : turn.TraceId,
+                        "状态处理完成 " + facet.Descriptor.Id, timer.ElapsedMilliseconds);
                 }
             }
         }
@@ -436,7 +448,7 @@ namespace TraceSoul2.Manager
                 return Failed(call, "所属平台不在，器官休眠中。");
             var timer = Stopwatch.StartNew();
             services.LogTiming(turn == null ? null : turn.TraceId,
-                "能力执行开始 " + contribution.Descriptor.Id);
+                "开始执行：" + contribution.Descriptor.DisplayName, detail: "能力：" + contribution.Descriptor.Id);
             var executionId = services.Executions.Start(turn?.ConversationId ?? string.Empty, call,
                 MouthLogic.BodyOf(contribution.Descriptor, turn), cancellationToken, EnvironmentLogic.Observation(turn?.Environment));
             call.execution_id = executionId;
@@ -453,12 +465,14 @@ namespace TraceSoul2.Manager
                 result.EvidenceRefs = result.EvidenceRefs ?? new List<string>();
                 services.Executions.AcceptResult(executionId, result);
                 services.LogTiming(turn == null ? null : turn.TraceId,
-                    "能力执行完成 " + contribution.Descriptor.Id,
-                    timer.ElapsedMilliseconds, "status=" + result.Status);
+                    (result.Status == "failed" ? "执行失败：" : "执行返回：") + contribution.Descriptor.DisplayName,
+                    timer.ElapsedMilliseconds, "status=" + result.Status + "｜能力：" + contribution.Descriptor.Id);
                 return result;
             }
             catch (OperationCanceledException)
             {
+                services.LogTiming(turn?.TraceId, "执行已取消：" + contribution.Descriptor.DisplayName,
+                    timer.ElapsedMilliseconds, "能力：" + contribution.Descriptor.Id);
                 services.Executions.Report(new TraceExecutionReceiptData { ExecutionId = executionId,
                     Sequence = long.MaxValue, Status = "cancelled", Summary = "执行已取消。" });
                 throw;

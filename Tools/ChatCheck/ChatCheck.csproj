@@ -38,6 +38,9 @@
     <Content Include="../../resources/emotion_tags.json" CopyToOutputDirectory="PreserveNewest" Link="emotion_tags.json" />
     <Content Include="../../resources/expression_semantics.json" CopyToOutputDirectory="PreserveNewest" Link="expression_semantics.json" />
     <Compile Include="AgentLoopChecks.cs" />
+    <Compile Include="MemoryTopicChecks.cs" />
+    <Compile Include="MemoryScopeChecks.cs" />
+    <Compile Include="AgentDesignChecks.cs" />
     <Compile Include="EnvironmentChecks.cs" />
     <Compile Include="ExistenceChecks.cs" />
     <Compile Include="RuntimeSliceChecks.cs" />
@@ -97,6 +100,7 @@
     <Compile Include="QzoneMediaChecks.cs" />
     <Compile Include="HeartbeatContinuityChecks.cs" />
     <Compile Include="../Host/RecentEventLog.cs" Link="RecentEventLog.cs" />
+    <Compile Include="../Host/TimedLlmClient.cs" Link="TimedLlmClient.cs" />
     <Compile Include="../Host/GeminiClientManager.cs" Link="GeminiClientManager.cs" />
     <Compile Include="../../ExternalPlugins/QqImageGen/CameraSharingContext.cs" />
     <Content Include="../../resources/identity_cards.json" CopyToOutputDirectory="PreserveNewest" Link="identity_cards.json" />

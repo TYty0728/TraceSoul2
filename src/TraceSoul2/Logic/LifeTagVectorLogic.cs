@@ -9,6 +9,24 @@ namespace TraceSoul2.Logic
     /// <summary>把数据库中逐渐生长的第三层人生 Tag 转成向量导航节点。</summary>
     public static class LifeTagVectorLogic
     {
+        /// <summary>夜间按每段原件查找可复用主题，向量只提供候选，不决定归属。</summary>
+        public static List<LifeTagRecord> ReviewCandidates(IMemoryStore store, IVectorEncoder encoder,
+            IEnumerable<string> material, IVectorCacheStore cache = null)
+        {
+            var tags = store.GetActiveLifeTags();
+            if (tags.Count == 0) return tags;
+            var router = new HierarchicalVectorRouterLogic(encoder, cache);
+            router.Build(BuildOntology(store, Array.Empty<VectorIndexNode>()));
+            var scores = new Dictionary<string, float>();
+            foreach (var text in material.Where(x => !string.IsNullOrWhiteSpace(x)))
+                for (var offset = 0; offset < text.Length; offset += 80)
+                    foreach (var hit in router.RankConcepts(text.Substring(offset, Math.Min(96, text.Length - offset)),
+                        new VectorRouteSettings { ActivationCountBonus = 0f }).Where(x => x.Score >= MemoryRecallLogic.TagMinScore).Take(3))
+                        scores[hit.Node.Id] = Math.Max(scores.GetValueOrDefault(hit.Node.Id), hit.Score);
+            return tags.Where(t => scores.ContainsKey(t.Id)).OrderByDescending(t => scores[t.Id])
+                .ThenBy(t => t.Id, StringComparer.Ordinal).Take(12).ToList();
+        }
+
         public static List<VectorIndexNode> BuildOntology(
             IMemoryStore store,
             IEnumerable<VectorIndexNode> fixedOntology)

@@ -73,9 +73,10 @@ internal static partial class Program
         public int Count(string table) { using var db = new SQLite.SQLiteConnection(BrainPath); return db.ExecuteScalar<int>("SELECT COUNT(*) FROM " + table); }
         public void Dispose() { ((IDisposable)Context).Dispose(); if (ownsDirectory) Directory.Delete(DirectoryPath, true); }
     }
-    private const string DailyEvents = "{\"events\":[{\"summary\":\"早餐想吃面包\",\"source_refs\":[1]},{\"summary\":\"一般闲谈\",\"source_refs\":[2]}]}";
+    private const string DailyTopicFields = ",\"tag_refs\":[],\"new_tags\":[{\"name\":\"饮食意愿\",\"definition\":\"当下想吃什么及选择\",\"domain_ids\":[\"user\"],\"dimension_ids\":[\"goal\",\"scope\"],\"positive_examples\":[\"早餐想吃面包\"],\"negative_examples\":[\"吃饭时讨论数学\"]}]";
+    private const string DailyEvents = "{\"events\":[{\"summary\":\"早餐想吃面包\",\"source_refs\":[1]" + DailyTopicFields + "},{\"summary\":\"一般闲谈\",\"source_refs\":[2]" + DailyTopicFields + "}]}";
     private const string DailySelection = "{\"selected_refs\":[1]}";
-    private const string DailyCognition = "{\"cognitions\":[{\"operation\":\"create\",\"target_ref\":0,\"summary\":\"他早餐想吃面包，选择时应尊重当天意愿。\",\"identity_slot\":\"other\",\"domains\":[\"user\"],\"source_refs\":[1],\"scope\":\"早餐选择\",\"exceptions\":\"意愿变化后重新确认\"}]}";
+    private const string DailyCognition = "{\"cognitions\":[{\"operation\":\"create\",\"target_ref\":0,\"summary\":\"他早餐想吃面包，选择时应尊重当天意愿。\",\"identity_slot\":\"other\",\"domains\":[\"user\"],\"source_refs\":[1],\"tag_refs\":[1],\"scope\":\"早餐选择\",\"exceptions\":\"意愿变化后重新确认\"}]}";
     private const string DailyRuntime = "{\"cards\":[{\"slot\":\"other\",\"body\":\"他早餐想吃面包，具体选择随当天意愿变化。\",\"cognition_refs\":[1]}],\"runtime\":{\"narrative\":\"听见他对早餐的想法。\",\"mood\":\"平静\",\"relationship_lens\":\"尊重具体意愿\"}}";
     private const string EmptyDailyRuntime = "{\"cards\":[],\"runtime\":{\"narrative\":\"\",\"mood\":\"\",\"relationship_lens\":\"\"}}";
     private static string DailyReply(List<DeepSeekMessageData> messages)
@@ -101,6 +102,12 @@ internal static partial class Program
             var llm = new SelectionProbeLlm { Reply = DailyReply }; f.Run(llm);
             Require(llm.Requests.Count == 4 && Enumerable.Range(1, 4).All(i => llm.Requests[i - 1].Contains(i + "/4")),
                 "实际日复盘严格提取、挑选、认知、runtime四阶段，无细节扩写或全量回望");
+            var grownTopics = f.Store.GetActiveLifeTags();
+            Require(grownTopics.Count == 1 && grownTopics[0].Label == "饮食意愿" &&
+                f.Store.GetLifeTagRoutes(grownTopics[0].Id).Count == 3 &&
+                f.Store.GetActiveEventIndexes().All(e => e.TagIds.Contains(grownTopics[0].Id)) &&
+                f.Store.GetCognitionTagIds(f.Graph.GetCognitionNodes(20).Select(n => n.Id)).Values.All(ids => ids.Contains(grownTopics[0].Id)),
+                "实际四步复盘新增多路主题，同名复用，事件和认知均挂接主题");
             Require(llm.Requests[2].Contains(moments[0].Content) && !llm.Requests[2].Contains(moments[1].Content) &&
                 !llm.Requests.Any(x => x.Contains(moments[0].Id)), "认知只读取入选原句，模型引用短编号不复制数据库ID");
             Require(f.Count("event_entries") == 2 && f.Graph.GetCognitionNodes(20).Count == 1 &&
@@ -141,7 +148,7 @@ internal static partial class Program
         {
             var sources = f.Seed(49);
             var interrupted = new AgentSequenceLlm(DailyEvents); Require(DailyRejects(() => f.Run(interrupted)), "提取批间中断");
-            f.Reopen(); var last = new AgentSequenceLlm("{\"events\":[{\"summary\":\"最后一条事件\",\"source_refs\":[1]}]}", "{\"selected_refs\":[]}");
+            f.Reopen(); var last = new AgentSequenceLlm("{\"events\":[{\"summary\":\"最后一条事件\",\"source_refs\":[1]" + DailyTopicFields + "}]}", "{\"selected_refs\":[]}");
             f.Run(last); Require(last.Requests.Count == 2 && last.Requests[0].Contains(sources[48].Content) &&
                 !last.Requests[0].Contains(sources[0].Content) && f.Count("event_entries") == 3,
                 "提取逐段检查点跨重启续做，最后一批编号1映射新的真实来源");
@@ -166,11 +173,14 @@ internal static partial class Program
             using (var db = new SQLite.SQLiteConnection(f.BrainPath))
                 db.Execute("CREATE TRIGGER inject_review_failure BEFORE INSERT ON plugin_documents WHEN NEW.PluginId='daily-review' AND json_array_length(json_extract(NEW.Json,'$.Events'))>0 BEGIN SELECT RAISE(ABORT,'injected atomic failure'); END");
             try { f.Run(new AgentSequenceLlm(DailyEvents)); } catch (Exception) { }
-            Require(f.Count("event_entries") == 0 && f.Count("event_indexes") == 0, "检查点写入失败必须同时回滚事件和索引");
+            Require(f.Count("event_entries") == 0 && f.Count("event_indexes") == 0 && f.Store.GetActiveLifeTags().Count == 0,
+                "检查点写入失败必须同时回滚事件、索引和新增主题");
             using (var db = new SQLite.SQLiteConnection(f.BrainPath)) db.Execute("DROP TRIGGER inject_review_failure");
             f.Reopen(); f.Run(new SelectionProbeLlm { Reply = DailyReply });
             Require(f.Count("event_entries") == 2, "事务失败重试只入库一次");
         }
+        RunDailyTopicGrowthChecks(assembly);
+        RunDailyToolEvidenceCheck(assembly);
         RunDailyRuntimeConflictCheck(assembly);
         RunDailyCommitFailureChecks(assembly);
         RunDailyValidationChecks(assembly);
@@ -181,6 +191,79 @@ internal static partial class Program
         RunReviewTransportChecks(assembly);
         RunDailyProcessRecovery(assembly);
         Console.WriteLine("Four-step daily review passed: complete day, batching, restart, atomic rollback, live runtime, call limit and bounded network recovery.");
+    }
+
+    private static void RunDailyToolEvidenceCheck(Assembly assembly)
+    {
+        using var f=new DailyFixture(assembly);
+        var parent=f.Seed(1)[0];
+        var observation=new MomentRecord { Id="observed-source", ConversationId=DailyFixture.Root, Role="system_event",
+            Type=MomentTypes.Event, Content="外部材料原件标记：牛肉面口味介绍。", ParentMomentId=parent.Id,
+            SourcePluginId="check.observation", Realm=TraceRealmValues.ExternalWorld,
+            EvidenceType=EvidenceTypeValues.PluginObserved, MemoryVisibility="private", CreatedUnixMs=parent.CreatedUnixMs+1 };
+        f.Store.SaveMoment(observation);
+        var llm=new SelectionProbeLlm{Reply=messages=> {
+            if(messages[0].content.Contains("1/4"))
+            {
+                Require(messages[1].content.Contains(observation.Content) && messages[1].content.Contains(EvidenceTypeValues.PluginObserved),
+                    "工具观察原件及证据类型实际进入日复盘");
+                return "{\"events\":[{\"summary\":\"阅读牛肉面口味材料\",\"source_refs\":[2]"+DailyTopicFields+"}]}";
+            }
+            if(messages[0].content.Contains("2/4")) return DailySelection;
+            if(messages[0].content.Contains("3/4")) return DailyCognition;
+            return EmptyDailyRuntime;
+        }};
+        f.Run(llm);
+        var ids=f.Graph.GetCognitionNodes(20).Select(x=>x.Id).ToList();
+        Require(f.Graph.GetCognitionEvidence(ids).Any(x=>x.MomentId==observation.Id) &&
+            f.Store.GetEventEntriesByIndexIds(f.Store.GetActiveEventIndexes().Select(x=>x.Id)).Single().SourceMomentId==observation.Id &&
+            f.Graph.GetEvidenceMoments(new[]{observation.Id}).Single().Content==observation.Content,
+            "工具原件完成复盘后保留，事件与认知证据指向观察而非触发用户原句");
+    }
+
+    private static void RunDailyTopicGrowthChecks(Assembly assembly)
+    {
+        using var f = new DailyFixture(assembly);
+        var examples = new[] {
+            ("2020-08-20", "想吃牛肉面了", "饮食意愿"),
+            ("2020-08-21", "牛肉面我喜欢加小葱", "口味偏好"),
+            ("2020-08-22", "我今天吃牛肉面的时候想到一个数学定理", "数学联想"),
+            ("2020-08-23", "牛肉面我喜欢加小葱", "口味偏好") };
+        foreach (var (day, statement, topic) in examples)
+        {
+            var source = f.Seed(1, day)[0]; source.Content = statement;
+            using (var db = new SQLite.SQLiteConnection(f.BrainPath)) db.Update(source);
+            var llm = new SelectionProbeLlm { Reply = messages => {
+                if (messages[0].content.Contains("1/4"))
+                {
+                    using var input = JsonDocument.Parse(messages[1].content);
+                    var candidates = input.RootElement.GetProperty("topics").EnumerateArray().ToList();
+                    var selected = candidates.Where(t => t.GetProperty("name").GetString() == topic)
+                        .Select(t => t.GetProperty("tag_ref").GetInt32()).ToList();
+                    if (day == "2020-08-23") Require(selected.Count == 1, "再次谈同一含义时，旧主题须通过语义候选进入真实复盘请求");
+                    return TraceJson.ToJson(new { events = new[] { new { summary=statement, source_refs=new[]{1},
+                        tag_refs=selected, new_tags=selected.Count > 0 ? new List<NewLifeTagWriteData>() : new() { new() {
+                            name=topic, definition=statement, domain_ids=new(){"user","world"}, dimension_ids=new(){"scope"},
+                            positive_examples=new(){statement}, negative_examples=new(){"今天天气怎么样"} } } } } });
+                }
+                if (messages[0].content.Contains("2/4")) return DailySelection;
+                if (messages[0].content.Contains("3/4")) return TraceJson.ToJson(new { cognitions = new[] { new {
+                    operation="create", target_ref=0, summary=statement, source_refs=new[]{1}, tag_refs=new[]{1},
+                    identity_slot="", domains=new[]{"user"}, scope="", exceptions="" } } });
+                return EmptyDailyRuntime;
+            } };
+            f.Run(llm, day); f.Reopen();
+        }
+        var tags = f.Store.GetActiveLifeTags();
+        Require(tags.Count == 3 && f.Store.GetActiveEventIndexes().Count == 4 && f.Graph.GetCognitionNodes(20).Count == 3,
+            "四天同词不同含义分成三个主题，同义重用主题及认知，事件原件仍各自保留");
+        foreach (var (_, statement, topic) in examples.Take(3))
+        {
+            var id = tags.Single(t => t.Label == topic).Id;
+            Require(f.Store.GetActiveEventIndexes().Where(e => e.EventSummary == statement).All(e => e.TagIds == id) &&
+                f.Store.GetCognitionTagIds(f.Graph.GetCognitionNodes(20).Where(n => n.Summary == statement).Select(n => n.Id)).Values.All(v => v.SequenceEqual(new[]{id})),
+                "模型选择的不同含义分别挂接事件与认知：" + topic);
+        }
     }
 
     private static void RunDailyRuntimeConflictCheck(Assembly assembly)
@@ -294,7 +377,9 @@ internal static partial class Program
             {
                 var batch = segment++;
                 return TraceJson.ToJson(new { events = Enumerable.Range(0, batch == 5 ? 8 : 9).Select(i => new {
-                    summary = "事件" + batch + "-" + i + new string('事', 490), source_refs = new[] { 1 } }) });
+                    summary = "事件" + batch + "-" + i + new string('事', 490), source_refs = new[] { 1 }, tag_refs = Array.Empty<int>(),
+                    new_tags = new[] { new NewLifeTagWriteData { name="饮食意愿", definition="当下想吃什么及选择", domain_ids=new(){"user"},
+                        dimension_ids=new(){"scope"}, positive_examples=new(){"早餐吃面包"}, negative_examples=new(){"数学定理"} } } }) });
             }
             if (title.Contains("2/4")) return DailySelection;
             if (title.Contains("3/4")) return "{\"cognitions\":[]}";

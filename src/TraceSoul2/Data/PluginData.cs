@@ -311,6 +311,8 @@ namespace TraceSoul2.Data
         public bool SupportsPublicEnvironment { get; set; }
         public bool HasInternalMutation { get; set; }
         public bool HasExternalSideEffect { get; set; }
+        /// <summary>成功读取的Payload可作为外部观察原件保存；插件不得在其中返回凭据或内部诊断。已有ProducedEvent优先。</summary>
+        public bool RetainResultAsObservation { get; set; }
         /// <summary>
         /// 进入空闲时参与系统抽签的每日上限。大于 0 才进池；达上限后当天不再抽到。
         /// 抽签由内核完成，不是模型自己选活动。

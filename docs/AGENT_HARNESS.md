@@ -33,7 +33,9 @@
 
 显式行动使用 `GetAvailableActionCatalog`，保留同一身体的全部可用动作，不按器官类型只留一个赢家。最终 reply 由原 `GetAvailableCatalog` / 身体路由选择文字出口；照片等由 actions 显式选择；表情不在模型目录或输出契约中，由文字发送侧自动匹配。只有语音而没有文字通道的入站身体也能用声音完成回应。
 
-- `memory.recall(query)`：复用现有记忆检索，明确区分候选证据和空结果，不新增记忆总结 LLM。
+- `memory.topics(query)`：按语义查可选主题；动态上下文也提供当前候选。
+- `memory.recall(query, tags, kind, period, date_start, date_end, day_basis)`：按日期、主题及材料类型读取；events查经历/同期原文，cognitions查当前认知，sources查原文。日期与主题取交集，空范围不跨范围兜底；旧query/tags保留兼容。自然日与04点记忆日分开，完整契约和时间语义限制见[按范围读取记忆](MEMORY_READ_ROUTING.md)。
+- `memory.source(source_id, offset)`：按原件ID读取可见记录，每页最多4000字符，返回来源、证据类型、外部引用和下一偏移；不绕过受众限制。
 - `dialogue.recent_history`：目录可用时读取近期原文。
 - `web.search` / `web.read`：由可选 Tavily 插件提供，按需搜索、核对原文并带来源继续回答；没有 Key 时不暴露。联网观察通过既有事件入口留存，不新增固定模型阶段，见 [插件说明](../ExternalPlugins/Tavily/README.md)。
 - 外部插件的可调用能力、语音、动作等按实际目录及参数说明使用；插件仍负责参数和设备约束。
@@ -73,6 +75,8 @@ context.Services.Executions.Report(new TraceExecutionReceiptData
 独立计算能力可以保持 `PlatformId` 为空，被不同身体复用；身体声明可执行的输出能力。现有 QQ TTS 等插件保持原归属，本次没有复制或改写设备驱动。
 
 ## 状态与后台整理
+
+2026-11-03：恢复随当前输入语义选择的情境提示（最多2项），由统一Agent直接使用；不恢复旧Mind根协议或另加生成阶段。读取工具的成功结果可由贡献描述符显式声明为观察材料，已有ProducedEvent优先。原件经Kernel绑定父输入、受众后保存；近期节选进入后续轮次，完整原件可召回和分页读取，夜间仍由现行四步复盘提炼事件与认知。材料不是用户发言或已核实事实；失败、空结果及进行中结果不自动成为观察。实现与回归边界见[恢复记录](knowledge/AGENT_TRANSITION_AUDIT.md#同日恢复实现)。
 
 模型使用独立 `AgentOutputData` 并按其类型生成 schema，校验后映射为 `AgentStepData`；后者继承旧 `MindDecisionData` 仅用于内部状态消费者兼容，不再直接读取模型 JSON。正文在 `reply`，动作在 `actions`，最终状态由原有状态面处理。
 

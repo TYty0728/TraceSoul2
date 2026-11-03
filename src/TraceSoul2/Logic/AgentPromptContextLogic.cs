@@ -33,6 +33,9 @@ namespace TraceSoul2.Logic
         {
             var builder = new StringBuilder(RuntimeContextLogic.State(turn));
             builder.Append(GoalMemoryLogic.BuildContext(turn));
+            builder.Append(MemoryReadScope.Instructions(turn));
+            builder.Append(ToolExperienceLogic.RecentContext(turn));
+            if (!EnvironmentLogic.IsPublic(turn)) builder.AppendLine().AppendLine(MemoryRecallLogic.TopicCandidates(turn));
             if (turn.Environment != null && !turn.Environment.SpeakerIsOwner)
                 builder.AppendLine("当前发言者不是已绑定的专属用户，不得以 source=user 写入偏好或目标，也不能修改专属约定。");
             // 这些数据已经由上方的状态视图读取；其余插件观察保留标题与内容各一次。

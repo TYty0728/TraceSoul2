@@ -13,9 +13,8 @@ using TraceSoul2.Util;
 namespace TraceSoul2.Plugins.Builtin
 {
     /// <summary>
-    /// 记忆神经：只读地检索第四层多维索引（时间×地点×人物×事件×心情）里的共同经历切片。
-    /// Mind 明确给出的新事实会写入生命网；本神经只读召回。话题积累到门槛后做批量小复盘。
-    /// 日构建继续只做浸染和阶梯，不抢活体写入。
+    /// 保存今日新识，并保留旧版查询/归档契约。当前Agent通过主题召回与原件读取入口查证；
+    /// 长期事件和认知只由四步日复盘形成，不在普通聊天中触发小复盘。
     /// </summary>
     public sealed class MemoryNervePlugin : ITracePlugin
     {
@@ -28,7 +27,7 @@ namespace TraceSoul2.Plugins.Builtin
             Version = "3.3.1",
             Author = "TraceSoul2",
             Role = PluginRoleValues.Kernel,
-            Description = "子代理沿四层记忆定位，语义向量在定位范围内拼装最相近的细节；累计几十条对话后做批量小复盘，只读召回不写历史。"
+            Description = "保存今日新识，按主题读取经历和认知；长期事件与认知由每日复盘整理。"
         };
 
         public void Register(TracePluginContext context)
@@ -314,7 +313,7 @@ namespace TraceSoul2.Plugins.Builtin
                 Id = "memory.activate",
                 Kind = TraceContributionKindValues.CallableNerve,
                 DisplayName = "激活并唤醒人生记忆",
-                Description = "子代理沿生命标签与多维维度列表定位（1-4 层），再由语义向量在定位范围内拼装最相近的细节切片；只向 Brain 返回证据，不写新记忆。",
+                Description = "兼容的多维记忆查询入口；当前 Agent 使用 memory.topics 与 memory.recall 选择主题并读取证据。",
                 Provides = "personal_memory.recall",
                 WhenToUse = MemoryNervePrompts.ActivateWhenToUse,
                 WhenNotToUse = MemoryNervePrompts.ActivateWhenNotToUse,

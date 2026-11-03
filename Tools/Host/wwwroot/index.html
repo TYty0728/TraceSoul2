@@ -118,10 +118,12 @@
       font-size: 12px; border-radius: 6px; white-space: pre-wrap; word-break: break-all; }
     #log { background: #15161a; color: #c8cbd1; padding: 10px; overflow: auto; height: 66vh;
       font-size: 12px; border-radius: 6px; }
-    .logline { white-space: pre-wrap; word-break: break-all; padding: 1px 0; }
+    .logline { white-space: pre-wrap; overflow-wrap: anywhere; padding: 7px 0; border-bottom: 1px solid #ffffff0a; line-height: 1.65; }
     .logline.memory { color: #9ec9ff; }
     .logline.moment { color: #d8e0c8; }
     .logline.error { color: #ff9e9e; }
+    .logline.warning { color: #eac586; }
+    .logline.debug { color: #919bac; }
     .logline.sys { color: #8f97a3; font-style: italic; }
     .turn-sec { margin-bottom: 8px; }
     .turn-head { font-size: 12px; font-weight: bold; color: #8fb3e8; padding: 2px 0; }
@@ -750,7 +752,7 @@
         </div>
         <div class="box">
           <h2>他的生活状态</h2>
-          <p class="muted">位置和当前活动是可变化状态，可由你、Mind、插件或传感器更新。这里的修改按“用户”来源写入，并立即影响后续心智上下文。</p>
+          <p class="muted">位置和当前活动是可变化状态，可由你、Agent、插件或传感器更新。这里的修改按“用户”来源写入，并立即影响后续对话上下文。</p>
           <div class="row">
             <div class="nogrow"><label>位置</label>
               <select id="liveLifeLocation"><option value="home">在家</option><option value="out">外出</option></select></div>
@@ -856,7 +858,7 @@
           <p class="muted">对话和模型错误仅报告，不暂停后续聊天。表情包对不上是正常结果，不记错误也不记警告。同一未处理报告只通知一次。日构建失败仍停止自动补跑，处理后恢复并重新检查历史，再点击开始构建。</p>
           <button onclick="loadFailures()">刷新保护状态</button>
           <div id="failureProtection" class="muted">加载中…</div>
-          <p class="muted">召回流程：Brain 判定回忆类问题 → 子代理读各层关键词列表定位（域/维度/概念/时间/地点/人物/心情）→ ONNX bge-small-zh 语义向量在定位范围内拼装 top_k 条细节 → 找不到就如实告诉 Brain。</p>
+          <p class="muted">相关记忆会随当前话题浮现。需要深入回忆时，Agent 选择语义主题，再读取相关事件、认知与原始依据；没有找到就如实返回。归档时按含义复用或新增主题，让记忆继续积累。</p>
         </div>
         <div class="grid2">
           <div class="box">
@@ -1495,8 +1497,13 @@
 
       <!-- 日志 -->
       <section id="sec-log" class="panel-section">
-        <div class="section-head"><h1>日志</h1><span class="muted">实时事件流（SSE），最近 300 条</span></div>
+        <div class="section-head"><h1>日志</h1><span class="muted">最新在前，保留最近 300 条</span></div>
         <div class="box">
+          <div class="row">
+            <div class="nogrow"><label for="logLevel">显示范围</label><select id="logLevel" onchange="filterLogs()"><option value="normal">常规日志</option><option value="issues">警告与错误</option><option value="all">全部（含调试）</option></select></div>
+            <div><label for="logSearch">筛选</label><input id="logSearch" placeholder="输入轮次编号、能力名称或关键词" oninput="filterLogs()" /></div>
+          </div>
+          <p id="logCount" class="muted">暂无日志</p>
           <div id="log"></div>
         </div>
       </section>
@@ -1553,23 +1560,45 @@
   let eventStream = null;
 
   function classify(text) {
+    const level = logLevel(text);
+    if (level === '错误') return 'error';
+    if (level === '警告') return 'warning';
+    if (level === '调试') return 'debug';
     if (text.indexOf("记忆神经") >= 0) return "memory";
     if (text.indexOf("命中") >= 0 || text.indexOf("缓存") >= 0) return "memory";
-    if (text.indexOf("moment") >= 0 || text.indexOf("已发送") >= 0) return "moment";
-    if (text.indexOf("失败") >= 0 || text.indexOf("错误") >= 0) return "error";
-    if (text.indexOf("host") >= 0) return "sys";
+    if (text.indexOf("输入处理") >= 0 || text.indexOf("已发送") >= 0) return "moment";
+    if (text.indexOf("宿主") >= 0) return "sys";
     return "";
+  }
+  function logLevel(text) {
+    const explicit = text.match(/^(?:(?:\d{4}-\d{2}-\d{2} )?\d{2}:\d{2}:\d{2}(?:\.\d+)?(?: [+-]\d{2}:\d{2})? )?\[(信息|调试|警告|错误)\]/);
+    return explicit ? explicit[1] : /失败|异常|错误/.test(text) ? '警告' : '信息';
+  }
+  function filterLogs() {
+    const mode = $('logLevel').value;
+    const query = $('logSearch').value.trim().toLowerCase();
+    let visible = 0;
+    for (const row of logEl.children) {
+      const level = row.dataset.level;
+      row.hidden = (mode === 'normal' && level === '调试') ||
+        (mode === 'issues' && level !== '错误' && level !== '警告') ||
+        (query && !row.textContent.toLowerCase().includes(query));
+      if (!row.hidden) visible++;
+    }
+    $('logCount').textContent = `显示 ${visible} / ${logEl.childElementCount} 条；常规视图隐藏内部调试过程`;
   }
   function addLog(text, cls) {
     const div = document.createElement("div");
     div.className = "logline " + (cls || classify(text));
+    div.dataset.level = logLevel(text);
     div.textContent = text;
     logEl.prepend(div);
     while (logEl.childElementCount > 300) logEl.removeChild(logEl.lastChild);
+    filterLogs();
   }
   function logLine(text) {
     const time = new Date().toTimeString().slice(0, 8);
-    addLog(time + " " + text);
+    addLog(time + " [" + logLevel(text) + "] [控制台] " + text);
   }
   function esc(s) { return (s || "").replace(/[&<>"]/g, c => ({ "&": "&amp;", "<": "&lt;", ">": "&gt;", '"': "&quot;" }[c])); }
   function fmtSize(bytes) {
@@ -2520,7 +2549,7 @@
     if (isWxxz && !wxxzSession) { $('sendState').textContent = '请先连接 WXXZ 会话'; return; }
     sending = true;
     $("sendBtn").disabled = true;
-    $("sendState").textContent = "● Brain 思考中……";
+    $("sendState").textContent = "● 正在回应……";
     try {
       const turn = await api(isWxxz ? '/wxxz/moments' : '/moments', 'POST',
         isWxxz ? { content: text, sessionId: wxxzSession, requestId: crypto.randomUUID(), captureId: wxxzCaptureId } : { content: text });
@@ -2558,6 +2587,11 @@
     sec.append(head, b);
     box.append(sec);
   }
+  function turnPhase(turn) {
+    const step = turn?.mindDecision?.step;
+    return ({finish:'已完成',continue:'行动后继续',wait:'等待'})[step] ||
+      ({reflex:'对话与行动',deep:'后台整理'})[turn?.brainMode] || '已处理';
+  }
   function renderTurn(turn) {
     const box = $("turnBox");
     box.innerHTML = "";
@@ -2568,8 +2602,7 @@
       addTurnSection(box, "尚无最近一轮", "");
       return;
     }
-    const head = (turn.brainMode ? "模式 " + turn.brainMode : "") +
-      (turn.brainIntent ? "｜意图 " + turn.brainIntent : "");
+    const head = "阶段：" + turnPhase(turn);
     addTurnSection(box, "决策", head + (turn.decisionSummary ? "\n" + turn.decisionSummary : ""));
     if (turn.reply) addTurnSection(box, "表达", turn.reply);
     for (const r of results) {
@@ -2578,9 +2611,9 @@
         (r.capabilityId || r.CapabilityId) === "memory.activate" ? "memory" : "");
     }
     if (facets.length)
-      addTurnSection(box, "Facet 写回", facets.map(f => (f.facet_id || "") + " changed=" + (f.changed || "") + " " + (f.summary || "")).join("\n"));
+      addTurnSection(box, "状态更新", facets.map(f => (f.summary || f.facet_id || "") + (f.changed ? "（已更新）" : "（保持）")).join("\n"));
     if (blocks.length)
-      addTurnSection(box, "BrainFrame 挂载（实际注入 LLM 的原文）", blocks.map(b =>
+      addTurnSection(box, "本轮上下文素材（会在请求中筛选和组织）", blocks.map(b =>
         (b.title || "") + "\n" + (b.content || "")).join("\n\n"));
   }
 
@@ -3384,7 +3417,7 @@
     }).join("") : `<span class="muted">还没有活动记录。</span>`;
     const turn = d.latestTurn;
     $("liveTurn").innerHTML = turn
-      ? `<div class="live-list">${liveField("模式", turn.brainMode)}${liveField("意图", turn.brainIntent)}${liveField("总结", turn.decisionSummary)}${turn.reply ? liveField("回复", turn.reply) : ""}<details><summary class="muted">查看本轮原始快照</summary><pre class="live-json">${esc(JSON.stringify(turn, null, 2))}</pre></details></div>`
+      ? `<div class="live-list">${liveField("阶段", turnPhase(turn))}${liveField("总结", turn.decisionSummary)}${turn.reply ? liveField("回复", turn.reply) : ""}<details><summary class="muted">查看本轮原始快照</summary><pre class="live-json">${esc(JSON.stringify(turn, null, 2))}</pre></details></div>`
       : `<span class="muted">还没有可回看的轮次。</span>`;
     $("liveUpdated").textContent = "刷新于 " + new Date().toLocaleTimeString();
   }

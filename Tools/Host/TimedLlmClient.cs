@@ -6,6 +6,7 @@ using System.Threading.Tasks;
 using TraceSoul2.Data;
 using TraceSoul2.Logic;
 using TraceSoul2.Manager;
+using TraceSoul2.Util;
 
 namespace TraceSoul2.Host
 {
@@ -59,24 +60,28 @@ namespace TraceSoul2.Host
         {
             var number = Interlocked.Increment(ref requestNumber);
             var timer = Stopwatch.StartNew();
-            Write("LLM#" + number + " 请求开始｜" + ProviderId + "/" + Model +
-                  (json ? string.Empty : "｜text") +
-                  "｜messages=" + (messages == null ? 0 : messages.Count));
+            Write("模型请求 #" + number + " 开始", detail: "模型：" + ProviderId + "/" + Model +
+                  "｜格式：" + (json ? "结构化" : "文本") + "｜messages=" + (messages?.Count ?? 0));
             try
             {
                 var result = json
                     ? await inner.CompleteJsonAsync(messages, cancellationToken, promptCacheKey)
                     : await inner.CompleteTextAsync(messages, cancellationToken, promptCacheKey);
                 var usage = FormatUsage();
-                Write("LLM#" + number + " 请求完成｜耗时 " + timer.ElapsedMilliseconds +
-                      " ms｜" + ProviderId + "/" + Model + "｜chars=" + (result == null ? 0 : result.Length) +
-                      (string.IsNullOrWhiteSpace(usage) ? string.Empty : "｜" + usage));
+                Write("模型请求 #" + number + " 完成", timer.ElapsedMilliseconds,
+                    "模型：" + ProviderId + "/" + Model + "｜返回字符：" + (result?.Length ?? 0) +
+                    (string.IsNullOrWhiteSpace(usage) ? string.Empty : "｜Token用量：" + usage));
                 return result;
+            }
+            catch (OperationCanceledException) when (cancellationToken.IsCancellationRequested)
+            {
+                Write("模型请求 #" + number + " 已取消", timer.ElapsedMilliseconds, "模型：" + ProviderId + "/" + Model);
+                throw;
             }
             catch (Exception exception)
             {
-                Write("LLM#" + number + " 请求失败｜耗时 " + timer.ElapsedMilliseconds +
-                      " ms｜" + exception.GetType().Name + ": " + exception.Message);
+                Write("模型请求 #" + number + " 失败", timer.ElapsedMilliseconds,
+                    "模型：" + ProviderId + "/" + Model + "｜原因：" + exception.GetType().Name + "：" + exception.Message, "错误");
                 throw;
             }
         }
@@ -93,9 +98,9 @@ namespace TraceSoul2.Host
             return reporter == null ? string.Empty : LlmUsageLogic.FormatLog(reporter.LastUsage);
         }
 
-        private void Write(string message)
+        private void Write(string stage, long? elapsedMs = null, string detail = null, string level = null)
         {
-            log?.Invoke("[链路 " + (string.IsNullOrWhiteSpace(traceId) ? "--------" : traceId) + "] " + message);
+            log?.Invoke(TraceLogFormat.Format(traceId, stage, elapsedMs, detail, level));
         }
     }
 }

@@ -17,6 +17,8 @@ PluginApi 1.5 源码新增持续执行、设备进度和取消契约，Agent 可
 
 ## 运行时模型
 
+读取能力如需让返回材料成为可持续记忆，可在描述符声明 `RetainResultAsObservation=true`（2026-11-03本地源码增量）。仅成功、无外部副作用的CallableNerve非空Payload自动生成观察；已有ProducedEvent保留原件且不重复生成。凭据和内部诊断不得作为观察返回；失败、空、running/accepted不会被当作已完成观察。Kernel补父输入关联，沿现有环境和受众保存；通过后续上下文、memory.recall/source及四步复盘使用。仅声明此字段的新版插件需要配套新版Host/PluginApi，见[SDK说明](../Tools/PluginApi/README.md)。
+
 工具是 Agent 看见的调用接口，插件是能力的交付和生命周期单位：两者不是互斥架构。基础记忆查询、执行取消等由内核保证；搜索服务、外部平台、语音和设备驱动通过插件提供，同样注册到统一能力目录，复用参数约束、执行反馈、取消和轮次预算。常用插件可以随安装包提供，默认安装不意味着它属于不可关闭的内核。无需为了模仿编码 Agent 而默认赋予陪伴主体任意终端或文件访问。
 
 `web.tavily` 是跨平台联网插件，提供 `web.search` / `web.read`；缺少 Key 时隐藏工具。配置、来源留存和验收见 [Tavily 插件](../ExternalPlugins/Tavily/README.md)。

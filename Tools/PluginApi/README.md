@@ -1,6 +1,12 @@
 # TraceSoul2.PluginApi
 
-TraceSoul2 运行时插件的契约（源码 **1.17.0**）。正式资产状态见 [版本说明](../../docs/RELEASES.md)。
+TraceSoul2 运行时插件的契约（源码 **1.18.0**）。正式资产状态见 [版本说明](../../docs/RELEASES.md)。
+
+## 1.18 起
+
+新增共享 `TraceLogFormat` 及 `TracePluginServices.LogDiagnostic`。`LogTiming` 原四参数签名保持不变，统一可读级别/轮次/耗时；高频正常内部过程用LogDiagnostic，失败应留在常规可见日志。不得记录密钥或原始敏感载荷，详见[日志规范](../../docs/knowledge/LOGGING.md)。
+
+`TraceContributionDescriptorData.RetainResultAsObservation` 默认false。只在成功读取可供记忆的外部材料时声明；Kernel对CallableNerve且无外部副作用的非空成功Payload生成来源观察，插件自己的ProducedEvent优先。不要对凭据、内部诊断或未完成操作声明。原件保留父输入和受众，进入后续读取及复盘；不会直接写成已核实认知。使用新字段的官方插件须与Host/共享程序集配套重建更新，旧DLL没有新增必需方法。旧MindPromptAppends/MindJsonFields不再被统一Agent读取；能力说明使用当前目录字段，动态状态仍可用MindTurnPromptAppends。
 
 ## 1.17 起
 

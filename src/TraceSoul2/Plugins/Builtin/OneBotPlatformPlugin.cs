@@ -707,7 +707,7 @@ namespace TraceSoul2.Plugins.Builtin
             {
                 Id = "qq.inbox.service",
                 DisplayName = "QQ 收件箱",
-                Description = "把 QQ 新消息排队交给 Brain 逐条处理。",
+                Description = "把 QQ 新消息排队交给 Agent 逐条处理。",
                 Provides = "platform.qq.inbox"
             };
 

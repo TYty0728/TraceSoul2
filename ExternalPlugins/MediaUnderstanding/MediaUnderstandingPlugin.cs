@@ -14,7 +14,7 @@ public sealed class MediaUnderstandingPlugin : ITracePlugin
 
     public TracePluginMetadataData Metadata { get; } = new()
     {
-        Id = "media.understanding", DisplayName = "媒体理解", Version = "0.2.0",
+        Id = "media.understanding", DisplayName = "媒体理解", Version = "0.2.1",
         Author = "TraceSoul2", Role = PluginRoleValues.Organ, PlatformId = "",
         Description = "统一识别 B站/抖音分享链接，受限下载视频、抽取时间点画面与可用字幕并调用多模态模型分析。"
     };
@@ -64,7 +64,7 @@ public sealed class MediaUnderstandingPlugin : ITracePlugin
             Description = "识别 B站/抖音分享链接与分P，只返回来源，不把页面信息说成视频内容。",
             WhenToUse = "用户分享 B站或抖音链接，需要确认来源或决定是否进一步分析时。",
             WhenNotToUse = "不能用来源识别结果回答视频情节、画面或声音问题。",
-            ParametersJsonSchema = "{text:string}", HasExternalSideEffect = false
+            ParametersJsonSchema = "{text:string}", HasExternalSideEffect = false, RetainResultAsObservation = true
         };
 
         public bool IsAvailable(TraceTurnContext context) => context != null;
@@ -113,7 +113,7 @@ public sealed class MediaUnderstandingPlugin : ITracePlugin
             WhenNotToUse = "当前不用于抖音图文；没有字幕时不能回答对白，也不能判断音效、音乐或未抽到的连续动作。",
             ParametersJsonSchema = "{url?:string,text?:string,question?:string}",
             OutputJsonSchema = "{status,source,summary,evidence[],limitations[]}",
-            HasInternalMutation = true, HasExternalSideEffect = false
+            HasInternalMutation = true, HasExternalSideEffect = false, RetainResultAsObservation = true
         };
 
         public bool IsAvailable(TraceTurnContext context)

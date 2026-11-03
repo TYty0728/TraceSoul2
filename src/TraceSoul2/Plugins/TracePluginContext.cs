@@ -5,6 +5,7 @@ using System.Threading;
 using System.Threading.Tasks;
 using TraceSoul2.Data;
 using TraceSoul2.Manager;
+using TraceSoul2.Util;
 
 namespace TraceSoul2.Plugins
 {
@@ -115,7 +116,7 @@ namespace TraceSoul2.Plugins
             new List<Func<TraceTurnContext, string, string, BrainCapabilityCallData>>();
 
         /// <summary>
-        /// 器官插件可把心智补充说明挂到这里。未加载或未就绪时不要挂；
+        /// 旧Mind兼容钩子，当前Agent不读取。新插件把用途与边界放能力描述；
         /// 心智核心提示词里不应出现相机/出图字段。
         /// </summary>
         public List<Func<TraceTurnContext, string>> MindPromptAppends { get; } =
@@ -126,7 +127,7 @@ namespace TraceSoul2.Plugins
             new List<Func<TraceTurnContext, string>>();
 
         /// <summary>
-        /// 器官插件可把心智 JSON 额外字段挂到这里，例如 "image":"有|无"。
+        /// 旧Mind JSON兼容钩子，当前Agent不读取。新插件用能力参数，不扩展Agent根字段。
         /// 未就绪时返回空；核心 JSON 样例本身不含出图字段。
         /// </summary>
         public List<Func<TraceTurnContext, string>> MindJsonFields { get; } =
@@ -155,12 +156,12 @@ namespace TraceSoul2.Plugins
 
         public void LogTiming(string traceId, string stage, long? elapsedMs = null, string detail = null)
         {
-            var id = string.IsNullOrWhiteSpace(traceId) ? "--------" : traceId.Trim();
-            var message = "[链路 " + id + "] " + (stage ?? string.Empty);
-            if (elapsedMs.HasValue) message += "｜耗时 " + elapsedMs.Value + " ms";
-            if (!string.IsNullOrWhiteSpace(detail)) message += "｜" + detail.Trim();
-            TimingLog?.Invoke(message);
+            TimingLog?.Invoke(TraceLogFormat.Format(traceId, stage, elapsedMs, detail));
         }
+
+        /// <summary>高频内部过程；保留在日志中，界面默认隐藏，异常不应使用此入口。</summary>
+        public void LogDiagnostic(string traceId, string stage, long? elapsedMs = null, string detail = null) =>
+            TimingLog?.Invoke(TraceLogFormat.Format(traceId, stage, elapsedMs, detail, "调试"));
     }
 
     /// <summary>每轮通用工作区；领域插件只能在自己的 State 槽中保存私有运行态。</summary>

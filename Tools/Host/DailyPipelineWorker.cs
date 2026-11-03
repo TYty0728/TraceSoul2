@@ -256,6 +256,7 @@ namespace TraceSoul2.Host
                         new InvalidOperationException(state?.Error ?? "子进程未确认完成"));
                     return -1;
                 }
+                await runtime.RefreshMemoryTopicsAsync(cancellationToken);
                 runtime.Providers.Protection.CompleteAttempt("daily");
                 if (state.Status == "done") runtime.Providers.Protection.Resume("review-backlog:" + dayKey);
                 if (state.Status == "pending" || state.Status == "deferred")

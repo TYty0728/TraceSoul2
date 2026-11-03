@@ -149,7 +149,7 @@ namespace TraceSoul2.Logic
             if (string.IsNullOrWhiteSpace(source.TraceId))
                 source.TraceId = Guid.NewGuid().ToString("N").Substring(0, 8);
             var totalTimer = Stopwatch.StartNew();
-            plugins.Services.LogTiming(source.TraceId, "Brain 整轮开始",
+            plugins.Services.LogTiming(source.TraceId, "Agent 整轮开始",
                 detail: "source=" + (source.PluginId ?? string.Empty));
             var pair = storage.LoadPairIdentity();
             if (!pair.IsComplete)
@@ -272,7 +272,7 @@ namespace TraceSoul2.Logic
             }
 
             var catalog = plugins.GetAvailableCatalog(turn);
-            plugins.Services.LogTiming(turn.TraceId, "输入落库与轮次准备完成",
+            plugins.Services.LogDiagnostic(turn.TraceId, "输入落库与轮次准备完成",
                 prepareTimer.ElapsedMilliseconds,
                 "wake=" + wake + "｜catalog=" + catalog.Count +
                 "｜history=" + recent.Count +
@@ -308,18 +308,18 @@ namespace TraceSoul2.Logic
                 mindDecision = lived.MindDecision;
                 expression = lived.Expression;
                 responseFlushed = lived.ResponseFlushed;
-                plugins.Services.LogTiming(turn.TraceId, "Agent 对话循环完成", branchTimer.ElapsedMilliseconds);
+                plugins.Services.LogDiagnostic(turn.TraceId, "Agent 对话循环完成", branchTimer.ElapsedMilliseconds);
             }
 
             if (!responseFlushed)
             {
                 var hooksTimer = Stopwatch.StartNew();
                 await RunTurnCompleteHooksAsync(turn);
-                plugins.Services.LogTiming(turn.TraceId, "整轮收尾钩子完成", hooksTimer.ElapsedMilliseconds);
+                plugins.Services.LogDiagnostic(turn.TraceId, "轮后通知完成", hooksTimer.ElapsedMilliseconds);
             }
             else
             {
-                plugins.Services.LogTiming(turn.TraceId, "整轮收尾钩子已在记忆观察前完成", 0);
+                plugins.Services.LogDiagnostic(turn.TraceId, "轮后通知已完成");
             }
 
             await TryCompleteExpressionAsync(turn);
@@ -338,7 +338,7 @@ namespace TraceSoul2.Logic
                 PayloadJson = BuildTurnSnapshot(turn, mindDecision),
                 CreatedUnixMs = DateTimeOffset.UtcNow.ToUnixTimeMilliseconds()
             });
-            plugins.Services.LogTiming(turn.TraceId, "轮次审查落库完成", reviewTimer.ElapsedMilliseconds);
+            plugins.Services.LogDiagnostic(turn.TraceId, "轮次审查落库完成", reviewTimer.ElapsedMilliseconds);
             try { stateMaintenanceWork = TurnMaintenanceLogic.Prepare(turn, mindDecision as AgentStepData); }
             catch (Exception error) { plugins.Services.LogTiming(turn.TraceId, "轮后关注整理未安排", detail: error.GetType().Name); }
             // 图片优先；整理概览留给没有其他轮后工作的轮次，避免拖延已准备的图片发送。
@@ -349,8 +349,8 @@ namespace TraceSoul2.Logic
                 try { EnqueueDeferred(LifeReadingBudgetLogic.Prepare(turn)); }
                 catch (Exception error) { plugins.Services.LogTiming(turn.TraceId, "阅读篇幅未安排", detail: error.GetType().Name); }
             }
-            plugins.Services.LogTiming(turn.TraceId, "Brain 整轮完成", totalTimer.ElapsedMilliseconds,
-                "mode=" + final.mode + "｜results=" + turn.Workspace.Results.Count);
+            plugins.Services.LogTiming(turn.TraceId, "Agent 整轮完成", totalTimer.ElapsedMilliseconds,
+                "results=" + turn.Workspace.Results.Count);
 
             return new ChatTurnResultData(
                 expression == null ? string.Empty : expression.ProducedEvent.Content,
@@ -475,9 +475,12 @@ namespace TraceSoul2.Logic
                 ? Math.Max(1, Math.Min(10, turn.Services.Recall.DefaultTopK))
                 : 3;
             var preludeTimer = Stopwatch.StartNew();
-            var naturallyAwakenedPast = MemoryRecallLogic.Preview(turn, recallTopK);
+            // 新消息由同一Agent先确定读取范围；不先对全部历史事件做语义检索。
+            // 后台自主活动仍可预激活共同经历；已有状态与榜单继续作为背景。
+            var naturallyAwakenedPast = EnvironmentLogic.IsHumanInput(turn)
+                ? MemoryRecallLogic.PreviewUnderstanding(turn, recallTopK) : MemoryRecallLogic.Preview(turn, recallTopK);
             turn.Workspace.SharedMemory = naturallyAwakenedPast ?? string.Empty;
-            plugins.Services.LogTiming(turn.TraceId, "记忆预激活完成", preludeTimer.ElapsedMilliseconds,
+            plugins.Services.LogDiagnostic(turn.TraceId, EnvironmentLogic.IsHumanInput(turn) ? "背景理解已准备" : "后台记忆预激活完成", preludeTimer.ElapsedMilliseconds,
                 "top_k=" + recallTopK + "｜chars=" + naturallyAwakenedPast.Length);
 
             // 是否表达由 Agent 决定；只有实际选择输出后才通知平台开始表达。
@@ -560,14 +563,18 @@ namespace TraceSoul2.Logic
             BrainCapabilityCallData call, TraceTurnContext turn, CancellationToken cancellationToken)
         {
             TraceCapabilityResultData result;
+            if (call.capability_id == "memory.source")
+            {
+                result = ToolExperienceLogic.ReadSource(turn, call.GetArgument("source_id"), call.GetArgument("offset"));
+                result.CallId = call.call_id; result.CapabilityId = call.capability_id;
+                return result;
+            }
+            if (call.capability_id == "memory.topics")
+                return new TraceCapabilityResultData { CallId = call.call_id, CapabilityId = call.capability_id,
+                    Status = "success", Payload = MemoryRecallLogic.TopicCandidates(turn, Limit(call.GetArgument("query"), 500)) };
             if (call.capability_id == "memory.recall")
             {
-                var query = Limit(call.GetArgument("query"), 500);
-                var recalled = MemoryRecallLogic.Assemble(turn,
-                    new MindDecisionData { beat = MindBeatValues.Memory, query = query }, 6, out var hasEvidence);
-                result = new TraceCapabilityResultData { CallId = call.call_id, CapabilityId = call.capability_id,
-                    Status = hasEvidence ? "success" : "empty",
-                    Summary = hasEvidence ? "检索到候选记忆，是否能回答问题以证据为准。" : "未找到相关记忆。", Payload = recalled };
+                result = ScopedMemoryReadLogic.Read(turn, call);
             }
             else if (call.capability_id == "execution.cancel")
             {
@@ -1007,20 +1014,6 @@ namespace TraceSoul2.Logic
                 @"你(?:去|帮我|给我)?(?:发|发布|发表|更新|同步)一?[条个篇段]?");
         }
 
-        private static bool WantsQzoneRead(TraceTurnContext turn)
-        {
-            if (AllowsQzonePublish(turn)) return false;
-            var text = turn == null || turn.Moment == null
-                ? string.Empty
-                : (turn.Moment.Content ?? string.Empty).Trim();
-            if (text.Length == 0) return false;
-            if (!HasQzoneTarget(text)) return false;
-            return text.IndexOf("看", StringComparison.Ordinal) >= 0 ||
-                   text.IndexOf("瞧", StringComparison.Ordinal) >= 0 ||
-                   text.IndexOf("翻", StringComparison.Ordinal) >= 0 ||
-                   text.IndexOf("刷", StringComparison.Ordinal) >= 0;
-        }
-
         private async Task RunIdleDeedAsync(
             TraceTurnContext turn,
             List<TraceContributionDescriptorData> catalog,
@@ -1077,46 +1070,7 @@ namespace TraceSoul2.Logic
                 MemoryDayLogic.CurrentDayKey(now),
                 now.ToUnixTimeMilliseconds());
             if (added > 0)
-                plugins.Services.LogTiming(turn.TraceId, "空闲生活写入今日新识", 0, text);
-        }
-
-        private async Task RunPostSpeakAsync(
-            MindDecisionData decision,
-            TraceTurnContext turn,
-            List<TraceContributionDescriptorData> catalog,
-            CancellationToken cancellationToken)
-        {
-            var archiveCursor = MemoryArchivePolicyLogic.LoadArchiveCursor(
-                storage, turn.ConversationId);
-            var archiveGate = MemoryArchivePolicyLogic.Evaluate(
-                decision,
-                turn.Moment,
-                storage.GetRecentMoments(turn.ConversationId, 200),
-                storage.LoadPairIdentity(),
-                archiveCursor);
-            if (archiveGate.ShouldArchive)
-            {
-                plugins.Services.LogTiming(turn.TraceId, "小复盘触发",
-                    detail: "dialogue_moments=" + archiveGate.UnbuiltDialogueMoments +
-                            "｜reason=" + archiveGate.Reason);
-                await TryExecuteNerveAsync("memory.archive", "归档刚结束的话题", turn, catalog,
-                    new List<BrainCallArgumentData>
-                    {
-                        new BrainCallArgumentData
-                        {
-                            name = "summary",
-                            value = Limit(decision == null ? string.Empty : decision.note, 80)
-                        }
-                    }, cancellationToken);
-            }
-            else if (archiveGate.TopicBoundarySuggested)
-            {
-                plugins.Services.LogTiming(turn.TraceId, "小复盘暂缓", 0,
-                    "dialogue_moments=" + archiveGate.UnbuiltDialogueMoments + "/" +
-                    MemoryArchivePolicyLogic.SoftDialogueMomentThreshold);
-            }
-
-            // 身份短卡复盘只由时间运行事件进入 RunSubconsciousAsync，普通对话不再派出。
+                plugins.Services.LogTiming(turn.TraceId, "空闲生活写入今日新识", detail: "字符数：" + text.Length);
         }
 
         private async Task<TraceCapabilityResultData> TryExecuteNerveAsync(
@@ -1160,13 +1114,16 @@ namespace TraceSoul2.Logic
             }
         }
 
-        private Task<TraceCapabilityResultData> ExecuteWithQzoneMediaAsync(
+        private async Task<TraceCapabilityResultData> ExecuteWithQzoneMediaAsync(
             BrainCapabilityCallData call, TraceTurnContext turn, CancellationToken cancellationToken)
         {
-            if (call.capability_id != "qq.qzone.publish")
-                return plugins.ExecuteAsync(call, turn, cancellationToken);
-            return QzonePublishLogic.ExecuteAsync(call, turn, plugins.GetAvailableCatalog(turn),
-                (step, token) => plugins.ExecuteAsync(step, turn, token), cancellationToken);
+            var result = call.capability_id != "qq.qzone.publish"
+                ? await plugins.ExecuteAsync(call, turn, cancellationToken)
+                : await QzonePublishLogic.ExecuteAsync(call, turn, plugins.GetAvailableCatalog(turn),
+                    (step, token) => plugins.ExecuteAsync(step, turn, token), cancellationToken);
+            ToolExperienceLogic.Prepare(plugins.GetAvailableActionCatalog(turn).FirstOrDefault(x => x.Id == call.capability_id),
+                call, result, turn);
+            return result;
         }
 
         private async Task RunTurnCompleteHooksAsync(TraceTurnContext turn)

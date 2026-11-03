@@ -14,6 +14,9 @@ internal static partial class Program
 {
     private static async Task RunAgentLoopChecksAsync()
     {
+        await RunMemoryTopicChecksAsync();
+        await RunMemoryScopeChecksAsync();
+        await RunAgentDesignChecksAsync();
         using var store = new SqliteMemoryManager(":memory:");
         store.SavePairIdentity("小雨", "小光", "雨雨");
         EnvironmentLogic.SaveSettings(store, new EnvironmentSettings { OwnerAccounts = new()

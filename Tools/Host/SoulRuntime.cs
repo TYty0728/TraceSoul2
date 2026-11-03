@@ -174,7 +174,7 @@ namespace TraceSoul2.Host
             deferredWorker = Task.Run(() => RunDeferredTurnLoopAsync(deferredTurns.Reader, deferredCts.Token));
             maintenanceWorker = Task.Run(() => RunDeferredTurnLoopAsync(maintenanceTurns.Reader, deferredCts.Token));
             stateMaintenanceWorker = Task.Run(() => RunDeferredTurnLoopAsync(stateMaintenanceTurns.Reader, deferredCts.Token));
-            Emit("host 已启动");
+            Emit("宿主已启动");
         }
 
         private IExpressionLibrary CreateExpressionLibrary()=>new ExpressionLibrary(Path.Combine(AppContext.BaseDirectory,"emotion_tags.json"),
@@ -824,7 +824,7 @@ namespace TraceSoul2.Host
                              .Where(x => x != null && x.CapabilityId == "memory.activate"))
                     Emit("记忆神经：" + memoryResult.Status + " | " + memoryResult.Summary);
                 RebuildOntology();
-                Emit("moment：" + Truncate(text, 40));
+                EmitTiming(traceId, "本地输入处理完成", detail: "输入字符：" + text.Length);
                 completed = result;
             }
             catch (OperationCanceledException) when (cancellationToken.IsCancellationRequested) { throw; }
@@ -876,7 +876,7 @@ namespace TraceSoul2.Host
                     Providers.Protection.ObserveTurnFailures(result);
                     LastTurn = result;
                     RebuildOntology();
-                    Emit("后台 Moment：" + Truncate(source.Content, 40));
+                    EmitTiming(source.TraceId, "后台输入处理完成", detail: "来源：" + source.PluginId);
                 }
             }
             catch (OperationCanceledException) when (cancellationToken.IsCancellationRequested) { throw; }
@@ -1059,6 +1059,13 @@ namespace TraceSoul2.Host
         private static string NewTraceId()
         {
             return Guid.NewGuid().ToString("N").Substring(0, 8);
+        }
+
+        public async Task RefreshMemoryTopicsAsync(CancellationToken token)
+        {
+            await gate.WaitAsync(token);
+            try { RebuildOntology(); }
+            finally { gate.Release(); }
         }
 
         public void RebuildOntology()

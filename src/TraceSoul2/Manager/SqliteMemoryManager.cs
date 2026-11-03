@@ -115,6 +115,29 @@ namespace TraceSoul2.Manager
         }
 
         [MethodImpl(MethodImplOptions.Synchronized)]
+        public List<MomentRecord> GetToolObservations(string conversationId, int take)
+        {
+            return connection.Query<MomentRecord>(
+                "SELECT * FROM moments WHERE ConversationId=? AND Type=? AND EvidenceType=? " +
+                "AND IFNULL(ParentMomentId,'')!='' AND IFNULL(MemoryStatus,'')!='operational' " +
+                "ORDER BY CreatedUnixMs DESC, Id LIMIT ?", conversationId, MomentTypes.Event,
+                EvidenceTypeValues.PluginObserved, Math.Clamp(take, 1, 2000));
+        }
+
+        /// <summary>先按会话、可见性和记录时间限定，再取有界原件。归档状态不影响读取。</summary>
+        [MethodImpl(MethodImplOptions.Synchronized)]
+        public List<MomentRecord> GetScopedMemorySources(string conversationId, long start, long end,
+            string excludeId, bool publicOnly, int take)
+        {
+            return connection.Query<MomentRecord>(
+                "SELECT * FROM moments WHERE ConversationId=? AND CreatedUnixMs>=? AND CreatedUnixMs<? AND Id!=? " +
+                "AND IFNULL(MemoryStatus,'')!='operational' AND (?=0 OR MemoryVisibility='public') " +
+                "AND (Type IN ('message','hearing','sight','feeling','touch','expression') OR EvidenceType=?) " +
+                "ORDER BY CreatedUnixMs DESC,Id LIMIT ?", conversationId, start, end, excludeId ?? "", publicOnly ? 1 : 0,
+                EvidenceTypeValues.PluginObserved, Math.Clamp(take,1,2001));
+        }
+
+        [MethodImpl(MethodImplOptions.Synchronized)]
         public List<MomentRecord> GetRecentDialogueMoments(string conversationId, int take)
         {
             if (take <= 0) return new List<MomentRecord>();

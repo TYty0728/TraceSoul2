@@ -26,7 +26,7 @@ namespace TraceSoul2.Prompts
             public const string Moment =
                 "Moment：一次进入意识的原始记录。常见来源：她发来的一句话、时间到期、外出结果。";
             public const string Brain =
-                "Brain：同伴本人。感受、看法、带温度的细节由他另写；你不是他。";
+                "同伴：持续相处中的主体。感受、看法、带温度的细节由他另写；你不是他。";
             public const string Tag =
                 "Tag：可长期复用的人生主题标签，用来做索引；名称不是本句摘要。";
             public const string IdentityCard =
@@ -246,7 +246,7 @@ QQ 里的我可以说话，也可以带一小段正在发生的动作或神情�
             public const string Duty = "职责只有：理解当前文字证据；从候选第三层 Tag 中多选；必要时新增中性 Tag；写事实短句；唤醒真正相关的旧事实。";
             public const string HardRulesHeader = "硬规则：";
             public const string Rule1 = "1. 事实 summary 必须少于20个汉字，主语必须是 {username} 或 {assname}，一次事实一条；最多3条。";
-            public const string Rule2 = "2. 不写关系结论、人格、动机、长期规律或‘这对我意味着什么’。这些属于 Brain 当场形成的看法（cognition），不归你写。";
+            public const string Rule2 = "2. 不写关系结论、人格、动机、长期规律或‘这对我意味着什么’。长期认识由日复盘结合证据形成，不在这一步写入。";
             public const string Rule3 = "3. 允许多选 Tag；语义相近事实不合并。没有值得结构化的事实时 fact_writes=[]。";
             public const string Rule4 = "4. 候选都不对时才新增 Tag。Tag 是可长期复用的人生主题，不是本句摘要；名称不超过12字。新 Tag 自动视为本轮已选择。";
             public const string Rule5 = "5. 文字摸头、拥抱、亲吻属于 shared_scene；{username} 外部生活自述属于 external_world；系统讨论属于 meta。";
@@ -376,7 +376,7 @@ QQ 里的我可以说话，也可以带一小段正在发生的动作或神情�
             {
                 "帮我记一下", "帮我记着", "你记住这句话", "以后别忘了"
             };
-            public const string ReleaseInstruction = "讲完了、告一段落、心里安静了：此刻从手上拿开。手里没了写「无」；这是话题边界，可将 archive=true，review 保持 false。";
+            public const string ReleaseInstruction = "讲完了、告一段落、心里安静了：此刻从手上拿开。手里没了写「无」，自然结束话题；长期整理留给每日复盘。";
             public const string ReleaseSense = "讲完了。故事讲完了。这段过了。告一段落。心里安静了。就这样吧。先这样。";
             public static readonly string[] ReleaseExamples =
             {

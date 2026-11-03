@@ -2,6 +2,7 @@ using System;
 using System.Collections.Generic;
 using System.Text.RegularExpressions;
 using System.Threading.Channels;
+using TraceSoul2.Util;
 
 namespace TraceSoul2.Host
 {
@@ -33,7 +34,7 @@ namespace TraceSoul2.Host
 
         public void Emit(string message)
         {
-            var line = DateTimeOffset.Now.ToString("HH:mm:ss.fff") + " " + Sanitize(message);
+            var line = DateTimeOffset.Now.ToString("yyyy-MM-dd HH:mm:ss.fff zzz") + " " + TraceLogFormat.Normalize(Sanitize(message));
             lock (gate)
             {
                 if (disposed) return;
@@ -49,7 +50,7 @@ namespace TraceSoul2.Host
             value = Regex.Replace(value, @"(?i)(?:data:[^,\s""<>]+;base64,|base64://)[a-z0-9+/=\\\s]*", "[图片数据已省略]");
             // 兼容 JSON 转义的 Base64；不让无前缀的大段编码占满日志。
             value = Regex.Replace(value, @"(?:[A-Za-z0-9+/=]|\\u00(?:2[BbFf]|3[Dd])|\\[rn/]){100,}", "[编码数据已省略]");
-            value = value.Replace("\r", " ").Replace("\n", " ");
+            value = TraceLogFormat.SingleLine(value);
             return value.Length <= 2000 ? value : value.Substring(0, 2000) + "…[已截断]";
         }
 

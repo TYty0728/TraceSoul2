@@ -23,7 +23,7 @@ public sealed class TavilyPlugin : ITracePlugin
 
     public TracePluginMetadataData Metadata { get; } = new()
     {
-        Id = "web.tavily", DisplayName = "联网搜索（Tavily）", Version = "0.1.1",
+        Id = "web.tavily", DisplayName = "联网搜索（Tavily）", Version = "0.1.2",
         Author = "TraceSoul2", Role = PluginRoleValues.Organ, PlatformId = "",
         Description = "自主搜索公开网页、按需读取正文，保留来源与获取时间。"
     };
@@ -68,7 +68,7 @@ public sealed class TavilyPlugin : ITracePlugin
                 ParametersJsonSchema = read
                     ? "{url:string,query?:string（想在页面中查找的内容）}"
                     : "{query:string,topic?:general|news,time_range?:day|week|month|year}",
-                HasExternalSideEffect = false
+                HasExternalSideEffect = false, RetainResultAsObservation = true
             };
         }
         public TraceContributionDescriptorData Descriptor { get; }

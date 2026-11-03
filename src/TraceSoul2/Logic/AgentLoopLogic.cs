@@ -29,6 +29,8 @@ namespace TraceSoul2.Logic
             Func<CancellationToken, Task> refreshContext = null)
         {
             var stable = BuildStable(turn);
+            var situations = await MindTemplateLogic.SelectAsync(turn.Moment?.Content,
+                turn.Services.Embedding, MindTemplateLogic.CandidateCap, token);
             var heartbeatTurn = HeartbeatLogic.IsHeartbeatTurn(turn);
             var history = new List<object>();
             var pendingState = new AgentTurnStateLogic();
@@ -44,7 +46,7 @@ namespace TraceSoul2.Logic
                 var catalog = BuildCatalog(catalogProvider());
                 if (!AgentPromptContextLogic.HasActiveExecution(turn)) catalog.RemoveAll(x => x.Id == "execution.cancel");
                 var dynamic = (catalog.Any(x => x.Id == "web.search" || x.Id == "web.read") ? AgentLoopPrompts.Search + "\n" : "") +
-                    AgentPromptContextLogic.Context(turn) + AgentPromptContextLogic.Catalog(catalog) +
+                    AgentPromptContextLogic.Context(turn) + MindTemplateLogic.FormatForAgent(situations) + AgentPromptContextLogic.Catalog(catalog) +
                     AgentPromptContextLogic.Executions(turn);
                 if (history.Count > 0) dynamic += AgentPromptContextLogic.Results(history);
                 dynamic += AgentPromptContextLogic.PendingState(pendingState.Values);
@@ -87,7 +89,9 @@ namespace TraceSoul2.Logic
                 GoalMemoryLogic.Apply(turn, step.goal_updates);
                 appliedGoals.AddRange(step.goal_updates ?? new());
                 step.applied_goal_updates = appliedGoals.ToList();
-                turn.Services.LogTiming(turn.TraceId, "Agent 推进", detail: "step=" + step.step + "｜round=" + (round + 1));
+                turn.Services.LogTiming(turn.TraceId, step.step switch {
+                    "continue" => "Agent 继续行动", "wait" => "Agent 本轮等待", _ => "Agent 准备收尾"
+                }, detail: "步骤：" + (round + 1) + "｜行动数：" + (step.actions?.Count ?? 0));
                 if (step.actions == null || step.actions.Count == 0)
                 {
                     step.reply = (step.reply ?? string.Empty).Trim();
@@ -145,9 +149,14 @@ namespace TraceSoul2.Logic
             var result = (source ?? Enumerable.Empty<TraceContributionDescriptorData>())
                 .Where(x => ToolLookupLogic.IsLookupEligible(x) || x?.Id == "dialogue.recent_history" ||
                     IsConversationalExpression(x)).ToList();
-            result.RemoveAll(x => x.Id == "memory.recall" || x.Id == "execution.cancel");
+            result.RemoveAll(x => x.Id == "memory.recall" || x.Id == "memory.topics" || x.Id == "memory.source" || x.Id == "execution.cancel");
+            result.Add(new TraceContributionDescriptorData { Id="memory.source", Kind=TraceContributionKindValues.CallableNerve,
+                Description="按召回提供的原件ID读取证据，每次最多4000字符；next_offset非空时可继续读。",
+                ParametersJsonSchema="{\"required\":[\"source_id\"],\"properties\":{\"source_id\":{\"type\":\"string\"},\"offset\":{\"type\":\"string\"}}}" });
+            result.Add(new TraceContributionDescriptorData { Id = "memory.topics", Kind = TraceContributionKindValues.CallableNerve,
+                Description = "按具体问题寻找相近的人生主题，再选择主题读取相关经历和认知。", ParametersJsonSchema = "{\"required\":[\"query\"],\"properties\":{\"query\":{\"type\":\"string\"}}}" });
             result.Add(new TraceContributionDescriptorData { Id = "memory.recall", Kind = TraceContributionKindValues.CallableNerve,
-                Description = "按具体问题检索真实共同记忆，不生成或改写记忆。", ParametersJsonSchema = "{\"required\":[\"query\"],\"properties\":{\"query\":{\"type\":\"string\"}}}" });
+                Description = "先确定范围再读记忆：kind=events查经历及同期原文、cognitions查当前认知、sources查原文、auto兼容综合查询。tags为0～3个主题名JSON数组字符串；明确日期必须填period或date_start/date_end。period可用today/yesterday/day_before_yesterday/this_week/last_week/this_month/last_month/this_year/last_year；日期格式yyyy-MM-dd，起止日都包含，单日填相同值。day_basis默认calendar自然日，明确归档记忆日才填memory（04:00切日）。日期与主题取交集，空结果不跨范围兜底；日期不能与cognitions组合。", ParametersJsonSchema = "{\"required\":[\"query\"],\"properties\":{\"query\":{\"type\":\"string\"},\"tags\":{\"type\":\"string\"},\"kind\":{\"type\":\"string\"},\"period\":{\"type\":\"string\"},\"date_start\":{\"type\":\"string\"},\"date_end\":{\"type\":\"string\"},\"day_basis\":{\"type\":\"string\"}}}" });
             result.Add(new TraceContributionDescriptorData { Id = "execution.cancel", Kind = TraceContributionKindValues.CallableNerve,
                 Description = "请求停止当前会话中的持续语音或动作；必须等待设备确认停止。", ParametersJsonSchema = "{\"required\":[\"execution_id\"],\"properties\":{\"execution_id\":{\"type\":\"string\"}}}" });
             return result.GroupBy(x => x.Id, StringComparer.Ordinal).Select(x => x.First()).ToList();

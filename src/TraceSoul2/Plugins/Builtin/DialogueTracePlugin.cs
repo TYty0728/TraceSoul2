@@ -23,7 +23,7 @@ namespace TraceSoul2.Plugins.Builtin
             Author = "TraceSoul2",
             Role = PluginRoleValues.Platform,
             PlatformId = BodyIds.Console,
-            Description = "保底对话平台：接收本地文字 Moment，按需提供受限的近期原文，并执行 Brain 的文字表达。"
+            Description = "保底对话平台：接收本地文字，按需读取近期原文，并发送 Agent 的回复。"
         };
 
         public void Register(TracePluginContext context)

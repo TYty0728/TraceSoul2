@@ -598,6 +598,7 @@ namespace TraceSoul2.Migrate
                     var selectedIds = new HashSet<string>(
                         output.selected_tag_ids ?? new List<string>(), StringComparer.Ordinal);
                     foreach (var tag in createdByName.Values) selectedIds.Add(tag.Id);
+                    foreach (var tag in createdByName.Values) allowed.Add(tag.Id);
                     foreach (var id in selectedIds.Where(allowed.Contains).Take(8))
                     {
                         var tag = brain.Find<LifeTagRecord>(id);

@@ -20,6 +20,7 @@ using Microsoft.AspNetCore.Mvc;
 using Microsoft.AspNetCore.Server.Kestrel.Core;
 using Microsoft.Extensions.DependencyInjection;
 using Microsoft.Extensions.Hosting;
+using Microsoft.Extensions.Logging;
 using TraceSoul2.Util;
 using TraceSoul2.Data;
 using TraceSoul2.Host;
@@ -85,6 +86,10 @@ var builder = WebApplication.CreateBuilder(new WebApplicationOptions
 {
     ContentRootPath = AppContext.BaseDirectory,
     Args = args
+});
+builder.Logging.AddSimpleConsole(options => {
+    options.SingleLine = true;
+    options.TimestampFormat = "yyyy-MM-dd HH:mm:ss.fff zzz ";
 });
 builder.WebHost.ConfigureKestrel(options =>
 {

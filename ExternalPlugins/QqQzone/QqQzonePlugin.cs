@@ -36,7 +36,7 @@ namespace TraceSoul2.ExternalPlugins
         {
             Id = PluginId,
             DisplayName = "QQ 空间说说",
-            Version = "1.4.0",
+            Version = "1.4.1",
             Author = "TraceSoul2",
             Role = PluginRoleValues.Organ,
             PlatformId = BodyIds.Qq,
@@ -144,14 +144,14 @@ namespace TraceSoul2.ExternalPlugins
             BrainCapabilityCallData call, TraceTurnContext context, CancellationToken cancellationToken)
         {
             var result = await ReadAsync(call, context, cancellationToken);
-            if (result != null && IsIdleCall(call) && result.ProducedEvent == null)
+            if (result?.Status == "success" && !string.IsNullOrWhiteSpace(result.Payload) && result.ProducedEvent == null)
             {
                 result.ProducedEvent = new PluginEventData
                 {
                     PluginId = PluginId,
                     ExternalEventId = Guid.NewGuid().ToString("N"),
                     Role = "system_event",
-                    Content = result.Summary ?? "看了说说。",
+                    Content = "读取空间材料（只证明页面这样记载，尚未独立核实）：\n" + result.Payload,
                     Realm = TraceRealmValues.ExternalWorld,
                     EvidenceType = EvidenceTypeValues.PluginObserved,
                     PayloadJson = string.Empty,
@@ -191,7 +191,7 @@ namespace TraceSoul2.ExternalPlugins
                     var text = FormatFeeds(target, feeds);
                     return new TraceCapabilityResultData
                     {
-                        Status = "success",
+                        Status = feeds.Count == 0 ? "empty" : "success",
                         Summary = feeds.Count == 0
                             ? "没有读到 QQ " + target + " 的说说。"
                             : "读到 QQ " + target + " 最近 " + feeds.Count + " 条说说。",
@@ -855,6 +855,7 @@ namespace TraceSoul2.ExternalPlugins
                     DisplayName = "QQ 空间看说说",
                     Description = QqQzonePrompts.ReadDescription,
                     Provides = "sense.qq.qzone",
+                    RetainResultAsObservation = true,
                     WhenToUse = QqQzonePrompts.ReadWhenToUse,
                     WhenNotToUse = QqQzonePrompts.ReadWhenNotToUse,
                     Boundary = QqQzonePrompts.ReadBoundary,

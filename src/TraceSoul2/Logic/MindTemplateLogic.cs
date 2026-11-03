@@ -104,6 +104,22 @@ namespace TraceSoul2.Logic
             return Take(scored, cap);
         }
 
+        public static string FormatForAgent(IEnumerable<MindTemplate> templates)
+        {
+            var hints = (templates ?? Enumerable.Empty<MindTemplate>()).Select(t => t.Id switch {
+                "recall" => "眼前的话涉及共同经历：先看相近的记忆主题，需要细节就通过 memory.recall 查证；没有依据就坦诚说明。",
+                "perform" => "对方在请我讲、唱、念或演：用合适的正文或能力把内容做出来，不停留在答应。",
+                "choose" => "眼前是在商量选择：结合已知口味和条件，给少量具体选项，也给对方留下选择空间。",
+                "hold" => "对方正在靠近、寻求陪伴：先回应这一刻的心意，让相处自然发生，不急着变成分析或追问。",
+                "leave" => "需要查找或办事：通过可用能力行动，根据真实结果继续；耗时动作可用实际表达能力告知进展，查资料不代表身体离场。",
+                "note" => "对方明确希望记住一件事：用有当前原话依据的 goal_updates 保存偏好或约定；刚得知的事实可留 new_fact，长期认识交给复盘。",
+                "release" => "事情告一段落：自然收尾，放下已经结束的关注；更新确有变化的状态，不为了继续说话重复追问，也不触发白天归档。",
+                _ => ""
+            }).Where(s => s.Length > 0).Take(CandidateCap).ToList();
+            return hints.Count == 0 ? "" : "\n【此刻可参考的回应方式】\n" + string.Join("\n", hints.Select(s => "- " + s)) +
+                "\n这些是语义候选，结合眼前情境决定是否适用，不当作必须执行的任务。\n";
+        }
+
         public static string Format(IEnumerable<MindTemplate> templates)
         {
             var list = (templates ?? Enumerable.Empty<MindTemplate>()).Where(x => x != null).ToList();

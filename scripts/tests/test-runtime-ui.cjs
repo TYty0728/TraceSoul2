@@ -10,6 +10,10 @@ const sandbox = {
   esc: s => String(s ?? '').replaceAll('&', '&amp;').replaceAll('<', '&lt;').replaceAll('>', '&gt;')
 };
 vm.createContext(sandbox);
+const phaseStart = html.indexOf('  function turnPhase(');
+const phaseEnd = html.indexOf('  function renderTurn(', phaseStart);
+assert.ok(phaseStart >= 0 && phaseEnd > phaseStart);
+vm.runInContext(html.slice(phaseStart, phaseEnd), sandbox);
 const start = html.indexOf('  function formatHeartbeatDue(');
 const end = html.indexOf('  async function loadLive(', start);
 assert.ok(start >= 0 && end > start);
@@ -42,6 +46,7 @@ state.latestTurn.mindDecision = state.decision;
 delete state.decision;
 sandbox.renderLive(state);
 assert.match(nodes.liveDecision.innerHTML, /finish/);
+assert.match(nodes.liveTurn.innerHTML, /阶段.*已完成/s);
 state.latestTurn.mindDecision = { beat: '当下', note: '旧判断', tags: [] };
 sandbox.renderLive(state);
 assert.match(nodes.liveDecision.innerHTML, /旧判断/);

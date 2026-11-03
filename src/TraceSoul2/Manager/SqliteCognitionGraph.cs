@@ -125,6 +125,7 @@ namespace TraceSoul2.Manager
             }
             if (op == "reinforce" || op == "weaken" || op == "retire")
             {
+                if (op == "reinforce") AddCognitionTags(target.Id, write.tag_ids);
                 // Upgrade only references whose exact old source still matches, before its
                 // metadata changes. Never bless a previously stale or edited source.
                 foreach (var card in connection.Table<IdentityCardRecord>().Where(x => x.Origin == "derived").ToList())
@@ -174,7 +175,7 @@ namespace TraceSoul2.Manager
                 .Where(x => x.Summary == summary && x.Domains == domains && (x.Status == "active" || x.Status == "weakened") &&
                     x.About == about && x.Scope == scope && x.Exceptions == exceptions &&
                     x.ContextConversationId == contextId && x.IdentitySlot == identitySlot).FirstOrDefault() : null;
-            if (existing != null) { AddGraphEvidence(existing.Id, evidence, "supports"); return existing; }
+            if (existing != null) { AddCognitionTags(existing.Id, tags); AddGraphEvidence(existing.Id, evidence, "supports"); return existing; }
             var node = new CognitionSliceRecord
             {
                 Id = Guid.NewGuid().ToString("N"), OwnerId = "ass", Domains = domains,
@@ -188,8 +189,7 @@ namespace TraceSoul2.Manager
                 CreatedUnixMs = now, UpdatedUnixMs = now, LastConfirmedUnixMs = now
             };
             connection.Insert(node);
-            foreach (var id in tags) connection.Insert(new CognitionTagLinkRecord
-                { Id = node.Id + "|" + id, CognitionId = node.Id, TagId = id, Weight = 1f });
+            AddCognitionTags(node.Id, tags);
             AddGraphEvidence(node.Id, evidence, "supports");
             if (op == "revise")
             {
@@ -203,6 +203,18 @@ namespace TraceSoul2.Manager
                     Cue = cue, AssociationStrength = Clamp01(write.association_strength),
                     SourceMomentId = evidence[0].MomentId, CreatedUnixMs = now });
             return node;
+        }
+
+        private void AddCognitionTags(string cognitionId, IEnumerable<string> tagIds)
+        {
+            foreach (var tagId in (tagIds ?? Enumerable.Empty<string>()).Distinct().Take(8))
+            {
+                if (connection.Find<LifeTagRecord>(tagId)?.Status != "active") continue;
+                var id = cognitionId + "|" + tagId;
+                if (connection.Find<CognitionTagLinkRecord>(id) == null)
+                    connection.Insert(new CognitionTagLinkRecord
+                        { Id = id, CognitionId = cognitionId, TagId = tagId, Weight = 1f });
+            }
         }
 
         private void SaveCognitionEdge(string from, string to, string relation, long now)

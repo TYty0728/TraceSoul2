@@ -20,6 +20,9 @@ internal static partial class Program
     private static void Main(string[] args)
     {
         SQLitePCL.Batteries_V2.Init();
+        if (args.Contains("--memory-scope")) { RunMemoryScopeChecksAsync().GetAwaiter().GetResult(); return; }
+        if (args.Contains("--memory-routing-audit")) { RunMemoryRoutingAuditAsync().GetAwaiter().GetResult(); return; }
+        if (args.Contains("--logging")) { RunRecentEventLogCheck(); Console.WriteLine("Logging checks passed."); return; }
         if (args.Length == 4 && args[0] == "--daily-review-peer") { RunDailyReviewPeer(args[1], args[2], args[3]); return; }
         if (args.Length == 3 && args[0] == "--review-recovery-peer") { RunReviewRecoveryPeerAsync(args[1], args[2]).GetAwaiter().GetResult(); return; }
         if (args.Contains("--camera-transport")) { RunCameraTransportChecksAsync().GetAwaiter().GetResult(); return; }

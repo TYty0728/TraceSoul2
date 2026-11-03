@@ -13,8 +13,38 @@ namespace TraceSoul2.Logic
     /// <summary>心智勾标签之后，由代码做向量语义拼装。不再另开一轮总结 LLM。</summary>
     public static class MemoryRecallLogic
     {
+        public static string TopicCandidates(TraceTurnContext turn, string query = null)
+        {
+            if (EnvironmentLogic.IsPublic(turn)) return string.Empty;
+            var tags = RankByMoment(turn.Services.Router, query ?? turn.Moment?.Content,
+                turn.Services.Storage.GetActiveLifeTags(), 12);
+            return "【可选记忆主题】\n" + (tags.Count == 0 ? "没有相近主题；可用 memory.topics 换一个具体问题查找，或不选主题直接查证。" :
+                string.Join("\n", tags.Select(t => "- " + t.Label + "：" + t.Definition))) +
+                "\n需要回忆时，从候选原样选择0～3个主题，用 memory.recall 的 tags 参数传JSON字符串数组；query说明具体想找什么。主题可多选，不把同词不同含义硬归一类。";
+        }
+
+        public static List<string> ParseTopicSelection(TraceTurnContext turn, string tagsJson)
+        {
+            var tags = string.IsNullOrWhiteSpace(tagsJson) ? new List<string>() : TraceJson.FromJson<List<string>>(tagsJson);
+            if (tags == null || tags.Count > 3 || tags.Any(string.IsNullOrWhiteSpace) || tags.Distinct().Count() != tags.Count)
+                throw new ArgumentException("tags须为0～3个不重复主题名称的JSON字符串数组。");
+            if (tags.Count > 0 && EnvironmentLogic.IsPublic(turn))
+                throw new ArgumentException("公开环境不能使用私密记忆主题。");
+            var known = turn.Services.Storage.GetActiveLifeTags().Select(t => t.Label).ToHashSet(StringComparer.Ordinal);
+            if (tags.Any(t => !known.Contains(t))) throw new ArgumentException("所选主题不存在；请先用memory.topics查找候选。");
+            return tags;
+        }
         public const float TagMinScore = 0.12f;
         public const float TagWindowFromBest = 0.28f;
+
+        /// <summary>新消息只预读当前理解，不预读无范围的事件/日复盘或原件。保留认知对普通相处的影响。</summary>
+        public static string PreviewUnderstanding(TraceTurnContext turn, int topK)
+        {
+            if (turn?.Services?.Storage == null) return string.Empty;
+            var query=EnvironmentLogic.IsPublic(turn) ? turn.Moment?.Content : BuildPreludeQuery(turn);
+            var text=RecallPuzzle(turn,query,topK,includeOriginalEvidence:false,includeRuntimeReview:false);
+            return string.IsNullOrWhiteSpace(text) ? "" : "【背景理解；不是本次日期查证的结果】\n"+text;
+        }
 
         /// <summary>
         /// 在心智作决定以前，先让与当前语境最贴近的一小片真实过去自然浮起。
@@ -124,7 +154,8 @@ namespace TraceSoul2.Logic
             return Assemble(turn, mind, topK, out _);
         }
 
-        public static string Assemble(TraceTurnContext turn, MindDecisionData mind, int topK, out bool hasEvidence)
+        public static string Assemble(TraceTurnContext turn, MindDecisionData mind, int topK, out bool hasEvidence,
+            IReadOnlyList<string> selectedLabels = null)
         {
             hasEvidence = false;
             if (turn == null || turn.Services == null || turn.Services.Storage == null)
@@ -142,9 +173,7 @@ namespace TraceSoul2.Logic
                 : mind.query.Trim();
             if (string.IsNullOrWhiteSpace(query)) query = turn.Moment.Content;
 
-            var cognitionText = RecallPuzzle(turn, query, topK);
-            hasEvidence = cognitionText.Length > 0;
-            var labels = mind == null ? new List<string>() : mind.ParseTags();
+            var labels = selectedLabels ?? (mind == null ? new List<string>() : mind.ParseTags());
             var idByLabel = (storage.GetActiveLifeTags() ?? new List<LifeTagRecord>())
                 .Where(x => x != null && !string.IsNullOrWhiteSpace(x.Label))
                 .GroupBy(x => x.Label, StringComparer.Ordinal)
@@ -154,6 +183,9 @@ namespace TraceSoul2.Logic
                 .Select(x => idByLabel[x])
                 .Distinct()
                 .ToList();
+            var cognitionText = RecallPuzzle(turn, query, topK, selectedTagIds: labels.Count > 0 ? conceptIds : null);
+            hasEvidence = cognitionText.Length > 0;
+            if (labels.Count > 0 && conceptIds.Count == 0) return "所选主题不存在，请重新选择。";
 
             var indexes = storage.GetActiveEventIndexes() ?? new List<EventIndexRecord>();
             if (indexes.Count == 0)
@@ -161,8 +193,9 @@ namespace TraceSoul2.Logic
 
             var filtered = storage.GetEventIndexesByFilter(
                 conceptIds, null, null, null, null, null, null, 500);
-            if (filtered == null || filtered.Count == 0)
+            if ((filtered == null || filtered.Count == 0) && labels.Count == 0)
                 filtered = indexes.Take(500).ToList();
+            filtered ??= new List<EventIndexRecord>();
 
             var entries = storage.GetEventEntriesByIndexIds(filtered.Select(x => x.Id))
                 ?? new List<EventEntryRecord>();
@@ -328,7 +361,8 @@ namespace TraceSoul2.Logic
             return builder.ToString().TrimEnd();
         }
 
-        internal static string RecallPuzzle(TraceTurnContext turn, string query, int topK, bool includeOriginalEvidence = true)
+        internal static string RecallPuzzle(TraceTurnContext turn, string query, int topK, bool includeOriginalEvidence = true,
+            IReadOnlyList<string> selectedTagIds = null, bool includeRuntimeReview = true)
         {
             var storage = turn.Services.Storage;
             var tags = EnvironmentLogic.IsPublic(turn) ? new List<LifeTagRecord>() : RankByMoment(turn.Services.Router, query, storage.GetActiveLifeTags(), 8);
@@ -339,12 +373,18 @@ namespace TraceSoul2.Logic
             var related = InnerLifeLogic.LiveAttention(runtime, DateTimeOffset.UtcNow.ToUnixTimeMilliseconds())
                 .SelectMany(x => x.source_refs ?? new List<string>()).Where(x => x != null && x.StartsWith("cognition:", StringComparison.Ordinal))
                 .Select(x => x.Substring(10)).Distinct().Take(6).ToList();
+            var topicNodes = selectedTagIds == null ? null : storage.GetCognitionTagIds(
+                (storage as ICognitionGraphStore)?.GetCognitionNodes(5000).Select(n => n.Id) ?? Array.Empty<string>())
+                .Where(x => x.Value.Any(selectedTagIds.Contains)).Select(x => x.Key).ToHashSet();
+            var sources = new List<IContextRecallSource> {
+                new CognitionContextRecallSource(storage, n => PuzzleViewLogic.CanRead(turn, n) && (topicNodes == null || topicNodes.Contains(n.Id)),
+                    m => PuzzleViewLogic.CanReadEvidence(turn, m)) };
+            if (selectedTagIds == null && includeRuntimeReview) sources.Add(new DelegateContextRecallSource("runtime_day", q => RuntimeSliceLogic.Recall(turn, q)));
             var selected = adapter.Recall(new ContextRecallQuery { Text = query, RelatedIds = related,
-                Cues = tags.Select(x => x.Id).ToList(), MaxItems = Math.Max(0, Math.Min(10, topK)),
+                Cues = selectedTagIds ?? tags.Select(x => x.Id).ToList(), MaxItems = Math.Max(0, Math.Min(10, topK)),
                 IncludeOriginalEvidence = includeOriginalEvidence,
                 MaxChars = 3200 - cognitionHeading.Length - reviewHeading.Length - 3 * Environment.NewLine.Length },
-                new IContextRecallSource[] { new CognitionContextRecallSource(storage, n => PuzzleViewLogic.CanRead(turn, n), m => PuzzleViewLogic.CanReadEvidence(turn, m)),
-                    new DelegateContextRecallSource("runtime_day", q => RuntimeSliceLogic.Recall(turn, q)) });
+                sources);
             foreach (var item in selected.Where(x => x.SourceId == "cognition")) turn.Workspace.RecalledCognitionIds.Add(item.Id);
             return string.Join("\n", new[] {
                 adapter.RenderNatural(cognitionHeading, selected.Where(x => x.SourceId == "cognition").ToList()),

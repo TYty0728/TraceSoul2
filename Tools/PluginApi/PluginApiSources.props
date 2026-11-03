@@ -35,4 +35,7 @@
     <Compile Include="$(MSBuildThisFileDirectory)../../src/TraceSoul2/Plugins/Platform/ITracePlatformAdapter.cs" />
     <Compile Include="$(MSBuildThisFileDirectory)../../src/TraceSoul2/Plugins/IMemoryRecallEngine.cs" />
   </ItemGroup>
+  <ItemGroup>
+    <Compile Include="$(MSBuildThisFileDirectory)../../src/TraceSoul2/Util/TraceLogFormat.cs" />
+  </ItemGroup>
 </Project>
