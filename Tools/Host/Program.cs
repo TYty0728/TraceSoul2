@@ -743,7 +743,8 @@ app.MapPost("/providers/{id}/models", async (SoulRuntime runtime, string id, Can
         fetched = await client.ListModelsAsync(token);
     }
     var saved = runtime.Providers.MergeFetched(id, fetched);
-    runtime.Emit("已获取 " + fetched.Count + " 个模型，已写入供应商「" + id + "」");
+    runtime.RefreshReviewClient();
+    runtime.Emit("已同步 " + saved.models.Count + " 个模型，上游已不存在的模型已移除：" + id);
     return Results.Json(new
     {
         models = fetched,

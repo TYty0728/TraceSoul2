@@ -52,8 +52,10 @@ public static class QwenTtsProvider
             using var json = JsonDocument.Parse(await response.Content.ReadAsStringAsync(token));
             if (!json.RootElement.TryGetProperty("data", out var data) || data.ValueKind != JsonValueKind.Array)
                 throw new InvalidOperationException("千问模型列表格式无效。");
-            return data.EnumerateArray().Where(x => x.ValueKind == JsonValueKind.Object && x.TryGetProperty("id", out var id) &&
-                id.ValueKind == JsonValueKind.String).Select(x => x.GetProperty("id").GetString())
+            if (data.EnumerateArray().Any(x => x.ValueKind != JsonValueKind.Object || !x.TryGetProperty("id", out var id) ||
+                id.ValueKind != JsonValueKind.String || string.IsNullOrWhiteSpace(id.GetString()) || id.GetString().Length > 160))
+                throw new InvalidOperationException("千问模型列表包含无效模型。");
+            return data.EnumerateArray().Select(x => x.GetProperty("id").GetString())
                 .Where(x => !string.IsNullOrWhiteSpace(x) && x.Length <= 160).Distinct().ToList();
         }
         catch (HttpRequestException) { throw new InvalidOperationException("千问语音服务连接失败；未自动重试。"); }

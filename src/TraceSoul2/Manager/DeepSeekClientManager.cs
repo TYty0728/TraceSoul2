@@ -81,7 +81,15 @@ namespace TraceSoul2.Manager
                     if (!response.IsSuccessStatusCode)
                         throw new InvalidOperationException(
                             "获取模型列表失败 HTTP " + (int)response.StatusCode + "。");
-            var parsed = TraceJson.FromJson<OpenAiModelListData>(body);
+                    using (var document = JsonDocument.Parse(body))
+                    {
+                        var root = document.RootElement;
+                        if (root.ValueKind != JsonValueKind.Object || !root.TryGetProperty("data", out var entries) ||
+                            entries.ValueKind != JsonValueKind.Array ||
+                            root.TryGetProperty("has_more", out var more) && more.ValueKind == JsonValueKind.True)
+                            throw new InvalidOperationException("模型列表格式不正确或尚未完整返回，已保留原模型。");
+                    }
+                    var parsed = TraceJson.FromJson<OpenAiModelListData>(body);
                     return ParseModelList(parsed);
                 }
             }
@@ -90,10 +98,12 @@ namespace TraceSoul2.Manager
         public static IReadOnlyList<string> ParseModelList(OpenAiModelListData parsed)
         {
             var ids = new List<string>();
-            if (parsed == null || parsed.data == null) return ids;
+            if (parsed == null || parsed.data == null)
+                throw new InvalidOperationException("模型列表格式不正确，缺少 data 数组。");
             foreach (var item in parsed.data)
             {
-                if (item == null || string.IsNullOrWhiteSpace(item.id)) continue;
+                if (item == null || string.IsNullOrWhiteSpace(item.id))
+                    throw new InvalidOperationException("模型列表包含无效模型 id。");
                 var id = item.id.Trim();
                 if (!ids.Contains(id)) ids.Add(id);
             }

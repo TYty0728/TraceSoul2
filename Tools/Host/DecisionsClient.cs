@@ -100,8 +100,10 @@ namespace TraceSoul2.Host
             var result = await RequestAsync(true, null, token);
             if (result.ValueKind != JsonValueKind.Object || !result.TryGetProperty("data", out var data) || data.ValueKind != JsonValueKind.Array)
                 throw new InvalidOperationException("决策模型列表格式不正确。");
-            return data.EnumerateArray().Where(x => x.ValueKind == JsonValueKind.Object &&
-                x.TryGetProperty("id", out var id) && id.ValueKind == JsonValueKind.String)
+            if (data.EnumerateArray().Any(x => x.ValueKind != JsonValueKind.Object ||
+                !x.TryGetProperty("id", out var id) || id.ValueKind != JsonValueKind.String || string.IsNullOrWhiteSpace(id.GetString())))
+                throw new InvalidOperationException("决策模型列表包含无效模型。");
+            return data.EnumerateArray()
                 .Select(x => x.GetProperty("id").GetString()).Where(x => !string.IsNullOrWhiteSpace(x)).Distinct().ToList();
         }
 

@@ -67,15 +67,28 @@ namespace TraceSoul2.Host
         {
             RequireKey();
             var url = GeminiRoot(config.BaseUrl) + "/models?key=" + Uri.EscapeDataString(config.ApiKey);
-            using (var request = new HttpRequestMessage(HttpMethod.Get, url))
-            using (var response = await SendWithTimeoutAsync(request, cancellationToken))
+            var ids = new HashSet<string>(StringComparer.Ordinal);
+            var seenPages = new HashSet<string>(StringComparer.Ordinal);
+            var pageToken = string.Empty;
+            do
             {
-                var body = await response.Content.ReadAsStringAsync();
-                if (!response.IsSuccessStatusCode)
-                    throw new InvalidOperationException(
-                        "获取 Gemini 模型列表失败 HTTP " + (int)response.StatusCode + "。");
-                return ParseModelIds(body);
-            }
+                using (var request = new HttpRequestMessage(HttpMethod.Get, url +
+                    (pageToken.Length == 0 ? "" : "&pageToken=" + Uri.EscapeDataString(pageToken))))
+                using (var response = await SendWithTimeoutAsync(request, cancellationToken))
+                {
+                    var body = await response.Content.ReadAsStringAsync();
+                    if (!response.IsSuccessStatusCode)
+                        throw new InvalidOperationException(
+                            "获取 Gemini 模型列表失败 HTTP " + (int)response.StatusCode + "。");
+                    foreach (var id in ParseModelIds(body)) ids.Add(id);
+                    using var document = JsonDocument.Parse(body);
+                    pageToken = document.RootElement.TryGetProperty("nextPageToken", out var next)
+                        ? next.GetString() ?? string.Empty : string.Empty;
+                    if (pageToken.Length > 0 && (!seenPages.Add(pageToken) || seenPages.Count > 100))
+                        throw new InvalidOperationException("Gemini 模型分页异常，已保留原模型。");
+                }
+            } while (pageToken.Length > 0);
+            return ids.OrderBy(x => x, StringComparer.Ordinal).ToList();
         }
 
         public Task<string> CompleteJsonAsync(
@@ -334,12 +347,14 @@ namespace TraceSoul2.Host
             {
                 if (!doc.RootElement.TryGetProperty("models", out var models) ||
                     models.ValueKind != JsonValueKind.Array)
-                    return ids;
+                    throw new InvalidOperationException("Gemini 模型列表格式不正确，缺少 models 数组。");
                 foreach (var item in models.EnumerateArray())
                 {
-                    if (!item.TryGetProperty("name", out var nameEl)) continue;
+                    if (item.ValueKind != JsonValueKind.Object || !item.TryGetProperty("name", out var nameEl))
+                        throw new InvalidOperationException("Gemini 模型列表包含无效模型。");
                     var name = StripModelsPrefix(nameEl.GetString());
-                    if (string.IsNullOrWhiteSpace(name)) continue;
+                    if (string.IsNullOrWhiteSpace(name))
+                        throw new InvalidOperationException("Gemini 模型列表包含空模型名。");
                     var canGenerate = true;
                     if (item.TryGetProperty("supportedGenerationMethods", out var methods) &&
                         methods.ValueKind == JsonValueKind.Array)

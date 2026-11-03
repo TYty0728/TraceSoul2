@@ -30,6 +30,7 @@ internal static partial class Program
         if (args.Contains("--identity-evolution")) { RunIdentityEvolutionChecksAsync().GetAwaiter().GetResult(); return; }
         if (args.Contains("--identity-reorganization")) { RunIdentityReorganizationChecksAsync().GetAwaiter().GetResult(); return; }
         if (args.Contains("--model-test")) { RunModelTestChecksAsync().GetAwaiter().GetResult(); return; }
+        if (args.Contains("--model-sync")) { RunModelSyncChecksAsync().GetAwaiter().GetResult(); return; }
         if (args.Contains("--main-fallback")) { RunMainModelFallbackChecksAsync().GetAwaiter().GetResult(); return; }
         if (TraceSoul2.Host.BackupArchiveService.TryRunSnapshotWorker(args, out var snapshotExit))
         { Environment.ExitCode = snapshotExit; return; }
@@ -88,6 +89,7 @@ internal static partial class Program
         RunMomentSemanticsChecksAsync().GetAwaiter().GetResult();
         RunExpressionChecksAsync().GetAwaiter().GetResult();
         RunDecisionsChecksAsync().GetAwaiter().GetResult();
+        RunModelSyncChecksAsync().GetAwaiter().GetResult();
         RunQwenTtsChecksAsync().GetAwaiter().GetResult();
         RunExistenceChecksAsync().GetAwaiter().GetResult();
         RunReviewSelectionChecksAsync().GetAwaiter().GetResult();

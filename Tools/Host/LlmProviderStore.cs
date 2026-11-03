@@ -357,24 +357,31 @@ namespace TraceSoul2.Host
 
         public LlmProviderRecord MergeFetched(string id, IReadOnlyList<string> fetched)
         {
+            if (fetched == null || fetched.Any(string.IsNullOrWhiteSpace))
+                throw new InvalidOperationException("模型列表格式不正确，已保留原模型。");
+            var available = new HashSet<string>(fetched.Select(x => x.Trim()), StringComparer.OrdinalIgnoreCase);
             lock (gate)
             {
                 var item = Find(id);
                 if (item == null) throw new InvalidOperationException("没有这个供应商：" + id);
                 NormalizeProvider(item);
-                if (fetched != null)
+                // A successful discovery replaces membership, while retained models keep user settings.
+                item.models.RemoveAll(x => !available.Contains(x.id));
+                if (!available.Contains(item.model ?? string.Empty)) item.model = string.Empty;
+                foreach (var slot in new[] { data.jev, data.review, data.multimodal, data.image, data.speech,
+                    data.mainFallbacks?.secondary, data.mainFallbacks?.tertiary })
                 {
-                    foreach (var raw in fetched)
-                    {
-                        if (string.IsNullOrWhiteSpace(raw)) continue;
-                        EnsureModel(item, raw.Trim(), null);
-                    }
+                    if (slot != null && string.Equals(slot.providerId, id, StringComparison.OrdinalIgnoreCase) &&
+                        !available.Contains(slot.model ?? string.Empty))
+                        DropSlotModel(slot, id, slot.model);
                 }
+                foreach (var modelId in available) EnsureModel(item, modelId, null);
                 if (string.IsNullOrWhiteSpace(item.model))
                 {
                     var firstChat = item.models.FirstOrDefault(x =>
                         x.enabled && LlmProviderCatalog.HasRole(x, LlmSlotNames.Chat));
-                    if (firstChat == null) firstChat = item.models.FirstOrDefault(x => x.enabled);
+                    if (firstChat == null && !LlmProviderCatalog.IsChat(item.type))
+                        firstChat = item.models.FirstOrDefault(x => x.enabled);
                     if (firstChat != null) item.model = firstChat.id;
                 }
                 SaveUnsafe();

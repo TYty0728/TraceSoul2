@@ -69,7 +69,7 @@ internal static partial class Program
             edit.baseUrl = "https://relay.example/?secret=x";
             Reject(() => store.Upsert(edit), "无效 URL 不保存");
             Require(store.Get(provider.id).baseUrl == provider.baseUrl, "失败保存不污染内存");
-            var fetched = store.MergeFetched(provider.id, new[] { "openai/gpt-6-luna-decisions" });
+            var fetched = store.MergeFetched(provider.id, new[] { provider.model, "openai/gpt-6-luna-decisions" });
             Require(fetched.models.All(x => x.roles.SequenceEqual(new[] { "jev" })), "模型发现不添加聊天用途");
             using (var native = store.CreateJevDecisionClient()) Require(native != null, "原生 JEV 工厂可用");
 

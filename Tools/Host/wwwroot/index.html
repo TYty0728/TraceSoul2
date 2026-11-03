@@ -993,6 +993,7 @@
               <div class="model-bar">
                 <input id="modelSearch" placeholder="搜索模型或 ID" oninput="renderModelList()" />
                 <button class="primary" onclick="fetchModels()">获取模型列表</button>
+                <p class="muted">获取成功后同步上游列表，移除上游已不存在的模型（含手动添加项）及其用途引用；保留现有模型的启用状态和用途标签。</p>
                 <button onclick="addCustomModel()">自定义模型</button>
               </div>
               <div class="role-filter" id="roleFilter"></div>
@@ -3169,7 +3170,7 @@
     try {
       await saveProvider();
       const data = await api("/providers/" + encodeURIComponent(id) + "/models", "POST");
-      logLine("已获取 " + (data.models || []).length + " 个模型");
+      logLine("已同步 " + (data.configured.models || []).length + " 个模型，上游已不存在的模型已移除");
       await refreshProviders(id);
     } catch (e) {
       logLine("获取模型失败：" + e.message);

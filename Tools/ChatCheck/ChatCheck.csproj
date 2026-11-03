@@ -62,6 +62,7 @@
     <Compile Include="../Host/MainModelFallbackClient.cs" Link="MainModelFallbackClient.cs" />
     <Compile Include="MainModelFallbackChecks.cs" />
     <Compile Include="ModelTestChecks.cs" />
+    <Compile Include="ModelSyncChecks.cs" />
     <Compile Include="IdentityReorganizationChecks.cs" />
     <Compile Include="IdentityEvolutionChecks.cs" />
     <Compile Include="CognitionComparisonChecks.cs" />
