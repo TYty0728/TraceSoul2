@@ -170,6 +170,8 @@ namespace TraceSoul2.Manager
             }
             if (UsesGlmExtensions(model))
             {
+                // GLM 5.3 cannot disable thinking. Review's off preference means lowest effort.
+                var alwaysThinking = IsGlm53Model(model);
                 // Reuse the existing JSON-capable contract; do not add a field to the shared GLM DTO.
                 return JsonSerializer.Serialize(new DeepSeekChatRequestData
                 {
@@ -178,9 +180,11 @@ namespace TraceSoul2.Manager
                     response_format = json && useJsonResponseFormat ? new DeepSeekResponseFormatData() : null,
                     thinking = new DeepSeekThinkingData
                     {
-                        type = config.ThinkingEnabled ? "enabled" : "disabled"
+                        type = config.ThinkingEnabled || alwaysThinking ? "enabled" : "disabled"
                     },
-                    reasoning_effort = config.ThinkingEnabled ? config.ReasoningEffort : "none",
+                    reasoning_effort = alwaysThinking
+                        ? (config.ThinkingEnabled ? NormalizeReasoningEffort(config.ReasoningEffort) : "low")
+                        : (config.ThinkingEnabled ? config.ReasoningEffort : "none"),
                     temperature = temperature,
                     top_p = config.TopP,
                     max_tokens = config.MaxTokens
@@ -847,6 +851,12 @@ namespace TraceSoul2.Manager
         private static bool UsesGlmExtensions(string model)
         {
             return (model ?? string.Empty).StartsWith("glm-", StringComparison.OrdinalIgnoreCase);
+        }
+
+        private static bool IsGlm53Model(string model)
+        {
+            return string.Equals(model, "glm-5.3", StringComparison.OrdinalIgnoreCase) ||
+                   (model ?? string.Empty).StartsWith("glm-5.3-", StringComparison.OrdinalIgnoreCase);
         }
 
         private async Task<HttpResponseMessage> SendWithTimeoutAsync(

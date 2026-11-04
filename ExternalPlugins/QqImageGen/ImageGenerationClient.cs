@@ -117,13 +117,14 @@ namespace TraceSoul2.ExternalPlugins
             var ratio = (aspectRatio ?? string.Empty).Split(':');
             if (ratio.Length != 2 || !int.TryParse(ratio[0], out var width) ||
                 !int.TryParse(ratio[1], out var height) || width <= 0 || height <= 0)
-                return "auto";
+                // Compatible image providers may require an explicit widthxheight, even when no ratio was requested.
+                return "1024x1024";
             if (width == height) return "1024x1024";
             if ((settings.Model ?? string.Empty).IndexOf("gpt-image-2", StringComparison.OrdinalIgnoreCase) >= 0)
             {
                 // A 1536px long edge stays within GPT Image 2/2.5 pixel limits for ratios up to 3:1.
                 var scale = (double)Math.Max(width, height) / Math.Min(width, height);
-                if (scale > 3) return "auto";
+                if (scale > 3) return "1024x1024";
                 var shortEdge = (int)Math.Round(1536 / scale / 16) * 16;
                 return width > height ? "1536x" + shortEdge : shortEdge + "x1536";
             }

@@ -53,12 +53,14 @@ internal static partial class Program
         foreach (var fixture in new[] {
             (Model: "gpt-image-2", Ratio: "4:3", Expected: "1536x1152"),
             (Model: "gpt-image-2.5", Ratio: "16:9", Expected: "1536x864"),
-            (Model: "gpt-image-2", Ratio: "", Expected: "auto"),
+            (Model: "gpt-image-2", Ratio: "", Expected: "1024x1024"),
+            (Model: "gpt-image-2", Ratio: "auto", Expected: "1024x1024"),
+            (Model: "gpt-image-2", Ratio: "invalid", Expected: "1024x1024"),
             (Model: "gpt-image-2", Ratio: "1:1", Expected: "1024x1024"),
-            (Model: "gpt-image-2", Ratio: "0:4", Expected: "auto"),
-            (Model: "gpt-image-2", Ratio: "1:4", Expected: "auto"),
+            (Model: "gpt-image-2", Ratio: "0:4", Expected: "1024x1024"),
+            (Model: "gpt-image-2", Ratio: "1:4", Expected: "1024x1024"),
             (Model: "gpt-image-1.5", Ratio: "3:4", Expected: "1024x1536"),
-            (Model: "chatgpt-image-latest", Ratio: "", Expected: "auto"),
+            (Model: "chatgpt-image-latest", Ratio: "", Expected: "1024x1024"),
             (Model: "dall-e-3", Ratio: "", Expected: "1024x1024") })
         {
             var settings = CameraSettings(fixture.Model);
@@ -71,7 +73,13 @@ internal static partial class Program
                 json.RootElement.GetProperty("model").GetString() == fixture.Model &&
                 json.RootElement.GetProperty("prompt").GetString() == prompt &&
                 json.RootElement.TryGetProperty("response_format", out _) == (fixture.Model == "dall-e-3"),
-                "无参考图使用标准 generations；自动尺寸和旧模型参数正确");
+                "无参考图使用标准 generations；默认明确尺寸和旧模型参数正确");
+            using var editHandler = new CameraHttpProbe();
+            using var editClient = new ImageGenerationClient(settings, null, null, editHandler);
+            var edited = await editClient.GenerateAsync(prompt, references, fixture.Ratio, default);
+            Require(edited.Success && editHandler.Paths.SequenceEqual(new[] { "/v1/images/edits" }) &&
+                editHandler.Fields["size"] == fixture.Expected && editHandler.Files.Count == references.Count,
+                "带参考图同样使用明确尺寸，保留全部参考且只生成一次");
         }
 
         using (var handler = new CameraHttpProbe())
@@ -176,6 +184,12 @@ internal static partial class Program
                 }
             }
             else Json = await request.Content.ReadAsStringAsync(token);
+            using var body = Json == null ? null : JsonDocument.Parse(Json);
+            var size = Fields.TryGetValue("size", out var fieldSize) ? fieldSize
+                : body.RootElement.GetProperty("size").GetString();
+            if (!System.Text.RegularExpressions.Regex.IsMatch(size ?? "", @"^\d+x\d+$"))
+                return new HttpResponseMessage(HttpStatusCode.BadRequest) { Content = new StringContent(
+                    "{\"error\":{\"message\":\"size must use the exact widthxheight format\"}}") };
             return new HttpResponseMessage((HttpStatusCode)Status) { Content = new StringContent(
                 Failure == "empty" ? "{\"data\":[]}" :
                 Failure == "url" ? "{\"data\":[{\"url\":\"https://camera.invalid/output.png\"}]}" :
