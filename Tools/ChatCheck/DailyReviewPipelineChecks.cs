@@ -185,6 +185,7 @@ internal static partial class Program
         RunJevReviewChecks(assembly);
         RunDailyToolEvidenceCheck(assembly);
         RunDailyRuntimeConflictCheck(assembly);
+        RunDailyRuntimeProseChecks(assembly);
         RunDailyCommitFailureChecks(assembly);
         RunDailyValidationChecks(assembly);
         RunDailyPrivacyChecks(assembly);
@@ -425,8 +426,8 @@ internal static partial class Program
                 "认知/runtime检查点失败与数据写入一起回滚，阶段=" + stage);
             using (var db = new SQLite.SQLiteConnection(f.BrainPath)) db.Execute("DROP TRIGGER fail_commit");
             f.Reopen(); var resume = new SelectionProbeLlm { Reply = DailyReply }; f.Run(resume);
-            Require(resume.Requests.Count == 5 - stage && f.Graph.GetCognitionNodes(20).Count == 1,
-                "提交中断后只补失败阶段，阶段=" + stage);
+            Require(resume.Requests.Count == (stage == 4 ? 0 : 2) && f.Graph.GetCognitionNodes(20).Count == 1,
+                "提交中断后只补失败阶段，第4步复用已保存的合格草稿，阶段=" + stage);
         }
     }
     private static void RunDailyValidationChecks(Assembly assembly)
