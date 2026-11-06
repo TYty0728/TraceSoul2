@@ -198,7 +198,8 @@ namespace TraceSoul2.Migrate
                             if (qs.Keys.Any(k => Pick(answers, k) == "uncertain")) throw new JevNeedsReview("主题含义需要核对。");
                             tags.AddRange(page.Where((t, i) => Pick(answers, "topic_" + (i + 1)) == "yes").Select(t => t.Id));
                         }
-                        if (tags.Count > 4) throw new JevNeedsReview("相关主题超过4个，保留草稿待收敛，不截取主题。");
+                        if (tags.Count > 4)
+                            tags = await SelectJevTopics(c, day, work, proof, topics.Where(t => tags.Contains(t.Id)).ToList());
                         var slot = target?.IdentitySlot ?? "";
                         var domains = (target?.Domains ?? "").Split(',', StringSplitOptions.RemoveEmptyEntries).ToList();
                         if (target == null)
@@ -247,6 +248,44 @@ namespace TraceSoul2.Migrate
             }
             var remaining = day.JevBatches.Count(b => !b.Done);
             if (remaining > 0) throw new InvalidOperationException("JEV复盘有" + remaining + "批依据待核对，草稿与已提交项保留；未标记整日完成。请检查后手动续做。");
+        }
+
+        private static async Task<List<string>> SelectJevTopics(MigrationContext c, DailyReviewState day,
+            JevCognitionWork work, List<MomentRecord> proof, List<LifeTagRecord> related)
+        {
+            // Cached yes/no answers from 0.1.90 remain relevance evidence, not a final attachment list.
+            // Each native choice has at most 18 topics + done/defer; page winners compete globally.
+            var selected = new List<string>();
+            var candidates = related.Select((topic, i) => new { key = "topic_" + (i + 1), topic }).ToList();
+            while (selected.Count < 4)
+            {
+                var contenders = candidates.Where(x => !selected.Contains(x.topic.Id)).ToList();
+                if (contenders.Count == 0) break;
+                do
+                {
+                    var winners = contenders.Take(0).ToList();
+                    foreach (var page in contenders.Chunk(18))
+                    {
+                        var options = page.ToDictionary(x => x.key, x => "选择主题：" + x.topic.Label);
+                        options["done"] = "本组没有值得追加的主题；已选主题已足够或本组都不贴切";
+                        options["defer"] = "无法判断，需要核对依据";
+                        var answers = await AskJev(c, day, work, new {
+                            policy = "topic-priority-1", evidence = NumberedSources(proof), draft = work.Draft,
+                            limit = 4, selected = candidates.Where(x => selected.Contains(x.topic.Id)).Select(x => new { x.key, x.topic.Label, x.topic.Definition }),
+                            candidates = page.Select(x => new { x.key, x.topic.Label, x.topic.Definition })
+                        }, new() { ["topic_priority"] = Choice(
+                            "一条认识最多挂4个主题。相关不等于必须挂接；结合原句与认识，从本组选择一个最核心且未被已选主题覆盖的主题。" +
+                            "各组优胜者会再比较，不按列表顺序取前几个；无需追加选done，无法判断选defer", options) });
+                        var choice = Pick(answers, "topic_priority");
+                        if (choice == "defer") throw new JevNeedsReview("主题优先级需要核对。");
+                        if (choice != "done") winners.Add(page.Single(x => x.key == choice));
+                    }
+                    contenders = winners;
+                } while (contenders.Count > 1);
+                if (contenders.Count == 0) break;
+                selected.Add(contenders[0].topic.Id);
+            }
+            return selected;
         }
     }
 }
