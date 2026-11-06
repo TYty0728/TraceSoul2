@@ -692,3 +692,19 @@ Kernel 的事件完成钩子覆盖识图/准备前失败、模型异常、取消
 DeepSeekClientManager在统一请求组装处为glm-5.3及glm-5.3-*识别始终思考：关思考偏好映射为thinking=enabled、reasoning_effort=low；开启时保留low/high/max（沿用已有强度规范化）。因此正式复盘、日构建和复盘测试均生效，普通文本/JSON以及纠正请求共享该入口。GLM 5.2等旧模型维持原开关；不改共享PluginApi契约、已保存供应商配置、JSON模式或复盘温度。
 
 新增模拟HTTP回归覆盖glm-5.3、glm-5.3-flash和大小写识别，三个复盘入口均只发一次enabled/low，配置及保护不变，并校验普通文本的三档思考强度。ChatCheck --model-test、--main-fallback通过，Host构建0警告0错误，ChatCheck构建有24项既有相机重复类型警告。未发布部署、解除daily保护或调用真实复盘。
+
+
+## 2026-11-06：11月5日复盘反复失败（只读核对）
+
+现场安装0.1.87，容器内仅壳与Host dotnet进程，无Migration子进程；daily失败保护仍在。11月4日复盘已于11月5日04:42完成，与本次11月5日复盘区别处理。11月5日复盘在北京时间11月6日04:00、07:11、07:14三次尝试均失败于3/4形成认知；前两次glm-5.3，最后一次kimi-k3。六份首次/纠正请求均HTTP200，因此本次直接原因是业务校验，不是此前关闭GLM思考的HTTP400。
+
+三次首次错误均为cognitions.tag_refs必须来自所引原句对应的事件；纠正后两次仍同类错误，另一次为domains包含非法值self（允许user/world/ass/relation）。实际请求events仅为摘要字符串，evidence仅列source_ref及原句属性，topics仅列tag_ref/name/definition，没有事件到source_refs/tag_refs的映射。源码DailyReviewPipeline.FormSelectedCognitions却按所引原句映射事件，再限制可选主题；提示仅要求从本批主题中语义选择，未提供这一更窄约束所需的对应关系。纠正沿用缺少映射的材料，导致更换模型也未解决；不能归结为网络或单一供应商故障。
+
+修复方向：给事件显式提供本批source_refs/tag_refs，提示与校验使用同一映射，纠正明确允许的引用，并区分identity_slot的self与domains的ass。保留来源真实性校验，不靠删除校验或增加盲目重试处理。此轮仅诊断与知识记录，未修改产品代码、配置、数据库，未重跑、解除保护、部署或调用模型。私有诊断只输出时间、字段结构、编号及模型等元数据，不复制原始对话；尚无修复或完整复盘验收。
+
+
+### 同日来源与主题映射修复（本地）
+
+DailyReviewPipeline形成认知请求将events从摘要列表改为summary/source_refs/tag_refs对象列表，编号按本批原句及活动主题生成。提示与校验共用同一关系映射，保留所引原句与事件交集的原语义；纠正提供当前来源、错误主题及允许主题编号，不靠增加重试或放宽校验。明确无合适主题可填[]，不能补引无关原句，并区分identity_slot的self与domains的ass。不改持久化格式，已完成批次仍复用。
+
+实际Migration临时库/模拟LLM回归覆盖两个事件共享原句、多主题合法选择、同批无来源支持主题被拒绝、一次纠正后成功、非法domains纠正、错误输出未提交及完成后重开零调用；完整实际Migration专项与review-reliability通过。ChatCheck构建0错误、24项既有相机类型警告；Migration/Host构建均0警告0错误，diff检查通过。未调用真实模型、发布部署、恢复正式复盘或修改运行数据；真实整日验收待更新后续做。

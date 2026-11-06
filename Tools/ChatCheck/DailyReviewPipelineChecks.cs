@@ -180,6 +180,7 @@ internal static partial class Program
             Require(f.Count("event_entries") == 2, "事务失败重试只入库一次");
         }
         RunDailyTopicGrowthChecks(assembly);
+        RunDailyTopicEvidenceChecks(assembly);
         RunDailyToolEvidenceCheck(assembly);
         RunDailyRuntimeConflictCheck(assembly);
         RunDailyCommitFailureChecks(assembly);
@@ -219,6 +220,67 @@ internal static partial class Program
             f.Store.GetEventEntriesByIndexIds(f.Store.GetActiveEventIndexes().Select(x=>x.Id)).Single().SourceMomentId==observation.Id &&
             f.Graph.GetEvidenceMoments(new[]{observation.Id}).Single().Content==observation.Content,
             "工具原件完成复盘后保留，事件与认知证据指向观察而非触发用户原句");
+    }
+
+    private static void RunDailyTopicEvidenceChecks(Assembly assembly)
+    {
+        foreach (var mode in new[] { "valid", "correct", "reject", "domain" })
+        {
+            using var f = new DailyFixture(assembly); f.Seed(3);
+            var calls = 0;
+            var llm = new SelectionProbeLlm { Reply = messages => {
+                var title = messages[0].content;
+                if (title.Contains("1/4")) return "{\"events\":[{\"summary\":\"早餐选择\",\"source_refs\":[1,2]" + DailyTopicFields +
+                    "},{\"summary\":\"讨论数学\",\"source_refs\":[2,3]" + DailyTopicFields.Replace("饮食意愿", "数学联想") + "}]}";
+                if (title.Contains("2/4")) return "{\"selected_refs\":[1,2]}";
+                if (title.Contains("4/4")) return EmptyDailyRuntime;
+                Require(title.Contains("3/4"), "引用映射夹具只执行四步复盘");
+                calls++;
+                using var input = JsonDocument.Parse(messages[1].content);
+                var events = input.RootElement.GetProperty("events").EnumerateArray().ToList();
+                int[] Refs(JsonElement item, string key) => item.GetProperty(key).EnumerateArray().Select(x => x.GetInt32()).ToArray();
+                var breakfast = events.Single(e => e.GetProperty("summary").GetString() == "早餐选择");
+                var maths = events.Single(e => e.GetProperty("summary").GetString() == "讨论数学");
+                var foodTag = Refs(breakfast, "tag_refs").Single(); var mathsTag = Refs(maths, "tag_refs").Single();
+                Require(Refs(breakfast, "source_refs").SequenceEqual(new[] { 1, 2 }) &&
+                    Refs(maths, "source_refs").SequenceEqual(new[] { 2, 3 }) && foodTag != mathsTag,
+                    "真实请求公开事件与本批原句、主题映射，包括一个原句支持多个事件");
+                var topics = input.RootElement.GetProperty("topics").EnumerateArray().ToList();
+                Require(topics.Single(t => t.GetProperty("tag_ref").GetInt32() == foodTag).GetProperty("name").GetString() == "饮食意愿" &&
+                    topics.Single(t => t.GetProperty("tag_ref").GetInt32() == mathsTag).GetProperty("name").GetString() == "数学联想",
+                    "映射主题编号指向实际主题候选，不混用主题ID与原句编号");
+                if (calls == 2)
+                {
+                    Require(f.Graph.GetCognitionNodes(20).Count == 0, "错误首次输出不得提前入库");
+                    var correction = messages[^1].content;
+                    Require(mode == "domain" ? correction.Contains("domains") :
+                        correction.Contains("source_refs=[1]") && correction.Contains("允许的tag_refs=[" + foodTag + "]"),
+                        "不回传失败正文时，纠正仍携带具体来源编号和允许的主题编号");
+                }
+                var invalid = mode == "reject" || (mode == "correct" && calls == 1);
+                return TraceJson.ToJson(new { cognitions = new[] { new {
+                    operation = "create", target_ref = 0, summary = "根据本次原句形成的独立认识。", identity_slot = "other",
+                    domains = mode == "domain" && calls == 1 ? new[] { "self" } : new[] { "user" },
+                    source_refs = mode == "valid" ? new[] { 2 } : new[] { 1 },
+                    tag_refs = invalid ? new[] { mathsTag } : mode == "valid" ? new[] { foodTag, mathsTag } : new[] { foodTag },
+                    scope = "", exceptions = ""
+                } } });
+            } };
+            if (mode == "reject")
+            {
+                Require(DailyRejects(() => f.Run(llm)) && calls == 2 && f.Graph.GetCognitionNodes(20).Count == 0,
+                    "同批但无来源支持的主题仍被拒绝，最多一次纠正且不写认知");
+                continue;
+            }
+            f.Run(llm);
+            var nodes = f.Graph.GetCognitionNodes(20);
+            var tagIds = f.Store.GetCognitionTagIds(nodes.Select(n => n.Id));
+            Require(calls == (mode == "valid" ? 1 : 2) && nodes.Count == 1 &&
+                tagIds[nodes[0].Id].Count == (mode == "valid" ? 2 : 1),
+                "共享来源可挂两个受支持主题；纠正只入库一次且不保留错误主题/领域");
+            f.Reopen(); var resumed = new AgentSequenceLlm(); f.Run(resumed);
+            Require(resumed.Requests.Count == 0, "映射修复保持已完成检查点零调用复用");
+        }
     }
 
     private static void RunDailyTopicGrowthChecks(Assembly assembly)
