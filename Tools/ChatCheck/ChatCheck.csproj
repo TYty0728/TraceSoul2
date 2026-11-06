@@ -23,6 +23,7 @@
     <Compile Include="Program.cs" />
     <Compile Include="ReviewReliabilityChecks.cs" />
     <Compile Include="DailyReviewPipelineChecks.cs" />
+    <Compile Include="JevReviewChecks.cs" />
     <Compile Include="../Host/ReviewMaintenanceGate.cs" Link="ReviewMaintenanceGate.cs" />
     <Compile Include="BackupArchiveChecks.cs" />
     <Compile Include="RuntimePathRepairChecks.cs" />

@@ -23,6 +23,8 @@ namespace TraceSoul2.Migrate
         public sealed class DailyReviewState
         {
             public int Version = 1;
+            public string CognitionEngine;
+            public List<JevCognitionBatch> JevBatches = new();
             public string Day, Stamp;
             public List<string> SourceIds = new();
             public List<string> Extracted = new();
@@ -88,7 +90,21 @@ namespace TraceSoul2.Migrate
                     EntryEmbedder.EmbedAll(context.Migration.GetEntriesByIndexIds(state.Events.Select(e => e.IndexId).ToList()),
                         context.Vectors, context.RequireEncoder());
                 await SelectDailyEvents(context, state, llm);
-                await FormSelectedCognitions(context, state, sources, llm);
+                if (string.IsNullOrEmpty(state.CognitionEngine))
+                {
+                    state.CognitionEngine = context.HasReviewDecision ? "jev-v1" : "legacy";
+                    if (state.CognitionEngine == "jev-v1")
+                    {
+                        context.RequireReviewDecision();
+                        state.Version = 2;
+                        // Old binaries fail the source stamp check instead of replaying partial commits.
+                        state.Stamp = "jev-v1:" + state.Stamp;
+                    }
+                    SaveDaily(context, state);
+                }
+                if (state.CognitionEngine == "jev-v1") await FormJevCognitions(context, state, sources, llm);
+                else if (state.CognitionEngine == "legacy") await FormSelectedCognitions(context, state, sources, llm);
+                else throw new InvalidOperationException("不支持的认知复盘执行器；保留检查点。");
                 await UpdateDailyRuntime(context, state, llm);
                 // Public audiences retain their separate evidence/commit boundary.
                 // They never enter private events, selected cognition or runtime prompts.
@@ -142,7 +158,7 @@ namespace TraceSoul2.Migrate
                 .OrderBy(m => m.CreatedUnixMs).ThenBy(m => m.Id, StringComparer.Ordinal).ToList();
         private static void ValidateDailySources(MigrationContext context, DailyReviewState state)
         {
-            if (state.Stamp != SourceStamp(context, state.SourceIds))
+            if (state.Stamp != (state.CognitionEngine == "jev-v1" ? "jev-v1:" : "") + SourceStamp(context, state.SourceIds))
                 throw new InvalidOperationException("原始对话或身份已修订，已完成工作保留，请核对变化后继续。");
         }
         private static void SaveDaily(MigrationContext context, DailyReviewState state)
@@ -152,7 +168,11 @@ namespace TraceSoul2.Migrate
         }
         private static DailyReviewState OpenDailyReview(MigrationContext context, string day, DailyReviewState state, List<MomentRecord> pending)
         {
-            if (state != null) ValidateDailySources(context, state);
+            if (state != null)
+            {
+                if (state.Version is < 1 or > 2) throw new InvalidOperationException("不支持的复盘检查点版本。");
+                ValidateDailySources(context, state);
+            }
             else
             {
                 state = new DailyReviewState { Day = day };
@@ -160,9 +180,9 @@ namespace TraceSoul2.Migrate
                 state.Stamp = SourceStamp(context, state.SourceIds);
             }
             var added = pending.Select(m => m.Id).Except(state.SourceIds).ToList();
-            if (added.Count > 0)
+            if (added.Count > 0 && !(state.CognitionEngine == "jev-v1" && !state.Done))
             {
-                state.SourceIds.AddRange(added); state.Stamp = SourceStamp(context, state.SourceIds);
+                state.SourceIds.AddRange(added); state.Stamp = (state.CognitionEngine == "jev-v1" ? "jev-v1:" : "") + SourceStamp(context, state.SourceIds);
                 state.Selected = null; state.RuntimeDone = state.Done = false;
             }
             SaveDaily(context, state);

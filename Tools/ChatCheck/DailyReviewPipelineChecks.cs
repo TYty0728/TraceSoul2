@@ -182,6 +182,7 @@ internal static partial class Program
         RunDailyTopicGrowthChecks(assembly);
         RunDailyTopicEvidenceChecks(assembly);
         RunDailyExistingSlotChecks(assembly);
+        RunJevReviewChecks(assembly);
         RunDailyToolEvidenceCheck(assembly);
         RunDailyRuntimeConflictCheck(assembly);
         RunDailyCommitFailureChecks(assembly);

@@ -20,6 +20,7 @@ internal static partial class Program
     private static void Main(string[] args)
     {
         SQLitePCL.Batteries_V2.Init();
+        if (args.Length == 3 && args[0] == "--jev-review-smoke") { RunJevReviewSmoke(args[1], args[2]); return; }
         if (args.Contains("--memory-scope")) { RunMemoryScopeChecksAsync().GetAwaiter().GetResult(); return; }
         if (args.Contains("--memory-routing-audit")) { RunMemoryRoutingAuditAsync().GetAwaiter().GetResult(); return; }
         if (args.Contains("--logging")) { RunRecentEventLogCheck(); Console.WriteLine("Logging checks passed."); return; }

@@ -32,6 +32,8 @@ namespace TraceSoul2.Migrate
             if (Interlocked.Increment(ref calls) > callLimit)
                 throw new ReviewBudgetYieldException();
         }
+        internal void ReserveDecision(string stage, CancellationToken token)
+        { Reserve(token); report?.Invoke(calls, stage); }
         public Task<string> CompleteJsonAsync(List<DeepSeekMessageData> messages, CancellationToken cancellationToken = default, string promptCacheKey = null)
             => CompleteBoundedAsync(messages, t => inner.CompleteJsonAsync(messages, t, promptCacheKey), cancellationToken);
         private async Task<string> CompleteBoundedAsync(List<DeepSeekMessageData> messages,

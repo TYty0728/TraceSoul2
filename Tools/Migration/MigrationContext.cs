@@ -2,6 +2,9 @@ using System;
 using System.Globalization;
 using System.IO;
 using System.Linq;
+using System.Text.Json;
+using System.Threading;
+using System.Threading.Tasks;
 using TraceSoul2.Data;
 using TraceSoul2.Host;
 using TraceSoul2.Manager;
@@ -29,6 +32,28 @@ namespace TraceSoul2.Migrate
         public IVectorEncoder CognitionEncoder { get; private set; }
         private OnnxBgeEncoder encoder;
         private ILlmClient budgetClient;
+        private DecisionsClient reviewDecisionClient;
+        public Func<JsonElement, JsonElement, CancellationToken, Task<JsonElement>> ReviewDecisionOverride { get; set; }
+        public bool HasReviewDecision => ReviewDecisionOverride != null ||
+            !string.IsNullOrWhiteSpace(Providers.Slots()[LlmSlotNames.Jev].providerId);
+        public string ReviewDecisionIdentity => ReviewDecisionOverride != null ? "test" :
+            TraceSoul2.Util.TraceJson.ToJson(Providers.Slots()[LlmSlotNames.Jev]);
+        public void RequireReviewDecision()
+        {
+            if (ReviewDecisionOverride == null)
+                reviewDecisionClient ??= Providers.CreateJevDecisionClient() ??
+                    throw new InvalidOperationException("该日已使用JEV复盘，请恢复原生JEV配置；不会回退到生成模型执行操作。");
+        }
+        public async Task<JsonElement> DecideReviewAsync(JsonElement state, JsonElement questions, CancellationToken token)
+        {
+            RequireReviewDecision();
+            DecisionsClient.ValidateQuestions(questions);
+            (budgetClient as ReviewBudgetClient)?.ReserveDecision("3/4 JEV认知决策", token);
+            var result = ReviewDecisionOverride != null ? await ReviewDecisionOverride(state, questions, token) :
+                await reviewDecisionClient.DecideAsync(state, questions, reviewDecisionClient.Model, token);
+            DecisionsClient.ValidateAnswers(result, questions);
+            return result;
+        }
         public void BeginReviewBudget() => budgetClient = Llm == null ? null : new ReviewBudgetClient(Llm,
             (calls, stage) => Migration.SetReviewStage(stage + "（本轮逻辑请求 " + calls + "）"));
 
@@ -111,6 +136,7 @@ namespace TraceSoul2.Migrate
 
         public void Dispose()
         {
+            reviewDecisionClient?.Dispose();
             if (Migration != null) Migration.Dispose();
             if (Store != null) Store.Dispose();
             if (Vectors != null) Vectors.Dispose();
