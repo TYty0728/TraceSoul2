@@ -8,6 +8,8 @@
 
 本地实际Migration与复盘可靠性专项、Host/Migration构建通过；完整回归、Docker升级/数据保留及三平台打包由发布CI执行。沿用0.1.87到0.1.88的增量包及完整包，核心更新仍需短暂重启；PluginApi保持1.18.0。发布不部署服务器、不解除失败保护或启动正式复盘。
 
+发布确认：[v0.1.88](https://github.com/TYty0728/TraceSoul2/releases/tag/v0.1.88)／源码1f98173，[发布CI](https://github.com/TYty0728/TraceSoul2/actions/runs/42157588570)全部成功。匿名latest指向本版，三平台完整包及0.1.87相邻增量包公开下载和SHA-256/GitHub digest核对通过，SDK1.18.0存在；增量约1.9～2.1MB。未部署服务器或恢复正式复盘。
+
 ## 0.1.87（2026-11-05）
 
 - 兼容GLM 5.3系列始终思考：复盘关闭思考的偏好映射为enabled/low，覆盖正式复盘、日构建及复盘测试；普通聊天保留合法思考强度，旧GLM开关不变。
