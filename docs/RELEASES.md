@@ -9,6 +9,8 @@
 
 Migration、ChatCheck、Host构建及实际Migration/原生Decisions/复盘可靠性专项通过。真实Jev合成新认识场景5次调用完成（草稿为模拟，未使用生产资料），复杂和真实整日语义仍待验收。完整回归、Docker升级/数据保留与三平台完整/相邻增量包由发布CI执行；PluginApi仍1.18.0。未部署或恢复正式复盘。
 
+发布确认：[v0.1.90](https://github.com/TYty0728/TraceSoul2/releases/tag/v0.1.90)／源码f7e8dbd，[发布CI](https://github.com/TYty0728/TraceSoul2/actions/runs/42183122521)完整回归、Docker升级/数据保留及三平台打包成功，独立复盘恢复CI42183122529也通过。匿名latest指向本版，三平台完整包和0.1.88增量包公开HTTP200，侧车SHA-256与GitHub digest一致，SDK1.18.0存在。增量分别为2,137,277／1,938,388／1,938,433字节（win-x64／linux-x64／linux-arm64）。未部署服务器或恢复复盘。
+
 ## 0.1.89（2026-11-06）
 
 仅本地补丁与标签，未单独发布；修复并入0.1.90。
