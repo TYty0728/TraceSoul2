@@ -181,6 +181,7 @@ internal static partial class Program
         }
         RunDailyTopicGrowthChecks(assembly);
         RunDailyTopicEvidenceChecks(assembly);
+        RunDailyExistingSlotChecks(assembly);
         RunDailyToolEvidenceCheck(assembly);
         RunDailyRuntimeConflictCheck(assembly);
         RunDailyCommitFailureChecks(assembly);
@@ -220,6 +221,63 @@ internal static partial class Program
             f.Store.GetEventEntriesByIndexIds(f.Store.GetActiveEventIndexes().Select(x=>x.Id)).Single().SourceMomentId==observation.Id &&
             f.Graph.GetEvidenceMoments(new[]{observation.Id}).Single().Content==observation.Content,
             "工具原件完成复盘后保留，事件与认知证据指向观察而非触发用户原句");
+    }
+
+    private static void RunDailyExistingSlotChecks(Assembly assembly)
+    {
+        foreach (var slot in new[] { "expression_habit", "" })
+        foreach (var overflow in new[] { false, true })
+        {
+            using var f = new DailyFixture(assembly); f.Seed(2);
+            var seed = DailyCognition.Replace("\"identity_slot\":\"other\"", "\"identity_slot\":\"" + slot + "\"")
+                .Replace("\"domains\":[\"user\"]", "\"domains\":[\"ass\"]");
+            f.Run(new AgentSequenceLlm(DailyEvents, DailySelection, seed, EmptyDailyRuntime));
+            var before = TraceJson.ToJson(f.Graph.GetCognitionNodes(20));
+            const string nextDay = "2020-08-21";
+            var nextSource = f.Seed(2, nextDay)[0];
+            var prior = f.Graph.GetCognitionNodes(20).Single();
+            nextSource.Content = prior.Summary + "\n" + prior.About + "\n" + prior.Scope + "\n" + prior.Exceptions;
+            using (var db = new SQLite.SQLiteConnection(f.BrainPath)) db.Execute("UPDATE moments SET Content=? WHERE Id=?", nextSource.Content, nextSource.Id);
+            var calls = 0;
+            var llm = new SelectionProbeLlm { Reply = messages => {
+                if (messages[0].content.Contains("1/4")) return DailyEvents;
+                if (messages[0].content.Contains("2/4")) return DailySelection;
+                if (messages[0].content.Contains("4/4")) return EmptyDailyRuntime;
+                calls++;
+                using var input = JsonDocument.Parse(messages[1].content);
+                var target = input.RootElement.GetProperty("existing").EnumerateArray().Single();
+                var reference = target.GetProperty("target_ref").GetInt32();
+                Require(target.GetProperty("identity_slot").GetString() == slot,
+                    "既有认知以与输出相同的identity_slot字段明确展示身份类别，包括空类别");
+                if (calls == 2)
+                {
+                    var repair = messages[^1].content;
+                    Require(repair.Contains("target_ref=" + reference) && repair.Contains("identity_slot=\"" + slot + "\"") &&
+                        repair.Contains("最多3项") && repair.Contains("ass"),
+                        "实际纠正请求须携带目标编号、确切身份类别及领域约束，同时提醒总条数上限");
+                    Require(TraceJson.ToJson(f.Graph.GetCognitionNodes(20)) == before, "身份类别错误的印证不得提前提交");
+                }
+                var write = new {
+                    operation = "reinforce", target_ref = reference, summary = "他早餐想吃面包，选择时应尊重当天意愿。",
+                    identity_slot = calls == 1 ? "relation" : slot, domains = new[] { calls == 1 ? "relation" : "ass" },
+                    source_refs = new[] { 1 }, tag_refs = new[] { 1 }, scope = "", exceptions = ""
+                };
+                return TraceJson.ToJson(new { cognitions = Enumerable.Repeat(write, calls == 2 && overflow ? 4 : 1).ToArray() });
+            } };
+            if (overflow)
+            {
+                Require(DailyRejects(() => f.Run(llm, nextDay)) && calls == 2 && TraceJson.ToJson(f.Graph.GetCognitionNodes(20)) == before,
+                    "复现身份类别错误后纠正扩成4条：明确失败且无认知写入，不增加盲目重试");
+                f.Reopen(); f.Run(new AgentSequenceLlm("{\"cognitions\":[]}", EmptyDailyRuntime), nextDay);
+            }
+            else
+            {
+                f.Run(llm, nextDay);
+                Require(calls == 2 && f.Graph.GetCognitionNodes(20).Single().IdentitySlot == slot,
+                    "纠正后印证既有认知，保持原类别且不另建重复认知");
+            }
+            using var state = f.State(nextDay); Require(state.RootElement.GetProperty("Done").GetBoolean(), "身份纠正或失败后续做均完成检查点");
+        }
     }
 
     private static void RunDailyTopicEvidenceChecks(Assembly assembly)
