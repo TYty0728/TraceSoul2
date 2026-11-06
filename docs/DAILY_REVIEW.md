@@ -37,6 +37,44 @@
 
 验证：实际Migration覆盖124→123字符后局部纠正、标点/emoji与120/121边界、较低提示上限与实际容错、卡片及多个runtime字段先后超长、断连/预算续做、超长/空白/额外字段的两次上限、草稿缓存、身份卡变化失效及提交回滚。未调用真实Kimi或重跑生产整日，语义压缩质量仍需实际验收。
 
+### 0.1.92之后追加的提示契约审计（尚未修复）
+
+用户要求继续检查模糊提示。范围为实际日复盘四步、JEV问项、结构纠正，以及日复盘调用的公开经历分支；未审计普通Agent、相机和语音全部提示。以下为对照源码的剩余问题，不能据此断言已发生数据损失或它们导致了20:14的错误。0.1.92仅包含上节已完成的长度与恢复修复，本表没有随该标签修复。
+
+| 问题 | 提示与程序差异 / 影响 | 应明确的契约 |
+|---|---|---|
+| 新主题域/维度类型与数量漏写 | ExtractDailyEvents只列domain_ids、dimension_ids枚举；EventTopicError要求字符串数组，分别1～4、1～8项。16个维度名都合法，选9个仍会被拒绝，提示却没告知8项限制。 | 写清数组类型、每个数组的上下限；空数组不合格，给一份完整new_tags对象示例。 |
+| 卡片“更新”的替换语义不明 | 第4步只说更新确有变化的部分；SaveDerivedIdentityCard最终调用SaveIdentityCard替换整段Body。若模型仅写变化片段，结构校验仍可能通过。 | 明确每张输出卡的body是更新后的完整正文，保留仍有效内容；整卡不改则不列入cards，不能返回补丁片段。 |
+| 卡片依据缺少范围与例外 | 第4步cognitions输入仅给编号、summary、slot，没有Scope/Exceptions。模型无法从未提供的限定条件判断如何保留。 | 提供范围/例外等必要语义材料，再要求保留；这是输入缺失，不能只增加“必须准确”的措辞。 |
+| 旧认知路径“同义就空”与印证冲突 | 无JEV时FormSelectedCognitions开头要求已有同样认识就返回空数组，后文又允许reinforce。 | 区分无新证据的重复与新增独立依据的印证；同义不等于无需印证。当前配置JEV的日期不走此路径。 |
+| 旧路径纠正反馈使用内部字段 | 上层输出target_ref/source_refs，底层CognitionFormationLogic部分错误仍写target_id/evidence_moment_ids；例如同目标重复操作的反馈为target_id。 | 在边界映射成当前输出字段和编号；不要让纠正要求模型填写未开放的内部ID字段。 |
+| JEV“无关”与“不足”及归属边界重叠 | yes/no问题把no描述为不支持或无关，uncertain描述为材料不足，未区分已明确无关和涉及同一问题但无法确认。other/user_fact、self/ass_fact也缺少是否进入身份用途的具体边界；operation里revise要求明确修正，defer又笼统包含“冲突”，可能把有依据的修正留待核对。 | 给出决策条件与正反例，区分可确定的修正和无法消解的冲突；保持不确定时停留待核对，不能靠放宽程序校验消除语义分歧。此项属于误判风险，未证明本轮实际误判。 |
+| 公开经历仍沿旧提示 | PublicExperienceLogic复用CorePrompts.Migration.CognitionBody，仍给summary程序上限600字，about/scope/exceptions没有数值上限；ReviewWorkLogic的单字段整理仍同时写目标与上限。 | 同步单一较低字符上限；保留公开路径真实ID契约，不能机械套用私密路径的短整数编号规则。 |
+| 公开路径的领域与主题材料冲突 | 公开外层允许非专属用户的明确对象关系，内层CognitionBody把relation定义为“我和他”；内层还说复制下方生命标签，但该入口没有提供标签列表，校验传空列表。 | 按公开环境说明关系对象，明确当前无主题候选时tag_ids只能为[]，避免引用不存在的列表。 |
+| 空结果的外层结构不明确 | DailyReviewPipeline第245/380行、CorePrompts第438行和PublicExperienceLogic第46行写“返回空数组”，但接收的是含events或cognitions的对象。裸`[]`不能反序列化为相应DTO。 | 无事件精确写`{"events":[]}`，无认知变化写`{"cognitions":[]}`；禁止把字段为空和根对象为空混为一谈。现有非空示例不能消除这项措辞冲突。 |
+| 空摘要被纠正为“写得更短” | DailyReviewPipeline第254行把空值/空白/超长合并成同一错误，含“不超过400字符”；DeepSeekStructuredOutputLogic第101～107行按“字”和“超过”判断超长，因而空摘要也进入压缩纠正分支。第305行主题正反例为空或数量错误时的统一提示也含“不超过60字符”，有相同分类问题。 | 必填、类型、数量和长度分别返回错误；长度判断用明确类型或错误码，不从通用自然语言要求推断。已对本地编译程序集调用实际IsLengthOverrun，空摘要错误返回true；没有调用模型。 |
+| JEV草稿纠正没有指出错处 | JevCognitionReview第83～97行将字段缺失、类型错误、长度超限、空summary伴随非空限定都归为“不符合格式”，重新列所有规则，不告知出错字段或实测长度。 | 按具体失败给字段路径、错误种类；超长给实测字符数和唯一较低硬上限。仍保持一次纠正预算。 |
+| JEV主题上限的计数范围不准确 | JevCognitionReview第277行说“一条认识最多挂4个主题”，实际限制本次选择4个；SqliteCognitionGraph第128、208～216行印证时追加链接，不移除历史链接。历史4个再补1个可累计5个。 | 写清“本次最多新增或选择4个主题”；若产品要限制累计总数，须另设计有依据的旧链接保留/替换规则，不能仅改措辞或擅删旧链接。此项不表示0.1.91的单次上限修复失效。 |
+| 公开认知证据数量没告知 | CorePrompts第435行只要求从原始Moment选evidence_moment_ids；CognitionFormationLogic第68～69行实际要求1～16条。RuntimeSliceLogic的证据批次按24000字符及200条上限组织，并不保证只有16条。 | 每项证据数组明确1～16个真实ID，只选实际支持该项的依据；不能把整个输入批次都引用进每条操作。 |
+| 公开比较new分支缺少留空要求 | CognitionConsolidationLogic第50～53行只明确insufficient的target_id/before留空，new仅规定after抄候选summary；第120～124行却校验new的target_id与before必须为空。 | 对same/revise/new/insufficient逐一给出字段规则；new明确target_id和before都为`""`。 |
+
+另有一项**程序组合问题，不能归咎于提示词**：公开分支的CognitionConsolidationLogic第83～89行把同目标reinforce的证据去重合并，但不保证合并后仍在16条内。两个原本各9条、互不重叠的create候选若经比较都转为同目标same，会合并成18条，再被PublicExperienceLogic第54～56行的最终校验拒绝。输入每条合规仍不能保证组合后合规。此为静态代码路径确认，未运行真实模型或生产复现；应单独设计证据合并和一次印证的计数语义，不能要求模型猜测后续归并结果，也不能直接截断原始依据。
+
+逐行复核基线为源码`28764b5`（v0.1.92），覆盖如下；没有把关键词命中当作全链审计完成：
+
+| 调用环节 | 已核对代码与对应条件 |
+|---|---|
+| 提取事件 | DailyReviewPipeline第215～307行：来源编号、提示与输入、DTO校验、域/维度及主题正反例限制、正式事件写入。 |
+| 选择事件 | 同文件第310～356行：分批、排序、0～10项、编号边界/重复、空结果和保存；未发现新的数量契约冲突。 |
+| 旧第3步 | 同文件第358～448行：提示/输出、引用映射、下层CognitionFormationLogic校验和纠正；与JEV路径分开记录。 |
+| JEV第3步 | JevCognitionReview全文件：单项草稿、目标/操作/证据/主题/归属全部问项、主题优先级、候选与答案校验、写入参数；对应SqliteCognitionGraph主题追加语义。 |
+| 当前状态及局部压缩 | DailyReviewPipeline第450～544行及DailyRuntimeProse全文件：输入、卡片完整替换、长度/引用校验、草稿复用与提交；单字段压缩只给较低max_length，没有目标/容错双重预算。压缩依赖原稿，未宣称程序能校验其语义完全不变。 |
+| 通用结构纠正 | DeepSeekStructuredOutputLogic的CompleteAsync、IsLengthOverrun、DescribeFailure、Parse：首次错误、二次请求、字段类型提示和对象解析；空摘要误判有本地实际方法调用证据。 |
+| 公开分支及比较 | PublicExperienceLogic、ReviewWorkLogic、CognitionConsolidationLogic全文件；CorePrompts第427～460行；RuntimeSliceLogic的EvidenceContext/EvidenceBatches；CognitionFormationLogic字段校验及正文上限。 |
+| 卡片最终保存 | SqliteExistence的SaveDerivedIdentityCard和SqliteMemoryManager第877～918行：引用合法性与整段Body替换，区分程序行为与尚未证实的模型误解。 |
+
+本轮新增6项提示/纠正问题，总表14项，另列1项程序组合问题。只有审计文档变更，不代表上述问题已修复；未新增模型调用、部署或重跑生产复盘。处理优先级是可直接触发拒绝的结构/类型/数量/纠正错误，再处理完整替换及缺少输入材料，随后收紧JEV语义边界；公开归并问题单独修程序。
+
 ## 第3步原生JEV接入（0.1.90）
 
 `JevCognitionReview.cs`按会话切段，再按每项认知最多16条证据的现有硬限制分批，每批最多3个串行工作项。LLM每次只生成summary、scope、exceptions三个正文字符串，不生成操作、目标、来源、类别或领域。正文格式最多纠正一次；草稿先保存，传输失败可续接，不重新生成已保存草稿。
