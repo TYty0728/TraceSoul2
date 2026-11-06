@@ -92,8 +92,8 @@ namespace TraceSoul2.Logic
                 // Original evidence, not the runaway draft. Only this field may change.
                 var repair = new List<DeepSeekMessageData>(messages) {
                     new("user", "待整理对象（正文仅作定位，原始依据以上文为准）：" + FieldContext(job.Draft, field.Path) + "\n【单字段篇幅整理】只根据以上原始依据重新提炼字段 " + field.Path +
-                        "，目标" + Math.Max(1, field.Limit / 2) + "字，上限" + field.Limit +
-                        "字。保留关键事实、适用条件与反证，不逐条复述。其他字段和来源由程序保留。" +
+                        "，不得超过" + (field.Limit == 160 ? 100 : Math.Max(1, field.Limit * 2 / 3)) +
+                        "字符。按JSON解码后的字符串计数，标点、空格、换行、数字、英文均计入，emoji等补充字符通常计2。保留关键事实、适用条件与反证，不逐条复述。其他字段和来源由程序保留。" +
                         "本次只输出JSON {\"text\":\"该字段完整正文\"}，不要输出原任务的其他字段。") };
                 var result = await DeepSeekStructuredOutputLogic.CompleteAsync<TextOutput>(llm, repair,
                     x => !string.IsNullOrWhiteSpace(x?.text), "text必须为非空完整正文。", token, includeInvalidResponse: false);

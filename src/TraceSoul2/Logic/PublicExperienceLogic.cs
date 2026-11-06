@@ -29,7 +29,10 @@ namespace TraceSoul2.Logic
                     return count;
                 }
                 var group = pending.GroupBy(x => x.ConversationId).First().ToList();
-                var evidence = RuntimeSliceLogic.EvidenceBatches(store, group).FirstOrDefault();
+                // Bound the whole model input, so merging any per-proposal evidence
+                // subsets still fits one mutation. Remaining originals are processed next.
+                var evidence = RuntimeSliceLogic.EvidenceBatches(store, group)
+                    .SelectMany(batch => batch.Chunk(16)).Select(batch => batch.ToList()).FirstOrDefault();
                 if (evidence == null) throw new InvalidOperationException("公开经历没有可处理的完整证据，原件保留。");
                 var evidenceContext = RuntimeSliceLogic.EvidenceContext(store, evidence);
                 var existing = CognitionReviewRecallLogic.Select(store, evidence, encoderFactory, cache, evidenceContext, token);
@@ -43,7 +46,7 @@ namespace TraceSoul2.Logic
                     "\n" + CorePrompts.Migration.CognitionJsonSchema;
                 Output output;
                 try { output = await ReviewWorkLogic.CompleteAsync<Output>(store, "public-cognition", llm,
-                    new List<DeepSeekMessageData> { new("system", prompt), new("user", "只根据这些经历输出认知变更，没有变化时给空数组。") },
+                    new List<DeepSeekMessageData> { new("system", prompt), new("user", "只根据这些经历输出认知变更，没有变化时返回{\"cognitions\":[]}，不能返回根数组[]。") },
                     x => CognitionFormationLogic.ValidationError(x.cognitions, evidence, existing, new List<LifeTagRecord>(), false) ??
                         (!evidence.Any(m => EnvironmentLogic.FromMoment(m)?.SpeakerIsOwner == true) &&
                          x.cognitions.Any(w => (w.domains ?? new()).Contains("user")) ? "公开认知不能冒认专属用户。" : null),

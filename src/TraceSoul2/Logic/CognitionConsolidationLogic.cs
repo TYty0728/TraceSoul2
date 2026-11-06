@@ -50,6 +50,7 @@ namespace TraceSoul2.Logic
                     "每个候选index恰好一项。same/revise的target_id只能来自该候选的existing_ids，且identity_slot一致；before逐字抄目标summary。" +
                     "用途为空与relation/self等用途不同，不能跨用途借用目标；没有合适的同用途旧认知时，独立理解用new，依据不足用insufficient。" +
                     "same的after等于before；new/revise的after逐字抄候选summary。insufficient的target_id/before/after留空。explanation解释语义判断。" +
+                    "new的target_id和before必须为空字符串。留空均指\"\"而非null；kind从same、revise、new、insufficient中选一个值，不照抄竖线候选列表。" +
                     "只输出JSON：{\"decisions\":[{\"index\":0,\"kind\":\"same|revise|new|insufficient\",\"target_id\":\"\",\"before\":\"\",\"after\":\"\",\"explanation\":\"判断依据\"}]}。"),
                 new("user", TraceJson.ToJson(new { proposals = proposed.Select(x => new { index = x.i, proposal = x.w,
                     existing_ids = comparable.Where(node => SamePurpose(node, x.w)).Select(node => node.Id).ToList(),

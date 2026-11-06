@@ -186,6 +186,7 @@ internal static partial class Program
         RunDailyToolEvidenceCheck(assembly);
         RunDailyRuntimeConflictCheck(assembly);
         RunDailyRuntimeProseChecks(assembly);
+        RunReviewPromptContractChecks(assembly);
         RunDailyCommitFailureChecks(assembly);
         RunDailyValidationChecks(assembly);
         RunDailyPrivacyChecks(assembly);

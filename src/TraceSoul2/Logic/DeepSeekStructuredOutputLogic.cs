@@ -103,8 +103,9 @@ namespace TraceSoul2.Logic
             if (error is ReviewSelectionValidationException) return false;
             if (error is ReviewProsePendingException) return true;
             var message = error?.Message ?? "";
-            if (!message.Contains("字")) return false;
-            return (message.Contains("当前") && message.Contains("最多")) || message.Contains("超过");
+            // Only a measured overrun diagnostic qualifies. A rule such as
+            // "非空字符串，不超过400字符" is not evidence of an overrun.
+            return Regex.IsMatch(message, @"当前\d+(?:字符|字)[^。；\r\n]*(?:最多|不得超过)\d+");
         }
 
         private static string DescribeFailure(Exception error, Type contract)

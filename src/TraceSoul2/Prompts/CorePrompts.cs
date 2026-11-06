@@ -424,18 +424,19 @@ QQ 里的我可以说话，也可以带一小段正在发生的动作或神情�
             public const string RealmUser = "请输出 JSON。";
             public const string Empty = "（无）";
 
-            public const string CognitionBody = @"长期拼图有四个领域：user=他，world=世界，ass=我，relation=我和他。一条理解可关联多个领域。
-认知是我从真实经历中形成、可随新依据修订的理解。它帮助我在今后的情境中更准确地理解她、自己、我们的关系或世界。回望时，体会本次经历为这些理解带来了什么。
-一条认知围绕一个认识，通常用一两句自然中文说明我理解了什么，以及使它成立的必要原因或条件。about、scope、exceptions 分别简要说明对象、适用范围与例外，经历的具体经过保存在原始证据中。
+            public const string CognitionBody = @"长期拼图有四个领域：user=已绑定的专属用户，world=外部世界及其他人的事实，ass=我，relation=我与明确对象的关系。relation必须在about说明实际对象，不能把公开环境的其他人当作专属用户。一条理解可关联多个领域。
+认知是我从真实经历中形成、可随新依据修订的理解。它帮助我在今后的情境中更准确地理解具体对象、自己、关系或世界。
+一条认知围绕一个认识，说明我理解了什么及其必要条件。summary不超过400字符；about不超过100字符，说明具体对象；scope和exceptions各不超过200字符，分别说明适用范围与例外，无对应限定填空字符串。经历的具体经过保存在原始证据中。
 认识的确定程度与依据相称：初步体会保留其发生的情境，得到持续印证的认识呈现其适用范围，尚待理解的部分保留开放性。依据中的表达、愿望、计划、想象与实际发生各自保留原有性质，细节的取舍服务于理解的准确和完整。
 操作：create=新理解；reinforce=新证据加强已有理解；weaken=新反证削弱；revise=保留旧版、创建修正版；retire=不再适用；link=为已有理解建立 related_to/abstracts/exemplifies/contradicts 关联。
 先比较本次经历与语义检索到的已有认知，结合正文、对象、范围和例外判断它们的关系。相同理解获得新的独立印证时 reinforce；理解或条件有实质变化时 revise，写出完整的修正版；反证使原认识减弱时 weaken，已不适用时 retire；形成独立的新理解时 create。不同对象、情境与相反认识各自保留意义，确有联系时用 link 表达。已有认识和依据保持原状时，保留原记录即可。
 【输出填写】
 正文、对象、范围和例外使用自然中文；JSON 键、ID 和枚举值按协议填写，专有名词保留原文。
-每条操作都必须从本次展示的原始 Moment 中选择 evidence_moment_ids；事件摘要用于定位，不代替原始证据。不知道依据就不写，不能拿当天最后一句作通用依据。evidence_fact_ids 必须为空。
-create/revise 必须给 domains（四领域的非空子集）、简练完整的 summary、about、scope、exceptions、confidence/strength（0~1）。summary 的程序长度上限为600字。tag_ids 只复制下方生命标签列表每行竖线左侧的完整ID，不填右侧名称，不拼接 concept.life. 与名称；没有合适标签填 []。subtype 可为 preference/boundary/tendency/relationship/self_model/expectation/standard/trace。trace_cues 可为各类型提供关联词。
-有些认识在长久相处中逐渐清晰，有些来自一次重要经历。足以影响我如何理解自己、看待她或与她相处的认识，可用 identity_slot=self/expression_habit/other/relation 标记为成长摘要的参考，其余留空并继续保存在认知中。self/expression_habit 对应 ass 领域；初始人格由用户设定。已有摘要用于承接过去，本轮经历提供新的依据。
-link 使用 target_id、related_id 和 relation；关联本身不提高置信。只写本日实际变化，最多3条，无变化输出空数组。";
+每条操作的evidence_moment_ids必须为1～16项不同的字符串ID，只从本批原始Moment中选择真正支持本项的依据；事件摘要不代替原始证据。不知道依据就不写，不能拿当天最后一句作通用依据。evidence_fact_ids必须为[]。
+create/revise必须给domains（1～4项字符串数组，只选user/world/ass/relation）、非空summary及about/scope/exceptions字符串、confidence/strength（0～1有限数字）。本任务没有生命标签候选，tag_ids必须为[]。subtype可为preference/boundary/tendency/relationship/self_model/expectation/standard/trace。trace_cues为0～5项字符串数组，每项不超过26字符；association_strength为0～1有限数字。
+足以指导今后同类情境的自身需求/特点、自身表达习惯、专属用户的特点、明确对象关系，可分别用identity_slot=self/expression_habit/other/relation，其余填空字符串。公开环境其他人的特点用world且identity_slot为空；不能填other冒认专属用户。self/expression_habit对应ass领域；初始人格由用户设定。已有摘要用于承接过去，本轮经历提供新的依据。
+link使用target_id、related_id和relation；关联本身不提高置信。cognitions为0～3项数组。无变化只返回{""cognitions"":[]}，不能返回根数组[]。
+字符按JSON解码后的字符串计算，标点、空格、换行、数字、英文都计入；普通中文计1，emoji等补充字符通常计2。不按汉字数或token计数。只输出JSON，枚举值必须选择一个实际值，不能照抄用竖线连接的候选列表。";
             public static string CognitionPronoun(string userPronoun)
             {
                 return "指代 {username} 一律用「" + userPronoun + "」，不要混用其它代词。";
