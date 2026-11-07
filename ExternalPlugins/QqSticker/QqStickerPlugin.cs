@@ -9,7 +9,7 @@ namespace TraceSoul2.ExternalPlugins;
 
 public sealed class QqStickerPlugin : ITracePlugin
 {
-    public TracePluginMetadataData Metadata {get;}=new(){Id="qq.sticker",DisplayName="QQ 表情（共用情绪图库）",Version="3.1.2",
+    public TracePluginMetadataData Metadata {get;}=new(){Id="qq.sticker",DisplayName="QQ 表情（共用情绪图库）",Version="3.1.3",
         Author="TraceSoul2",Role=PluginRoleValues.Organ,PlatformId=BodyIds.Qq,Description="直接发送本轮共用评分最高的可用图片，不设最低分门槛。"};
     public void Register(TracePluginContext context)=>context.AddCallable(new Sticker());
     public void Shutdown() { }
@@ -27,6 +27,7 @@ public sealed class QqStickerPlugin : ITracePlugin
             if(!IsAvailable(turn))return new(){Status="skipped",Summary="QQ表情目标不可用，未改发其他平台。"};
             var library=turn.Services.Expressions;
             var match=turn.Workspace.ExpressionMatch;
+            if(match?.reason=="no_enabled_assets")return new(){Status="skipped",Summary="全部表情已禁用。"};
             if(library==null||match?.status!="matched")
                 return new(){Status="failed",Summary="本轮共用表情评分不可用："+(match?.reason??"scoring_unavailable")};
             var selected=ExpressionSelection.ReadHighest(library,match,token);

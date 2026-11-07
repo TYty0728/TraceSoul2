@@ -600,6 +600,8 @@ app.MapPost("/expressions/preview", async (SoulRuntime runtime,ExpressionQuery b
     Results.Json(await runtime.Expressions.MatchAsync(body,token)));
 app.MapPut("/expressions/assets/{id}/semantics", async (SoulRuntime runtime,string id,ExpressionSemanticsWrite body,CancellationToken token)=>
     Results.Json(await runtime.ExclusiveAsync(()=>runtime.SaveExpressionSemantics(id,body.tags),token)));
+app.MapPut("/expressions/assets/{id}/enabled", async (SoulRuntime runtime,string id,ExpressionEnabledWrite body,CancellationToken token)=>
+    Results.Json(await runtime.ExclusiveAsync(()=>runtime.SaveExpressionEnabled(id,body.enabled??throw new ArgumentException("请提供激活状态。")),token)));
 app.MapGet("/expressions/assets/{id}", (SoulRuntime runtime,string id,HttpContext context) => {
     var image=runtime.Expressions.ReadImage(id);
     context.Response.Headers.CacheControl="no-store";
@@ -1597,6 +1599,7 @@ internal sealed class DecisionTestWrite { public string model { get; set; } }
 internal sealed class ModelTestWrite { public string model { get; set; } public string slot { get; set; } }
 internal sealed class SpeechTestWrite { public string text { get; set; } }
 internal sealed class WxxzDeviceControlWrite { public bool enabled { get; set; } }
+internal sealed class ExpressionEnabledWrite { public bool? enabled { get; set; } }
 internal sealed class ExpressionSemanticsWrite { public string[] tags { get; set; } }
 
 internal sealed class ModelWrite

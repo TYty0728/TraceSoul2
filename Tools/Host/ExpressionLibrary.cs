@@ -17,7 +17,7 @@ public sealed class ExpressionLibrary : IExpressionLibrary
 {
     private const double SemanticCandidateWindow=0.04;
     private sealed record Tag(string Name,string Category);
-    private sealed record Asset(string Id,string Name,string Path,string Description,string[] Legacy,Dictionary<string,double> Manual,string Hash,string Index,string[] Semantics);
+    private sealed record Asset(string Id,string Name,string Path,string Description,string[] Legacy,Dictionary<string,double> Manual,string Hash,string Index,string[] Semantics,bool Enabled);
     private sealed record Semantic(string Name,string Cue,bool Required,string[] Exclusions);
     private readonly List<Semantic> semantics=new();
     private readonly Dictionary<string,string> indexHashes=new();
@@ -133,7 +133,7 @@ public sealed class ExpressionLibrary : IExpressionLibrary
                         manual.Add(pair.Name,score);
                     }
                 var hash=Hash(File.ReadAllBytes(path));
-                byName[entry.Name]=new(Hash(persona+"/"+entry.Name+"/"+hash),entry.Name,path,description,legacy,manual,hash,index,semanticTags);
+                byName[entry.Name]=new(Hash(persona+"/"+entry.Name+"/"+hash),entry.Name,path,description,legacy,manual,hash,index,semanticTags,!entry.Value.TryGetProperty("enabled",out var enabled)||enabled.GetBoolean());
                 if(byName.Count>2000)throw new InvalidOperationException("表情库最多2000张。");
             }
         }
@@ -141,13 +141,13 @@ public sealed class ExpressionLibrary : IExpressionLibrary
         foreach(var label in assets.SelectMany(a=>a.Semantics).Distinct(StringComparer.Ordinal))
             if(!semantics.Any(s=>s.Name==label))semantics.Add(new(label,label,true,Array.Empty<string>()));
         if(semantics.Count>256)throw new InvalidOperationException("表情语义标签最多256个。");
-        revision=Hash(JsonSerializer.Serialize(new{matching="semantic_first",semanticCandidateWindow=SemanticCandidateWindow,tags,semantics,assets=assets.Select(a=>new{a.Id,a.Description,a.Legacy,a.Manual,a.Hash,a.Semantics}),threshold,topTags,semanticThreshold}));
+        revision=Hash(JsonSerializer.Serialize(new{matching="semantic_first",semanticCandidateWindow=SemanticCandidateWindow,tags,semantics,assets=assets.Select(a=>new{a.Id,a.Description,a.Legacy,a.Manual,a.Hash,a.Semantics,a.Enabled}),threshold,topTags,semanticThreshold}));
     }
     public ExpressionCatalog Catalog()
     {
         lock(sync)return new(){revision=revision,model=profileModel??embedding()?.ModelId,threshold=threshold,topTags=topTags,profilesReady=profiles!=null,
             tags=tags.Select(t=>new EmotionTagScore{tag=t.Name,category=t.Category}).ToList(),
-            assets=assets.Select((a,i)=>new ExpressionAsset{id=a.Id,name=a.Name,legacyTags=(string[])a.Legacy.Clone(),
+            assets=assets.Select((a,i)=>new ExpressionAsset{id=a.Id,name=a.Name,enabled=a.Enabled,legacyTags=(string[])a.Legacy.Clone(),
                 tags=profiles==null?new():Clone(profiles[i]),semanticTags=(string[])a.Semantics.Clone(),requiresSemanticMatch=RequiresSemantic(a)}).ToList(),
             semanticTags=semantics.Select(s=>s.Name).ToArray(),semanticThreshold=semanticThreshold};
     }
@@ -160,16 +160,22 @@ public sealed class ExpressionLibrary : IExpressionLibrary
     // Construct and validate the replacement before atomically changing this one persistent index.
     public ExpressionLibrary WithSemanticTags(string id,string[] labels)
     {
-        ValidateSemanticTags(labels);ReadImage(id);
+        ValidateSemanticTags(labels);
+        return WithAssetProperty(id,"semantic_tags",JsonSerializer.SerializeToNode(labels));
+    }
+    public ExpressionLibrary WithEnabled(string id,bool enabled)=>WithAssetProperty(id,"enabled",JsonValue.Create(enabled));
+    private ExpressionLibrary WithAssetProperty(string id,string property,JsonNode value)
+    {
+        ReadImage(id);
         var asset=assets.Single(a=>a.Id==id);
         var allowed=Path.GetFullPath(Path.Combine(dataRoot,"emojis"))+Path.DirectorySeparatorChar;
         if(!asset.Index.StartsWith(allowed,OperatingSystem.IsWindows()?StringComparison.OrdinalIgnoreCase:StringComparison.Ordinal))
-            throw new InvalidOperationException("请先把包内默认图库复制到持久图库，再编辑用途标签。");
+            throw new InvalidOperationException("请先把包内默认图库复制到持久图库，再编辑表情设置。");
         if(!SafeFile(asset.Index))throw new InvalidOperationException("图片索引已改变，请重新加载图库。");
         var original=File.ReadAllBytes(asset.Index);
         if(Hash(original)!=indexHashes[asset.Index])throw new InvalidOperationException("索引已被其他操作修改，请重新加载后再保存。");
         var document=JsonNode.Parse(original).AsObject();
-        document[asset.Name].AsObject()["semantic_tags"]=JsonSerializer.SerializeToNode(labels);
+        document[asset.Name].AsObject()[property]=value;
         var bytes=Encoding.UTF8.GetBytes(document.ToJsonString(new JsonSerializerOptions{WriteIndented=true,Encoder=System.Text.Encodings.Web.JavaScriptEncoder.UnsafeRelaxedJsonEscaping}));
         var next=new ExpressionLibrary(palettePath,dataRoot,packageRoot,embedding,semanticPath,new(){{asset.Index,bytes}});
         var temp=asset.Index+"."+Guid.NewGuid().ToString("N")+".tmp";
@@ -246,6 +252,7 @@ public sealed class ExpressionLibrary : IExpressionLibrary
         var result=new ExpressionMatch{status="skipped",reason="no_match",revision=revision,threshold=threshold,topTags=n,semanticThreshold=semanticThreshold};
         if(string.IsNullOrWhiteSpace(query.text)&&string.IsNullOrWhiteSpace(query.mood)){result.reason="empty_expression";return result;}
         if(assets.Count==0){result.reason="empty_library";return result;}
+        if(!assets.Any(a=>a.Enabled)){result.reason="no_enabled_assets";return result;}
         var encoder=embedding();
         if(encoder==null){result.reason="embedding_unavailable";return result;}
         await scoring.WaitAsync(token);
@@ -260,16 +267,16 @@ public sealed class ExpressionLibrary : IExpressionLibrary
                     var denied=semanticExclusions[i].Select(v=>Cos(vector,v)).DefaultIfEmpty(0).Max();
                     return new SemanticTagScore{tag=s.Name,similarity=similarity,exclusionScore=denied,excluded=denied>similarity,score=denied>similarity?0:similarity};})
                     .OrderByDescending(s=>s.score).ThenBy(s=>s.tag,StringComparer.Ordinal).ToList();
-            var semanticFirst=result.semanticTags.Count>0&&assets.Any(a=>a.Semantics.Length>0);
+            var semanticFirst=result.semanticTags.Count>0&&assets.Any(a=>a.Enabled&&a.Semantics.Length>0);
             result.semanticMode=semanticFirst?"semantic_first":"emotion";
             var semanticScores=assets.Select(asset=>result.semanticTags
                 .Where(s=>asset.Semantics.Contains(s.tag,StringComparer.Ordinal))
                 .Select(s=>s.excluded?-Math.Max(0,s.exclusionScore-s.similarity):s.score).DefaultIfEmpty(0).Max()).ToArray();
             // Keep every tie in the leading semantic band. Emotion cannot promote
             // an unrelated image, and a uniformly weak signal still has candidates.
-            var bestSemantic=semanticScores.Max();
+            var bestSemantic=semanticScores.Where((score,i)=>assets[i].Enabled).Max();
             // Embeddings use floats; tolerate their rounding at the band boundary.
-            var shortlisted=semanticScores.Select(score=>!semanticFirst||bestSemantic-score<=SemanticCandidateWindow+1e-6).ToArray();
+            var shortlisted=semanticScores.Select((score,i)=>assets[i].Enabled&&(!semanticFirst||bestSemantic-score<=SemanticCandidateWindow+1e-6)).ToArray();
             if(!string.IsNullOrWhiteSpace(query.mood)&&!string.IsNullOrWhiteSpace(query.text))
             {
                 var mood=await encoder.EmbedAsync(query.mood,token);
@@ -288,7 +295,7 @@ public sealed class ExpressionLibrary : IExpressionLibrary
                 }
                 result.candidates.Add(new(){id=assets[i].Id,name=assets[i].Name,score=emotionScore,emotionScore=emotionScore,
                     semanticScore=semanticScores[i],eligible=shortlisted[i],
-                    reason=!shortlisted[i]?"semantic_not_shortlisted":semanticFirst?"shortlisted_emotion_score":"emotion_score"});
+                    reason=!assets[i].Enabled?"disabled":!shortlisted[i]?"semantic_not_shortlisted":semanticFirst?"shortlisted_emotion_score":"emotion_score"});
             }
             result.candidates=result.candidates.OrderByDescending(a=>a.eligible).ThenByDescending(a=>a.score).ThenBy(a=>a.id,StringComparer.Ordinal).ToList();
             foreach(var candidate in result.candidates.Where(c=>c.eligible))

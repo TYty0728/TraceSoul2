@@ -190,6 +190,11 @@ namespace TraceSoul2.Host
             var replacement=((ExpressionLibrary)Expressions).WithSemanticTags(id,tags);
             liveServices.Expressions=replacement;return replacement.Catalog();
         }
+        public object SaveExpressionEnabled(string id,bool enabled)
+        {
+            var replacement=((ExpressionLibrary)Expressions).WithEnabled(id,enabled);
+            liveServices.Expressions=replacement;return replacement.Catalog();
+        }
         public object SetHistoryWindow(int max, int align)
         {
             if (align <= 0)

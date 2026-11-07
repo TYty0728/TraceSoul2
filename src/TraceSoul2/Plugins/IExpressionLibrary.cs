@@ -26,6 +26,7 @@ namespace TraceSoul2.Plugins
         public List<EmotionTagScore> tags { get; set; } = new();
         public string[] semanticTags { get; set; } = System.Array.Empty<string>();
         public bool requiresSemanticMatch { get; set; }
+        public bool enabled { get; set; } = true;
     }
     public sealed class ExpressionCandidate
     {

@@ -16,9 +16,11 @@ public static class ExpressionSelection
         var candidates=match.candidates.Where(c=>c.eligible).OrderByDescending(c=>c.score).ThenBy(c=>c.id,StringComparer.Ordinal).Select(c=>c.id);
         // Older scorers may only provide a selected asset.
         if(!candidates.Any()&&!string.IsNullOrEmpty(match.selectedId))candidates=new[]{match.selectedId};
+        var disabled=library.Catalog().assets.Where(a=>!a.enabled).Select(a=>a.id).ToHashSet(StringComparer.Ordinal);
         foreach(var id in candidates)
         {
             token.ThrowIfCancellationRequested();
+            if(disabled.Contains(id))continue;
             try {return (id,library.ReadImage(id));}
             catch(Exception error) when(error is IOException or UnauthorizedAccessException or InvalidOperationException or ArgumentException){}
         }

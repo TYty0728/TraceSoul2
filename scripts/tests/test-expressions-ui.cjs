@@ -54,7 +54,17 @@ vm.createContext(sandbox);vm.runInContext(html.slice(html.indexOf('  /* Shared e
   failure=false;$('expressionSemantic-'+id).value='睡觉、晚安';await sandbox.saveExpressionSemantics(id);
   const saved=calls.at(-1);assert.equal(saved.method,'PUT');assert.equal(saved.path,'/expressions/assets/'+id+'/semantics');assert.equal(JSON.stringify(saved.body.tags),'["睡觉","晚安"]');
   assert.match($('expressionState').textContent,/用途标签已保存/);
+  catalog.assets[0].enabled=false;await sandbox.setExpressionEnabled(id,false);
+  assert.equal(calls.at(-1).path,'/expressions/assets/'+id+'/enabled');
+  assert.equal(calls.at(-1).body.enabled,false);
+  assert.match($('expressionGallery').innerHTML,/已禁用/);assert.match($('expressionGallery').innerHTML,/>激活<\/button>/);
+  assert.doesNotMatch($('expressionGallery').innerHTML,/本轮选中/);
+  catalog.assets[0].enabled=true;await sandbox.setExpressionEnabled(id,true);
+  assert.equal(calls.at(-1).body.enabled,true);assert.match($('expressionGallery').innerHTML,/已激活/);
+  assert.match($('expressionGallery').innerHTML,/>禁用<\/button>/);
+  failure=true;await sandbox.setExpressionEnabled(id,false);failure=false;
+  assert.match($('expressionState').textContent,/未完成/);assert.match($('expressionGallery').innerHTML,/已激活/);
   const savedCount=calls.length;$('expressionSemantic-'+id).value='重复、重复';await sandbox.saveExpressionSemantics(id);assert.equal(calls.length,savedCount);
-  assert.ok(calls.every(c=>['/expressions','/expressions/preview','/expressions/reload','/expressions/assets/'+id+'/semantics'].includes(c.path)),'预览和编辑不能调用QQ、板子或Moment接口');
+  assert.ok(calls.every(c=>['/expressions','/expressions/preview','/expressions/reload','/expressions/assets/'+id+'/semantics','/expressions/assets/'+id+'/enabled'].includes(c.path)),'预览和编辑不能调用QQ、板子或Moment接口');
   console.log('Expression UI checks passed: catalog, scores/rank, escaping, bounded asset URL, validation/busy/error, preview-only APIs.');
 })().catch(e=>{console.error(e);process.exitCode=1;});

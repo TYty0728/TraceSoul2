@@ -110,6 +110,26 @@ internal static partial class Program
             await CheckExpressionQqMerge(library,missing);
             await CheckExpressionSemantics(root,palette);
             await CheckExpressionSemanticShortlist(root,palette);
+            Require(catalog.assets.All(a=>a.enabled),"旧索引未写启停状态时默认激活");
+            var disabled=library.WithEnabled(match.selectedId,false);
+            Require(disabled.Catalog().revision!=library.Catalog().revision&&disabled.ReadImage(match.selectedId).bytes.Length>0,
+                "禁用更新版本但保留图库预览原图");
+            var disabledMatch=await disabled.MatchAsync(new(){text="开心"},default);
+            Require(disabledMatch.selectedId!=match.selectedId&&disabledMatch.candidates.Single(c=>c.id==match.selectedId).reason=="disabled",
+                "禁用的最高分图不参加匹配");
+            Require(ExpressionSelection.ReadHighest(disabled,match,default)?.id!=match.selectedId,"交付旧评分时仍跳过当前已禁用图");
+            Require(!Make().Catalog().assets.Single(a=>a.id==match.selectedId).enabled,"禁用状态重新加载后保持");
+            var tagged=disabled.WithSemanticTags(match.selectedId,new[]{"开心"});
+            Require(!tagged.Catalog().assets.Single(a=>a.id==match.selectedId).enabled,"编辑用途标签不会重新激活");
+            var allDisabled=tagged.WithEnabled(disabledMatch.selectedId,false);
+            var beforeDisabledCalls=encoder.Calls;
+            var noEnabled=await allDisabled.MatchAsync(new(){text="开心"},default);
+            Require(noEnabled.reason=="no_enabled_assets"&&noEnabled.selectedId==null&&encoder.Calls==beforeDisabledCalls,
+                "全部禁用时跳过选图及语义请求");
+            Require(ExpressionSelection.ReadHighest(allDisabled,match,default)==null,"全部禁用后旧评分也不能交付图片");
+            var restored=allDisabled.WithEnabled(match.selectedId,true).WithEnabled(disabledMatch.selectedId,true);
+            Require(restored.Catalog().assets.Single(a=>a.id==match.selectedId).semanticTags.Contains("开心")&&
+                (await restored.MatchAsync(new(){text="开心"},default)).selectedId==match.selectedId,"重新激活恢复选图且保留用途标签");
             File.WriteAllBytes(Path.Combine(folder,"happy.png"),new byte[]{9});
             try {library.ReadImage(match.selectedId);throw new Exception("changed image accepted");}catch(InvalidOperationException){}
             var next=await library.MatchAsync(new(){text="开心"},default);
@@ -224,6 +244,11 @@ internal static partial class Program
             "交付时首图失效，只顺位选择本轮已入围图片");
         foreach(var candidate in match.candidates.Where(c=>c.eligible))delivery.Unreadable.Add(candidate.id);
         Require(ExpressionSelection.ReadHighest(delivery,match,default)==null,"入围图片全失效，不越过用途筛选改发未入围图");
+        var onlyFar=library;
+        foreach(var asset in library.Catalog().assets.Where(a=>a.id!=far.id))onlyFar=onlyFar.WithEnabled(asset.id,false);
+        Require((await onlyFar.MatchAsync(new(){text="[purpose]",mood="开心"},default)).selectedId==far.id,
+            "禁用的高用途分不能抬高窗口排除剩余已激活图");
+        foreach(var asset in library.Catalog().assets.Where(a=>a.id!=far.id))onlyFar=onlyFar.WithEnabled(asset.id,true);
         foreach(var candidate in match.candidates.Where(c=>c.eligible))File.WriteAllBytes(Path.Combine(folder,candidate.name),new byte[]{9});
         var broken=await library.MatchAsync(new(){text="[purpose]",mood="开心"},default);
         Require(broken.status=="skipped"&&broken.reason=="images_unavailable"&&broken.selectedId==null&&

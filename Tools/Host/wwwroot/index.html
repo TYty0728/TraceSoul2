@@ -1643,17 +1643,19 @@
     const assets=[...catalog.assets].sort((a,b)=>(rank.get(a.id)?.rank||9999)-(rank.get(b.id)?.rank||9999));
     $('expressionGallery').innerHTML=assets.map(asset=>{
       if(!/^[a-f0-9]{64}$/.test(asset.id))return '';
-      const selected=asset.id===match?.selectedId, candidate=rank.get(asset.id);
+      const enabled=asset.enabled!==false;
+      const selected=enabled&&asset.id===match?.selectedId, candidate=rank.get(asset.id);
       const labels=[...(asset.tags||[])].sort((a,b)=>b.score-a.score).slice(0,4).map(t=>esc(t.tag)+' '+Number(t.score).toFixed(2)).join(' · ');
       const semanticValue=expressionSemanticDrafts.has(asset.id)?expressionSemanticDrafts.get(asset.id):(asset.semanticTags||[]).join('、');
       return '<article style="border:1px solid '+(selected?'#648d70':'var(--border,#ddd)')+';border-radius:12px;padding:12px;min-width:0;overflow-wrap:anywhere">'+
         '<img loading="lazy" src="/expressions/assets/'+asset.id+'" alt="'+esc(asset.name)+'" style="width:100%;height:130px;object-fit:contain" />'+
-        '<div>'+esc(asset.name)+'</div><div class="muted">'+(selected?'本轮选中 · ':'')+(candidate?(candidate.reason==='semantic_not_shortlisted'?'用途未入围':'第'+candidate.rank+'名 · '+candidate.score.toFixed(3)):'尚未匹配')+'</div>'+
+        '<div>'+esc(asset.name)+'</div><div class="muted">'+(enabled?'已激活 · ':'已禁用 · ')+(selected?'本轮选中 · ':'')+(!enabled?'不参与选图':candidate?(candidate.reason==='semantic_not_shortlisted'?'用途未入围':'第'+candidate.rank+'名 · '+candidate.score.toFixed(3)):'尚未匹配')+'</div>'+
         (candidate?'<small class="muted">用途 '+Number(candidate.semanticScore||0).toFixed(3)+(candidate.reason==='semantic_not_shortlisted'?' · 未计算本轮心情匹配':' · 心情 '+Number(candidate.emotionScore||0).toFixed(3))+(candidate.reason==='image_unavailable'?' · 图片不可用':'')+'</small><br>':'')+
         '<small class="muted">'+(labels||'首次计算后显示心情得分')+'</small>'+
         '<label style="display:block;margin-top:12px">用途标签<input id="expressionSemantic-'+asset.id+'" maxlength="550" value="'+esc(semanticValue)+'" placeholder="睡觉、困了、晚安" oninput="expressionSemanticDrafts.set(\''+asset.id+'\',this.value)" /></label>'+
         '<small class="muted">先按用途筛候选，再按心情选图；每张图单独保存，可新增词语。</small><br>'+
         '<button style="margin:8px 6px 0 0" onclick="showExpressionMotion(\''+asset.id+'\')">预览动感</button>'+
+        '<button data-expression-enabled onclick="setExpressionEnabled(\''+asset.id+'\','+(!enabled)+')">'+(enabled?'禁用':'激活')+'</button> '+
         '<button data-expression-semantic-save onclick="saveExpressionSemantics(\''+asset.id+'\')">保存用途标签</button></article>';
     }).join('');
     showExpressionMotion(match?.selectedId,true);
@@ -1661,11 +1663,11 @@
   async function expressionOperation(action) {
     if(expressionBusy)return;expressionBusy=true;
     for(const id of ['expressionLoad','expressionReload','expressionPreview'])$(id).disabled=true;
-    document.querySelectorAll('[data-expression-semantic-save]').forEach(button=>button.disabled=true);
+    document.querySelectorAll('[data-expression-semantic-save],[data-expression-enabled]').forEach(button=>button.disabled=true);
     $('expressionState').textContent='正在计算或读取图库，首次会建立本地语义档案……';
     try {await action();}
     catch(e){$('expressionState').textContent='未完成：'+e.message+'；没有发送消息或设备指令。';}
-    finally {expressionBusy=false;for(const id of ['expressionLoad','expressionReload','expressionPreview'])$(id).disabled=false;document.querySelectorAll('[data-expression-semantic-save]').forEach(button=>button.disabled=false);}
+    finally {expressionBusy=false;for(const id of ['expressionLoad','expressionReload','expressionPreview'])$(id).disabled=false;document.querySelectorAll('[data-expression-semantic-save],[data-expression-enabled]').forEach(button=>button.disabled=false);}
   }
   async function loadExpressions() {
     return expressionOperation(async()=>{
@@ -1699,8 +1701,16 @@
       $('expressionSemantics').textContent=(match.semanticMode==='semantic_first'?'先按用途筛选，再按心情排名：':match.semanticMode==='combined'?'用途与心情综合评分：':'心情评分：')+(match.semanticTags||[]).slice(0,6).map(t=>t.tag+' '+t.score.toFixed(3)).join(' · ');
       const excluded=(match.semanticTags||[]).filter(t=>t.excluded);
       if(excluded.length)$('expressionSemantics').textContent+='；更接近排除语义：'+excluded.map(t=>t.tag).join('、');
-      const reasons={empty_expression:'尚未填写表达',embedding_unavailable:'本地语义模型未就绪',empty_library:'图库为空',images_unavailable:'本轮候选图片均不可用'};
+      const reasons={empty_expression:'尚未填写表达',embedding_unavailable:'本地语义模型未就绪',empty_library:'图库为空',no_enabled_assets:'全部表情已禁用，请先激活至少一张',images_unavailable:'本轮候选图片均不可用'};
       $('expressionState').textContent=(match.status==='matched'?'已选出候选中心情最高分表情':('无法选图：'+(reasons[match.reason]||match.reason)))+' · 心情前'+match.topTags+'个标签 · 无绝对最低分门槛。仅预览，未发送。';
+    });
+  }
+  async function setExpressionEnabled(id,enabled) {
+    if(!/^[a-f0-9]{64}$/.test(id)||typeof enabled!=='boolean')return;
+    return expressionOperation(async()=>{
+      expressionCatalog=await api('/expressions/assets/'+id+'/enabled','PUT',{enabled});
+      expressionCards(null);
+      $('expressionState').textContent=enabled?'本图已激活，QQ和板端选图立即生效。':'本图已禁用，不再参与QQ和板端选图；图片和标签已保留，可随时激活。';
     });
   }
   async function saveExpressionSemantics(id) {
@@ -1758,7 +1768,7 @@
     const purposes=state==='thinking'?['思考','提问','疑问','困惑']
       :['standby','offline'].includes(state)?['发呆','等待']
       :['focused','listening'].includes(state)?['倾听','在听']:[];
-    const choices=(companionCatalog.assets||[]).filter(a=>/^[a-f0-9]{64}$/.test(a.id)).map(asset=>{
+    const choices=(companionCatalog.assets||[]).filter(a=>a.enabled!==false&&/^[a-f0-9]{64}$/.test(a.id)).map(asset=>{
       const purpose=(asset.semanticTags||[]).some(tag=>purposes.includes(tag));
       const labels=new Map((asset.legacyTags||[]).map(tag=>[tag,1]));
       for(const tag of asset.tags||[])labels.set(tag.tag,Math.max(labels.get(tag.tag)||0,Number(tag.score)||0));
