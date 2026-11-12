@@ -37,9 +37,12 @@ internal static partial class Program
             _ => question.StartsWith("source_") || question.StartsWith("topic_") ? "yes" : "no"
         };
     }
-    private static void AttachJev(DailyFixture fixture, ReviewDecisionProbe probe) => fixture.Context.GetType()
-        .GetProperty("ReviewDecisionOverride").SetValue(fixture.Context,
+    private static void AttachJev(DailyFixture fixture, ReviewDecisionProbe probe)
+    {
+        fixture.ExistingEngine = "jev-v1";
+        fixture.Context.GetType().GetProperty("ReviewDecisionOverride").SetValue(fixture.Context,
             new Func<JsonElement, JsonElement, CancellationToken, Task<JsonElement>>(probe.Decide));
+    }
     private const string JevDraftText = "{\"summary\":\"他早餐想吃面包，选择时应尊重当天意愿。\",\"scope\":\"早餐选择\",\"exceptions\":\"意愿变化后重新确认\"}";
     private const string JevEmptyDraft = "{\"summary\":\"\",\"scope\":\"\",\"exceptions\":\"\"}";
     private static string JevLlmReply(List<DeepSeekMessageData> messages)
@@ -301,6 +304,7 @@ internal static partial class Program
             baseUrl = cfg.GetProperty("base_url").GetString(), apiKey = cfg.GetProperty("openrouter_api_key").GetString(),
             relayKey = cfg.GetProperty("relay_key").GetString(), decisionMode = "relay", model = "typesafe/jev-1.14", timeout = 60 });
         using var f = new DailyFixture(Assembly.LoadFrom(Path.GetFullPath(assemblyPath)));
+        f.ExistingEngine = "jev-v1";
         f.Seed(2);
         var calls = 0; double cost = 0;
         Func<JsonElement, JsonElement, CancellationToken, Task<JsonElement>> decide = async (state, questions, token) => {

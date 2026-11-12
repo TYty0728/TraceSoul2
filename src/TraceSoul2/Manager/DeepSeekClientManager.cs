@@ -190,6 +190,13 @@ namespace TraceSoul2.Manager
                     max_tokens = config.MaxTokens
                 }, OmitNullJson);
             }
+            if (IsGpt61SolModel(model))
+                return JsonSerializer.Serialize(new {
+                    model, messages,
+                    response_format = json && useJsonResponseFormat ? new DeepSeekResponseFormatData() : null,
+                    max_completion_tokens = config.MaxTokens > 0 ? config.MaxTokens : (int?)null,
+                    reasoning_effort = config.ThinkingEnabled ? NormalizeGpt61SolEffort(config.ReasoningEffort) : "low"
+                }, OmitNullJson);
             return JsonSerializer.Serialize(
                 new OpenAiChatRequestData
                 {
@@ -209,6 +216,19 @@ namespace TraceSoul2.Manager
         {
             return OfficialLlmChannelLogic.Resolve(config) == OfficialLlmChannel.Kimi;
         }
+
+        private static bool IsGpt61SolModel(string model)
+        {
+            var name = (model ?? "").Trim().ToLowerInvariant();
+            if (name.StartsWith("openai/", StringComparison.Ordinal)) name = name.Substring(7);
+            return name == "gpt-6.1-sol" || name.StartsWith("gpt-6.1-sol-", StringComparison.Ordinal);
+        }
+
+        private static string NormalizeGpt61SolEffort(string value)
+            => (value ?? "").Trim().ToLowerInvariant() switch {
+                "low" => "low", "medium" => "medium", "high" => "high", "xhigh" => "xhigh", "max" => "max",
+                _ => "medium"
+            };
 
         private static KimiChatRequestData BuildKimiChatRequest(
             DeepSeekConfigData config,
@@ -892,7 +912,8 @@ namespace TraceSoul2.Manager
             value.TimeoutSeconds = Math.Max(5, Math.Min(600, value.TimeoutSeconds));
             value.EmptyContentRetries = Math.Max(0, Math.Min(3, value.EmptyContentRetries));
             value.TransientErrorRetries = Math.Max(0, Math.Min(6, value.TransientErrorRetries));
-            value.ReasoningEffort = NormalizeReasoningEffort(value.ReasoningEffort);
+            value.ReasoningEffort = IsGpt61SolModel(ResolveRequestModel(value))
+                ? NormalizeGpt61SolEffort(value.ReasoningEffort) : NormalizeReasoningEffort(value.ReasoningEffort);
         }
 
         private static string NormalizeReasoningEffort(string value)

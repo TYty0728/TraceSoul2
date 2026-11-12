@@ -19,7 +19,7 @@ internal static partial class Program
     private static bool IsRuntimeFit(List<DeepSeekMessageData> messages) => messages[0].content.Contains("单字段压缩");
     private static void RunDailyRuntimeProseChecks(Assembly assembly)
     {
-        using (var f = new DailyFixture(assembly))
+        using (var f = new DailyFixture(assembly) { ExistingEngine = "legacy" })
         {
             f.Seed(2); AttachJev(f, new ReviewDecisionProbe()); var fits = 0; var drafts = 0;
             var original = new string('知', 113) + new string('，', 11);
@@ -53,7 +53,7 @@ internal static partial class Program
         }
         foreach (var length in new[] { 120, 121 })
         {
-            using var f = new DailyFixture(assembly); f.Seed(2); var fits = 0;
+            using var f = new DailyFixture(assembly) { ExistingEngine = "legacy" }; f.Seed(2); var fits = 0;
             var narrative = new string('字', length - 3) + "😀。";
             f.Run(new SelectionProbeLlm { Reply = m => {
                 if (IsRuntimeFit(m)) { fits++; return "{\"text\":\"已经保留完整含义。\"}"; }
@@ -63,7 +63,7 @@ internal static partial class Program
         }
         foreach (var mode in new[] { "transport", "budget" })
         {
-            using var f = new DailyFixture(assembly); f.Seed(2);
+            using var f = new DailyFixture(assembly) { ExistingEngine = "legacy" }; f.Seed(2);
             var before = TraceJson.ToJson(f.Store.LoadIdentityCards(DailyFixture.Root));
             var first = new SelectionProbeLlm { Reply = m => {
                 if (IsRuntimeFit(m))
@@ -92,7 +92,7 @@ internal static partial class Program
         }
         foreach (var invalid in new[] { "{\"text\":\" \"}", "{\"text\":\"短\",\"slot\":\"self\"}", TraceJson.ToJson(new { text = new string('长', 123) }) })
         {
-            using var f = new DailyFixture(assembly); f.Seed(2); var fits = 0;
+            using var f = new DailyFixture(assembly) { ExistingEngine = "legacy" }; f.Seed(2); var fits = 0;
             var llm = new SelectionProbeLlm { Reply = m => {
                 if (IsRuntimeFit(m)) { fits++; return invalid; }
                 return m[0].content.Contains("4/4") ? RuntimeProseDraft(new string('长', 124)) : DailyReply(m);
@@ -104,7 +104,7 @@ internal static partial class Program
             f.Reopen(); var retry = new SelectionProbeLlm { Reply = m => { Require(IsRuntimeFit(m), "人工续做仅补失败字段"); return "{\"text\":\"有效叙事。\"}"; } }; f.Run(retry);
             Require(retry.Requests.Count == 1, "人工续做有机会重新压缩，不被失败缓存锁死");
         }
-        using (var f = new DailyFixture(assembly))
+        using (var f = new DailyFixture(assembly) { ExistingEngine = "legacy" })
         {
             f.Seed(2);
             Require(DailyRejects(() => f.Run(new SelectionProbeLlm { Reply = m => {

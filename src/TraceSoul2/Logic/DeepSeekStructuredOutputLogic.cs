@@ -34,7 +34,8 @@ namespace TraceSoul2.Logic
             Func<T, string> validationError = null,
             Action<T, IReadOnlyCollection<string>> onParsed = null,
             bool includeInvalidResponse = true,
-            Func<T, Exception> typedValidationError = null)
+            Func<T, Exception> typedValidationError = null,
+            bool preserveValidContent = false)
             where T : class
         {
             var raw = await client.CompleteJsonAsync(messages, cancellationToken, promptCacheKey);
@@ -58,15 +59,23 @@ namespace TraceSoul2.Logic
 
             var runaway = IsRunawayDraft(raw, firstError);
             var failure = runaway && !IsLengthOverrun(firstError)
-                ? "上一份写得太长，没有写完。按原篇幅筛掉不重要的，重新输出更短的完整 JSON。不要继续上一份，不要逐条复述输入。"
-                : DescribeFailure(firstError, typeof(T));
+                ? (preserveValidContent
+                    ? "上一份JSON尚未完整结束。请基于原始材料，合并重复表述，重新输出简洁完整的结果，保留证据与事实性质。"
+                    : "上一份写得太长，没有写完。按原篇幅筛掉不重要的，重新输出更短的完整 JSON。不要继续上一份，不要逐条复述输入。")
+                : DescribeFailure(firstError, typeof(T), preserveValidContent);
             var repair = new List<DeepSeekMessageData>(messages);
             if (!runaway && includeInvalidResponse)
-                repair.Add(new DeepSeekMessageData("assistant", Limit(raw, 16000)));
+                repair.Add(new DeepSeekMessageData("assistant", preserveValidContent ? raw : Limit(raw, 16000)));
             var lengthOverrun = IsLengthOverrun(firstError);
             repair.Add(new DeepSeekMessageData(
                 "user",
-                lengthOverrun
+                preserveValidContent
+                    ? "请按以下反馈修正结果：" + failure +
+                      (!runaway && includeInvalidResponse
+                          ? " 请以所附草稿为基础，只修改报错字段及必要关联项，保留其余条目、顺序、正文和有效引用。"
+                          : "") +
+                      " 返回修正后的完整JSON对象，使用标准JSON语法。"
+                    : lengthOverrun
                     ? "上一条不满足要求：" + failure + "。这不是新输入。新正文必须更短，删掉次要的事，只留少数转折。重新输出完整 JSON；不要解释，不要 Markdown。"
                     : CorePrompts.Retry.JsonRepairUser(failure) +
                       " 请重新输出完整 JSON，不要只输出修改片段；字符串中的双引号必须转义，属性和值之间用冒号，属性之间用逗号。"));
@@ -108,7 +117,7 @@ namespace TraceSoul2.Logic
             return Regex.IsMatch(message, @"当前\d+(?:字符|字)[^。；\r\n]*(?:最多|不得超过)\d+");
         }
 
-        private static string DescribeFailure(Exception error, Type contract)
+        private static string DescribeFailure(Exception error, Type contract, bool completeDetails = false)
         {
             if (error is JsonException json)
             {
@@ -117,7 +126,7 @@ namespace TraceSoul2.Logic
                     ContractTypeHint(contract, json.Path);
             }
             return error is InvalidOperationException
-                ? Limit(error.Message, 240) : "结构化输出解析失败";
+                ? (completeDetails ? error.Message : Limit(error.Message, 240)) : "结构化输出解析失败";
         }
 
         private static string ContractTypeHint(Type contract, string path)

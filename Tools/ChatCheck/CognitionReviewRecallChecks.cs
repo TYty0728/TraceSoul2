@@ -72,11 +72,12 @@ internal static partial class Program
             publicMoment.Id = "public-proof"; publicMoment.CreatedUnixMs = 1; publicMoment.Role = "user";
             store.SaveMoment(publicMoment);
             var publicLlm = new AgentSequenceLlm(TraceJson.ToJson(new { cognitions = new[] { new BrainCognitionWriteData {
-                operation = "reinforce", target_id = "public", evidence_moment_ids = new() { publicMoment.Id }, confidence = 0.7f } } }));
+                operation = "create", summary = "本日公开经历的新理解", domains = new() { "world" }, identity_slot = "",
+                evidence_moment_ids = new() { publicMoment.Id }, confidence = 0.7f } } }));
             Require(PublicExperienceLogic.BuildAsync(store, publicLlm, 0, 100, encoderFactory: () => encoder, cache: cache)
-                .GetAwaiter().GetResult() == 1 && publicLlm.Requests.Single().Contains("他喜欢烘焙") &&
-                store.GetCognitionEvidence(new[] { "public" }).Any(x => x.MomentId == publicMoment.Id),
-                "公开复盘也在生成前召回旧理解并按真实依据补强原节点");
+                .GetAwaiter().GetResult() == 1 && !publicLlm.Requests.Single().Contains("他喜欢烘焙") &&
+                !store.GetCognitionEvidence(new[] { "public" }).Any(x => x.MomentId == publicMoment.Id),
+                "公开复盘只读当日材料，不注入或修改历史认知");
             var mixed = Evidence("面包"); mixed.AddRange(Evidence("面包", "room", "public"));
             var rejected = false;
             try { CognitionReviewRecallLogic.Select(store, mixed, () => encoder, cache); } catch (InvalidOperationException) { rejected = true; }
@@ -87,6 +88,15 @@ internal static partial class Program
                 selected.Sum(x => CognitionReviewRecallLogic.Describe(x).Length + 1) + 2 <= CognitionReviewRecallLogic.TextBudget &&
                 selected.All(x => x.Summary == sql.Find<CognitionSliceRecord>(x.Id).Summary),
                 "候选数量和完整正文预算受控，不截断旧理解");
+            selected = CognitionReviewRecallLogic.Select(store, Evidence("面包"), () => encoder, cache, completeBatch: true);
+            Require(selected.Count == 22 && selected.Sum(x => CognitionReviewRecallLogic.Describe(x).Length) > 8000 &&
+                selected.All(x => x.Summary == sql.Find<CognitionSliceRecord>(x.Id).Summary),
+                "整批复盘保留全部22条相关旧认知及超过8000字符的完整正文，继续排除越权和无关项");
+            store.SeedLifeTags(Enumerable.Range(0, 20).Select(i => new VectorIndexNode("concept.review-" + i,
+                VectorNodeLevel.Concept, "烘焙主题" + i, "烘焙", "scope", new[] { "user" },
+                new[] { "dimension.scope" }, new[] { "烘焙" }, Array.Empty<string>())).ToList());
+            Require(LifeTagVectorLogic.ReviewCandidates(store, encoder, new[] { "面包" }, cache, completeBatch: true).Count == 20,
+                "整批复盘保留全部20个相关主题，不再被每片段3个或总数12个裁掉");
             rejected = false;
             try { CognitionReviewRecallLogic.Select(store, evidence, () => encoder, cache, token: new CancellationToken(true)); }
             catch (OperationCanceledException) { rejected = true; }

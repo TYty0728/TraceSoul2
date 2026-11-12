@@ -11,7 +11,7 @@ namespace TraceSoul2.Logic
     {
         /// <summary>夜间按每段原件查找可复用主题，向量只提供候选，不决定归属。</summary>
         public static List<LifeTagRecord> ReviewCandidates(IMemoryStore store, IVectorEncoder encoder,
-            IEnumerable<string> material, IVectorCacheStore cache = null)
+            IEnumerable<string> material, IVectorCacheStore cache = null, bool completeBatch = false)
         {
             var tags = store.GetActiveLifeTags();
             if (tags.Count == 0) return tags;
@@ -21,10 +21,10 @@ namespace TraceSoul2.Logic
             foreach (var text in material.Where(x => !string.IsNullOrWhiteSpace(x)))
                 for (var offset = 0; offset < text.Length; offset += 80)
                     foreach (var hit in router.RankConcepts(text.Substring(offset, Math.Min(96, text.Length - offset)),
-                        new VectorRouteSettings { ActivationCountBonus = 0f }).Where(x => x.Score >= MemoryRecallLogic.TagMinScore).Take(3))
+                        new VectorRouteSettings { ActivationCountBonus = 0f }).Where(x => x.Score >= MemoryRecallLogic.TagMinScore).Take(completeBatch ? int.MaxValue : 3))
                         scores[hit.Node.Id] = Math.Max(scores.GetValueOrDefault(hit.Node.Id), hit.Score);
             return tags.Where(t => scores.ContainsKey(t.Id)).OrderByDescending(t => scores[t.Id])
-                .ThenBy(t => t.Id, StringComparer.Ordinal).Take(12).ToList();
+                .ThenBy(t => t.Id, StringComparer.Ordinal).Take(completeBatch ? int.MaxValue : 12).ToList();
         }
 
         public static List<VectorIndexNode> BuildOntology(

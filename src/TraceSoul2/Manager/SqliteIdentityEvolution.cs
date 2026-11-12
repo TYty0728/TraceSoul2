@@ -11,11 +11,11 @@ namespace TraceSoul2.Manager
     {
         [MethodImpl(MethodImplOptions.Synchronized)]
         public void CommitPublicExperienceChecked(System.Collections.Generic.IEnumerable<string> ids,
-            System.Collections.Generic.IEnumerable<BrainCognitionWriteData> writes, Action validate)
+            System.Collections.Generic.IEnumerable<BrainCognitionWriteData> writes, Action validate, bool completeBatch = false)
         {
             connection.RunInTransaction(() => {
                 connection.Execute("UPDATE plugin_documents SET UpdatedUnixMs=UpdatedUnixMs WHERE 0");
-                validate(); CommitPublicExperience(ids, writes);
+                validate(); CommitPublicExperience(ids, writes, completeBatch);
             });
         }
         [MethodImpl(MethodImplOptions.Synchronized)]

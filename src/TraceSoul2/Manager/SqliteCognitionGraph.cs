@@ -14,11 +14,11 @@ namespace TraceSoul2.Manager
             .OrderByDescending(x => x.UpdatedUnixMs).Take(Math.Max(0, Math.Min(5000, take))).ToList();
 
         [MethodImpl(MethodImplOptions.Synchronized)]
-        public List<CognitionSliceRecord> GetCognitionReviewCandidates(string scope, bool isPublic) => connection.Query<CognitionSliceRecord>(
+        public List<CognitionSliceRecord> GetCognitionReviewCandidates(string scope, bool isPublic, bool completeBatch = false) => connection.Query<CognitionSliceRecord>(
             "SELECT * FROM cognition_slices WHERE Status IN ('active','weakened') AND " +
             (isPublic ? "MemoryVisibility = 'public' AND ContextConversationId = ? " :
                 "COALESCE(MemoryVisibility, '') <> 'public' AND (COALESCE(ContextConversationId, '') = '' OR ContextConversationId = ?) ") +
-            "ORDER BY UpdatedUnixMs DESC, Id LIMIT 5000", scope ?? "");
+            "ORDER BY UpdatedUnixMs DESC, Id" + (completeBatch ? "" : " LIMIT 5000"), scope ?? "");
 
         [MethodImpl(MethodImplOptions.Synchronized)]
         public List<CognitionEdgeRecord> GetCognitionEdges(IEnumerable<string> nodeIds)
@@ -52,14 +52,14 @@ namespace TraceSoul2.Manager
             (momentIds ?? Array.Empty<string>()).Distinct().Take(256)
             .Select(id => connection.Find<MomentRecord>(id)).Where(x => x != null && x.MemoryStatus != "operational").ToList();
 
-        private List<CognitionEvidenceRecord> ResolveCognitionEvidence(BrainCognitionWriteData write, string trigger)
+        private List<CognitionEvidenceRecord> ResolveCognitionEvidence(BrainCognitionWriteData write, string trigger, bool completeBatch = false)
         {
             var result = new List<CognitionEvidenceRecord>();
             var moments = (write.evidence_moment_ids ?? new List<string>()).Distinct().ToList();
             var facts = (write.evidence_fact_ids ?? new List<string>()).Distinct().ToList();
             // 兼容旧调用：仅未指定任何证据时才使用真实触发 Moment；显式错误 ID 不兜底。
             if (moments.Count == 0 && facts.Count == 0) moments.Add(trigger);
-            if (moments.Count + facts.Count > 16) throw new InvalidOperationException("认知证据数量超过 16。");
+            if (!completeBatch && moments.Count + facts.Count > 16) throw new InvalidOperationException("认知证据数量超过 16。");
             foreach (var id in moments)
             {
                 var moment = string.IsNullOrWhiteSpace(id) ? null : connection.Find<MomentRecord>(id);
@@ -78,7 +78,7 @@ namespace TraceSoul2.Manager
             return result;
         }
 
-        private CognitionSliceRecord ApplyCognitionMutation(BrainCognitionWriteData write, string trigger, long now)
+        private CognitionSliceRecord ApplyCognitionMutation(BrainCognitionWriteData write, string trigger, long now, bool completeBatch = false)
         {
             if (write == null) return null;
             var op = (write.operation ?? "").Trim().ToLowerInvariant();
@@ -91,7 +91,7 @@ namespace TraceSoul2.Manager
                 throw new InvalidOperationException("认知权重必须是有限数值。");
             if ((write.domains ?? new List<string>()).Any(x => !LifeRouteValues.IsDomain(x)))
                 throw new InvalidOperationException("认知领域只能是 user/world/ass/relation。");
-            var evidence = ResolveCognitionEvidence(write, trigger);
+            var evidence = ResolveCognitionEvidence(write, trigger, completeBatch);
             var originals = evidence.Select(x => connection.Find<MomentRecord>(x.MomentId)).ToList();
             var contexts = originals.Select(x => x.ConversationId ?? "").Distinct().ToList();
             var visibilities = originals.Select(x => x.MemoryVisibility == "public" ? "public" : "private").Distinct().ToList();
@@ -125,7 +125,7 @@ namespace TraceSoul2.Manager
             }
             if (op == "reinforce" || op == "weaken" || op == "retire")
             {
-                if (op == "reinforce") AddCognitionTags(target.Id, write.tag_ids);
+                if (op == "reinforce") AddCognitionTags(target.Id, write.tag_ids, completeBatch);
                 // Upgrade only references whose exact old source still matches, before its
                 // metadata changes. Never bless a previously stale or edited source.
                 foreach (var card in connection.Table<IdentityCardRecord>().Where(x => x.Origin == "derived").ToList())
@@ -160,22 +160,23 @@ namespace TraceSoul2.Manager
                 return target;
             }
             var summary = visibility == "public" ? (write.summary ?? "").Trim() : LoadPairIdentity().RewriteRecordedText((write.summary ?? "").Trim());
-            if (summary.Length == 0 || summary.Length > 600) throw new InvalidOperationException("认知正文须为 1～600 字。");
+            if (summary.Length == 0 || (!completeBatch && summary.Length > 600))
+                throw new InvalidOperationException(completeBatch ? "认知正文不能为空。" : "认知正文须为 1～600 字。");
             var domains = PuzzleDomains.Pack(write.domains);
             if (domains.Length == 0 && target != null) domains = target.Domains;
-            var tags = (write.tag_ids ?? new List<string>()).Distinct().Take(8)
+            var tags = (write.tag_ids ?? new List<string>()).Distinct().Take(completeBatch ? int.MaxValue : 8)
                 .Where(id => connection.Find<LifeTagRecord>(id) != null).ToList();
             // 旧记录可沿用 Tag；新认知只要有领域与证据即可，不受标签生成进度阻塞。
             if (domains.Length == 0 && tags.Count == 0) throw new InvalidOperationException("认知需要领域或有效旧标签。");
-            var about = Limit((write.about ?? "").Trim(), 160);
-            var scope = Limit((write.scope ?? "").Trim(), 300);
-            var exceptions = Limit((write.exceptions ?? "").Trim(), 300);
+            var about = completeBatch ? (write.about ?? "").Trim() : Limit((write.about ?? "").Trim(), 160);
+            var scope = completeBatch ? (write.scope ?? "").Trim() : Limit((write.scope ?? "").Trim(), 300);
+            var exceptions = completeBatch ? (write.exceptions ?? "").Trim() : Limit((write.exceptions ?? "").Trim(), 300);
             var identitySlot = write.identity_slot ?? "";
             var existing = op == "create" ? connection.Table<CognitionSliceRecord>()
                 .Where(x => x.Summary == summary && x.Domains == domains && (x.Status == "active" || x.Status == "weakened") &&
                     x.About == about && x.Scope == scope && x.Exceptions == exceptions &&
                     x.ContextConversationId == contextId && x.IdentitySlot == identitySlot).FirstOrDefault() : null;
-            if (existing != null) { AddCognitionTags(existing.Id, tags); AddGraphEvidence(existing.Id, evidence, "supports"); return existing; }
+            if (existing != null) { AddCognitionTags(existing.Id, tags, completeBatch); AddGraphEvidence(existing.Id, evidence, "supports"); return existing; }
             var node = new CognitionSliceRecord
             {
                 Id = Guid.NewGuid().ToString("N"), OwnerId = "ass", Domains = domains,
@@ -189,7 +190,7 @@ namespace TraceSoul2.Manager
                 CreatedUnixMs = now, UpdatedUnixMs = now, LastConfirmedUnixMs = now
             };
             connection.Insert(node);
-            AddCognitionTags(node.Id, tags);
+            AddCognitionTags(node.Id, tags, completeBatch);
             AddGraphEvidence(node.Id, evidence, "supports");
             if (op == "revise")
             {
@@ -205,9 +206,9 @@ namespace TraceSoul2.Manager
             return node;
         }
 
-        private void AddCognitionTags(string cognitionId, IEnumerable<string> tagIds)
+        private void AddCognitionTags(string cognitionId, IEnumerable<string> tagIds, bool completeBatch = false)
         {
-            foreach (var tagId in (tagIds ?? Enumerable.Empty<string>()).Distinct().Take(8))
+            foreach (var tagId in (tagIds ?? Enumerable.Empty<string>()).Distinct().Take(completeBatch ? int.MaxValue : 8))
             {
                 if (connection.Find<LifeTagRecord>(tagId)?.Status != "active") continue;
                 var id = cognitionId + "|" + tagId;

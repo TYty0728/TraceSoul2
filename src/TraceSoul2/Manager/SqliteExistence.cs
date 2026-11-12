@@ -32,11 +32,11 @@ namespace TraceSoul2.Manager
 
         [MethodImpl(MethodImplOptions.Synchronized)]
         public IdentityCardRecord SaveDerivedIdentityCard(string conversationId, string slot, string body,
-            IEnumerable<string> cognitionIds, string sourceMomentId)
+            IEnumerable<string> cognitionIds, string sourceMomentId, bool completeReview = false)
         {
             var ids = (cognitionIds ?? Array.Empty<string>()).Distinct().ToList();
             // Provenance is stored separately from prose; complete semantic groups must not be reduced to a sample.
-            if (ids.Count == 0 || ids.Count > 1000) throw new InvalidOperationException("成长摘要必须有完整认知依据，且不超过单槽1000条处理容量。");
+            if (ids.Count == 0 || (!completeReview && ids.Count > 1000)) throw new InvalidOperationException("成长摘要必须有完整认知依据。");
             IdentityCardRecord result = null;
             connection.RunInTransaction(() =>
             {
@@ -49,7 +49,7 @@ namespace TraceSoul2.Manager
                     throw new InvalidOperationException("身份摘要引用了失效、跨环境或用途不符的认知。");
                 if (nodes.Any(n => !connection.Table<CognitionEvidenceRecord>().Any(e => e.CognitionId == n.Id)))
                     throw new InvalidOperationException("身份摘要缺少经历来源。");
-                result = SaveIdentityCard(conversationId, slot, body, sourceMomentId);
+                result = SaveIdentityCardCore(conversationId, slot, body, sourceMomentId, completeReview);
                 result.Origin = "derived";
                 result.CognitionSourcesJson = TraceJson.ToJson(nodes.ToDictionary(n => n.Id, IdentityProjectionLogic.MeaningStamp));
                 connection.Update(result);
@@ -74,10 +74,10 @@ namespace TraceSoul2.Manager
         public List<MomentRecord> GetPublicMomentsInRange(long startMs, long endMs, int take = 200) => connection.Table<MomentRecord>()
             .Where(x => x.MemoryVisibility == "public" && x.CreatedUnixMs >= startMs && x.CreatedUnixMs < endMs &&
                 (x.MemoryStatus == null || (x.MemoryStatus != "built" && x.MemoryStatus != "operational")))
-            .OrderBy(x => x.CreatedUnixMs).Take(Math.Clamp(take, 1, 200)).ToList();
+            .OrderBy(x => x.CreatedUnixMs).Take(Math.Max(take, 1)).ToList();
 
         [MethodImpl(MethodImplOptions.Synchronized)]
-        public void CommitPublicExperience(IEnumerable<string> sourceIds, IEnumerable<BrainCognitionWriteData> writes)
+        public void CommitPublicExperience(IEnumerable<string> sourceIds, IEnumerable<BrainCognitionWriteData> writes, bool completeBatch = false)
         {
             var ids = sourceIds.Distinct().ToList();
             connection.RunInTransaction(() =>
@@ -89,14 +89,20 @@ namespace TraceSoul2.Manager
                 if (moments.All(x => x.MemoryStatus == "built")) return;
                 if (moments.Any(x => x.MemoryStatus == "built")) throw new InvalidOperationException("公开证据批次已部分提交，请重读。");
                 var changes = (writes ?? throw new InvalidOperationException("缺少认知变更数组。")).ToList();
-                var candidates = GetCognitionNodes(5000).Where(x => x.ContextConversationId == moments[0].ConversationId && PuzzleDomains.Live(x.Status)).ToList();
-                if (!CognitionFormationLogic.Valid(changes, moments, candidates, new List<LifeTagRecord>()) ||
+                var candidates = GetCognitionReviewCandidates(moments[0].ConversationId, true, completeBatch);
+                if (CognitionFormationLogic.ValidationError(changes, moments, candidates, new List<LifeTagRecord>(),
+                    checkLength: !completeBatch, completeBatch: completeBatch) != null ||
                     (!moments.Any(m => EnvironmentLogic.FromMoment(m)?.SpeakerIsOwner == true) && changes.Any(w => (w.domains ?? new()).Contains("user"))))
                     throw new InvalidOperationException("公开认知变更的结构、对象或引用无效。");
                 if (changes.Any(x => x.evidence_moment_ids == null || x.evidence_moment_ids.Count == 0 ||
                     x.evidence_moment_ids.Any(id => !ids.Contains(id)) || (x.evidence_fact_ids?.Count ?? 0) != 0))
                     throw new InvalidOperationException("公开整理不能引用未提供的证据。");
-                CommitCognitions(ids[0], changes);
+                if (completeBatch)
+                {
+                    var now = DateTimeOffset.UtcNow.ToUnixTimeMilliseconds();
+                    foreach (var write in changes) ApplyCognitionMutation(write, ids[0], now, completeBatch: true);
+                }
+                else CommitCognitions(ids[0], changes);
                 MarkPublicMomentsBuilt(ids);
             });
         }

@@ -23,6 +23,9 @@ internal static partial class Program
         public readonly string DirectoryPath, BrainPath;
         public readonly Assembly Assembly;
         public object Context, ActualStore, Migration;
+        // Existing checks default to Version 3; later legacy contracts opt in, fresh days use the current version.
+        public string ExistingEngine = "batch-v1";
+        public int? ExistingVersion;
         public IMemoryStore Store => (IMemoryStore)ActualStore;
         public ICognitionGraphStore Graph => (ICognitionGraphStore)ActualStore;
         public const string Day = "2020-08-20", Root = "tracesoul2";
@@ -65,6 +68,27 @@ internal static partial class Program
         }
         public void Run(ILlmClient llm, string day = Day)
         {
+            // Compatibility tests explicitly seed an old checkpoint, rather than
+            // enabling the retired per-item engine for newly created reviews.
+            if (ExistingEngine != null && string.IsNullOrEmpty(Store.LoadPluginDocument("daily-review", day)))
+            {
+                var builder = Assembly.GetType("TraceSoul2.Migrate.DayBuilder", true);
+                var state = Activator.CreateInstance(builder.GetNestedType("DailyReviewState"));
+                var start = MemoryDayLogic.StartOf(day).ToUnixTimeMilliseconds();
+                var pending = (List<MomentRecord>)DbCall("GetUnbuiltMomentsInRange", start, start + 86400000);
+                var ids = pending.Select(m => m.Id).ToList();
+                var stamp = (string)builder.GetMethod("SourceStamp", BindingFlags.NonPublic | BindingFlags.Static)
+                    .Invoke(null, new object[] { Context, ids });
+                var fields = state.GetType();
+                fields.GetField("Day").SetValue(state, day);
+                fields.GetField("SourceIds").SetValue(state, ids);
+                fields.GetField("CognitionEngine").SetValue(state, ExistingEngine);
+                fields.GetField("Version").SetValue(state, ExistingVersion ?? (ExistingEngine == "batch-v1" ? 3 : ExistingEngine == "jev-v1" ? 2 : 1));
+                if (ExistingVersion >= 5) fields.GetField("IdentityContext").SetValue(state,
+                    builder.GetMethod("CaptureReviewIdentity", BindingFlags.NonPublic | BindingFlags.Static).Invoke(null, new[] { Context }));
+                fields.GetField("Stamp").SetValue(state, (ExistingEngine is "jev-v1" or "batch-v1" ? ExistingEngine + ":" : "") + stamp);
+                Store.SavePluginDocument("daily-review", day, TraceJson.ToJson(state));
+            }
             Context.GetType().GetProperty("Llm").SetValue(Context, llm);
             ((Task)Assembly.GetType("TraceSoul2.Migrate.DayBuilder", true).GetMethod("RunAsync")
                 .Invoke(null, new object[] { Context, new[] { "--day", day } })).GetAwaiter().GetResult();
@@ -79,6 +103,26 @@ internal static partial class Program
     private const string DailyCognition = "{\"cognitions\":[{\"operation\":\"create\",\"target_ref\":0,\"summary\":\"他早餐想吃面包，选择时应尊重当天意愿。\",\"identity_slot\":\"other\",\"domains\":[\"user\"],\"source_refs\":[1],\"tag_refs\":[1],\"scope\":\"早餐选择\",\"exceptions\":\"意愿变化后重新确认\"}]}";
     private const string DailyRuntime = "{\"cards\":[{\"slot\":\"other\",\"body\":\"他早餐想吃面包，具体选择随当天意愿变化。\",\"cognition_refs\":[1]}],\"runtime\":{\"narrative\":\"听见他对早餐的想法。\",\"mood\":\"平静\",\"relationship_lens\":\"尊重具体意愿\"}}";
     private const string EmptyDailyRuntime = "{\"cards\":[],\"runtime\":{\"narrative\":\"\",\"mood\":\"\",\"relationship_lens\":\"\"}}";
+    private static List<JsonElement> ReadReviewTable(JsonElement root, string name, string columns)
+    {
+        var rows = root.GetProperty(name).EnumerateArray().ToList();
+        if (!root.TryGetProperty(columns, out var schema)) return rows;
+        var names = schema.EnumerateArray().Select(x => x.GetString()).ToArray();
+        return rows.Select(row => JsonSerializer.SerializeToElement(names.Select((key, i) => (key, value: row[i].Clone()))
+            .ToDictionary(x => x.key, x => x.value))).ToList();
+    }
+    private static List<JsonElement> ReadReviewSources(JsonElement root)
+    {
+        var rows = ReadReviewTable(root, "conversation", "conversation_columns");
+        if (!root.TryGetProperty("source_profiles", out var sourceProfiles)) return rows;
+        var profiles = sourceProfiles.EnumerateArray().ToDictionary(p => p.GetProperty("profile_ref").GetInt32());
+        return rows.Select(row => {
+            var fields = row.EnumerateObject().Where(p => p.Name != "profile_ref").ToDictionary(p => p.Name, p => p.Value.Clone());
+            foreach (var p in profiles[row.GetProperty("profile_ref").GetInt32()].EnumerateObject())
+                if (p.Name != "profile_ref") fields.Add(p.Name, p.Value.Clone());
+            return JsonSerializer.SerializeToElement(fields);
+        }).ToList();
+    }
     private static string DailyReply(List<DeepSeekMessageData> messages)
     {
         var title = messages[0].content;
@@ -138,15 +182,21 @@ internal static partial class Program
             var llm = new SelectionProbeLlm { Reply = messages => {
                 if (!messages[0].content.Contains("1/4")) throw new InvalidOperationException("Empty events need no later model");
                 using var input = JsonDocument.Parse(messages[1].content);
-                foreach (var source in input.RootElement.GetProperty("conversation").EnumerateArray()) seen.Add(source.GetProperty("text").GetString());
+                foreach (var source in ReadReviewSources(input.RootElement)) seen.Add(source.GetProperty("text").GetString());
                 return "{\"events\":[]}";
             } };
-            f.Run(llm); Require(seen.Count == 250 && llm.Requests.Count == 6 && f.Count("event_entries") == 0,
-                "250条原文分段完整覆盖，没有事件时不额外生成挑选、认知或runtime");
+            f.Run(llm); Require(seen.Count == 250 && llm.Requests.Count == 1 && f.Count("event_entries") == 0,
+                "250条原文一次完整覆盖，没有事件时不额外生成挑选、认知或runtime");
         }
         using (var f = new DailyFixture(assembly))
         {
             var sources = f.Seed(49);
+            using (var db = new SQLite.SQLiteConnection(f.BrainPath))
+                for (var i = 0; i < sources.Count; i++)
+                {
+                    sources[i].Content += new string(i == 48 ? '乙' : '甲', i == 48 ? 5000 : 2000);
+                    db.Update(sources[i]);
+                }
             var interrupted = new AgentSequenceLlm(DailyEvents); Require(DailyRejects(() => f.Run(interrupted)), "提取批间中断");
             f.Reopen(); var last = new AgentSequenceLlm("{\"events\":[{\"summary\":\"最后一条事件\",\"source_refs\":[1]" + DailyTopicFields + "}]}", "{\"selected_refs\":[]}");
             f.Run(last); Require(last.Requests.Count == 2 && last.Requests[0].Contains(sources[48].Content) &&
@@ -161,7 +211,7 @@ internal static partial class Program
         {
             f.Seed(2);
             var invalid = new AgentSequenceLlm("{\"events\":[{\"summary\":\"越界\",\"source_refs\":[3]}]}",
-                "{\"events\":[{\"summary\":\"重复\",\"source_refs\":[1,1]}]}");
+                "{\"events\":[{\"summary\":\"仍越界\",\"source_refs\":[3]}]}");
             Require(DailyRejects(() => f.Run(invalid)) && invalid.Requests.Count == 2 && f.Count("event_entries") == 0 &&
                 invalid.Requests[1].Contains("source_refs[0]=3"), "非法来源最多纠正一次，失败不入库且反馈定位到字段");
             f.Run(new AgentSequenceLlm(DailyEvents, "{\"selected_refs\":[]}"));
@@ -180,6 +230,12 @@ internal static partial class Program
             Require(f.Count("event_entries") == 2, "事务失败重试只入库一次");
         }
         RunDailyTopicGrowthChecks(assembly);
+        RunEventEvidenceReviewChecks(assembly);
+        RunSubjectiveReviewChecks(assembly);
+        RunDailyReflectionChecks(assembly);
+        RunJointReviewChecks(assembly);
+        RunWholeDayReviewChecks(assembly);
+        RunDailyRuntimeContractChecks(assembly);
         RunDailyTopicEvidenceChecks(assembly);
         RunDailyExistingSlotChecks(assembly);
         RunJevReviewChecks(assembly);
@@ -196,6 +252,295 @@ internal static partial class Program
         RunReviewTransportChecks(assembly);
         RunDailyProcessRecovery(assembly);
         Console.WriteLine("Four-step daily review passed: complete day, batching, restart, atomic rollback, live runtime, call limit and bounded network recovery.");
+    }
+
+    private static void RunWholeDayReviewChecks(Assembly assembly)
+    {
+        using (var f = new DailyFixture(assembly))
+        {
+            var sources = f.Seed(3);
+            using (var db = new SQLite.SQLiteConnection(f.BrainPath))
+            {
+                sources[0].Content = "早餐\"面包\"\r\n第二行\\路径🙂"; sources[0].SourcePlatform = null;
+                sources[1].Content = "早餐选择与预算"; sources[1].Realm = "reality"; sources[1].EvidenceType = "self_report";
+                sources[2].Content = "早餐面包"; sources[2].ConversationId = "another-private";
+                foreach (var source in sources) db.Update(source);
+                db.Insert(new LifeTagRecord { Id = "ambiguous-a", Label = "早餐", Definition = "早餐面包的饮食意愿", Status = "active" });
+                db.Insert(new LifeTagRecord { Id = "ambiguous-b", Label = "早餐", Definition = "早餐面包的消费预算", Status = "active" });
+            }
+            var llm = new SelectionProbeLlm { Reply = messages => {
+                using var input = JsonDocument.Parse(messages[1].content);
+                var rows = ReadReviewSources(input.RootElement);
+                Require(rows.Select(r => r.GetProperty("text").GetString()).SequenceEqual(sources.Select(s => s.Content)) &&
+                    rows[0].GetProperty("platform").ValueKind == JsonValueKind.Null &&
+                    rows[1].GetProperty("evidence_type").GetString() == "self_report" &&
+                    rows[2].GetProperty("conversation_ref").GetInt32() != rows[0].GetProperty("conversation_ref").GetInt32(),
+                    "紧凑来源格式保留引号、换行、反斜线、emoji、空值、事实性质及会话边界");
+                var topics = ReadReviewTable(input.RootElement, "topics", "topic_columns");
+                var meanings = input.RootElement.GetProperty("topic_disambiguation").EnumerateArray().ToList();
+                Require(topics.Count == 2 && topics.All(t => !t.TryGetProperty("definition", out _)) &&
+                    meanings.Select(m => m.GetProperty("definition").GetString()).ToHashSet().SetEquals(new[] { "早餐面包的饮食意愿", "早餐面包的消费预算" }) &&
+                    meanings.All(m => topics.Any(t => t.GetProperty("tag_ref").GetInt32() == m.GetProperty("tag_ref").GetInt32())),
+                    "名称目录避免反复附完整定义，同名不同义保留可对照的定义及编号");
+                return "{\"events\":[]}";
+            } };
+            f.Run(llm); Require(llm.Requests.Count == 1, "主题语义选用在提取环节内，不增加预筛模型请求");
+        }
+        using (var f = new DailyFixture(assembly))
+        {
+            var prior = new List<string>();
+            for (var day = 20; day <= 22; day++)
+            {
+                var key = "2020-08-" + day;
+                var marker = "独立日理解" + day;
+                f.Seed(2, key);
+                var llm = new SelectionProbeLlm { Reply = messages => {
+                    var stage = messages[0].content;
+                    using var input = JsonDocument.Parse(messages[1].content);
+                    if (stage.Contains("3/4"))
+                    {
+                        Require(!input.RootElement.TryGetProperty("existing", out _) && prior.All(p => !messages[1].content.Contains(p)),
+                            "连续三日新复盘不检索或注入昨日认知，existing字段也不回灌");
+                        return DailyCognition.Replace("他早餐想吃面包，选择时应尊重当天意愿。", marker);
+                    }
+                    if (stage.Contains("4/4"))
+                    {
+                        Require(!input.RootElement.TryGetProperty("current", out _) &&
+                            input.RootElement.GetProperty("cards").EnumerateArray().All(c => !c.TryGetProperty("body", out _)) &&
+                            input.RootElement.GetProperty("cognitions").GetArrayLength() == 1 &&
+                            prior.All(p => !messages[1].content.Contains(p)),
+                            "状态生成仅包含当日认知和槽位固定标记，不重复旧卡、旧依据或上次状态");
+                        return DailyRuntime.Replace("他早餐想吃面包，具体选择随当天意愿变化。", marker + "卡片")
+                            .Replace("听见他对早餐的想法。", marker + "状态");
+                    }
+                    return DailyReply(messages);
+                } };
+                f.Run(llm, key);
+                Require(llm.Requests.Count == 4 && f.Store.LoadIdentityCards(DailyFixture.Root).Single(c => c.Slot == "other").Body == marker + "卡片",
+                    "每日四次，卡片替换为当日读视图，不串接昨日正文");
+                prior.Add(marker);
+            }
+            Require(f.Graph.GetCognitionNodes(20).Count == 3, "历史认知仍留库，不以清理输入删除记忆");
+        }
+        using (var f = new DailyFixture(assembly))
+        {
+            f.Seed(2);
+            var llm = new SelectionProbeLlm { Reply = messages => {
+                if (messages[0].content.Contains("1/4")) return "{\"events\":[{\"summary\":\"双方确认早餐选择\",\"source_refs\":[1,1,2]}]}";
+                if (messages[0].content.Contains("2/4")) return "{\"selected_refs\":[1,1]}";
+                if (messages[0].content.Contains("3/4")) return DailyCognition.Replace(",\"tag_refs\":[1]", "").Replace("\"source_refs\":[1]", "\"source_refs\":[1,1]");
+                return EmptyDailyRuntime;
+            } };
+            f.Run(llm);
+            Require(llm.Requests.Count == 4 && f.Count("event_entries") == 1 && f.Graph.GetCognitionNodes(20).Count == 1 &&
+                f.Store.GetActiveLifeTags().Count == 0, "事件没有合适主题可留空，完整依据与认识仍一次完成，不为主题重试整批");
+        }
+        foreach (var total in new[] { 100000, 100001 })
+        {
+            using var f = new DailyFixture(assembly);
+            var sources = f.Seed(250);
+            using (var db = new SQLite.SQLiteConnection(f.BrainPath))
+                for (var i = 0; i < sources.Count; i++)
+                {
+                    var source = sources[i];
+                    source.Content = "完整原文" + i.ToString("D3") + new string('文', 393 + (i == 249 ? total - 100000 : 0));
+                    source.Role = i % 3 == 0 ? "user" : "assistant";
+                    source.Type = i % 3 == 0 ? MomentTypes.Message : MomentTypes.Expression;
+                    source.ConversationId = i % 2 == 0 ? DailyFixture.Root : DailyFixture.Root + ":private:second";
+                    db.Update(source);
+                }
+            var seen = new List<string>(); var scopes = new Dictionary<string, int>();
+            var llm = new SelectionProbeLlm { Reply = messages => {
+                Require(messages[0].content.Contains("主动、连续发言"), "完整互动提示明确包含助手主动与连续表达");
+                using var input = JsonDocument.Parse(messages[1].content);
+                var rows = ReadReviewSources(input.RootElement);
+                scopes.Clear();
+                for (var i = 0; i < rows.Count; i++)
+                {
+                    var expected = sources[seen.Count]; var row = rows[i];
+                    Require(row.GetProperty("source_ref").GetInt32() == i + 1 &&
+                        row.GetProperty("text").GetString() == expected.Content && row.GetProperty("role").GetString() == expected.Role &&
+                        row.GetProperty("type").GetString() == expected.Type && row.GetProperty("time").GetInt64() == expected.CreatedUnixMs &&
+                        row.GetProperty("realm").GetString() == expected.Realm && row.GetProperty("evidence_type").GetString() == expected.EvidenceType &&
+                        row.GetProperty("platform").GetString() == expected.SourcePlatform,
+                        "紧凑表格可无损还原全文、双方角色、连续表达、时间、事实性质和平台");
+                    var scope = row.GetProperty("conversation_ref").GetInt32();
+                    if (scopes.TryGetValue(expected.ConversationId, out var previous)) Require(scope == previous, "会话短编号稳定");
+                    else { Require(!scopes.Values.Contains(scope), "不同私密会话不能伪装成同一轮问答"); scopes.Add(expected.ConversationId, scope); }
+                    seen.Add(expected.Content);
+                }
+                return "{\"events\":[]}";
+            } };
+            f.Run(llm);
+            Require(seen.SequenceEqual(sources.Select(m => m.Content)) && llm.Requests.Count == (total == 100000 ? 1 : 2),
+                "100000字符含边界一次读取，超出才按完整消息分批，不按条数/角色/会话拆分");
+        }
+        foreach (var length in new[] { 100000, 100001 })
+        {
+            using var f = new DailyFixture(assembly); var source = f.Seed(1)[0];
+            source.Content = new string('长', length);
+            using (var db = new SQLite.SQLiteConnection(f.BrainPath)) db.Update(source);
+            var llm = new AgentSequenceLlm("{\"events\":[]}");
+            if (length == 100000) { f.Run(llm); Require(llm.Requests.Count == 1, "单条十万字符仍完整读取一次"); }
+            else Require(DailyRejects(() => f.Run(llm)) && llm.Requests.Count == 0 && f.Count("event_entries") == 0,
+                "单条超预算在派发前明确失败，不截字、不假报完成");
+        }
+        foreach (var rollback in new[] { false, true })
+        {
+            using var f = new DailyFixture(assembly); var sources = f.Seed(50);
+            using (var db = new SQLite.SQLiteConnection(f.BrainPath))
+                foreach (var source in sources) { source.Content += new string('据', 1000); db.Update(source); }
+            var probe = new ReviewDecisionProbe();
+            f.Context.GetType().GetProperty("ReviewDecisionOverride").SetValue(f.Context,
+                new Func<JsonElement, JsonElement, CancellationToken, Task<JsonElement>>(probe.Decide));
+            var tags = Enumerable.Range(1, 9).Select(i => new NewLifeTagWriteData {
+                name = "整批主题" + i, definition = new string('义', 250), domain_ids = new() { "user" },
+                dimension_ids = new() { "owner", "subject", "about", "predicate", "object", "scope", "context", "quality", "time" },
+                positive_examples = Enumerable.Repeat(new string('正', 110), 4).ToList(), negative_examples = new() { "不同含义" }
+            }).ToArray();
+            string Reply(List<DeepSeekMessageData> messages)
+            {
+                var stage = messages[0].content;
+                if (stage.Contains("1/4")) return TraceJson.ToJson(new { events = Enumerable.Range(1, 131).Select(i => new {
+                    summary = "完整事件" + i + new string('事', 650), source_refs = Enumerable.Range(1, 50).ToArray(),
+                    tag_refs = Array.Empty<int>(), new_tags = tags
+                }) });
+                if (stage.Contains("2/4")) return TraceJson.ToJson(new { selected_refs = Enumerable.Range(1, 131).ToArray() });
+                if (stage.Contains("3/4"))
+                {
+                    using var input = JsonDocument.Parse(messages[1].content);
+                    Require(input.RootElement.GetProperty("evidence").GetArrayLength() == 50, "所有入选原件一次进入认知判断");
+                    return TraceJson.ToJson(new { cognitions = Enumerable.Range(1, 17).Select(i => new {
+                        operation = "create", target_ref = 0, summary = "整批理解" + i + new string('知', 650), identity_slot = "other",
+                        domains = new[] { "user" }, source_refs = Enumerable.Range(1, 50).ToArray(), tag_refs = Enumerable.Range(1, 9).ToArray(),
+                        scope = new string('域', 350), exceptions = new string('例', 351)
+                    }) });
+                }
+                return EmptyDailyRuntime;
+            }
+            if (rollback)
+            {
+                using (var db = new SQLite.SQLiteConnection(f.BrainPath)) db.Execute(
+                    "CREATE TRIGGER fail_full_batch BEFORE INSERT ON cognition_slices WHEN NEW.Summary LIKE '整批理解4%' BEGIN SELECT RAISE(ABORT,'injected batch failure'); END");
+                var failed = false;
+                try { f.Run(new SelectionProbeLlm { Reply = Reply }); }
+                catch (SQLite.SQLiteException e) when (e.Message.Contains("injected batch failure")) { failed = true; }
+                Require(failed && f.Graph.GetCognitionNodes(100).Count == 0,
+                    "第4项写入失败时前3项也必须回滚，整批不能半写成功");
+                using (var state = f.State()) Require(state.RootElement.GetProperty("CognitionSources").GetArrayLength() == 0,
+                    "失败的整批不得提前标记来源完成");
+                using (var db = new SQLite.SQLiteConnection(f.BrainPath)) db.Execute("DROP TRIGGER fail_full_batch");
+                f.Reopen();
+            }
+            var llm = new SelectionProbeLlm { Reply = Reply }; f.Run(llm);
+            Require(llm.Requests.Count == (rollback ? 2 : 4) && probe.Questions.Count == 0,
+                "有JEV配置的新日期也按环节一次，失败恢复仅补剩余环节");
+            using (var db = new SQLite.SQLiteConnection(f.BrainPath))
+                Require(f.Count("event_entries") == 131 && f.Graph.GetCognitionNodes(100).Count == 17 &&
+                    db.ExecuteScalar<int>("SELECT COUNT(*) FROM cognition_evidence") == 17 * 50 &&
+                    db.ExecuteScalar<int>("SELECT COUNT(*) FROM cognition_tag_links") == 17 * 9,
+                    "超过旧事件/选中/认知/来源/主题配额仍完整入库，不截成128/10/3/16/8项");
+            Require(f.Graph.GetCognitionNodes(100).All(n => n.Summary.Length > 600 && n.Scope.Length == 350 && n.Exceptions.Length == 351) &&
+                f.Store.GetActiveLifeTags().All(t => t.Definition.Length == 250 && f.Store.GetLifeTagRoutes(t.Id).Count == 10),
+                "完整认知、限定及主题目录不被旧字符/维度限制截断");
+            using (var state = f.State()) Require(state.RootElement.GetProperty("Version").GetInt32() == 3 &&
+                state.RootElement.GetProperty("Selected").GetArrayLength() == 131 && state.RootElement.GetProperty("Done").GetBoolean(),
+                "新检查点区分旧程序，选中事件无固定条数配额");
+            f.Reopen(); var empty = new AgentSequenceLlm(); f.Run(empty);
+            Require(empty.Requests.Count == 0 && f.Graph.GetCognitionNodes(100).Count == 17, "整批完成后重开不重放、不重复写入");
+        }
+        using (var f = new DailyFixture(assembly))
+        {
+            var sources = f.Seed(2); sources[1].ConversationId += ":private:second";
+            using (var db = new SQLite.SQLiteConnection(f.BrainPath)) db.Update(sources[1]);
+            var decisions = 0;
+            f.Run(new SelectionProbeLlm { Reply = messages => {
+                if (messages[0].content.Contains("1/4")) return DailyEvents;
+                if (messages[0].content.Contains("2/4")) return "{\"selected_refs\":[1,2]}";
+                if (!messages[0].content.Contains("3/4")) return EmptyDailyRuntime;
+                decisions++;
+                if (decisions == 1) return DailyCognition.Replace("\"source_refs\":[1]", "\"source_refs\":[1,2]");
+                Require(messages[^1].content.Contains("conversation_ref"), "合批不能跨会话借用证据，纠正指出来源会话");
+                return TraceJson.ToJson(new { cognitions = Enumerable.Range(1, 2).Select(i => new {
+                    operation = "create", target_ref = 0, summary = "会话认识" + i, identity_slot = "other", domains = new[] { "user" },
+                    source_refs = new[] { i }, tag_refs = new[] { 1 }, scope = "", exceptions = ""
+                }) });
+            } });
+            Require(decisions == 2 && f.Graph.GetCognitionNodes(20).Select(n => n.ContextConversationId).Distinct().Count() == 2,
+                "同次整批判断允许不同私密会话分别写入，不能将两种受众合成同一认识");
+        }
+        using (var f = new DailyFixture(assembly))
+        {
+            f.Seed(2); var runtimeCalls = 0;
+            var llm = new SelectionProbeLlm { Reply = messages => {
+                if (!messages[0].content.Contains("4/4")) return DailyReply(messages);
+                Require(!messages[0].content.Contains("单字段压缩"), "新复盘不进入逐字段压缩调用链");
+                runtimeCalls++;
+                return RuntimeProseDraft(new string('长', 124), new string('心', 91), new string('关', 250), new string('卡', 701));
+            } };
+            f.Run(llm);
+            var runtime = (InnerRuntimeData)f.StoreCall("LoadOrCreateInnerRuntime", DailyFixture.Root);
+            Require(runtimeCalls == 1 && llm.Requests.Count == 4 && runtime.Narrative.Length == 124 && runtime.Mood.Length == 91 &&
+                runtime.RelationshipLens.Length == 250 && f.Store.LoadIdentityCards(DailyFixture.Root).Single(c => c.Slot == "other").Body.Length == 701,
+                "状态与卡片超过旧字数限制也完整写入，一次生成、不截断、不逐字段压缩");
+        }
+    }
+
+    private static void RunDailyRuntimeContractChecks(Assembly assembly)
+    {
+        foreach (var mode in new[] { "slot", "reference", "body", "none", "pinned" })
+        {
+            using var f = new DailyFixture(assembly); f.Seed(2);
+            if (mode == "pinned") f.StoreCall("SetIdentityPinned", DailyFixture.Root, "relation", true);
+            var runtimeCalls = 0; string rejected = null;
+            var llm = new SelectionProbeLlm { Reply = messages => {
+                var stage = messages[0].content;
+                if (stage.Contains("1/4")) return DailyEvents;
+                if (stage.Contains("2/4")) return DailySelection;
+                if (stage.Contains("3/4"))
+                {
+                    Require(stage.Contains(CognitionFormationLogic.ReviewMeaningGuide), "认知环节使用共享的经历、理解与对象归属说明");
+                    if (mode == "none") return "{\"cognitions\":[]}";
+                    return TraceJson.ToJson(new { cognitions = Enumerable.Range(0, 3).Select(i => new {
+                        operation = "create", target_ref = 0, summary = "合成测试理解" + i,
+                        identity_slot = new[] { "relation", "", "personality" }[i],
+                        domains = new[] { new[] { "relation", "world", "ass" }[i] },
+                        source_refs = new[] { 1 }, tag_refs = new[] { 1 }, scope = "合成限定", exceptions = ""
+                    }) });
+                }
+                runtimeCalls++;
+                using var input = JsonDocument.Parse(messages[1].content);
+                var cards = input.RootElement.GetProperty("cards").EnumerateArray().ToList();
+                if (mode is "none" or "pinned")
+                {
+                    Require(cards.Count == 0, "无认知或唯一有依据槽位被固定时不展示可改卡片");
+                    return "{\"cards\":[],\"runtime\":{\"mood\":\"平静\"}}";
+                }
+                Require(cards.Count == 1 && cards[0].GetProperty("slot").GetString() == "relation" &&
+                    cards[0].GetProperty("purpose").GetString().Contains("双方"), "只有关系卡有合法依据，不展示无依据卡、固定人格或用户资料卡");
+                var valid = cards[0].GetProperty("allowed_cognition_refs").EnumerateArray().Select(x => x.GetInt32()).Single();
+                Require(input.RootElement.GetProperty("cognitions").EnumerateArray().All(c => c.GetProperty("slot").GetString() == "relation"),
+                    "固定人格和无身份类别的认识不再次灌入身份卡请求，当日状态从事件取材");
+                var invalid = Enumerable.Range(1, 3).First(n => n != valid);
+                string Output(string slot, string body, int reference) => TraceJson.ToJson(new {
+                    cards = new[] { new { slot, body, cognition_refs = new[] { reference } } }, runtime = new { mood = "平静" } });
+                if (runtimeCalls == 1)
+                {
+                    rejected = Output(mode == "slot" ? "self" : "relation", mode == "body" ? "" : "错误草稿",
+                        mode == "reference" ? invalid : valid);
+                    return rejected;
+                }
+                Require(messages.Any(m => m.role == "assistant" && m.content == rejected) &&
+                    messages.Last().content.Contains("cards[0]") &&
+                    (mode == "body" ? messages.Last().content.Contains("删除整项") :
+                        messages.Last().content.Contains("relation") && messages.Last().content.Contains("[" + valid + "]")),
+                    "纠正同时携带原草稿、具体出错卡和合法编号或省略办法");
+                return Output("relation", "双方约定先倾听，再共同决定下一步。", valid);
+            } };
+            f.Run(llm);
+            Require(llm.Requests.Count == (mode is "none" or "pinned" ? 4 : 5), "正常四步，发生错误只补一次完整纠正");
+            using var state = f.State(); Require(state.RootElement.GetProperty("RuntimeDone").GetBoolean(), "空卡或纠正后卡片均正常完成状态提交");
+        }
     }
 
     private static void RunDailyToolEvidenceCheck(Assembly assembly)
@@ -231,7 +576,7 @@ internal static partial class Program
         foreach (var slot in new[] { "expression_habit", "" })
         foreach (var overflow in new[] { false, true })
         {
-            using var f = new DailyFixture(assembly); f.Seed(2);
+            using var f = new DailyFixture(assembly) { ExistingEngine = "legacy" }; f.Seed(2);
             var seed = DailyCognition.Replace("\"identity_slot\":\"other\"", "\"identity_slot\":\"" + slot + "\"")
                 .Replace("\"domains\":[\"user\"]", "\"domains\":[\"ass\"]");
             f.Run(new AgentSequenceLlm(DailyEvents, DailySelection, seed, EmptyDailyRuntime));
@@ -285,10 +630,11 @@ internal static partial class Program
 
     private static void RunDailyTopicEvidenceChecks(Assembly assembly)
     {
-        foreach (var mode in new[] { "valid", "correct", "reject", "domain" })
+        foreach (var mode in new[] { "valid", "cross_event", "correct", "reject", "domain", "legacy" })
         {
-            using var f = new DailyFixture(assembly); f.Seed(3);
-            var calls = 0;
+            using var f = new DailyFixture(assembly) { ExistingEngine = mode == "legacy" ? "legacy" : "batch-v1" }; f.Seed(3);
+            var calls = 0; string firstDraft = null;
+            var summary = "根据本次原句形成的独立认识。" + (mode == "correct" ? new string('义', 17000) + "完整草稿结尾" : "");
             var llm = new SelectionProbeLlm { Reply = messages => {
                 var title = messages[0].content;
                 if (title.Contains("1/4")) return "{\"events\":[{\"summary\":\"早餐选择\",\"source_refs\":[1,2]" + DailyTopicFields +
@@ -314,31 +660,36 @@ internal static partial class Program
                 {
                     Require(f.Graph.GetCognitionNodes(20).Count == 0, "错误首次输出不得提前入库");
                     var correction = messages[^1].content;
-                    Require(mode == "domain" ? correction.Contains("domains") :
-                        correction.Contains("source_refs=[1]") && correction.Contains("允许的tag_refs=[" + foodTag + "]"),
-                        "不回传失败正文时，纠正仍携带具体来源编号和允许的主题编号");
+                    Require(mode == "domain" ? correction.Contains("domains") : correction.Contains("tag_refs"),
+                        "纠正定位到实际错误字段");
+                    if (mode != "legacy") Require(messages.Any(m => m.role == "assistant" && m.content == firstDraft) &&
+                        correction.Contains("只修改报错字段") && !correction.Contains("新正文必须更短"),
+                        "带回完整原稿包括16000字符之后的内容，引用错误只作局部纠正，不触发删减重写");
                 }
                 var invalid = mode == "reject" || (mode == "correct" && calls == 1);
-                return TraceJson.ToJson(new { cognitions = new[] { new {
-                    operation = "create", target_ref = 0, summary = "根据本次原句形成的独立认识。", identity_slot = "other",
+                var response = TraceJson.ToJson(new { cognitions = new[] { new {
+                    operation = "create", target_ref = 0, summary, identity_slot = "other",
                     domains = mode == "domain" && calls == 1 ? new[] { "self" } : new[] { "user" },
                     source_refs = mode == "valid" ? new[] { 2 } : new[] { 1 },
-                    tag_refs = invalid ? new[] { mathsTag } : mode == "valid" ? new[] { foodTag, mathsTag } : new[] { foodTag },
+                    tag_refs = invalid ? new[] { topics.Count + 1 } : mode == "cross_event" || (mode == "legacy" && calls == 1)
+                        ? new[] { mathsTag } : mode == "valid" ? new[] { foodTag, mathsTag } : new[] { foodTag },
                     scope = "", exceptions = ""
                 } } });
+                if (calls == 1) firstDraft = response;
+                return response;
             } };
             if (mode == "reject")
             {
                 Require(DailyRejects(() => f.Run(llm)) && calls == 2 && f.Graph.GetCognitionNodes(20).Count == 0,
-                    "同批但无来源支持的主题仍被拒绝，最多一次纠正且不写认知");
+                    "不存在的主题编号仍被拒绝，最多一次纠正且不写认知");
                 continue;
             }
             f.Run(llm);
             var nodes = f.Graph.GetCognitionNodes(20);
             var tagIds = f.Store.GetCognitionTagIds(nodes.Select(n => n.Id));
-            Require(calls == (mode == "valid" ? 1 : 2) && nodes.Count == 1 &&
+            Require(calls == (mode is "valid" or "cross_event" ? 1 : 2) && nodes.Count == 1 && nodes[0].Summary == summary &&
                 tagIds[nodes[0].Id].Count == (mode == "valid" ? 2 : 1),
-                "共享来源可挂两个受支持主题；纠正只入库一次且不保留错误主题/领域");
+                "新路径允许按认知含义选用本批其他主题，旧路径保留约束；结构纠正不丢正文且只入库一次");
             f.Reopen(); var resumed = new AgentSequenceLlm(); f.Run(resumed);
             Require(resumed.Requests.Count == 0, "映射修复保持已完成检查点零调用复用");
         }
@@ -360,7 +711,7 @@ internal static partial class Program
                 if (messages[0].content.Contains("1/4"))
                 {
                     using var input = JsonDocument.Parse(messages[1].content);
-                    var candidates = input.RootElement.GetProperty("topics").EnumerateArray().ToList();
+                    var candidates = ReadReviewTable(input.RootElement, "topics", "topic_columns");
                     var selected = candidates.Where(t => t.GetProperty("name").GetString() == topic)
                         .Select(t => t.GetProperty("tag_ref").GetInt32()).ToList();
                     if (day == "2020-08-23") Require(selected.Count == 1, "再次谈同一含义时，旧主题须通过语义候选进入真实复盘请求");
@@ -473,7 +824,7 @@ internal static partial class Program
         var publicSource = f.Seed(1, visibility: "public", offset: 100).Single();
         var llm = new SelectionProbeLlm { Reply = messages => {
             var text = string.Join("\n", messages.Select(x => x.content));
-            if (messages[0].content.Contains("当前环境不是两人私密相处"))
+            if (messages[0].content.Contains("【公开经历复盘】"))
             {
                 Require(!text.Contains(sources[0].Content) && text.Contains(publicSource.Content), "公开整理不含私聊原文");
                 return "{\"cognitions\":[]}";
@@ -493,14 +844,13 @@ internal static partial class Program
     }
     private static void RunDailyLargeSelectionChecks(Assembly assembly)
     {
-        using var f = new DailyFixture(assembly); f.Seed(250); var segment = 0;
+        using var f = new DailyFixture(assembly); f.Seed(250);
         var llm = new SelectionProbeLlm { Reply = messages => {
             var title = messages[0].content;
             if (title.Contains("1/4"))
             {
-                var batch = segment++;
-                return TraceJson.ToJson(new { events = Enumerable.Range(0, batch == 5 ? 8 : 9).Select(i => new {
-                    summary = "事件" + batch + "-" + i + new string('事', 490), source_refs = new[] { 1 }, tag_refs = Array.Empty<int>(),
+                return TraceJson.ToJson(new { events = Enumerable.Range(0, 53).Select(i => new {
+                    summary = "事件" + i + new string('事', 490), source_refs = new[] { 1 }, tag_refs = Array.Empty<int>(),
                     new_tags = new[] { new NewLifeTagWriteData { name="饮食意愿", definition="当下想吃什么及选择", domain_ids=new(){"user"},
                         dimension_ids=new(){"scope"}, positive_examples=new(){"早餐吃面包"}, negative_examples=new(){"数学定理"} } } }) });
             }
@@ -510,9 +860,9 @@ internal static partial class Program
             throw new InvalidOperationException("unexpected stage");
         } };
         f.Run(llm);
-        Require(f.Count("event_entries") == 53 && llm.Requests.Count == 11 &&
-            llm.Requests.Where(p => p.Contains("【2/4")).All(p => p.Length < 18000),
-            "53件长摘要分批挑选、全局收敛，250条对话共11次调用，无逐事件扩写");
+        Require(f.Count("event_entries") == 53 && llm.Requests.Count == 4 &&
+            Enumerable.Range(1, 4).All(i => llm.Requests.Count(p => p.Contains("【" + i + "/4")) == 1),
+            "53件长摘要一次挑选，250条对话四阶段各一次，无逐事件扩写或逐认知判断");
     }
     private static void RunDailyRecallCheck(Assembly assembly)
     {

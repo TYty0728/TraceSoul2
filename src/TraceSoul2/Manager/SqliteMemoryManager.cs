@@ -493,14 +493,24 @@ namespace TraceSoul2.Manager
         [MethodImpl(MethodImplOptions.Synchronized)]
         public List<CognitionSliceRecord> CommitCognitionsWithCheckpoint(string triggerMomentId,
             IEnumerable<BrainCognitionWriteData> mutations, string pluginId, string key,
-            Action validate, Func<List<CognitionSliceRecord>, string> checkpoint)
+            Action validate, Func<List<CognitionSliceRecord>, string> checkpoint, bool completeBatch = false)
         {
+            var writes = (mutations ?? Enumerable.Empty<BrainCognitionWriteData>()).ToList();
             List<CognitionSliceRecord> changed = null;
             connection.RunInTransaction(() =>
             {
                 connection.Execute("UPDATE plugin_documents SET UpdatedUnixMs=UpdatedUnixMs WHERE 0");
                 validate();
-                changed = CommitCognitions(triggerMomentId, mutations);
+                // New daily reviews commit every validated operation atomically;
+                // ordinary callers and old checkpoints retain their old contract.
+                if (completeBatch)
+                {
+                    Required(triggerMomentId, "triggerMomentId");
+                    var now = DateTimeOffset.UtcNow.ToUnixTimeMilliseconds();
+                    changed = writes.Select(write => ApplyCognitionMutation(write, triggerMomentId, now, completeBatch: true))
+                        .Where(node => node != null).ToList();
+                }
+                else changed = CommitCognitions(triggerMomentId, writes);
                 SavePluginDocument(pluginId, key, checkpoint(changed));
             });
             return changed;
@@ -876,12 +886,17 @@ namespace TraceSoul2.Manager
         [MethodImpl(MethodImplOptions.Synchronized)]
         public IdentityCardRecord SaveIdentityCard(
             string conversationId, string slot, string body, string sourceMomentId)
+            => SaveIdentityCardCore(conversationId, slot, body, sourceMomentId, false);
+
+        private IdentityCardRecord SaveIdentityCardCore(
+            string conversationId, string slot, string body, string sourceMomentId, bool completeReview)
         {
             conversationId = Required(conversationId, "conversationId");
             if (!IdentityCardSlotValues.IsKnown(slot))
                 throw new InvalidOperationException("未知的身份短卡：" + slot);
             var pair = LoadPairIdentity();
-            body = IdentityCardLogic.PrepareBody(slot, pair.RewriteRecordedText((body ?? string.Empty).Trim()));
+            body = pair.RewriteRecordedText((body ?? string.Empty).Trim());
+            if (!completeReview) body = IdentityCardLogic.PrepareBody(slot, body);
             if (body.Length == 0) throw new ArgumentException("短卡内容不能为空。", "body");
             var now = DateTimeOffset.UtcNow.ToUnixTimeMilliseconds();
             var id = conversationId + "|" + slot;

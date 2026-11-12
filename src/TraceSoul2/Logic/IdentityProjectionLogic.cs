@@ -28,7 +28,7 @@ namespace TraceSoul2.Logic
                 Matches(x.Value, node));
         }
 
-        public static string Build(TraceTurnContext turn)
+        public static string Build(TraceTurnContext turn, bool includeHistorical = true)
         {
             var store = turn.Services.Storage;
             var pair = store.LoadPairIdentity();
@@ -49,6 +49,8 @@ namespace TraceSoul2.Logic
             // 兼容旧配置：这份本人确认的共享自我描述同时用于私密和公开，绝不另选一份人格。
             var shared = EnvironmentLogic.Settings(store).PublicIdentity;
             if (!string.IsNullOrWhiteSpace(shared)) builder.AppendLine("【跨环境自我描述（本人确认）】" + shared.Trim());
+            // Night reflection uses the current identity view, not another historical cognition retrieval.
+            if (!includeHistorical) return builder.ToString().TrimEnd();
             var pinned = cards.Where(x => x.Pinned).Select(x => x.Slot).ToHashSet();
             var covered = cards.Where(x => Current(x, nodes) && (!isPublic || PuzzleViewLogic.Shared(store, x.Id, PuzzleViewLogic.Stamp(x))))
                 .SelectMany(x => (PuzzleViewLogic.Read<Dictionary<string, string>>(x.CognitionSourcesJson) ?? new()).Keys).ToHashSet();

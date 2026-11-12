@@ -494,7 +494,7 @@ namespace TraceSoul2.Migrate
             MemoryObservationOutputData output,
             MomentRecord sourceMoment,
             List<string> allowedTagIds,
-            PairIdentity pair)
+            PairIdentity pair, bool completeBatch = false)
         {
             var createdByName = new Dictionary<string, LifeTagRecord>(StringComparer.Ordinal);
             var selected = new List<LifeTagRecord>();
@@ -507,8 +507,9 @@ namespace TraceSoul2.Migrate
                     foreach (var proposal in output.new_tags ?? new List<NewLifeTagWriteData>())
                     {
                         if (proposal == null) continue;
-                        var label = Limit(pair.RewriteRecordedText((proposal.name ?? string.Empty).Trim()), 30);
-                        var definition = Limit(pair.RewriteRecordedText((proposal.definition ?? string.Empty).Trim()), 240);
+                        var label = pair.RewriteRecordedText((proposal.name ?? string.Empty).Trim());
+                        var definition = pair.RewriteRecordedText((proposal.definition ?? string.Empty).Trim());
+                        if (!completeBatch) { label = Limit(label, 30); definition = Limit(definition, 240); }
                         if (label.Length == 0 || definition.Length == 0) continue;
                         var domainRoutes = (proposal.domain_ids ?? new List<string>())
                             .Select(pair.CanonicalDomain)
@@ -522,7 +523,7 @@ namespace TraceSoul2.Migrate
                             .Where(x => x.Length > "dimension.".Length &&
                                         LifeRouteValues.IsDimension(x.Substring("dimension.".Length)))
                             .Distinct()
-                            .Take(8)
+                            .Take(completeBatch ? int.MaxValue : 8)
                             .ToList();
                         if (domainRoutes.Count == 0 || dimensionRoutes.Count == 0) continue;
                         var existing = brain.Table<LifeTagRecord>().FirstOrDefault(x => x.Label == label);
@@ -563,9 +564,10 @@ namespace TraceSoul2.Migrate
                                 Weight = 1f
                             });
                         var positiveIndex = 0;
-                        foreach (var example in (proposal.positive_examples ?? new List<string>()).Take(6))
+                        foreach (var example in (proposal.positive_examples ?? new List<string>()).Take(completeBatch ? int.MaxValue : 6))
                         {
-                            var text = Limit(pair.RewriteRecordedText(example), 100);
+                            var text = pair.RewriteRecordedText(example);
+                            if (!completeBatch) text = Limit(text, 100);
                             if (text.Length == 0) continue;
                             brain.Insert(new LifeTagExampleRecord
                             {
@@ -578,9 +580,10 @@ namespace TraceSoul2.Migrate
                             positiveIndex += 1;
                         }
                         var negativeIndex = 0;
-                        foreach (var example in (proposal.negative_examples ?? new List<string>()).Take(6))
+                        foreach (var example in (proposal.negative_examples ?? new List<string>()).Take(completeBatch ? int.MaxValue : 6))
                         {
-                            var text = Limit(pair.RewriteRecordedText(example), 100);
+                            var text = pair.RewriteRecordedText(example);
+                            if (!completeBatch) text = Limit(text, 100);
                             if (text.Length == 0) continue;
                             brain.Insert(new LifeTagExampleRecord
                             {
@@ -599,7 +602,7 @@ namespace TraceSoul2.Migrate
                         output.selected_tag_ids ?? new List<string>(), StringComparer.Ordinal);
                     foreach (var tag in createdByName.Values) selectedIds.Add(tag.Id);
                     foreach (var tag in createdByName.Values) allowed.Add(tag.Id);
-                    foreach (var id in selectedIds.Where(allowed.Contains).Take(8))
+                    foreach (var id in selectedIds.Where(allowed.Contains).Take(completeBatch ? int.MaxValue : 8))
                     {
                         var tag = brain.Find<LifeTagRecord>(id);
                         if (tag == null || tag.Status != "active") continue;

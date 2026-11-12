@@ -6,16 +6,30 @@ using System.Text.Json;
 using System.Text.Json.Nodes;
 using System.Threading.Tasks;
 using TraceSoul2.Data;
+using TraceSoul2.Logic;
 using TraceSoul2.Util;
 
 internal static partial class Program
 {
     private static void RunReviewPromptContractChecks(Assembly assembly)
     {
+        var detail = "summary字段错误，允许修正的内容：" + new string('测', 300) + "反馈末尾必须保留";
+        var draft = TraceJson.ToJson(new BrainCognitionWriteData { summary = "原稿" });
+        var repairCalls = 0;
+        var repairClient = new SelectionProbeLlm { Reply = messages => {
+            if (++repairCalls == 1) return draft;
+            Require(messages.Any(m => m.role == "assistant" && m.content == draft) && messages.Last().content.Contains(detail),
+                "局部纠正保留完整失败草稿和超过240字符的字段反馈");
+            return TraceJson.ToJson(new BrainCognitionWriteData { summary = "修正稿" });
+        } };
+        var repaired = DeepSeekStructuredOutputLogic.CompleteAsync<BrainCognitionWriteData>(repairClient,
+            new() { new("system", "合成纠正测试"), new("user", "合成材料") }, null, "输出无效", default,
+            validationError: x => x.summary == "原稿" ? detail : null, preserveValidContent: true).GetAwaiter().GetResult();
+        Require(repairCalls == 2 && repaired.summary == "修正稿", "局部纠正模式只增加一次请求");
         // Real pipeline repairs must distinguish missing content, count errors and overruns.
         foreach (var mode in new[] { "empty", "long", "dimensions", "examples", "root" })
         {
-            using var f = new DailyFixture(assembly); f.Seed(2); var calls = 0;
+            using var f = new DailyFixture(assembly) { ExistingEngine = "legacy" }; f.Seed(2); var calls = 0;
             f.Run(new SelectionProbeLlm { Reply = m => {
                 if (!m[0].content.Contains("1/4")) return DailyReply(m);
                 if (++calls == 2)
@@ -36,7 +50,7 @@ internal static partial class Program
             } });
             Require(calls == 2 && f.Count("event_entries") == 2, "一次纠正成功后只保存有效事件");
         }
-        using (var f = new DailyFixture(assembly))
+        using (var f = new DailyFixture(assembly) { ExistingEngine = "legacy" })
         {
             f.Seed(2);
             f.Run(new SelectionProbeLlm { Reply = m => {
@@ -91,7 +105,7 @@ internal static partial class Program
 
     private static void RunPublicEvidenceBoundCheck(Assembly assembly)
     {
-        using var f = new DailyFixture(assembly);
+        using var f = new DailyFixture(assembly) { ExistingEngine = "legacy" };
         var old = f.Seed(1, visibility: "public", offset: -1).Single();
         old.Content = "共享空间保持安静";
         using (var db = new SQLite.SQLiteConnection(f.BrainPath)) db.Update(old);
@@ -100,36 +114,34 @@ internal static partial class Program
         var node = ((List<CognitionSliceRecord>)f.StoreCall("CommitCognitions", old.Id, new[] { initial })).Single();
         old.MemoryStatus = "built";
         using (var db = new SQLite.SQLiteConnection(f.BrainPath)) db.Update(old);
-        var sources = f.Seed(18, visibility: "public");
+        var sources = f.Seed(250, visibility: "public");
         using (var db = new SQLite.SQLiteConnection(f.BrainPath))
             foreach (var source in sources) { source.Content = "共享空间保持安静"; db.Update(source); }
-        var batches = new List<int>(); var comparisons = 0;
+        var batches = new List<int>();
         var llm = new SelectionProbeLlm { Reply = m => {
-            if (m[0].content.Contains("认知写入前比较"))
-            {
-                comparisons++; using var input = JsonDocument.Parse(m[1].content);
-                return TraceJson.ToJson(new { decisions = input.RootElement.GetProperty("proposals").EnumerateArray().Select(p => new {
-                    index = p.GetProperty("index").GetInt32(), kind = "same", target_id = node.Id,
-                    before = node.Summary, after = node.Summary, explanation = "同对象同条件的合成印证" }).ToList() });
-            }
-            Require(m[0].content.Contains("当前环境不是两人私密相处"), "公开测试不得进入私密复盘");
+            Require(!m[0].content.Contains("认知写入前比较") && !m[0].content.Contains(node.Id), "公开生成不包含旧认识，也不追加比较请求");
+            Require(m[0].content.Contains("【公开经历复盘】"), "公开测试不得进入私密复盘");
             var shown = sources.Where(s => m[0].content.Contains(s.Id + "｜")).ToList();
             batches.Add(shown.Count);
-            Require(shown.Count is > 0 and <= 16, "请求前就限制完整原句数，防止后续合并超限");
-            var groups = shown.Count == 16 ? new[] { shown.Take(9).ToList(), shown.Skip(7).ToList() } : new[] { shown };
-            return TraceJson.ToJson(new { cognitions = groups.Select(g => new BrainCognitionWriteData {
-                operation = "create", summary = node.Summary, domains = new() { "world" }, identity_slot = "",
-                evidence_moment_ids = g.Select(s => s.Id).ToList(), confidence = .7f, strength = .5f }).ToList() });
+            Require(shown.Count == 250, "公开环境250条完整原句一次进入模型，不按200/16拆请求");
+            return TraceJson.ToJson(new { cognitions = new[] { new BrainCognitionWriteData {
+                operation = "create", summary = "当日公开新认识", domains = new() { "world" }, identity_slot = "",
+                evidence_moment_ids = shown.Select(s => s.Id).ToList(), confidence = .7f, strength = .5f } }.Concat(
+                    Enumerable.Range(1, 16).Select(i => new BrainCognitionWriteData {
+                        operation = "create", summary = "公开认识" + i + new string('知', 650), domains = new() { "world" }, identity_slot = "",
+                        scope = new string('域', 350), evidence_moment_ids = shown.Select(s => s.Id).ToList(), confidence = .7f, strength = .5f
+                    })).ToList() });
         } };
         f.Run(llm);
-        Require(batches.SequenceEqual(new[] { 16, 2 }) && comparisons == 2 && f.Graph.GetCognitionNodes(20).Count == 1,
-            "18条来源分两批，首批两条各9证据的候选合并为16条，不重复创建节点");
+        Require(batches.SequenceEqual(new[] { 250 }) && llm.Requests.Count == 1 && f.Graph.GetCognitionNodes(20).Count == 18,
+            "公开250条来源和17项操作一次完成，不再切小批、比较或压缩");
         using (var db = new SQLite.SQLiteConnection(f.BrainPath))
-            Require(db.ExecuteScalar<int>("SELECT COUNT(DISTINCT MomentId) FROM cognition_evidence WHERE CognitionId=?", node.Id) == 19,
-                "旧证据和18条新证据全部保留，不截断丢失");
-        var current = f.Graph.GetCognitionNodes(20).Single();
-        Require(current.Revision == node.Revision + 2 && Math.Abs(current.Strength - (node.Strength + .16f)) < .001,
-            "每批同目标只印证一次，不因两个同义候选重复加权");
+            Require(db.ExecuteScalar<int>("SELECT COUNT(DISTINCT MomentId) FROM cognition_evidence WHERE CognitionId=?", node.Id) == 1 &&
+                db.ExecuteScalar<int>("SELECT COUNT(*) FROM cognition_evidence") == 1 + 17 * 250,
+                "新认识完整绑定250条来源，旧认知证据不变");
+        var current = f.Graph.GetCognitionNodes(20).Single(n => n.Id == node.Id);
+        Require(current.Revision == node.Revision && current.Strength == node.Strength,
+            "不读旧认知的日复盘不推测历史目标或修改其权重");
         f.Reopen(); var noCalls = new AgentSequenceLlm(); f.Run(noCalls);
         Require(noCalls.Requests.Count == 0, "已提交公开批次跨重开不重放");
     }

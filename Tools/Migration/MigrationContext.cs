@@ -54,8 +54,8 @@ namespace TraceSoul2.Migrate
             DecisionsClient.ValidateAnswers(result, questions);
             return result;
         }
-        public void BeginReviewBudget() => budgetClient = Llm == null ? null : new ReviewBudgetClient(Llm,
-            (calls, stage) => Migration.SetReviewStage(stage + "（本轮逻辑请求 " + calls + "）"));
+        public void BeginReviewBudget(bool unbounded = false) => budgetClient = Llm == null ? null : new ReviewBudgetClient(Llm,
+            (calls, stage) => Migration.SetReviewStage(stage + "（本轮逻辑请求 " + calls + "）"), unbounded ? int.MaxValue : 256);
 
         public IVectorEncoder RequireCognitionEncoder() => CognitionEncoder ?? RequireEncoder();
 
@@ -83,12 +83,12 @@ namespace TraceSoul2.Migrate
             context.MigrationModel = Environment.GetEnvironmentVariable("TRACESOUL2_MIGRATION_MODEL");
             if (!string.IsNullOrWhiteSpace(context.MigrationProviderId))
             {
-                context.Llm = context.Providers.CreateReviewAttemptClient(
+                context.Llm = context.Providers.CreateReviewClient(
                     context.MigrationProviderId, context.MigrationModel);
             }
             else
             {
-                context.Llm = context.Providers.CreateReviewAttemptClient();
+                context.Llm = context.Providers.CreateReviewClient();
                 if (context.Llm != null)
                 {
                     context.MigrationProviderId = context.Llm.ProviderId;

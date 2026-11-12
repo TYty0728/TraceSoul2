@@ -21,8 +21,13 @@
     <ProjectReference Include="../../ExternalPlugins/RealtimeCall/TraceSoul2.Plugin.RealtimeCall.csproj" />
     <Compile Include="RealtimeCallChecks.cs" />
     <Compile Include="Program.cs" />
+    <Compile Include="NightContextChecks.cs" />
     <Compile Include="ReviewReliabilityChecks.cs" />
     <Compile Include="DailyReviewPipelineChecks.cs" />
+    <Compile Include="EventEvidenceReviewChecks.cs" />
+    <Compile Include="SubjectiveReviewChecks.cs" />
+    <Compile Include="DailyReflectionChecks.cs" />
+    <Compile Include="JointReviewChecks.cs" />
     <Compile Include="DailyRuntimeProseChecks.cs" />
     <Compile Include="ReviewPromptContractChecks.cs" />
     <Compile Include="JevReviewChecks.cs" />

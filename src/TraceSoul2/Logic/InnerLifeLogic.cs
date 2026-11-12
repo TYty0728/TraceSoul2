@@ -41,7 +41,7 @@ namespace TraceSoul2.Logic
             InnerRuntimeData current,
             InnerRuntimeWriteData proposed,
             string sourceMomentId,
-            long nowUnixMs)
+            long nowUnixMs, bool completeReview = false)
         {
             if (current == null) throw new ArgumentNullException("current");
             if (string.IsNullOrWhiteSpace(sourceMomentId))
@@ -53,9 +53,9 @@ namespace TraceSoul2.Logic
                 Environment = current.Environment,
                 SnapshotId = Guid.NewGuid().ToString("N"),
                 Revision = checked(current.Revision + 1),
-                Narrative = KeepWithin(proposed == null ? null : proposed.narrative, current.Narrative, 120),
-                RelationshipLens = KeepOrLimit(proposed == null ? null : proposed.relationship_update, current.RelationshipLens, 200),
-                Mood = KeepOrLimit(proposed == null ? null : proposed.mood, current.Mood, 80),
+                Narrative = KeepWithin(proposed == null ? null : proposed.narrative, current.Narrative, completeReview ? int.MaxValue : 120),
+                RelationshipLens = KeepOrLimit(proposed == null ? null : proposed.relationship_update, current.RelationshipLens, completeReview ? int.MaxValue : 200),
+                Mood = KeepOrLimit(proposed == null ? null : proposed.mood, current.Mood, completeReview ? int.MaxValue : 80),
                 OngoingActivity = KeepOrLimit(proposed == null ? null : proposed.ongoing_activity, current.OngoingActivity, 120, true),
                 // 旧字段保留在数据库中，但新的内心不再把碎片写成未完成事项。
                 UnfinishedIntent = string.Empty,

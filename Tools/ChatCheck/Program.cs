@@ -20,6 +20,7 @@ internal static partial class Program
     private static void Main(string[] args)
     {
         SQLitePCL.Batteries_V2.Init();
+        if (args.Contains("--gpt61-wire")) { RunGpt61RequestCheck(); RunKimiOfficialRequestCheck(); Console.WriteLine("GPT-6.1 wire and existing Kimi/relay checks passed."); return; }
         if (args.Length == 3 && args[0] == "--jev-review-smoke") { RunJevReviewSmoke(args[1], args[2]); return; }
         if (args.Length == 3 && args[0] == "--jev-topic-smoke") { RunJevReviewSmoke(args[1], args[2], true); return; }
         if (args.Contains("--memory-scope")) { RunMemoryScopeChecksAsync().GetAwaiter().GetResult(); return; }
@@ -65,6 +66,7 @@ internal static partial class Program
         if (args?.Length == 2 && args[0] == "--agent-contract-dump") { RunAgentDumpReplay(args[1]); return; }
         if (args?.Length == 2 && args[0] == "--agent-repair-dump") { RunAgentRepairDumpAsync(args[1]).GetAwaiter().GetResult(); return; }
         if ((args ?? Array.Empty<string>()).Contains("--agent-contract")) { RunAgentContractChecksAsync().GetAwaiter().GetResult(); return; }
+        if ((args ?? Array.Empty<string>()).Contains("--night-context")) { RunNightResidueCheck(); RunNightContextChecksAsync().GetAwaiter().GetResult(); return; }
         if ((args ?? Array.Empty<string>()).Contains("--goal-memory")) { RunGoalMemoryChecksAsync().GetAwaiter().GetResult(); return; }
         if ((args ?? Array.Empty<string>()).Contains("--web-search")) { RunWebSearchChecksAsync().GetAwaiter().GetResult(); return; }
         if (args?.Length == 2 && args[0] == "--cognition-migration") { RunCognitionMigrationContractChecks(args[1]); RunEnvironmentMigrationChecks(args[1]); return; }
@@ -112,6 +114,7 @@ internal static partial class Program
         RunAgentLoopChecksAsync().GetAwaiter().GetResult();
         RunMindTemplateCheck();
         RunKimiOfficialRequestCheck();
+        RunGpt61RequestCheck();
         RunOfficialChannelCheck();
         RunCommonContextPackCheck();
         RunAlignedHistoryWindowCheck();
@@ -128,6 +131,7 @@ internal static partial class Program
         RunToolLookupCheck();
         RunKernelWakeCheck();
         RunNightResidueCheck();
+        RunNightContextChecksAsync().GetAwaiter().GetResult();
         RunRecentEventLogCheck();
         RunQzoneMediaChecksAsync().GetAwaiter().GetResult();
         RunHeartbeatContinuityChecksAsync().GetAwaiter().GetResult();
@@ -1981,6 +1985,38 @@ internal static partial class Program
             Require(!doc.RootElement.TryGetProperty("response_format", out _),
                 "中转站文本口不应带 response_format");
         }
+    }
+
+    private static void RunGpt61RequestCheck()
+    {
+        var messages = new List<DeepSeekMessageData> { new("system", "只输出JSON。"), new("user", "完整材料") };
+        foreach (var model in new[] { "gpt-6.1-sol", "openai/gpt-6.1-sol", "gpt-6.1-sol-2026-11-01" })
+        foreach (var effort in new[] { "low", "medium", "high", "xhigh", "max" })
+        foreach (var thinking in new[] { false, true })
+        {
+            var config = new DeepSeekConfigData { BaseUrl = "https://relay.example/v1", Model = model, ApiKey = "test",
+                ThinkingEnabled = thinking, ReasoningEffort = effort, MaxTokens = 8192 };
+            var client = new DeepSeekClientManager(config);
+            using var doc = JsonDocument.Parse(DeepSeekClientManager.BuildChatRequestJson(client.ConfigSnapshot, messages, .2f, true, true));
+            var root = doc.RootElement;
+            Require(root.GetProperty("max_completion_tokens").GetInt32() == 8192 &&
+                root.GetProperty("reasoning_effort").GetString() == (thinking ? effort : "low"),
+                "GPT-6.1 Sol使用完成token参数并保留合法推理档位，关闭思考映射low");
+            Require(!root.TryGetProperty("max_tokens", out _) && !root.TryGetProperty("temperature", out _) &&
+                !root.TryGetProperty("top_p", out _) && !root.TryGetProperty("thinking", out _),
+                "GPT-6.1 Sol不发送不支持的采样或通用思考开关参数");
+            Require(root.GetProperty("model").GetString() == model && root.GetProperty("messages").GetArrayLength() == 2 &&
+                root.GetProperty("messages")[1].GetProperty("content").GetString() == "完整材料" && messages.Count == 2 &&
+                root.GetProperty("response_format").GetProperty("type").GetString() == "json_object",
+                "模型名、任务消息及JSON协议保持");
+            using var plain = JsonDocument.Parse(DeepSeekClientManager.BuildChatRequestJson(config, messages, .2f, false, false));
+            Require(!plain.RootElement.TryGetProperty("response_format", out _), "文本口保持无JSON格式参数");
+        }
+        var generic = new DeepSeekConfigData { BaseUrl = "https://relay.example/v1", Model = "other-model", MaxTokens = 2048, TopP = .9f };
+        using var fallback = JsonDocument.Parse(DeepSeekClientManager.BuildChatRequestJson(generic, messages, .2f, true, true));
+        Require(fallback.RootElement.GetProperty("max_tokens").GetInt32() == 2048 &&
+            fallback.RootElement.TryGetProperty("temperature", out _) && !fallback.RootElement.TryGetProperty("reasoning_effort", out _),
+            "其他兼容模型沿用原请求参数");
     }
 
     private static void RunCommonContextPackCheck()

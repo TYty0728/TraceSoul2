@@ -121,14 +121,12 @@ namespace TraceSoul2.Logic
             IEnumerable<TraceContributionDescriptorData> catalog,
             CancellationToken cancellationToken)
         {
-            var shared = LlmContextPackLogic.SharedSystem(llm, turn);
+            var shared = IdentityProjectionLogic.Build(turn, includeHistorical: false);
             var roleStable = BuildNightResidueStablePrompt(turn, contextBlocks).TrimEnd();
-            var roleDynamic = BuildNightResidueDynamicPrompt(turn, seed).TrimEnd();
-            var current = turn == null || turn.Moment == null
-                ? string.Empty
-                : turn.Moment.Content ?? string.Empty;
-            var messages = LlmContextPackLogic.AssembleExpress(
-                llm, shared, turn, string.Empty, current, roleStable, roleDynamic);
+            var goals = await GoalMemoryLogic.BuildNightContextAsync(turn, seed?.FormatForPrompt() ?? string.Empty,
+                llm, cancellationToken);
+            var roleDynamic = BuildNightResidueDynamicPrompt(turn, seed, goals).TrimEnd();
+            var messages = LlmContextPackLogic.AssembleNightResidue(llm, shared, turn, roleStable, roleDynamic);
             var promptCacheKey = LlmContextPackLogic.BuildPromptCacheKey(
                 llm, turn == null ? string.Empty : turn.ConversationId);
             var raw = await DeepSeekStructuredOutputLogic.CompletePlainAsync(
@@ -139,6 +137,18 @@ namespace TraceSoul2.Logic
                 cancellationToken,
                 promptCacheKey);
             var expressed = ParseSpoken(raw);
+            if ((expressed.reply?.Trim().Length ?? 0) > NightResidueLogic.ReplyCharCap)
+            {
+                var repair = new List<DeepSeekMessageData>(messages) {
+                    new("assistant", expressed.reply),
+                    new("user", "刚才正文为" + expressed.reply.Trim().Length + "字符，过长。请将原稿压缩到350字符以内，" +
+                        "字符包括标点、空格和换行。保留同一件事的关键感想和限定，删除重复，完整收句，不增加经历，" +
+                        "不能用‘无’代替已有感想。只返回完整消息正文，不解释、不输出JSON。")
+                };
+                expressed = ParseSpoken(await llm.CompleteTextAsync(repair, cancellationToken, promptCacheKey));
+                if (expressed == null || NightResidueLogic.IsSilentReply(expressed.reply))
+                    throw new InvalidOperationException("夜间余温压缩未保留有效正文，未发送。");
+            }
             expressed.image = string.Empty;
             expressed.image_mode = string.Empty;
             expressed.image_refs = string.Empty;
@@ -183,7 +193,7 @@ namespace TraceSoul2.Logic
             return builder.ToString();
         }
 
-        private static string BuildNightResidueDynamicPrompt(TraceTurnContext turn, NightResidueSeed seed)
+        private static string BuildNightResidueDynamicPrompt(TraceTurnContext turn, NightResidueSeed seed, string goals)
         {
             var pair = turn.Services.Storage.LoadPairIdentity();
             var builder = new StringBuilder();
@@ -193,7 +203,7 @@ namespace TraceSoul2.Logic
                 builder.AppendLine();
             }
             builder.AppendLine(pair.Apply(CorePrompts.Expressor.NightResidueRequest));
-            builder.AppendLine(GoalMemoryLogic.BuildContext(turn));
+            builder.AppendLine(goals);
             return builder.ToString();
         }
 

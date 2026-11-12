@@ -16,7 +16,7 @@ namespace TraceSoul2.Logic
 
         public static List<CognitionSliceRecord> Select(SqliteMemoryManager store, IReadOnlyList<MomentRecord> evidence,
             Func<IVectorEncoder> encoderFactory, IVectorCacheStore cache = null, string context = null,
-            CancellationToken token = default, IReadOnlyList<string> queryOverride = null)
+            CancellationToken token = default, IReadOnlyList<string> queryOverride = null, bool completeBatch = false)
         {
             token.ThrowIfCancellationRequested();
             if (evidence == null || evidence.Count == 0) return new();
@@ -25,7 +25,7 @@ namespace TraceSoul2.Logic
             if (evidence.Any(x => (x.ConversationId ?? "") != scope || (x.MemoryVisibility == "public") != isPublic))
                 throw new InvalidOperationException("认知检索必须使用同一环境的证据。");
             // 环境与状态先过滤，再限制扫描窗口；其他环境的新节点不挤占候选。
-            var nodes = store.GetCognitionReviewCandidates(scope, isPublic);
+            var nodes = store.GetCognitionReviewCandidates(scope, isPublic, completeBatch);
             if (nodes.Count == 0) return new();
             var encoder = encoderFactory?.Invoke() ?? throw new InvalidOperationException("认知复盘缺少语义编码器，未进行认知写入。");
             var queries = (queryOverride ?? evidence.Select(x => x.Content).Append(context).ToList()).SelectMany(Chunks)
@@ -53,7 +53,11 @@ namespace TraceSoul2.Logic
                 }
                 hits.Add((node, scores));
             }
-            // 每个材料片段先有一个候选名额，再补其余近邻；重复说同一件事不累加权重。
+            if (completeBatch)
+                return hits.Where(hit => hit.Scores.Any(score => score >= 0.45f))
+                    .OrderByDescending(hit => hit.Scores.Max()).ThenBy(hit => hit.Node.Id, StringComparer.Ordinal)
+                    .Select(hit => hit.Node).ToList();
+            // Legacy callers retain their old prompt budget.
             var ranked = Enumerable.Range(0, queries.Count).Select(q => hits
                     .Where(x => x.Scores[q] >= 0.45f)
                     .OrderByDescending(x => x.Scores[q]).ThenBy(x => x.Node.Id, StringComparer.Ordinal)

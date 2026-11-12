@@ -194,7 +194,7 @@ namespace TraceSoul2.Logic
         {
             var value = (text ?? string.Empty).Trim();
             if (value.Length <= ReplyCharCap) return value;
-            return value.Substring(0, ReplyCharCap).TrimEnd();
+            throw new InvalidOperationException("夜间余温压缩后仍超长，未截断或发送。");
         }
 
         public static bool HasHandled(IMemoryStore store, string dayKey)

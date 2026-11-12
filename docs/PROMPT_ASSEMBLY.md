@@ -137,3 +137,9 @@ dotnet Tools\ChatCheck\bin\Debug\net8.0\ChatCheck.dll --prompt-layout
 ## 白天切片与夜间输入
 
 白天沿用 Agent 可选状态字段，完成轮次后直接追加到 `runtime_slices`，不新增一轮“人格提炼”。深夜 `RuntimeSliceLogic` 分环境读取切片并落地日回望；认知阶段读取完整原文及对应切片，切片明确是主观记录。日回望与认知共同参与相关召回，公开视图不会携带另一环境的回望。身份复盘的输出需提供 `cognition_ids`，没有依据允许 `cards: []`，已固定卡不能覆盖。详见 [当下切片与夜间拼图](RUNTIME_SLICES.md)。
+
+## 2026-11-12：GPT-6.1 Sol请求参数兼容
+
+NewAPI的gpt-6.1-sol实测拒绝旧兼容请求的max_tokens（HTTP400，未进入内容判断）。客户端针对该模型及其openai/前缀、版本后缀使用max_completion_tokens，保留messages和response_format，省略temperature/top_p及其他模型的thinking开关。推理开启时保留low/medium/high/xhigh/max；关闭思考的槽位映射low。依据[官方模型兼容说明](https://developers.openai.com/api/docs/guides/latest-model?model=gpt-6.1-sol)，该模型不支持none，推理时不接收上述采样参数。
+
+这只是模型请求参数适配，不改变共同提示形状，也不把中转入口标为官方渠道。其他模型保持既有请求逻辑。`ChatCheck --gpt61-wire`验证JSON/文本口、命名形式、推理档位经实际客户端构造后保持、参数排除及普通兼容模型回归，并运行既有Kimi/中转检查；通过。GPT同材料实测与局限见[复盘审计](REVIEW_SIMPLIFICATION_AUDIT.md#gpt61sol同材料真实测试)。未部署。

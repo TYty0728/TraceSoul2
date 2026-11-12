@@ -147,13 +147,14 @@ namespace TraceSoul2.Logic
             string roleHeader,
             string roleStable,
             string roleDynamic,
-            bool includeAssistantReasoning = false)
+            bool includeAssistantReasoning = false,
+            bool includeRecentHistory = true)
         {
             var messages = new List<DeepSeekMessageData>
             {
                 new DeepSeekMessageData("system", sharedSystem ?? string.Empty)
             };
-            messages.AddRange(BuildRecentChatHistory(turn, includeAssistantReasoning));
+            if (includeRecentHistory) messages.AddRange(BuildRecentChatHistory(turn, includeAssistantReasoning));
             // 角色头贴在第一个非空指令段上：新用法归稳定段，插件旧用法（仅动态段）归动态段。
             var stable = (roleStable ?? string.Empty).Trim();
             if (turn?.Environment?.PlatformId == "wxxz")

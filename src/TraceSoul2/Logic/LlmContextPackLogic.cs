@@ -88,6 +88,14 @@ namespace TraceSoul2.Logic
             }
         }
 
+        public static List<DeepSeekMessageData> AssembleNightResidue(
+            ILlmClient llm, string sharedSystem, TraceTurnContext turn, string roleStable, string roleDynamic)
+        {
+            return CommonContextPackLogic.Assemble(sharedSystem, turn, string.Empty, string.Empty,
+                CommonContextPackLogic.ExpressRoleHeader, roleStable, roleDynamic,
+                includeAssistantReasoning: false, includeRecentHistory: false);
+        }
+
         public static List<DeepSeekMessageData> AssembleReview(
             ILlmClient llm,
             string sharedSystem,
