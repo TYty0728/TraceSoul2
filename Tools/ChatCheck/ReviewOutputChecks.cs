@@ -19,21 +19,20 @@ internal static partial class Program
         try
         {
             const string ok = "{\"choices\":[{\"message\":{\"content\":\"{}\"},\"finish_reason\":\"stop\"}]}";
-            using var server = new FailureHttpServer(200, ok, n => n == 2 ? (200, ok) : (503, "offline"));
+            using var server = new FailureHttpServer(200, ok, n => n == 2 || n == 4 ? (200, ok) : (503, "offline"));
             var store = new LlmProviderStore(Path.Combine(root, "providers.json"));
             store.Upsert(new LlmProviderRecord { id = "default", model = "test", apiKey = "test", baseUrl = server.Url });
             var shared = store.CreateReviewClient();
             var messages = new List<DeepSeekMessageData> { new("user", "Return JSON.") };
-            using var bound = new CancellationTokenSource(TimeSpan.FromSeconds(3));
-            try { await shared.CompleteJsonAsync(messages, bound.Token); throw new Exception("Expected HTTP failure"); }
-            catch (InvalidOperationException error) when (error.Message.Contains("503")) { }
-            Require(server.Calls == 1, "Routine maintenance must not enter daily retry cooldown");
+            using var bound = new CancellationTokenSource(TimeSpan.FromSeconds(10));
             Require(await shared.CompleteJsonAsync(messages, bound.Token) == "{}" && server.Calls == 2,
-                "The same shared client must recover on its next independent task");
+                "Routine maintenance shares provider backoff and recovers without daily cooldown");
+            Require(await shared.CompleteJsonAsync(messages, bound.Token) == "{}" && server.Calls == 4,
+                "Shared client keeps independent per-call retry budgets");
             using var cancel = new CancellationTokenSource(TimeSpan.FromMilliseconds(300));
             try { await store.CreateReviewAttemptClient().CompleteJsonAsync(messages, cancel.Token); throw new Exception("Expected cooldown cancellation"); }
             catch (OperationCanceledException) when (cancel.IsCancellationRequested) { }
-            Require(server.Calls == 3, "Daily attempts retain bounded cooldown, without nested provider retries");
+            Require(server.Calls == 5, "Daily attempts retain bounded cooldown, without nested provider retries");
             Console.WriteLine("Review client scope passed: routine failure/recovery and daily cooldown isolation.");
         }
         finally { Directory.Delete(root, true); }

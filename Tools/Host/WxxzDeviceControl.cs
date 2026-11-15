@@ -76,11 +76,13 @@ public sealed class WxxzDeviceControl : IDisposable
             CancellationToken armed;long ack;string previousError;
             lock(sync){if(!enabled||disposed)return;identity=controller;armed=arm.Token;ack=handled;previousError=error;}
             using var bounded=CancellationTokenSource.CreateLinkedTokenSource(token,armed);
-            bounded.CancelAfter(TimeSpan.FromSeconds(45));
             var state=current();
+            // A completed manual clip owns the bridge until its bounded upload finishes.
+            // Keep normal control failures fast, but do not cancel that clip after 45 seconds.
+            bounded.CancelAfter(TimeSpan.FromSeconds(state.active&&state.phase=="thinking"?120:45));
             var response=await exchange(new(identity,ack,state.active,state.phase,state.available,previousError),bounded.Token);
             if(response.controller!=identity||!Guid.TryParseExact(response.boot,"N",out _)||response.sequence<0||response.sequence>uint.MaxValue||
-                response.action is not ("" or "start" or "stop"))throw new InvalidOperationException("invalid_device_receipt");
+                response.action is not ("" or "start" or "stop" or "record" or "finish"))throw new InvalidOperationException("invalid_device_receipt");
             received=true;
             bool changedBoot;
             lock(sync)
@@ -97,17 +99,18 @@ public sealed class WxxzDeviceControl : IDisposable
                 if(response.sequence<=handled)return;
                 handled=response.sequence; // An ambiguous/failed action is acknowledged, never retried.
             }
-            if(response.action=="start")
+            if(response.action is "start" or "record")
             {
                 if(response.localMicPaused||!state.available)throw new InvalidOperationException("start_unavailable");
                 if(!state.active)
                 {
                     lock(sync){starting=true;}
-                    try{await action("start",bounded.Token);}
+                    try{await action(response.action,bounded.Token);}
                     finally{lock(sync){starting=false;}}
                 }
             }
             else if(response.action=="stop")await action("stop",bounded.Token);
+            else if(response.action=="finish")await action("finish",bounded.Token);
             lock(sync){error=null;}
         }
         catch(OperationCanceledException) when(token.IsCancellationRequested){ }

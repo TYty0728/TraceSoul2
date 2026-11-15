@@ -31,6 +31,7 @@ static std::atomic<bool> menu{false}, has_frame{false};
 static std::atomic<bool> artwork_frame{false},capturing{false},hop_active{false};
 static std::atomic<unsigned> capture_notice{0},hop_frames{0};
 static std::atomic<unsigned> countdown_seen{0};
+static std::atomic<unsigned> manual_state{0};
 static std::atomic<unsigned> brightness{60};
 static std::atomic<unsigned> volume{60};
 static constexpr int menu_mic_top=206,menu_row=52,menu_brightness_top=290,menu_volume_top=350,menu_back_top=410;
@@ -78,8 +79,12 @@ static void settings_icon(){
 }
 static void call_button(){
     auto state=device_control_state();
-    button(174,8,88,40);
-    label(!state.online?label_web_control:state.active||state.starting?label_end_call:label_start_call,180,20,state.online?ink:muted);
+    rectangle(0,0,266,56,background);
+    button(8,8,124,40);button(140,8,124,40);
+    bool start=state.online&&!state.active&&!state.starting&&!state.stopping;
+    bool finish=state.online&&(state.starting||capturing||(state.active&&state.phase==2));
+    label(label_start_call,32,20,start?ink:muted);
+    label(label_end_call,164,20,finish?ink:muted);
 }
 static const NativeLabel &call_label(){
     auto state=device_control_state();
@@ -88,6 +93,8 @@ static const NativeLabel &call_label(){
     if(state.failed)return label_call_error;
     if(board_mic_paused())return label_paused;
     if(!state.online)return label_authorise;
+    if(manual_state==3)return label_stopping;
+    if(manual_state==2)return label_manual_ready;
     if(!state.active)return label_waiting;
     if(capturing)return capture_notice==1?label_owner_unconfirmed:capture_notice==2?label_no_speech:label_listening;
     return state.phase==2?label_listening:state.phase==3?label_thinking:state.phase==4?label_speaking:label_call_ready;
@@ -96,6 +103,8 @@ static void remote_overlay(){
     settings_icon();call_button();
     rectangle(16,244,288,66,background);
     if(board_mic_paused()){center(label_paused,258);return;}
+    if(manual_state==3){center(label_stopping,249);return;}
+    if(manual_state==2){center(label_manual_ready,249);return;}
     if(countdown_value){
         rectangle(0,64,320,180,background);
         center(label_prepare,98);center(*big_labels[countdown_value.load()],145);
@@ -103,9 +112,13 @@ static void remote_overlay(){
         center(label_count_hint,261,muted);return;
     }
     unsigned current=phase;
+    auto control=device_control_state();
+    if(control.online&&control.stopping){center(label_stopping,249);return;}
+    if(control.online&&control.starting){center(label_starting,249);return;}
+    if(control.online&&control.active&&current!=4)current=control.phase;
     unsigned focus=focus_seconds();
     if(current==1&&!focus&&focus_until>0)current=0;
-    const NativeLabel &title=current==3?label_thinking:current==4?label_speaking:
+    const NativeLabel &title=capturing?label_listening:current==3?label_thinking:current==4?label_speaking:
         current==5?label_rest:current==6?label_offline:current==7?label_error:
         human_speech||current==2?label_listening:current==1?label_focused:label_standby;
     center(title,249);
@@ -133,7 +146,7 @@ static const NativeLabel &network_label(int state){
     return state==2?label_online:state==1?label_connecting:state==3?label_network_error:label_unconfigured;
 }
 static void render(int network,bool recent){
-    if(!menu&&(has_frame||countdown_value||capturing)){
+    if(!menu&&(has_frame||countdown_value||capturing||manual_state)){
         if(has_frame)memcpy(canvas,last_frame,bytes);else{rectangle(0,0,320,480,background);label(label_title,16,20);}
         remote_overlay();
     }
@@ -179,6 +192,10 @@ void native_ui_capture(bool recording,unsigned notice){
     UiGuard guard;
     if(!recording&&human_speech)phase=3;
     capturing=recording;human_speech=false;capture_notice=recording?notice:0;hop_active=false;
+    if(!menu)render(network_state(),true);
+}
+void native_ui_manual(unsigned state){
+    UiGuard guard;manual_state=state;
     if(!menu)render(network_state(),true);
 }
 void native_ui_speech(){
@@ -247,10 +264,14 @@ static void run(void *){
         if(touch.count!=seen){
             seen=touch.count;
             if(touch.ready&&touch.x<320&&touch.y<480){
-                if(touch.x>=174&&touch.x<264&&touch.y<56){
+                if(touch.x>=8&&touch.x<132&&touch.y<56){
                     auto state=device_control_state();
-                    if(state.active||state.starting){device_control_stop();save_preferences();}
-                    else if(device_control_start())save_preferences();
+                    if(!state.active&&!state.starting&&!state.stopping&&device_control_record())save_preferences();
+                    dirty=true;
+                }
+                else if(touch.x>=140&&touch.x<264&&touch.y<56){
+                    auto state=device_control_state();
+                    if(state.online&&(state.starting||capturing||(state.active&&state.phase==2)))device_control_finish();
                     dirty=true;
                 }
                 else if(touch.x>=268&&touch.y<56){menu=!menu;dirty=true;}

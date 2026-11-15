@@ -11,43 +11,11 @@ using TraceSoul2.Prompts;
 namespace TraceSoul2.Logic
 {
     /// <summary>
-    /// 文字感官：只回答“说了/做了什么、挂到哪些 Tag、唤醒哪些事实”。
+    /// 旧观察记录的纯数据归一化工具，不执行模型观察或写入。
     /// 它没有第一人称人格，也没有认知写入权限。
     /// </summary>
-    public sealed class MemoryObservationLogic
+    public static class MemoryObservationLogic
     {
-        public const string ObserverId = "memory.observer.dialogue";
-
-        private readonly ILlmClient llm;
-
-        public MemoryObservationLogic(ILlmClient llm)
-        {
-            this.llm = llm ?? throw new ArgumentNullException("llm");
-        }
-
-        public Task<MemoryObservationOutputData> AnalyzeAsync(
-            MomentRecord moment,
-            VectorRouteResult route,
-            IEnumerable<FactSliceRecord> factCandidates,
-            IEnumerable<MomentRecord> localReferenceContext,
-            PairIdentity pair,
-            CancellationToken cancellationToken)
-        {
-            if (moment == null) throw new ArgumentNullException("moment");
-            pair = pair ?? PairIdentity.Missing;
-            var messages = new List<DeepSeekMessageData>
-            {
-                new DeepSeekMessageData("system", BuildPrompt(moment, route, factCandidates, localReferenceContext, pair)),
-                new DeepSeekMessageData("user", moment.Content)
-            };
-            return DeepSeekStructuredOutputLogic.CompleteAsync<MemoryObservationOutputData>(
-                llm,
-                messages,
-                x => x != null && !string.IsNullOrWhiteSpace(x.perception_summary),
-                CorePrompts.MemoryObservation.MissingSummary,
-                cancellationToken);
-        }
-
         public static MemoryObservationOutputData Normalize(
             MemoryObservationOutputData output,
             VectorRouteResult route,
@@ -74,61 +42,6 @@ namespace TraceSoul2.Logic
                 wake.relevance = Clamp01(wake.relevance);
             }
             return output;
-        }
-
-        private static string BuildPrompt(
-            MomentRecord moment,
-            VectorRouteResult route,
-            IEnumerable<FactSliceRecord> factCandidates,
-            IEnumerable<MomentRecord> localReferenceContext,
-            PairIdentity pair)
-        {
-            pair = pair ?? PairIdentity.Missing;
-            var builder = new StringBuilder();
-            builder.AppendLine(pair.Apply(CorePrompts.MemoryObservation.Role));
-            builder.AppendLine(CorePrompts.MemoryObservation.Duty);
-            builder.AppendLine();
-            builder.AppendLine(CorePrompts.MemoryObservation.HardRulesHeader);
-            builder.AppendLine(pair.Apply(CorePrompts.MemoryObservation.Rule1));
-            builder.AppendLine(CorePrompts.MemoryObservation.Rule2);
-            builder.AppendLine(CorePrompts.MemoryObservation.Rule3);
-            builder.AppendLine(CorePrompts.MemoryObservation.Rule4);
-            builder.AppendLine(pair.Apply(CorePrompts.MemoryObservation.Rule5));
-            builder.AppendLine(pair.Apply(CorePrompts.MemoryObservation.Rule6));
-            builder.AppendLine(CorePrompts.MemoryObservation.Rule7);
-            builder.AppendLine(pair.Apply(CorePrompts.MemoryObservation.Rule8));
-            if (pair.HasCallName)
-                builder.AppendLine(pair.Apply(CorePrompts.MemoryObservation.Rule9));
-            builder.AppendLine();
-            builder.AppendLine(CorePrompts.MemoryObservation.CurrentSourcePrefix + moment.SourcePluginId + "；evidence=" + moment.EvidenceType);
-            builder.AppendLine(CorePrompts.MemoryObservation.CurrentMomentPrefix + moment.Content);
-            builder.AppendLine();
-            builder.AppendLine(CorePrompts.MemoryObservation.LocalContextHeader);
-            var context = (localReferenceContext ?? Enumerable.Empty<MomentRecord>()).ToList();
-            if (context.Count == 0) builder.AppendLine(CorePrompts.MemoryObservation.Empty);
-            foreach (var item in context)
-                builder.AppendLine("- " + pair.LabelForRole(item.Role) + "：" + item.Content);
-            builder.AppendLine();
-            builder.AppendLine(CorePrompts.MemoryObservation.Layer12Header);
-            if (route == null) builder.AppendLine(CorePrompts.MemoryObservation.Empty);
-            else
-            {
-                builder.AppendLine(CorePrompts.MemoryObservation.DomainPrefix + JoinHits(route.Domains));
-                builder.AppendLine(CorePrompts.MemoryObservation.DimensionPrefix + JoinHits(route.Dimensions));
-            }
-            builder.AppendLine(CorePrompts.MemoryObservation.Layer3Header);
-            if (route == null || route.Concepts.Count == 0) builder.AppendLine(CorePrompts.MemoryObservation.NoReliableTags);
-            else foreach (var hit in route.Concepts)
-                builder.AppendLine("- " + hit.Node.Id + " | " + hit.Node.Label + " | " + hit.Node.Definition);
-            builder.AppendLine();
-            builder.AppendLine(CorePrompts.MemoryObservation.FactCandidatesHeader);
-            var facts = (factCandidates ?? Enumerable.Empty<FactSliceRecord>()).ToList();
-            if (facts.Count == 0) builder.AppendLine(CorePrompts.MemoryObservation.Empty);
-            else foreach (var fact in facts)
-                builder.AppendLine("- " + fact.Id + " | " + fact.Summary + " | " + fact.Realm);
-            builder.AppendLine();
-            CorePrompts.Write(builder, pair.Apply(CorePrompts.MemoryObservation.JsonSchema));
-            return builder.ToString();
         }
 
         private static List<NewLifeTagWriteData> NormalizeNewTags(

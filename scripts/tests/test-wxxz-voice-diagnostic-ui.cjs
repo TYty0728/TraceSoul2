@@ -13,7 +13,7 @@ const sandbox={$,sending:false,setInterval:()=>1,clearInterval(){},window:{addEv
     if(pending)await pending;
     if(fail)throw new Error('连接失败');
     return {sessionId:'test-session',voiceprint:{enrolled:true,samples:3,threshold:body.threshold,
-      diagnosticBypass:body.threshold===0,diagnosticUntilUnixMs:Date.now()+900000},
+      diagnosticBypass:body.threshold===0,persistentBypass:url.endsWith('/policy')&&body.threshold===0,diagnosticUntilUnixMs:Date.now()+900000},
       monitor:{active:false,state:'stopped',turns:0}};
   }};
 vm.createContext(sandbox);
@@ -40,5 +40,9 @@ vm.runInContext(html.slice(html.indexOf('  let wxxzSession ='),html.indexOf('  /
   assert.match($('wxxzVoiceDiagnosticState').textContent,/设置失败/);
   assert.equal($('wxxzVoiceBypass').disabled,false);
   assert.ok(writes.every(x=>x.url==='/wxxz/voice/diagnostic'),'只更改调试门槛，不隐式采音或提交对话');
+  fail=false;await sandbox.configureWxxzVoicePolicy(0);
+  assert.equal(writes.at(-1).url,'/wxxz/voice/policy');
+  assert.match($('wxxzVoiceDiagnosticState').textContent,/持续放行.*重启后保留/);
+  assert.equal($('wxxzVoicePersistent').disabled,false);
   console.log('Voice diagnostic UI passed: explicit lease, restore, busy, errors and no implicit recording.');
 })().catch(e=>{console.error(e);process.exit(1);});

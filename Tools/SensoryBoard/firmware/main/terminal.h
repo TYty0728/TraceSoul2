@@ -10,4 +10,6 @@ struct TerminalLink {
 void terminal_run(TerminalLink &link);
 void network_init();
 bool network_save(const char *data, size_t size);
+bool network_relay_save(const char *data, size_t size);
 void network_status(char *out, size_t size);
+void terminal_manual_finish();

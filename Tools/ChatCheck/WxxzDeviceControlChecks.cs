@@ -8,7 +8,7 @@ internal static partial class Program
 {
     private static async Task CheckWxxzDeviceControlAsync()
     {
-        int exchanges=0,starts=0,stops=0;bool active=false,fail=false,paused=false,failStart=false;
+        int exchanges=0,starts=0,stops=0,finishes=0;bool active=false,fail=false,paused=false,failStart=false;
         long sequence=0;string action="",boot=Guid.NewGuid().ToString("N"),owner=null;
         WxxzDeviceControl.Request last=null;
         using var control=new WxxzDeviceControl((request,token)=>
@@ -19,8 +19,8 @@ internal static partial class Program
             return Task.FromResult(new WxxzDeviceControl.Receipt(request.controller,boot,sequence,action,paused));
         },(command,token)=>
         {
-            if(command=="start"){starts++;if(failStart)throw new InvalidOperationException("synthetic_start_failure");active=true;}
-            else{stops++;active=false;}
+            if(command is "start" or "record"){starts++;if(failStart)throw new InvalidOperationException("synthetic_start_failure");active=true;}
+            else{if(command=="finish")finishes++;else stops++;active=false;}
             return Task.CompletedTask;
         },()=> (active,active?"listening":"paused",true));
         await control.TickAsync(CancellationToken.None);
@@ -53,10 +53,19 @@ internal static partial class Program
         await control.ConfigureAsync(false,CancellationToken.None);
         int count=exchanges;await control.TickAsync(CancellationToken.None);
         Require(exchanges==count&&!control.Status().enabled&&!last.allowed,"撤销授权发送停止租约，之后不再轮询");
+        await control.ConfigureAsync(true,CancellationToken.None);
+        action="";await control.TickAsync(CancellationToken.None);
+        sequence++;action="record";previous=starts;await control.TickAsync(CancellationToken.None);
+        Require(starts==previous+1&&active,"板端开始说话事件进入整段录音");
+        sequence++;action="finish";await control.TickAsync(CancellationToken.None);await control.TickAsync(CancellationToken.None);
+        Require(finishes==1&&!active,"板端结束说话只提交一次，和撤销/断线停止区分");
+        await control.ConfigureAsync(false,CancellationToken.None);
+        Require(finishes==1,"撤销授权不发送未完成录音");
         Require(WxxzPlatform.SupportsRealtimeFirmware("0.3.0")&&WxxzPlatform.SupportsRealtimeFirmware("0.4.3")&&
             !WxxzPlatform.SupportsRealtimeFirmware("0.5.0")&&!WxxzPlatform.SupportsRealtimeFirmware("garbage"),
             "实时协议接受已兼容0.3/0.4版本，拒绝未知版本");
         await CheckWxxzDeviceStartConfirmationAsync();
+        await CheckWxxzLongTransferAsync();
         Console.WriteLine("WXXZ touch control checks passed: explicit authorization, dedup, stale boot/lease rejection, stop, no retry and start confirmation before capture.");
     }
     private static async Task CheckWxxzDeviceStartConfirmationAsync()
@@ -87,5 +96,25 @@ internal static partial class Program
             stopDuringConfirm=true;sequence=3;action="start";await control.TickAsync(CancellationToken.None);
             Require(captures==1&&!active&&control.Status().error!=null,"开始确认途中按结束，后到的开始不能开启采音");
         }
+    }
+    private static async Task CheckWxxzLongTransferAsync()
+    {
+        bool transferring=false;int stops=0;
+        string boot=Guid.NewGuid().ToString("N");
+        using var control=new WxxzDeviceControl(async(request,token)=>
+        {
+            // Reproduce a bridge occupied beyond the old 45-second control deadline.
+            if(transferring)await Task.Delay(TimeSpan.FromSeconds(46),token);
+            return new WxxzDeviceControl.Receipt(request.controller,boot,0,"",false);
+        },(command,token)=>{if(command=="stop")stops++;return Task.CompletedTask;},
+        ()=>(transferring,transferring?"thinking":"standby",true));
+        await control.ConfigureAsync(true,CancellationToken.None);
+        await control.TickAsync(CancellationToken.None);
+        transferring=true;
+        await control.TickAsync(CancellationToken.None);
+        Require(control.Status().online&&stops==0,"整段上传超过45秒仍保留处理任务，不误取消");
+        using var cancel=new CancellationTokenSource(TimeSpan.FromMilliseconds(50));
+        await control.TickAsync(cancel.Token);
+        Require(stops==0,"长上传控制等待仍响应宿主取消，不重放操作");
     }
 }

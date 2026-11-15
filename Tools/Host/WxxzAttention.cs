@@ -154,7 +154,7 @@ public sealed class WxxzAttention
             if (before.Length > 0 && (char.IsPunctuation(before[^1]) || char.IsWhiteSpace(before[^1]))) return true;
             return Regex.IsMatch(before, "(?:叫|喊|名字是|你是|称呼你)\\s*$");
         }
-        return Regex.IsMatch(after, "^(?:你|在吗|在不在|帮|给我|请|能不能|能帮|我|我们|你好|早上好|晚上好|听我|醒醒|看一下|说一下|别|先|今天|明天|现在|告诉我|为什么|怎么|记住|把)");
+        return Regex.IsMatch(after, "^(?:你|在吗|在不在|帮|给我|请|能不能|能帮|能听见|能听到|听得见|听得到|听见|听到|我|我们|你好|早上好|晚上好|听我|醒醒|看一下|说一下|别|先|今天|明天|现在|告诉我|为什么|怎么|记住|把)");
     }
     public Correction Correct(string raw)
     {

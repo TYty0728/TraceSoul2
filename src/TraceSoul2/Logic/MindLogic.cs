@@ -1,66 +1,14 @@
 using System;
 using System.Collections.Generic;
 using System.Linq;
-using System.Text;
-using System.Threading;
-using System.Threading.Tasks;
 using TraceSoul2.Data;
-using TraceSoul2.Manager;
 using TraceSoul2.Plugins;
-using TraceSoul2.Prompts;
-using TraceSoul2.Util;
 
 namespace TraceSoul2.Logic
 {
-    /// <summary>心智：安静、理性，只组织这一拍怎么想。不演戏、不对她说话。</summary>
-    public sealed class MindLogic
+    /// <summary>Agent 状态归一化及历史记录兼容工具；不提供独立模型决策入口。</summary>
+    public static class MindLogic
     {
-        public const int TagCandidateCap = 12;
-        private readonly ILlmClient llm;
-
-        public MindLogic(ILlmClient llm)
-        {
-            this.llm = llm ?? throw new ArgumentNullException("llm");
-        }
-
-        public async Task<MindDecisionData> DecideAsync(
-            TraceTurnContext turn,
-            string leaveResult,
-            bool alreadyLeft,
-            CancellationToken cancellationToken)
-        {
-            return await DecideAsync(turn, leaveResult, alreadyLeft, string.Empty, cancellationToken);
-        }
-
-        public async Task<MindDecisionData> DecideAsync(
-            TraceTurnContext turn,
-            string leaveResult,
-            bool alreadyLeft,
-            string naturallyAwakenedPast,
-            CancellationToken cancellationToken)
-        {
-            var query = turn.Moment == null ? string.Empty : turn.Moment.Content;
-            var embedding = turn.Services == null ? null : turn.Services.Embedding;
-            var templates = await MindTemplateLogic.SelectAsync(
-                query, embedding, MindTemplateLogic.CandidateCap, cancellationToken);
-            var shared = LlmContextPackLogic.SharedSystem(llm, turn);
-            var roleStable = BuildMindStablePrompt(turn).TrimEnd();
-            var roleDynamic = BuildTurnPrompt(
-                turn, leaveResult, alreadyLeft, templates, string.Empty).TrimEnd();
-            var messages = LlmContextPackLogic.AssembleMind(
-                llm, shared, turn, naturallyAwakenedPast, query, roleStable, roleDynamic);
-            var promptCacheKey = LlmContextPackLogic.BuildPromptCacheKey(llm, turn.ConversationId);
-            var decided = await DeepSeekStructuredOutputLogic.CompleteAsync<MindDecisionData>(
-                llm,
-                messages,
-                x => x != null && !string.IsNullOrWhiteSpace(Normalize(x).beat),
-                CorePrompts.Mind.MissingBeat,
-                cancellationToken,
-                promptCacheKey,
-                validationError: ProseLengthError);
-            return Normalize(decided, alreadyLeft);
-        }
-
         public static MindDecisionData Normalize(MindDecisionData output, bool alreadyLeft = false)
         {
             output = output ?? new MindDecisionData();
@@ -121,134 +69,7 @@ namespace TraceSoul2.Logic
             return output;
         }
 
-        /// <summary>
-        /// 心智稳定段：思考方式、JSON 输出模板与器官附加提示。跨轮字节级稳定，供前缀缓存命中；
-        /// 时间、身体场景、检索结果等轮内变化内容都在 BuildTurnPrompt（动态段）。
-        /// </summary>
-        private static string BuildMindStablePrompt(TraceTurnContext turn)
-        {
-            var builder = new StringBuilder();
-            builder.AppendLine(CorePrompts.Mind.HowToThinkHeader);
-            CorePrompts.Write(builder, CorePrompts.Mind.Foundation);
-            InjectMindJsonFields(builder, turn);
-            AppendOrganMindPrompts(builder, turn);
-            return builder.ToString();
-        }
-
-        private static string BuildFoundationPrompt(TraceTurnContext turn)
-        {
-            var pair = turn.Services.Storage.LoadPairIdentity();
-            var cards = turn.Services.Storage.LoadIdentityCards(turn.ConversationId);
-            var builder = new StringBuilder();
-            builder.AppendLine(IdentityCardLogic.FormatForMind(cards, pair));
-            builder.AppendLine();
-            builder.AppendLine(CorePrompts.Mind.HowToThinkHeader);
-            CorePrompts.Write(builder, CorePrompts.Mind.Foundation);
-            InjectMindJsonFields(builder, turn);
-            AppendOrganMindPrompts(builder, turn);
-            return builder.ToString();
-        }
-
-        internal static string BuildTurnPrompt(
-            TraceTurnContext turn,
-            string leaveResult,
-            bool alreadyLeft,
-            IReadOnlyList<MindTemplate> templates,
-            string naturallyAwakenedPast,
-            bool includeLegacyTools = true)
-        {
-            var pair = turn.Services.Storage.LoadPairIdentity();
-            var storage = turn.Services.Storage;
-            var builder = new StringBuilder();
-            builder.AppendLine(RuntimeContextLogic.State(turn));
-            if (includeLegacyTools) builder.AppendLine(CorePrompts.Mind.InnerAttentionRule);
-            if (!string.IsNullOrWhiteSpace(naturallyAwakenedPast))
-            {
-                builder.AppendLine();
-                builder.AppendLine(naturallyAwakenedPast.Trim());
-            }
-            builder.AppendLine();
-            if (includeLegacyTools)
-            {
-                builder.AppendLine(CorePrompts.Mind.TagCandidatesHeader);
-                var tags = MemoryRecallLogic.ListTagCandidates(turn, TagCandidateCap);
-                if (tags.Count == 0)
-                    builder.AppendLine(CorePrompts.Mind.NoCloseTags);
-                else
-                    foreach (var tag in tags)
-                        builder.AppendLine("- " + tag.Label + "：" + Limit(tag.Definition, 40));
-            }
-            if (!string.IsNullOrWhiteSpace(leaveResult))
-            {
-                builder.AppendLine();
-                builder.AppendLine(CorePrompts.Mind.LeaveResultHeader);
-                builder.AppendLine(leaveResult.Trim());
-            }
-            var qzoneSeen = turn == null || turn.Workspace == null ? string.Empty : turn.Workspace.QzoneSeen;
-            if (!string.IsNullOrWhiteSpace(qzoneSeen))
-            {
-                builder.AppendLine();
-                builder.AppendLine(CorePrompts.Mind.QzoneResultHeader);
-                builder.AppendLine(qzoneSeen.Trim());
-            }
-            var toolCandidates = turn == null || turn.Workspace == null
-                ? null
-                : turn.Workspace.ToolCandidates;
-            var toolList = ToolLookupLogic.FormatForMind(toolCandidates);
-            if (includeLegacyTools && !string.IsNullOrWhiteSpace(toolList))
-            {
-                builder.AppendLine();
-                builder.AppendLine(toolList);
-            }
-            if (alreadyLeft)
-                builder.AppendLine(CorePrompts.Mind.AlreadyLeft);
-            foreach (var append in turn.Services.MindTurnPromptAppends.ToArray())
-            {
-                try
-                {
-                    var text = append?.Invoke(turn);
-                    if (!string.IsNullOrWhiteSpace(text)) builder.AppendLine(text.Trim());
-                }
-                catch (Exception exception)
-                {
-                    turn.Services.LogTiming(turn.TraceId, "器官本轮提示失败", detail: exception.GetType().Name);
-                }
-            }
-            var organized = MindTemplateLogic.Format(templates);
-            if (!string.IsNullOrWhiteSpace(organized))
-            {
-                builder.AppendLine();
-                builder.AppendLine(organized);
-            }
-            builder.AppendLine();
-            builder.AppendLine(CorePrompts.Mind.NowHeader);
-            var momentContent = turn.Moment == null ? string.Empty : turn.Moment.Content;
-            if (HeartbeatLogic.IsHeartbeatContent(momentContent))
-            {
-                var plan = HeartbeatLogic.ExtractPlan(momentContent);
-                if (!string.IsNullOrWhiteSpace(plan))
-                {
-                    builder.AppendLine("上次安排这次醒来时，留下的重新检查计划：" + plan);
-                    builder.AppendLine("这只是计划提示，不是她刚发来的话；本次要重新判断，不能照着上一拍续说。");
-                }
-                CorePrompts.Write(builder, includeLegacyTools ? CorePrompts.Mind.Heartbeat : AgentLoopPrompts.Heartbeat);
-            }
-            else if (turn.Wake == KernelWakeValues.Mind)
-                builder.AppendLine(includeLegacyTools ? CorePrompts.Mind.MindWake : CorePrompts.Mind.Background);
-            else
-            {
-                builder.AppendLine(turn.RequiresExpression
-                    ? pair.Apply(includeLegacyTools ? CorePrompts.Mind.HumanSpeak :
-                        "这是 {username} 正在对我说话，本轮要回应。结合此刻的关系、状态与意愿决定内容和方式；需要补充资料时可以先行动。结合她的安排决定后续联系时间。")
-                    : CorePrompts.Mind.Background);
-            }
-            return builder.ToString();
-        }
-
-        /// <summary>
-        /// 一轮请求：一条 system（身份/规则/本轮状态），随后是真正的 user/assistant 历史。
-        /// 普通消息最后追加真实 user；心跳是系统唤醒，不伪装成 user 消息。
-        /// </summary>
+        /// <summary>旧记录历史视图的纯组装工具，不是模型执行入口。</summary>
         internal static List<DeepSeekMessageData> AssembleTurnMessages(
             string systemPrompt,
             TraceTurnContext turn,
@@ -320,63 +141,5 @@ namespace TraceSoul2.Logic
             return value.Length <= max ? value : value.Substring(0, max);
         }
 
-        private static void InjectMindJsonFields(StringBuilder builder, TraceTurnContext turn)
-        {
-            if (builder == null || turn == null || turn.Services == null ||
-                turn.Services.MindJsonFields == null)
-                return;
-            var extras = new List<string>();
-            foreach (var field in turn.Services.MindJsonFields)
-            {
-                if (field == null) continue;
-                string value;
-                try { value = field(turn); }
-                catch { continue; }
-                if (string.IsNullOrWhiteSpace(value)) continue;
-                extras.Add(value.Trim().Trim(','));
-            }
-            if (extras.Count == 0) return;
-            var text = builder.ToString();
-            var close = text.LastIndexOf('}');
-            if (close < 0) return;
-            var head = text.Substring(0, close);
-            var unique = new List<string>();
-            foreach (var extra in extras)
-            {
-                var colon = extra.IndexOf(':');
-                var key = colon > 0 ? extra.Substring(0, colon).Trim() : extra;
-                if (head.IndexOf(key, StringComparison.Ordinal) >= 0) continue;
-                if (!unique.Contains(extra)) unique.Add(extra);
-            }
-            if (unique.Count == 0) return;
-            builder.Clear();
-            builder.Append(head);
-            builder.Append(',');
-            builder.Append(string.Join(",", unique));
-            builder.Append(text.Substring(close));
-        }
-
-        private static void AppendOrganMindPrompts(StringBuilder builder, TraceTurnContext turn)
-        {
-            if (builder == null || turn == null || turn.Services == null ||
-                turn.Services.MindPromptAppends == null)
-                return;
-            var any = false;
-            var seen = new HashSet<string>(StringComparer.Ordinal);
-            foreach (var append in turn.Services.MindPromptAppends)
-            {
-                if (append == null) continue;
-                string text;
-                try { text = append(turn); }
-                catch { continue; }
-                if (string.IsNullOrWhiteSpace(text) || !seen.Add(text.Trim())) continue;
-                if (!any)
-                {
-                    builder.AppendLine();
-                    any = true;
-                }
-                CorePrompts.Write(builder, text);
-            }
-        }
     }
 }

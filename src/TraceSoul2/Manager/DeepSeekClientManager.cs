@@ -29,6 +29,7 @@ namespace TraceSoul2.Manager
 
         private readonly DeepSeekConfigData config;
         private readonly bool singleAttempt;
+        private readonly bool retryTransientFailures;
         private LlmUsageData lastUsage;
 
         /// <summary>按需 LLM 原文导出：设置 TRACESOUL2_LLM_DUMP_DIR 后，每次调用把请求/响应原文落盘（不含 API Key）。</summary>
@@ -60,9 +61,14 @@ namespace TraceSoul2.Manager
         public DeepSeekClientManager(DeepSeekConfigData config) : this(config, false) { }
 
         public DeepSeekClientManager(DeepSeekConfigData config, bool singleAttempt)
+            : this(config, singleAttempt, false) { }
+
+        // Allow transport backoff without enabling empty-content/semantic retries.
+        public DeepSeekClientManager(DeepSeekConfigData config, bool singleAttempt, bool retryTransientFailures)
         {
             this.config = config ?? throw new ArgumentNullException("config");
             this.singleAttempt = singleAttempt;
+            this.retryTransientFailures = retryTransientFailures;
             NormalizeConfig(this.config);
         }
 
@@ -335,7 +341,7 @@ namespace TraceSoul2.Manager
                         throw;
                     }
                     catch (Exception exception) when (
-                        !singleAttempt && totalRequests < 3 && transientRetry < Math.Min(2, config.TransientErrorRetries) &&
+                        (!singleAttempt || retryTransientFailures) && totalRequests < 3 && transientRetry < Math.Min(2, config.TransientErrorRetries) &&
                         IsRetryableProviderException(exception))
                     {
                         transientRetry++;

@@ -76,6 +76,8 @@ namespace TraceSoul2.Host
         public WxxzPlatform Wxxz { get; private set; }
         public WxxzVoiceMonitor WxxzMonitor { get; private set; }
         public WxxzDeviceControl WxxzDevice { get; private set; }
+        private Task deviceManualTask=Task.CompletedTask;
+        private CancellationTokenSource deviceManualCancel;
         public int HistoryWindowMax { get; private set; }
         public int HistoryWindowAlign { get; private set; }
         public int HistoryWindowMin { get; private set; }
@@ -153,7 +155,10 @@ namespace TraceSoul2.Host
             WxxzDevice=new WxxzDeviceControl(Wxxz.ExchangeDeviceControlAsync,DeviceWxxzActionAsync,()=>
             {
                 var monitor=WxxzMonitor.Status();
-                return(monitor.active?monitor.state=="running":Wxxz.HasCall,Wxxz.DisplayState().state,
+                var manualBusy=!deviceManualTask.IsCompleted;
+                var phase=Wxxz.ManualRecording?(manualBusy?"thinking":"listening"):
+                    manualBusy&&Wxxz.DisplayState().state!="speaking"?"thinking":Wxxz.DisplayState().state;
+                return(Wxxz.ManualRecording||manualBusy||(monitor.active?monitor.state=="running":Wxxz.HasCall),phase,
                     Plugins.GetPlugins().Any(x=>x.Id==WxxzPlatform.Id&&x.Enabled));
             });
             Wxxz.DeviceControlStatus=()=>WxxzDevice.Status();
@@ -726,8 +731,28 @@ namespace TraceSoul2.Host
         {
             if(action=="stop")
             {
+                deviceManualCancel?.Cancel();
+                if(Wxxz.ManualRecording&&deviceManualTask.IsCompleted)
+                    await StopManualWxxzAsync(Wxxz.SessionId,true,token);
                 await WxxzMonitor.StopAsync();
                 if(Wxxz.HasCall)await Wxxz.StopCallAsync(Wxxz.ActiveCallId,token);
+                return;
+            }
+            if(action=="finish")
+            {
+                if(Wxxz.ManualRecording&&deviceManualTask.IsCompleted)
+                {
+                    deviceManualCancel?.Dispose();deviceManualCancel=new();
+                    deviceManualTask=CompleteDeviceManualAsync(Wxxz.SessionId,deviceManualCancel.Token);
+                }
+                return;
+            }
+            if(action=="record")
+            {
+                if(!deviceManualTask.IsCompleted)throw new InvalidOperationException("上一段录音仍在处理。");
+                if(Wxxz.SessionId==null)await StartWxxzAsync(false,token);
+                await WxxzDevice.ConfirmStartAsync(token);
+                await StartManualWxxzAsync(Wxxz.SessionId,token);
                 return;
             }
             if(action!="start")throw new InvalidOperationException("未知设备操作。");
@@ -735,6 +760,19 @@ namespace TraceSoul2.Host
             // A physical start uses a public scene unless the administrator already opened a private one.
             if(Wxxz.SessionId==null)await StartWxxzAsync(false,token);
             await StartWxxzMonitorAsync(Wxxz.SessionId,false,token);
+        }
+        private async Task CompleteDeviceManualAsync(string session,CancellationToken token)
+        {
+            try
+            {
+                var capture=await StopManualWxxzAsync(session,false,token);
+                token.ThrowIfCancellationRequested();
+                if(capture.captureId!=null)
+                    await PostWxxzAsync(capture.text,session,Guid.NewGuid().ToString("N"),token,capture.captureId);
+            }
+            catch(OperationCanceledException){Wxxz.Diagnostics.Add("manual","cancelled","本段处理已取消，未自动重发。");}
+            catch(Exception error){Wxxz.Diagnostics.Add("manual","failed",error is InvalidOperationException
+                ? error.Message : "整段录音处理未确认完成，请查看运行日志；未自动重发。");}
         }
         public async Task<object> StopWxxzMonitorAsync(string expectedId)
         {
@@ -765,6 +803,22 @@ namespace TraceSoul2.Host
                 return await Wxxz.ListenAsync(sessionId, token);
             }
             finally { gate.Release(); }
+        }
+        public async Task<object> StartManualWxxzAsync(string sessionId, CancellationToken token)
+        {
+            await gate.WaitAsync(token);
+            try
+            {
+                if(!Plugins.GetPlugins().Any(x=>x.Id==WxxzPlatform.Id&&x.Enabled))throw new InvalidOperationException("WXXZ 插件未启用。");
+                return await Wxxz.StartManualAsync(sessionId,token);
+            }
+            finally {gate.Release();}
+        }
+        public async Task<WxxzPlatform.ManualCapture> StopManualWxxzAsync(string sessionId, bool cancel, CancellationToken token)
+        {
+            await gate.WaitAsync(token);
+            try {return await Wxxz.StopManualAsync(sessionId,cancel,token);}
+            finally {gate.Release();}
         }
 
         public async Task<object> VoiceWxxzAsync(string action, string sessionId, string callId, bool restart, CancellationToken token, string requestId = null, int? sampleNumber = null, bool wakeMode = false)
@@ -1352,6 +1406,7 @@ namespace TraceSoul2.Host
         {
             if (disposed) return;
             disposed = true;
+            deviceManualCancel?.Cancel();
             WxxzDevice?.Dispose();
             WxxzMonitor?.Dispose();
             try { deferredTurns.Writer.TryComplete(); } catch { /* ignored */ }

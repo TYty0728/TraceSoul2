@@ -1,5 +1,18 @@
 # 当前架构地图
 
+## 2026-11-14 旧执行路径清理
+
+普通对话、主动心跳及后台事件的模型决策统一进入 `AgentLoopLogic`。`MindLogic` 仅保留状态归一化和历史兼容工具，已移除构造器、`DecideAsync` 及旧心智提示组装。`ToolLookupLogic` 仅保留当前Agent所需的能力资格过滤，旧向量预选和 `tool_call` 提示已移除。新功能应接当前Agent能力目录或明确的独立模块，不恢复旧心智执行链。
+
+白天记录仍在：当前Agent的 `today` 经Kernel映射到 `day.trajectory`，由TimeSchedulerPlugin追加有来源的轨迹；`new_fact` 映射到 `memory.today.new`，由MemoryNervePlugin保存今日新识。两者在主Agent同次输出中产生，概览整理与阅读稿精简可另行调用模型。页面“今日轨迹/今日新识”展示这些白天记录，不能与日终提取的事件条目及长期认知节点混称。清理后再次运行 `--runtime-continuity`，完整Kernel写入、后续省略保留、追加不覆盖、重启及记忆日边界均通过。
+
+已删除没有生产调用的 `MemoryLiveWriteLogic`（白天即时观察/事实写入）、`CognitionLiveWriteLogic`（白天即时认知写入）、`IdentityReviewLogic`（旧独立身份复盘）、`CognitionConsolidationLogic`（额外写入前认知比较），同步移除编译清单、废弃专项测试和专用提示。`MemoryObservationLogic` 仅保留旧记录纯数据归一化，不再提供模型调用。
+
+保留正在使用的Agent状态/目标更新、轮后整理、表达加工、按需身份演化/重整及Version8三阶段复盘。历史复盘检查点的旧版/JEV续做分支保留：新任务由OpenDailyReview创建Version8，旧分支仅供既有检查点继续处理；数据库结构、旧记录字段和插件共享契约不因本次清理删除。
+
+提示回归改走真实Agent入口，并检查旧执行类型不再进入程序集。验证：完整ChatCheck、独立提示/相机/心跳/身份演化、错误保护以及实际Migration（含历史检查点恢复）通过；Host/Migration构建均0警告0错误，ChatCheck保留24项既有相机类型冲突警告，diff检查通过。同时修正退避作用域测试的旧503即失败断言，覆盖普通复盘短退避及独立整轮预算隔离。此清理未修改角色数据或运行配置；未发布部署。
+
+
 2026-10-26主动入口补充：时间心跳与人类新消息在同一Agent中明确区分，动态段分别描述联系选择或待回应消息；主动文字/媒体在同次输出具有联系意图后才允许外发，遗漏时转wait并保留下次唤醒。没有新增模型岗位或配置，见[Agent主链](../AGENT_HARNESS.md)。
 
 2026-10-26：职责收拢为 Agent 自循环、感官、平台、能力插件。关注/共同场景收尾进入独立最新快照队列，按同一主体版本提交；相机脱离 QQ 生命周期依赖，媒体输出绑定原轮平台。旧ID/数据目录保留，开发板尚未接通通用照片输出。见[当前边界与实现](../AGENT_SENSES_PLATFORMS.md)。
@@ -79,3 +92,14 @@ KernelLogic → 保存输入 / 判断唤醒类型 / 识图 / 记忆预激活
 - PluginApi 是共享契约程序集，Host 与插件共享同一份类型；核心源清单显式维护。
 - `TRACESOUL2_HOME` 放角色和全局配置，`TRACESOUL2_PLUGINS` 放代码包，`TRACESOUL2_PLUGINS_DATA` 放插件配置和图库。软件目录可以替换，角色与插件数据需要保留。
 - 启动器、发布包和 Docker 可用不同路径。排障先确认实际启动脚本与进程，不从源码位置猜运行家目录。
+
+
+## 2026-11-14 请求调用点复核
+
+此前“8类核心请求”遗漏了夜间余温的偏好/目标背景筛选和正文生成。按任务用途合并、将传输包装层/重试/分批去重，核心常规用途应为10类：Agent、表达加工、轮后关注/场景整理、轨迹概览、今日阅读稿精简、日复盘三阶段、夜间背景筛选、夜间心里话。今日轨迹与新识由Agent同次输出；阅读稿精简可分别针对轨迹与新识调用，并非每轮固定一次。夜间余温由DailyPipelineWorker在处理成功后通过SoulRuntime.TrySpeakNightResidueAsync触发，不是三阶段复盘的第三轮正文。
+
+扩展及维护请求还包括：公开经历认知整理；榜单候选筛选和排序；手动身份重整的分批理解归并、最终卡片候选生成；按需身份演化；迁移工具的领域分类；图片理解、视频理解；相机氛围分享判断和镜头规划；说说正文、已有说说配图意图、签名；游戏阶段摘要、结束经历整理、游戏动作决策。对应调用分别位于PublicExperienceLogic、ReviewSelectionLogic/DayLadderLogic、IdentityReorganizationLogic/IdentityEvolutionLogic、RealmClassifier、VisionLogic/MediaVideoPipeline、QqImageGenPlugin、QqQzonePlugin/QzoneDraft/QqStatusPlugin及GameSessionController/StardewGameAdapter。
+
+异常附加请求另计：DeepSeekStructuredOutputLogic的结构/内容纠正；DailyRuntimeProse及ReviewWorkLogic的超长字段整理；ExpressNightResidueAsync的超长心里话压缩。Retry-After退避、协议降级和备用切换也增加HTTP次数，但不是新的业务用途。图片生成、ASR、TTS、模型目录/测试、搜索/网页读取、平台收发另属其他请求；BGE向量与表情匹配主要是本地推理，不应按语言模型API调用计费统计。
+
+本次静态复核还确认上一轮清理尚有遗漏：MemoryNervePlugin仍注册memory.archive和memory.activate，前者可调用模型作小复盘并标记原文built，后者可调用NerveLlm定位记忆；当前Agent的BuildCatalog通过资格过滤排除了这两个入口，但插件执行实现和Host的NerveLlm构造仍在。Kernel仍有subconscious→identity.review分支，TimeScheduler虽加载时停用旧日复盘任务，仍保留EnsureDailyReview及自定义subconscious唤醒。这些与历史Version1～7/JEV检查点续做不同，应单独审查入口和契约，不能声称全部旧路径已删除，也不能仅因源码存在就声称线上正在产生这些请求。本轮只核对调用点，未继续删除或触发真实请求。

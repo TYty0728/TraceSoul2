@@ -34,7 +34,10 @@ internal static partial class Program
         foreach(var sample in new[]{"河边有一条小溪","沿着小溪走","小溪里有鱼","小溪很清澈"})
             Require(!policy.Correct(sample).Changed && !policy.Correct(sample).Mentioned,"普通名词不改："+sample);
         Require(policy.Correct("小溪在吗").WakeOnly && !policy.Correct("小溪帮我看看").WakeOnly,"纯唤醒与实际指令分开");
-        policy.Save(new(){name="阿循",aliases=new[]{"阿旭","阿寻"}});
+        policy.Save(new(){name="阿循",aliases=new[]{"阿旭","阿寻","阿雪"}});
+        foreach(var phrase in new[]{"能听见吗？","能听到吗？","听得见我吗？","听得到吗？","听见了吗？","听到没有？"})
+            Require(policy.Correct("阿雪"+phrase).Text=="阿循"+phrase&&policy.Correct("阿雪"+phrase).MatchMode=="alias",
+                "已配置误识别在无标点听音问句中也校正");
         Require(policy.Correct("阿旭你好").Text=="阿循你好" && policy.Correct("阿寻，听我说").Text=="阿循，听我说","阿循自定义变体");
         policy.Save(new(){name="阿循",aliases=Array.Empty<string>()});
         Require(policy.Correct("阿寻你好").Text=="阿循你好" && policy.Correct("a xun").Text=="阿循" && !policy.Correct("阿旭你好").Mentioned,"a xun不等于a xu，不自动扩大近音范围");

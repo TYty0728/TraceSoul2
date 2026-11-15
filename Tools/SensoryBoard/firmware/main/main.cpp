@@ -28,15 +28,43 @@ static constexpr size_t FRAME_BYTES = 320 * 480 * 2;
 static constexpr size_t MAX_PAYLOAD = 48000 * 2 * 10;
 static constexpr size_t CHUNK = 4096;
 static uint32_t frames = 0, plays = 0;
+struct ManualAudio {
+    uint8_t *pcm=nullptr;
+    size_t size=0;
+    char id[33]={};
+    std::atomic<bool> active{false}, stop{false}, failed{false};
+    SemaphoreHandle_t done=nullptr;
+};
+static ManualAudio manual_audio;
+static std::atomic<unsigned> manual_finish_epoch{0};
+static unsigned manual_begin_epoch=0;
+void terminal_manual_finish(){manual_finish_epoch++;manual_audio.stop=true;}
+static constexpr size_t MANUAL_MAX=48000*2*30;
+static void capture_manual(void *) {
+    while(!manual_audio.stop.load() && manual_begin_epoch==manual_finish_epoch.load() && manual_audio.size+3072<=MANUAL_MAX) {
+        if(board_record_read(manual_audio.pcm+manual_audio.size,3072)!=ESP_OK){manual_audio.failed=true;break;}
+        manual_audio.size+=3072;
+    }
+    native_ui_manual(2);native_ui_capture(false);
+    manual_audio.active=false;
+    xSemaphoreGive(manual_audio.done);
+    vTaskDelete(nullptr);
+}
+static void clear_manual() {
+    native_ui_manual(0);
+    free(manual_audio.pcm);manual_audio.pcm=nullptr;manual_audio.size=0;manual_audio.id[0]=0;
+    if(manual_audio.done)vSemaphoreDelete(manual_audio.done);
+    manual_audio.done=nullptr;
+}
 static uint32_t checksum(const uint8_t *p, size_t n) {
     uint32_t hash = 2166136261u;
     for (size_t i = 0; i < n; ++i) hash = (hash ^ p[i]) * 16777619u;
     return hash;
 }
 static void reply(TerminalLink &link, uint32_t id, const char *status, size_t received = 0, const char *error = "") {
-    char line[1300];
-    char state[360],touch_state[180],ui_state[400]; network_status(state,sizeof(state));board_touch_status(touch_state,sizeof(touch_state));native_ui_status(ui_state,sizeof(ui_state));
-    int n = snprintf(line, sizeof(line), "{\"protocol\":1,\"firmware\":\"0.4.8\",\"audio_stream_version\":1,\"id\":%lu,\"status\":\"%s\",\"received\":%u,\"frames\":%lu,\"plays\":%lu,\"uptime_ms\":%llu,\"error\":\"%s\",\"local_mic_paused\":%s,%s,%s,%s}\n",
+    char line[1500];
+    char state[500],touch_state[180],ui_state[400]; network_status(state,sizeof(state));board_touch_status(touch_state,sizeof(touch_state));native_ui_status(ui_state,sizeof(ui_state));
+    int n = snprintf(line, sizeof(line), "{\"protocol\":1,\"firmware\":\"0.4.12\",\"audio_stream_version\":1,\"manual_record_version\":1,\"id\":%lu,\"status\":\"%s\",\"received\":%u,\"frames\":%lu,\"plays\":%lu,\"uptime_ms\":%llu,\"error\":\"%s\",\"local_mic_paused\":%s,%s,%s,%s}\n",
         (unsigned long)id, status, (unsigned)received, (unsigned long)frames, (unsigned long)plays,
         (unsigned long long)(esp_timer_get_time() / 1000), error, board_mic_paused()?"true":"false", state, touch_state,ui_state);
     if(n<0||n>=(int)sizeof(line)){link.closed=true;return;}
@@ -62,18 +90,23 @@ static bool uint_field(cJSON *json, const char *name, uint32_t *out) {
     *out = (uint32_t)item->valuedouble;
     return true;
 }
-static bool send_recording(TerminalLink &link, uint32_t id, const uint8_t *pcm, size_t size) {
+static bool send_recording(TerminalLink &link, uint32_t id, const uint8_t *pcm, size_t size, size_t window=1) {
     char line[256];
     int length = snprintf(line, sizeof(line), "{\"protocol\":1,\"id\":%lu,\"status\":\"captured\",\"size\":%u,\"sample_rate\":48000,\"checksum\":%lu}\n",
         (unsigned long)id, (unsigned)size, (unsigned long)checksum(pcm, size));
     if (link.write(line, length, pdMS_TO_TICKS(1000)) != length) return false;
     for (size_t offset = 0; offset < size; offset += CHUNK) {
+        if(window>1&&board_mic_paused())return false;
         size_t n = size - offset < CHUNK ? size - offset : CHUNK;
-        if (link.write(pcm + offset, n, pdMS_TO_TICKS(2000)) != (int)n) return false;
+        if(offset % (CHUNK*window)==0) {
+            size_t batch=size-offset<CHUNK*window?size-offset:CHUNK*window;
+            if(link.write(pcm+offset,batch,pdMS_TO_TICKS(5000))!=(int)batch)return false;
+        }
         size_t count = 0; bool complete = false;
-        while (count + 1 < sizeof(line)) {
+        int64_t ack_deadline=esp_timer_get_time()+5000000;
+        while (count + 1 < sizeof(line) && esp_timer_get_time()<ack_deadline && !link.closed) {
             uint8_t c;
-            if (link.read(&c, 1, pdMS_TO_TICKS(2000)) != 1) break;
+            if (link.read(&c, 1, pdMS_TO_TICKS(100)) != 1) continue;
             if (c == '\n') { complete = true; break; }
             line[count++] = c;
         }
@@ -226,6 +259,42 @@ void terminal_run(TerminalLink &link) {
         OutputGuard guard;
         if (!guard.held) { cJSON_Delete(json); reply(link,id,"error",0,"device_busy"); continue; }
         native_ui_command();
+        if(!strcmp(op->valuestring,"manual_start") || !strcmp(op->valuestring,"manual_stop") || !strcmp(op->valuestring,"manual_cancel")) {
+            auto *key=cJSON_GetObjectItemCaseSensitive(json,"recording_id");
+            bool valid=cJSON_IsString(key)&&strlen(key->valuestring)==32&&strspn(key->valuestring,"0123456789abcdef")==32;
+            bool start=!strcmp(op->valuestring,"manual_start"),cancel=!strcmp(op->valuestring,"manual_cancel");
+            char record_id[33]={};if(valid)memcpy(record_id,key->valuestring,32);
+            cJSON_Delete(json);
+            if(!valid){reply(link,id,"error",0,"bad_recording_id");continue;}
+            if(start) {
+                manual_begin_epoch=manual_finish_epoch.load();
+                if(device_control_state().stopping){reply(link,id,"error",0,"manual_start_cancelled");continue;}
+                if(manual_audio.pcm && !manual_audio.active.load() && xSemaphoreTake(manual_audio.done,0)==pdTRUE)clear_manual();
+                if(manual_audio.pcm){reply(link,id,"error",0,"manual_recording_pending");continue;}
+                if(board_mic_paused()){reply(link,id,"error",0,"local_mic_paused");continue;}
+                manual_audio.pcm=(uint8_t *)heap_caps_malloc(MANUAL_MAX,MALLOC_CAP_SPIRAM|MALLOC_CAP_8BIT);
+                manual_audio.done=xSemaphoreCreateBinary();manual_audio.size=0;manual_audio.stop=false;manual_audio.failed=false;
+                if(!manual_audio.pcm||!manual_audio.done||board_record_begin(manual_audio.pcm)!=ESP_OK){clear_manual();reply(link,id,"error",0,"manual_recording_unavailable");continue;}
+                memcpy(manual_audio.id,record_id,33);manual_audio.active=true;native_ui_manual(1);native_ui_capture(true);
+                if(xTaskCreate(capture_manual,"manual-capture",8192,nullptr,6,nullptr)!=pdPASS){manual_audio.active=false;native_ui_capture(false);clear_manual();reply(link,id,"error",0,"manual_task_unavailable");continue;}
+                reply(link,id,"ready");continue;
+            }
+            if(!manual_audio.pcm || strcmp(record_id,manual_audio.id)){reply(link,id,"error",0,"manual_recording_expired");continue;}
+            manual_audio.stop=true;
+            if(xSemaphoreTake(manual_audio.done,pdMS_TO_TICKS(5000))!=pdTRUE){reply(link,id,"error",0,"manual_stop_pending");continue;}
+            if(cancel){clear_manual();reply(link,id,"ready");continue;}
+            if(manual_audio.failed.load()||board_mic_paused()||manual_audio.size==0){clear_manual();reply(link,id,"error",0,"manual_capture_incomplete");continue;}
+            reply(link,id,"ready");
+            size_t size=manual_audio.size;
+            native_ui_manual(3);device_control_upload(true);
+            bool sent=send_recording(link,id,manual_audio.pcm,size,8);
+            device_control_upload(false);
+            clear_manual();
+            reply(link,id,sent?"done":"error",size,sent?"":"record_transfer_failed");continue;
+        }
+        if(manual_audio.active.load() && (!strcmp(op->valuestring,"listen")||!strcmp(op->valuestring,"record")||!strcmp(op->valuestring,"audio")||!strcmp(op->valuestring,"audio_stream"))) {
+            cJSON_Delete(json);reply(link,id,"error",0,"manual_recording_active");continue;
+        }
         if(!strcmp(op->valuestring,"control")){
             uint32_t ack=0;
             auto *controller=cJSON_GetObjectItemCaseSensitive(json,"controller");
@@ -248,6 +317,7 @@ void terminal_run(TerminalLink &link) {
         bool scene = !strcmp(op->valuestring, "scene");
         bool audio = !strcmp(op->valuestring, "audio");
         bool setup = !link.tls && !strcmp(op->valuestring,"wifi_setup");
+        bool relay_setup = !link.tls && !strcmp(op->valuestring,"relay_setup");
         if(!strcmp(op->valuestring,"touch_test") || !strcmp(op->valuestring,"touch_stop")){
             board_touch_test(!strcmp(op->valuestring,"touch_test"));cJSON_Delete(json);reply(link,id,"ready");continue;
         }
@@ -316,7 +386,7 @@ void terminal_run(TerminalLink &link) {
             continue;
         }
         bool valid = uint_field(json, "size", &size) && uint_field(json, "checksum", &expected) &&
-            ((setup && size > 0 && size <= 7000) || (scene && size>=12 && size<=MAX_PAYLOAD) || (frame && size == FRAME_BYTES) || (audio && size > 0 && size <= MAX_PAYLOAD && size % 2 == 0));
+            (((setup || relay_setup) && size > 0 && size <= 7000) || (scene && size>=12 && size<=MAX_PAYLOAD) || (frame && size == FRAME_BYTES) || (audio && size > 0 && size <= MAX_PAYLOAD && size % 2 == 0));
         auto *art=cJSON_GetObjectItemCaseSensitive(json,"artwork");
         bool artwork=(frame||scene)&&cJSON_IsTrue(art);
         if(art&&(!(frame||scene)||!cJSON_IsBool(art)))valid=false;
@@ -332,8 +402,8 @@ void terminal_run(TerminalLink &link) {
         }
         if (received != size) { drain(link); reply(link, id, "error", received, "payload_timeout"); continue; }
         if (checksum(payload, size) != expected) { reply(link, id, "error", received, "checksum_mismatch"); continue; }
-        if (setup) {
-            bool saved=network_save((const char *)payload,size);
+        if (setup || relay_setup) {
+            bool saved=relay_setup ? network_relay_save((const char *)payload,size) : network_save((const char *)payload,size);
             memset(payload,0,size);
             reply(link,id,saved?"done":"error",received,saved?"":"wifi_config_invalid"); continue;
         }

@@ -718,6 +718,10 @@
           <div style="margin-top:8px">
             <button id="wxxzCallStart" onclick="startWxxzCall()">开始语音通话</button>
             <button id="wxxzDirectStart" onclick="startWxxzCall(false)">开始直接对话（无需叫名字）</button>
+            <button id="wxxzManualStart" onclick="startWxxzManual()">开始说话</button>
+            <button id="wxxzManualStop" onclick="stopWxxzManual(false)" disabled>结束说话并发送</button>
+            <button id="wxxzManualCancel" onclick="stopWxxzManual(true)" disabled>取消本段</button>
+            <div id="wxxzManualState" class="muted" role="status">手动录音：最多30秒，结束后整段上传并发送。</div>
             <button id="wxxzCallStop" onclick="stopWxxzCall()" disabled>结束通话</button>
             <div id="wxxzCallState" class="muted">开启名字唤醒时先叫名字，专注30秒内可直接说话；停顿约1秒后听写，实际指令需本人声纹确认。播音时暂停采音，无需JEV逐句判断。</div>
             <div id="wxxzCallLast" class="muted"></div>
@@ -898,7 +902,7 @@
         </div>
         <div class="box">
           <h2>主模型备用顺序</h2>
-          <p class="muted">对话和主动联系按「已保存的主模型 → 二级备用 → 三级备用」尝试。建议选不同供应商，以应对接口不稳定。配置备用后，每个通道只请求一次；超时、连接失败、服务错误或空响应时切换，沿用本轮上下文。下一轮仍先尝试主模型。</p>
+          <p class="muted">对话和主动联系按「已保存的主模型 → 二级备用 → 三级备用」尝试。建议选不同供应商，以应对接口不稳定。配置备用后，各通道共用供应商的过载退避设置，每个通道最多请求三次；瞬时故障退避耗尽或空响应等错误后切换，沿用本轮上下文。下一轮仍先尝试主模型。</p>
           <div class="slot-grid">
             <div><label for="fallbackSecondary">二级备用</label><select id="fallbackSecondary"></select></div>
             <div><label for="fallbackTertiary">三级备用</label><select id="fallbackTertiary"></select></div>
@@ -967,7 +971,7 @@
                   <div><label>代理地址（Decisions 已支持；其他协议仍为暂存）</label>
                     <input id="proxy" placeholder="http://127.0.0.1:7890" /></div>
                 </div>
-                <p class="muted" style="margin:4px 0 8px">仅用于 429、5xx、请求超时等瞬时故障；优先采用 Retry-After，否则按 2、4 秒退避，单次最多等待 60 秒。0 为关闭，最多重试 2 次；含空响应与兼容重试在内，单次模型调用最多请求 3 次。耗尽后暂停通道，余额/鉴权错误直接暂停。</p>
+                <p class="muted" style="margin:4px 0 8px">仅用于 429、5xx、请求超时等瞬时故障；优先采用 Retry-After，否则按 2、4 秒退避，单次最多等待 60 秒。0 为关闭，最多重试 2 次；含空响应与兼容重试在内，单次模型调用最多请求 3 次。对话、主动联系和普通复盘共用此设置；耗尽后报告错误或切换备用，鉴权错误不退避。</p>
                 <div class="row">
                   <div class="slider">
                     <label>冷暖（温度）<span id="tempVal" class="slider-val"></span></label>
@@ -1148,9 +1152,10 @@
           <div class="device-detail">
             <h3>语音链路测试</h3>
             <button id="wxxzVoiceBypass" onclick="configureWxxzVoiceDiagnostic(0)">放行所有声音（15分钟）</button>
+            <button id="wxxzVoicePersistent" onclick="configureWxxzVoicePolicy(0)">持续放行所有声音（重启后保留）</button>
             <button id="wxxzVoiceRestore" onclick="configureWxxzVoiceDiagnostic(0.65)">恢复声纹核验</button>
             <div id="wxxzVoiceDiagnosticState" class="muted" role="status">当前使用正常声纹门槛。</div>
-            <p class="muted">先暂停监听再切换。放行期间阈值为0，任何人的话都可能进入当前会话；原声纹不变，到期或Host重启恢复0.65。随后到「经历与对话」点击「开始直接对话」即可测试完整链路。</p>
+            <p class="muted">先暂停监听再切换。放行期间阈值为0，任何人的话都可能进入当前会话；原声纹保留。临时放行到期或重启后恢复，持续放行则保留至点击「恢复声纹核验」。随后到「经历与对话」点击「开始直接对话」。</p>
           </div>
           <div style="margin-top:12px">
             <button id="wxxzEnroll" onclick="enrollWxxzVoice()">录入本人声纹（第1/3段，8秒）</button>
@@ -2146,6 +2151,9 @@
     $('sendBtn').disabled=inputBlocked;
     $('wxxzCallStop').disabled=!wxxzMonitorActive;
     $('wxxzWakeStop').disabled=!wxxzMonitorActive;
+    $('wxxzManualStart').disabled=wxxzMonitorActive||wxxzManualActive||!wxxzSession;
+    $('wxxzManualStop').disabled=!wxxzManualActive;
+    $('wxxzManualCancel').disabled=!wxxzManualActive;
   }
   function ensureWxxzMonitorPolling() {
     if(wxxzMonitorTimer===null) wxxzMonitorTimer=setInterval(pollWxxzMonitor,1000);
@@ -2292,7 +2300,9 @@
   }
   function renderWxxzVoice(voice) {
     if (!voice) return;
-    $('wxxzVoiceDiagnosticState').textContent = voice.diagnosticBypass
+    $('wxxzVoiceDiagnosticState').textContent = voice.persistentBypass
+      ? '持续放行中：阈值0，所有声音均可通过；重启后保留，点击「恢复声纹核验」可关闭。'
+      : voice.diagnosticBypass
       ? `调试放行中：阈值0，所有声音均可通过；${new Date(voice.diagnosticUntilUnixMs).toLocaleTimeString('zh-CN',{hour12:false})}恢复0.65。`
       : `声纹核验已开启，当前阈值${voice.threshold ?? 0.65}。`;
     wxxzVoiceSamples = voice.samples || 0;
@@ -2322,8 +2332,17 @@
     } catch(e) { $('wxxzVoiceDiagnosticState').textContent='设置失败：'+e.message; }
     finally { sending=false; applyWxxzMonitorLocks(); }
   }
+  async function configureWxxzVoicePolicy(threshold) {
+    if(sending || wxxzMonitorActive || wxxzCallId) return;
+    sending=true; wxxzVoiceBusy(true);
+    try {
+      renderWxxzStatus(await api('/wxxz/voice/policy','PUT',{threshold}));
+      ensureWxxzMonitorPolling();
+    } catch(e) { $('wxxzVoiceDiagnosticState').textContent='设置失败：'+e.message; }
+    finally { sending=false; applyWxxzMonitorLocks(); }
+  }
   function wxxzVoiceBusy(busy) {
-    for(const id of ['wxxzVoiceBypass','wxxzVoiceRestore','wxxzDirectStart']) $(id).disabled=busy;
+    for(const id of ['wxxzVoiceBypass','wxxzVoicePersistent','wxxzVoiceRestore','wxxzDirectStart']) $(id).disabled=busy;
     $('wxxzWakePrepare').disabled=busy;
     for (const id of ['wxxzWakeEnabled','wxxzWakeName','wxxzWakePhonetic','wxxzWakePronunciation','wxxzWakeAliases','wxxzWakeReply','wxxzWakeSave','wxxzWakeStart','wxxzListen','sendBtn','wxxzConnect','wxxzDisconnect','wxxzEnroll','wxxzSampleRecord1','wxxzSampleRecord2','wxxzSampleRecord3','wxxzVoiceCheck','wxxzCallStart','momentSource','wxxzPrivate','content','wxxzSpeechEngine','wxxzSpeechLocalVoice','wxxzSpeechRemoteModel','wxxzSpeechRemoteVoice','wxxzSpeechSave','wxxzSpeechTest'])
       $(id).disabled = busy;
@@ -2495,7 +2514,36 @@
     } catch(e) { $('sendState').textContent = '录音或听写失败：' + e.message; $('wxxzState').textContent = $('sendState').textContent; }
     finally { sending=false; $('wxxzListen').disabled=false; $('sendBtn').disabled=false; }
   }
+  let wxxzManualActive=false;
+  async function startWxxzManual() {
+    if(sending||wxxzMonitorActive||wxxzManualActive||!wxxzSession)return;
+    sending=true;wxxzVoiceBusy(true);$('wxxzManualStart').disabled=true;
+    $('wxxzManualState').textContent='正在启动板载录音，请等“正在录音”再开口…';
+    try {
+      const status=await api('/wxxz/manual/start','POST',{sessionId:wxxzSession});
+      renderWxxzStatus(status);wxxzManualActive=true;
+      $('wxxzManualState').textContent='正在录音，请说话；最多30秒，说完点击“结束说话并发送”。';
+    } catch(e) {
+      $('wxxzManualState').textContent='开始结果未确认：'+e.message+'；请取消本段后再试。';
+      wxxzManualActive=true;
+    } finally {sending=false;applyWxxzMonitorLocks();}
+  }
+  async function stopWxxzManual(cancel) {
+    if(sending||!wxxzManualActive)return;
+    sending=true;wxxzVoiceBusy(true);
+    $('wxxzManualStop').disabled=true;$('wxxzManualCancel').disabled=true;
+    $('wxxzManualState').textContent=cancel?'正在取消本段…':'正在停止录音、上传完整音频并等待阿循回复…';
+    try {
+      const result=await api(cancel?'/wxxz/manual/cancel':'/wxxz/manual/stop','POST',
+        {sessionId:wxxzSession,requestId:crypto.randomUUID().replaceAll('-','')});
+      $('wxxzManualState').textContent=cancel?'本段已取消，没有发送。':result.text
+        ? `完整录音${(result.recordedMs/1000).toFixed(1)}秒，听写：${result.text}`:'未识别出清晰语音，没有发送。';
+      if(result.turn){renderTurn(result.turn);await refreshTranscript();}
+    } catch(e) {$('wxxzManualState').textContent='本次处理未确认：'+e.message+'；没有自动重发。';}
+    finally {wxxzManualActive=false;sending=false;applyWxxzMonitorLocks();}
+  }
   function renderWxxzStatus(status) {
+    if('manualRecording' in status)wxxzManualActive=!!status.manualRecording;
     if(status.deviceControl){
       const device=status.deviceControl;
       $('wxxzDeviceAllowed').checked=!!device.enabled;

@@ -47,6 +47,6 @@ class AsrChecks(unittest.TestCase):
         self.assertEqual(result['status'], 'no_text')
 
     def test_invalid_pcm_rejected_before_recognizer(self):
-        for pcm in (b'', b'x', b'\0' * 1920002):
+        for pcm in (b'', b'x', b'\0' * 2880002):
             with self.assertRaises(ValueError):
                 self.asr.transcribe(pcm)

@@ -16,7 +16,7 @@ class LocalAsr:
 
     def transcribe(self, pcm, sample_rate=48000):
         import numpy as np
-        if sample_rate not in (16000, 48000) or not pcm or len(pcm) % 2 or len(pcm) > sample_rate * 2 * 20:
+        if sample_rate not in (16000, 48000) or not pcm or len(pcm) % 2 or len(pcm) > sample_rate * 2 * 30:
             raise ValueError('无效的麦克风音频规格')
         samples = np.frombuffer(pcm, dtype='<i2').astype(np.float32)
         rms = float(np.sqrt(np.mean(samples * samples)))

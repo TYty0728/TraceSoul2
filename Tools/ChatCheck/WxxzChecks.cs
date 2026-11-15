@@ -47,6 +47,10 @@ internal static partial class Program
             Observe?.Invoke(path);
             Bodies.Add(System.Text.Json.JsonSerializer.Deserialize<System.Text.Json.JsonElement>(request.Content.ReadAsStringAsync().GetAwaiter().GetResult()));
             if(path=="/api/text") TextObserved.TrySetResult(true);
+            if(path.StartsWith("/api/manual/",StringComparison.Ordinal))
+                return Task.FromResult(new HttpResponseMessage(HttpStatusCode.OK){Content=new StringContent(System.Text.Json.JsonSerializer.Serialize(new {
+                    ok=true,receipt=new {protocol=1,status=path.EndsWith("/stop",StringComparison.Ordinal)?"done":"ready"},
+                    text=path.EndsWith("/stop",StringComparison.Ordinal)?"完整录音测试":"",recorded_ms=10240}))});
             if (path == "/api/voice/sample") return Task.FromResult(new HttpResponseMessage(HttpStatusCode.OK) { Content = new StringContent(
                 "{\"ok\":true,\"receipt\":{\"protocol\":1,\"status\":\"done\"},\"quality\":{\"recorded_ms\":15000,\"speech_ms\":4000,\"full_text\":\"本段本地听写\"},\"voice\":" + UtteranceVoice + "}") });
             if (path == "/api/utterance") return BlockUtterance ? Pending.Task : Task.FromResult(Utterance());
@@ -74,6 +78,24 @@ internal static partial class Program
     }
     private static async Task CheckSourceReplyAndSharedLifeAsync()
     {
+        using(var manualStore=new SqliteMemoryManager(":memory:"))
+        using(var manualManager=new TracePluginManager(manualStore,new TracePluginServices(manualStore,new HierarchicalVectorRouterLogic(new FakeEncoder()))))
+        using(var manual=new WxxzPlatform(new WxxzMockBridge()))
+        {
+            manualManager.RegisterExternal(manual);
+            await manual.StartAsync(false,default);
+            var session=manual.SessionId;
+            await manual.StartManualAsync(session,default);
+            try {await manual.StartManualAsync(session,default);throw new Exception("duplicate manual capture");}catch(InvalidOperationException){}
+            try {manual.ValidateCallStart(session);throw new Exception("automatic capture overlapped manual");}catch(InvalidOperationException){}
+            var complete=await manual.StopManualAsync(session,false,default);
+            Require(complete.text=="完整录音测试"&&complete.recordedMs==10240&&complete.captureId!=null,"手动录音完整听写并生成一次性来源标记");
+            try {await manual.StopManualAsync(session,false,default);throw new Exception("duplicate manual submission");}catch(InvalidOperationException){}
+            await manual.StartManualAsync(session,default);
+            var cancelled=await manual.StopManualAsync(session,true,default);
+            Require(cancelled.captureId==null&&cancelled.text=="","取消录音不生成可发送听写");
+            try {await manual.StartManualAsync("stale",default);throw new Exception("stale manual session");}catch(InvalidOperationException){}
+        }
         const string root = "same-subject-platforms";
         var directory = System.IO.Path.Combine(System.IO.Path.GetTempPath(), "tracesoul-shared-platforms-" + Guid.NewGuid().ToString("N"));
         System.IO.Directory.CreateDirectory(directory);
@@ -532,9 +554,24 @@ internal static partial class Program
             foreach (var invalid in new[] {new WxxzVoiceprint.DiagnosticSettings(0, 901), new(0.1, 10), new(0, 0)})
                 try { debug.ConfigureDiagnostic(invalid); throw new Exception("invalid diagnostic accepted"); }
                 catch (ArgumentException) { }
+            debug.ConfigurePolicy(new(0));
+            clock=clock.AddDays(1);
+            Require(debug.Match(default).matched && new WxxzVoiceprint(path).Match(Evidence(1,1)).matched,
+                "持续零门槛跨到期时间和实例重建保留，放行其他声音及短语音");
+            Require(System.IO.File.ReadAllText(path)==naturalProfile,
+                "持续放行不改变原声纹档案");
+            Require(System.Text.Json.JsonSerializer.SerializeToElement(new WxxzVoiceprint(path).Status())
+                .GetProperty("persistentBypass").GetBoolean(), "重载显示持久放行状态");
+            try { debug.ConfigurePolicy(new(0.1)); throw new Exception("invalid policy accepted"); }
+            catch (ArgumentException) { }
+            var restored = new WxxzVoiceprint(path);
+            restored.ConfigureDiagnostic(new());
+            Require(!restored.Match(default).matched && !new WxxzVoiceprint(path).Match(Evidence(1,1)).matched,
+                "原恢复按钮关闭持久放行并在重载后保留本人核验");
         }
         finally
         {
+            if (System.IO.File.Exists(path + ".policy.json")) System.IO.File.Delete(path + ".policy.json");
             if (System.IO.File.Exists(path)) System.IO.File.Delete(path);
             if (System.IO.Directory.Exists(directory)) System.IO.Directory.Delete(directory);
         }

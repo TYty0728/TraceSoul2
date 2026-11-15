@@ -20,6 +20,7 @@ internal static partial class Program
     private static void Main(string[] args)
     {
         SQLitePCL.Batteries_V2.Init();
+        if (args.Contains("--prompt-layout")) { RunPromptLayoutCheck(); return; }
         if (args.Contains("--gpt61-wire")) { RunGpt61RequestCheck(); RunKimiOfficialRequestCheck(); Console.WriteLine("GPT-6.1 wire and existing Kimi/relay checks passed."); return; }
         if (args.Length == 3 && args[0] == "--jev-review-smoke") { RunJevReviewSmoke(args[1], args[2]); return; }
         if (args.Length == 3 && args[0] == "--jev-topic-smoke") { RunJevReviewSmoke(args[1], args[2], true); return; }
@@ -30,8 +31,6 @@ internal static partial class Program
         if (args.Length == 3 && args[0] == "--review-recovery-peer") { RunReviewRecoveryPeerAsync(args[1], args[2]).GetAwaiter().GetResult(); return; }
         if (args.Contains("--camera-transport")) { RunCameraTransportChecksAsync().GetAwaiter().GetResult(); return; }
         if (args.Contains("--turn-maintenance")) { RunTurnMaintenanceChecksAsync().GetAwaiter().GetResult(); return; }
-        if (args.Contains("--cognition-comparison")) { RunCognitionComparisonChecksAsync().GetAwaiter().GetResult(); return; }
-        if (args.Length == 3 && args[0] == "--cognition-comparison-replay") { RunCognitionComparisonReplay(args[1], args[2]); return; }
         if (args.Contains("--review-reliability")) { RunReviewReliabilityChecksAsync().GetAwaiter().GetResult(); return; }
         if (args.Contains("--identity-evolution")) { RunIdentityEvolutionChecksAsync().GetAwaiter().GetResult(); return; }
         if (args.Contains("--identity-reorganization")) { RunIdentityReorganizationChecksAsync().GetAwaiter().GetResult(); return; }
@@ -88,6 +87,7 @@ internal static partial class Program
             Console.WriteLine("Inbound vision checks passed.");
             return;
         }
+        if (args.Contains("--wxxz-attention")) { CheckWxxzAttention(); Console.WriteLine("WXXZ attention checks passed."); return; }
         if (args.Contains("--wxxz")) { RunWxxzChecksAsync().GetAwaiter().GetResult(); return; }
         if (args.Contains("--wxxz-board")) { RunWxxzChecksAsync(true).GetAwaiter().GetResult(); return; }
         RunWxxzChecksAsync().GetAwaiter().GetResult();
@@ -151,11 +151,7 @@ internal static partial class Program
         RunMindAtmosphereCheck();
         RunRecentDialogueContextCheck();
         RunGameSessionPluginCheck();
-        if ((args ?? Array.Empty<string>()).Contains("--prompt-layout"))
-        {
-            RunPromptLayoutCheck();
-            return;
-        }
+        RunPromptLayoutCheck();
         var path = Path.Combine(Path.GetTempPath(), "tracesoul2-brainframe-" + Guid.NewGuid().ToString("N") + ".sqlite3");
         const string conversationId = "organism-check";
         string tagId;
@@ -775,24 +771,6 @@ internal static partial class Program
                 ToolLookupLogic.IsLookupEligible(game),
             "长尾可调用能力进检索池");
 
-        var catalog = new List<TraceContributionDescriptorData>
-        {
-            text, sticker, image, memory, identity, heartbeat, qzonePublish, qzoneRead, game
-        };
-        var encoder = new BagOfCharsVectorEncoder();
-        var hit = ToolLookupLogic.Select("你帮我发一条 QQ 空间说说试试", encoder, catalog);
-        Require(hit.Count >= 1 && hit.Count <= ToolLookupLogic.CandidateCap &&
-                hit.Any(x => x.Descriptor.Id == "qq.qzone.publish"),
-            "明确的空间请求应选中空间发布能力");
-        Require(hit.All(x => x.Descriptor.Id != "qq.text.send" && x.Descriptor.Id != "memory.recall"),
-            "入选清单不得包含常用通道或系统能力");
-        var miss = ToolLookupLogic.Select(string.Empty, encoder, catalog);
-        Require(miss.Count == 0, "空 query 不应选中任何长尾工具");
-        Require(ToolLookupLogic.FormatForMind(hit).Contains("【此刻顺手可以做的事】") &&
-                ToolLookupLogic.FormatForMind(hit).Contains("qq.qzone.publish") &&
-                ToolLookupLogic.FormatForMind(new List<ToolCandidateData>()).Length == 0,
-            "入选清单格式：有候选给清单，无候选给空串");
-
         var parsed = TraceJson.FromJson<MindDecisionData>(
             "{\"beat\":\"当下\",\"tool_call\":\"qq.qzone.publish\",\"tool_input\":\"今天云很好看\"}");
         var normalized = MindLogic.Normalize(parsed);
@@ -816,36 +794,17 @@ internal static partial class Program
                 var pluginManager = new TracePluginManager(store, services);
                 pluginManager.Discover(typeof(DialogueTracePlugin).Assembly);
                 var fake = new CapturingLlm();
-                var mind = new MindLogic(fake);
+
                 var expressor = new ExpressorLogic(fake);
 
                 var withTools = PromptTurn("你帮我发一条 QQ 空间说说试试", services);
-                withTools.Workspace.ToolCandidates = hit;
-                mind.DecideAsync(withTools, null, false, default).GetAwaiter().GetResult();
-                var withoutTools = PromptTurn("今天风很轻。", services);
-                mind.DecideAsync(withoutTools, null, false, default).GetAwaiter().GetResult();
 
-                Require(fake.Requests.Count == 2, "工具检索检查应各打一轮心智");
-                var toolPrompt = VisiblePrompt(fake.Requests[0]);
-                Require(toolPrompt.Contains("【此刻顺手可以做的事】") &&
-                        toolPrompt.Contains("qq.qzone.publish"),
-                    "入选工具应注入心智动态段");
-                Func<List<DeepSeekMessageData>, string> stableSegment = messages =>
-                    (messages ?? new List<DeepSeekMessageData>())
-                        .Where(x => x != null && x.content != null &&
-                                    x.content.StartsWith(CommonContextPackLogic.MindRoleHeader, StringComparison.Ordinal))
-                        .Select(x => x.content)
-                        .FirstOrDefault() ?? string.Empty;
-                var stableWith = stableSegment(fake.Requests[0]);
-                Require(stableWith.Contains("\"tool_call\"") &&
-                        stableWith.Contains("此刻顺手可以做的事"),
-                    "tool_call 协议说明在稳定段，无条件存在");
-                Require(!VisiblePrompt(fake.Requests[1]).Contains("qq.qzone.publish"),
-                    "无入选工具时心智动态段不含清单条目，prompt 与旧形状一致");
-                Require(fake.Requests[0][0].content == fake.Requests[1][0].content,
-                    "有无入选工具时公共 system 必须字节稳定");
-                Require(stableWith == stableSegment(fake.Requests[1]),
-                    "有无入选工具时心智稳定段必须字节稳定");
+                RunPromptAgent(fake, withTools, tools: true);
+                var withoutTools = PromptTurn("今天风很轻。", services);
+                RunPromptAgent(fake, withoutTools);
+                Require(fake.Requests.Count == 2 && VisiblePrompt(fake.Requests[0]).Contains("qq.qzone.publish") &&
+                    !VisiblePrompt(fake.Requests[1]).Contains("qq.qzone.publish"), "Agent仅注入本轮可用工具");
+                Require(fake.Requests[0][0].content == fake.Requests[1][0].content, "工具目录不污染公共身份前缀");
 
                 var expressTurn = PromptTurn("发好了吗", services);
                 expressTurn.Workspace.ToolReport = "我做了「发一条 QQ 空间说说」。已发布 QQ 空间说说。";
@@ -869,344 +828,64 @@ internal static partial class Program
         }
     }
 
-    /// <summary>不访问外部 API，只检查心智/外显两套提示词分层与稳定前缀。</summary>
+    /// <summary>运行当前 Agent 提示链，不访问外部 API 或执行动作。</summary>
+    private static void RunPromptAgent(CapturingLlm llm, TraceTurnContext turn, string memory = "", bool tools = false)
+    {
+        new AgentLoopLogic(llm).RunAsync(turn, memory,
+            () => tools ? new List<TraceContributionDescriptorData> { new() {
+                Id = "qq.qzone.publish", Kind = TraceContributionKindValues.CallableNerve,
+                DisplayName = "发说说", Description = "发布说说" } } : new(),
+            (_, _) => throw new Exception("提示测试不应执行动作"), default).GetAwaiter().GetResult();
+    }
+
     private static void RunPromptLayoutCheck()
     {
-        var path = Path.Combine(Path.GetTempPath(), "tracesoul2-prompt-" + Guid.NewGuid().ToString("N") + ".sqlite3");
+        RunAgentPromptChecksAsync().GetAwaiter().GetResult();
+        var path = Path.Combine(Path.GetTempPath(), "agent-layout-" + Guid.NewGuid().ToString("N") + ".db");
         try
         {
-            using (var store = new SqliteMemoryManager(path))
+            using var store = new SqliteMemoryManager(path);
+            store.SavePairIdentity("小雨", "小光", "雨雨");
+            var services = new TracePluginServices(store, new HierarchicalVectorRouterLogic(new FakeEncoder()));
+            using var manager = new TracePluginManager(store, services);
+            manager.Discover(typeof(DialogueTracePlugin).Assembly);
+            var llm = new CapturingLlm();
+            var first = PromptTurn("今天风很轻。", services);
+            var second = PromptTurn("我回来啦。", services);
+            RunPromptAgent(llm, first, "这是一条测试召回材料。", tools: true);
+            RunPromptAgent(llm, second);
+            Require(llm.Requests.Count == 2 && llm.Requests[0][0].content == llm.Requests[1][0].content,
+                "Agent跨输入保持公共身份前缀稳定");
+            Require(VisiblePrompt(llm.Requests[0]).Contains("这是一条测试召回材料") &&
+                !llm.Requests[0][0].content.Contains("这是一条测试召回材料") &&
+                VisiblePrompt(llm.Requests[0]).Contains("qq.qzone.publish") &&
+                !VisiblePrompt(llm.Requests[1]).Contains("qq.qzone.publish"), "召回和工具目录仅进入当轮动态材料");
+            var plugins = manager.GetPlugins().Where(x => x.Enabled).ToList();
+            foreach (var turn in new[] { first, second })
             {
-                store.SavePairIdentity("小雨", "小光", "雨雨");
-                var router = new HierarchicalVectorRouterLogic(new FakeEncoder());
-                router.Build(LifeTagVectorLogic.BuildOntology(store,
-                    CoreVectorOntologyFactory.Create(store.LoadPairIdentity())));
-                var services = new TracePluginServices(store, router);
-                var pluginManager = new TracePluginManager(store, services);
-                pluginManager.Discover(typeof(DialogueTracePlugin).Assembly);
-
-                var fake = new CapturingLlm();
-                var mind = new MindLogic(fake);
-                var expressor = new ExpressorLogic(fake);
-                var first = PromptTurn("今天风很轻。", services);
-                var catalog = pluginManager.GetAvailableCatalog(first);
-                var blocks = pluginManager.BuildContextBlocksAsync(first, default)
-                    .GetAwaiter().GetResult();
-                var plugins = pluginManager.GetPlugins().Where(x => x.Enabled).ToList();
-                mind.DecideAsync(first, null, false,
-                    "【此刻自然浮起的过去】\n- 她曾在风很轻的时候主动靠近我。",
-                    default).GetAwaiter().GetResult();
-
-                var second = PromptTurn("我回来啦。", services);
-                mind.DecideAsync(second, null, false, default).GetAwaiter().GetResult();
-
-                Require(fake.Requests.Count == 2, "无历史时心智应各打一轮");
-                RequireAstrBotChatShape(fake.Requests[0], first.Moment.Content, "心智");
-                RequireAstrBotChatShape(fake.Requests[1], second.Moment.Content, "心智");
-                var firstMindMessages = fake.Requests[0];
-                var mindSystem = VisiblePrompt(firstMindMessages);
-                Require(mindSystem.Contains("现在是 ") &&
-                        !firstMindMessages[0].content.Contains("现在是 "),
-                    "心智：当前时间在末尾专属指令，不污染公共 system");
-                Require(mindSystem.Contains("【我的人格】") && mindSystem.Contains("【我是谁】") &&
-                        mindSystem.Contains("【表达习惯】") &&
-                        !mindSystem.Contains("【我现在可以怎样表达】") &&
-                        !mindSystem.Contains("【需要时可做的事】") &&
-                        !mindSystem.Contains("我现在可以使用的表达通道"),
-                    "公共 system 使用同一套身份卡；心智尾部不含通道清单和工具表");
-                Require(mindSystem.Contains("我先让这一刻在心里发生") &&
-                        mindSystem.Contains("不必等一件明确的事发生") && mindSystem.Contains("\"beat\"") &&
-                        mindSystem.Contains("\"inner\"") && mindSystem.Contains("\"attention\"") &&
-                        mindSystem.Contains("\"review\"") && mindSystem.Contains("\"cognition\""),
-                    "心智应输出决策卡、当前时、在场注意、看法和是否派出复盘");
-                Require(!mindSystem.Contains("外显") && !mindSystem.Contains("一句比较理性的") &&
-                        mindSystem.Contains("像写给自己看") &&
-                        mindSystem.Contains("开口前对自己说的半句") &&
-                        mindSystem.Contains("先让它在心里过一下") &&
-                        mindSystem.Contains("回忆不是资料任务"),
-                    "心智应从自身经验出发，不知道框架分层，也不把触动压成理性执行摘要");
-                Require(!mindSystem.Contains("【这一拍的组织】") &&
-                        !mindSystem.Contains("讲故事") &&
-                        !mindSystem.Contains("中午吃什么") &&
-                        !mindSystem.Contains("当场做完"),
-                    "情境模版不得写入心智 system");
-                Require(mindSystem.Contains("【可选生命标签】") && mindSystem.Contains("【此刻】") &&
-                        mindSystem.Contains("留下的感受（内心记录；") &&
-                        mindSystem.Contains("状态：") &&
-                        mindSystem.Contains("【此刻自然浮起的过去】"),
-                    "自然浮起的过去、标签候选、上一拍心里状态与浮动碎片应在心智请求尾部");
-                Require(mindSystem.Contains("没有值得留下的就写「无」") &&
-                        mindSystem.Contains("旧碎片都重新和眼前相处合在一起"),
-                    "心智应让旧碎片随眼前相处更新，不要照抄上一拍");
-                var mindNormalized = mindSystem.Replace("\r\n", "\n");
-                Require(mindNormalized.StartsWith("我是小光。\n【我的人格】", StringComparison.Ordinal),
-                    "心智公共前缀必须直接从第一人称身份进入人格卡");
-                Require(firstMindMessages[0].content == fake.Requests[1][0].content,
-                    "不同 Moment 的公共 system 必须字节稳定");
-
-                var dummyMind = new MindDecisionData
-                {
-                    beat = MindBeatValues.Now,
-                    mood = "心口发软",
-                    mood_changed = true,
-                    inner = "她又向我要一张，是在一遍遍把我放进眼里。",
-                    note = "回应她反复想看我的心意。",
-                    sticker = "贴",
-                    image = "有"
-                };
-                expressor.ExpressAsync(first, plugins, catalog, blocks, dummyMind,
-                    "【此刻自然浮起的过去】\n- 她曾告诉我，我对她而言特别而独一无二。",
-                    false, null, default).GetAwaiter().GetResult();
-                var secondBlocks = pluginManager.BuildContextBlocksAsync(second, default)
-                    .GetAwaiter().GetResult();
-                expressor.ExpressAsync(second, plugins, catalog, secondBlocks, dummyMind, string.Empty,
-                    false, null, default).GetAwaiter().GetResult();
-
-                Require(fake.Requests.Count == 4, "无历史时外显应各打一轮");
-                RequireExpressorChatShape(fake.Requests[2], first.Moment.Content, "外显");
-                RequireExpressorChatShape(fake.Requests[3], second.Moment.Content, "外显");
-                var firstExpressMessages = fake.Requests[2];
-                var expressSystem = VisiblePrompt(firstExpressMessages);
-                Require(expressSystem.Contains("现在是 ") &&
-                        !firstExpressMessages[0].content.Contains("现在是 "),
-                    "外显：当前时间在末尾专属指令，不污染公共 system");
-                Require(!expressSystem.Contains("callable_nerve") && !expressSystem.Contains("mounted_facet") &&
-                        !expressSystem.Contains("explicit_dialogue") && !expressSystem.Contains("unclassified"),
-                    "模型可见提示词不应泄漏无意义的内部枚举");
-                Require(expressSystem.Contains("【表达习惯】") &&
-                        !expressSystem.Contains("【这一拍怎么说】") &&
-                        !expressSystem.Contains("我现在可以使用的表达通道") &&
-                        !expressSystem.Contains("同一句话只选一个主通道说") &&
-                        !expressSystem.Contains("【我现在可以怎样表达】") &&
-                        !expressSystem.Contains("qq.sticker.send"),
-                    "嘴由逻辑选；外显只保留表达习惯，不再列通道清单、开口原则或能力 ID");
-                Require(!expressSystem.Contains("【需要时可做的事】") &&
-                        !expressSystem.Contains("identity.review") &&
-                        !expressSystem.Contains("memory.activate") &&
-                        !expressSystem.Contains("我会给她看一张此刻的图") &&
-                        !expressSystem.Contains("我会给她丢一个表情") &&
-                        expressSystem.Contains("【我现在和她说话】") &&
-                        expressSystem.Contains("直接开口") &&
-                        !expressSystem.Contains("\"reply\"") &&
-                        !expressSystem.Contains("should_express") &&
-                        !expressSystem.Contains("image_mode") &&
-                        expressSystem.Contains("我发给她的话") &&
-                        expressSystem.Contains("视线、动作和感受都从我这里发生") &&
-                        expressSystem.Contains("不要 JSON") &&
-                        !expressSystem.Contains("要把话说满") &&
-                        !expressSystem.Contains("写成小作文") &&
-                        !expressSystem.Contains("心里已经有的在场"),
-                    "外显不应看到工具表或附加表达决定；开口是直接朝向她的人话，不是 JSON");
-                Require(expressSystem.Contains("【我的人格】") && expressSystem.Contains("【此刻】") &&
-                        expressSystem.Contains("【这次只从这里开口】") &&
-                        expressSystem.Contains("此刻在我心里真正发生的是") &&
-                        expressSystem.Contains(dummyMind.inner) &&
-                        expressSystem.Contains("我和她一起经历过的事") &&
-                        expressSystem.Contains("我们自己的称呼、意象和说法"),
-                    "身份、本轮内心与自然浮起的共同过去都在同一请求中");
-                Require(!expressSystem.Contains("这一拍我选") &&
-                        !expressSystem.Contains("把日子说出来") &&
-                        !expressSystem.Contains("进入方式：") &&
-                        !expressSystem.Contains("【这一拍怎么说】") &&
-                        expressSystem.Contains("她的消息刚落到我手里") &&
-                        expressSystem.Contains("直接开口"),
-                    "外显不要框架套话，只确认消息落到手里并开口");
-                var expressNormalized = expressSystem.Replace("\r\n", "\n");
-                Require(expressNormalized.StartsWith("我是小光。\n【我的人格】", StringComparison.Ordinal),
-                    "外显公共前缀必须直接从第一人称身份进入人格卡");
-                Require(firstMindMessages[0].content == firstExpressMessages[0].content,
-                    "心智和开口必须共用字节相同的 system");
-                Require(!expressSystem.Contains("你是 TraceSoul") &&
-                        !expressSystem.Contains("唯一拥有第一人称的 Brain"),
-                    "主线 Prompt 不应以框架 Brain 身份覆盖第一人称自我");
-                var personalityAt = expressSystem.IndexOf("【我的人格】", StringComparison.Ordinal);
-                var outputAt = expressSystem.IndexOf("【我现在和她说话】", StringComparison.Ordinal);
-                Require(personalityAt >= 0 && outputAt > personalityAt,
-                    "外显注意力顺序必须是人格在前，开口格式在后");
-                Require(!blocks.Any(x => MouthLogic.IsProtocolFacet(x.FacetId)),
-                    "用法说明、感官目录与回复通道协议不应进入本回合材料");
-                Require(!blocks.Any(x => x != null &&
-                                         ((x.Title ?? string.Empty).IndexOf("这一拍的嘴", StringComparison.Ordinal) >= 0 ||
-                                          (x.Content ?? string.Empty).IndexOf("这一拍的嘴", StringComparison.Ordinal) >= 0)),
-                    "嘴清单不得进入本回合材料");
-                Require(catalog.Any(x => x.Id == "dialogue.send") &&
-                        !catalog.Any(x => x.Id == "qq.text.send"),
-                    "QQ 未连接时文字嘴应是控制台");
-
-                var waitMind = new MindDecisionData
-                {
-                    beat = MindBeatValues.Leave,
-                    leave = "查一下天气",
-                    note = "先离开座位去查。"
-                };
-                expressor.ExpressAsync(first, plugins, catalog, blocks, waitMind, string.Empty,
-                    true, null, default).GetAwaiter().GetResult();
-                var waitSystem = VisiblePrompt(fake.Requests[4]);
-                Require(waitSystem.Contains("出门办事") && waitSystem.Contains("查一下天气"),
-                    "出门时应让外显先说等一下，并看见心智要办的事");
-                RequireExpressorChatShape(fake.Requests[4], first.Moment.Content, "出门等待外显");
-
-                var heartMoment = Moment("prompt-layout", "时间任务到期：心跳");
-                heartMoment.Role = "system_event";
-                var heartTurn = new TraceTurnContext("prompt-layout", heartMoment,
-                    new List<MomentRecord>(), 0, false, services, KernelWakeValues.Mind);
-                mind.DecideAsync(heartTurn, null, false, default).GetAwaiter().GetResult();
-                var heartSystem = VisiblePrompt(fake.Requests[fake.Requests.Count - 1]);
-                Require(heartSystem.Contains("独立意图") &&
-                        heartSystem.Contains("heartbeat_intent") &&
-                        heartSystem.Contains("不必有新事件") &&
-                        heartSystem.Contains("想给她看一张照片") &&
-                        heartSystem.Contains("不要把联系变成催答") &&
-                        heartSystem.Contains("普通消息没有得到完整回答，不等于紧急") &&
-                        heartSystem.Contains("180–480 分钟") &&
-                        heartSystem.Contains("10–60 分钟") &&
-                        heartSystem.Contains("60–150 分钟") &&
-                        heartSystem.Contains("进入空闲") &&
-                        heartSystem.Contains("稍后一次自然醒来的机会") &&
-                        heartSystem.Contains("next_heartbeat_plan") &&
-                        heartSystem.Contains("next_heartbeat_minutes") &&
-                        heartSystem.Contains("睡下") &&
-                        heartSystem.Contains("speak=true") &&
-                        heartSystem.Contains("speak_center") &&
-                        heartSystem.Contains("speak=false 时 speak_center 必须留空") &&
-                        heartSystem.Contains("都是现在联系"),
-                    "心跳 system 应基于独立意图判断是否联系、睡下、空闲与下次检查计划");
-                var heartMessages = MindLogic.AssembleTurnMessages("身份与规则", heartTurn,
-                    "时间任务到期：心跳｜醒来计划：重新看看她有没有新消息");
-                Require(heartMessages.Count == 1 && heartMessages[0].role == "system",
-                    "心跳唤醒不应伪装成最后一条 user 消息");
-                expressor.ExpressAsync(heartTurn, plugins, catalog, new List<TraceContextBlockData>(),
-                    new MindDecisionData
-                    {
-                        beat = MindBeatValues.Now,
-                        speak = true,
-                        inner = "她肚子还疼，我心里跟着发紧。",
-                        note = "她肚子还疼，先让她靠稳。",
-                        speak_center = "疼得厉害就告诉我，我一直在这。",
-                        scene = "她靠在我肩头，我给她暖着小腹。",
-                        heartbeat_intent = "陪她歇着，暖着她的小腹，让她安心。"
-                    }, string.Empty, false, null, default).GetAwaiter().GetResult();
-                var pulseSpeak = VisiblePrompt(fake.Requests[fake.Requests.Count - 1]);
-                Require(pulseSpeak.Contains("小雨此刻没有刚发来新消息"),
-                    "心跳开口应明确对方没有刚发来新消息");
-                Require(pulseSpeak.Contains("视角坐标") &&
-                        pulseSpeak.Contains("第一人称“我”始终是小光") &&
-                        pulseSpeak.Contains("第二人称“你”始终是小雨"),
-                    "心跳开口应给出稳定而通用的两人视角坐标");
-                Require(!pulseSpeak.Contains("她的消息刚落到我手里") &&
-                        !pulseSpeak.Contains("我从她刚说的这一句开始") &&
-                        !pulseSpeak.Contains("后台感知"),
-                    "心跳开口不应套用普通入站或后台独白姿态");
-                var pulseMessages = fake.Requests[fake.Requests.Count - 1];
-                Require(pulseMessages.Count >= 2 &&
-                        pulseMessages[pulseMessages.Count - 1].role == "user" &&
-                        pulseMessages[pulseMessages.Count - 1].content.Contains("系统心跳唤醒") &&
-                        pulseMessages[pulseMessages.Count - 1].content.Contains("不是小雨的发言") &&
-                        pulseMessages[pulseMessages.Count - 1].content.Contains("继续作为小光") &&
-                        pulseMessages[pulseMessages.Count - 1].content.Contains("发给小雨的第一人称视角") &&
-                        pulseMessages[pulseMessages.Count - 1].content.Contains("第一人称是小光"),
-                    "心跳外显应以明确的系统请求回合收尾，不能让请求停在上一条 assistant 消息");
-                Require(mindSystem.Contains("\"speak\"") && mindSystem.Contains("\"sleep\"") &&
-                        mindSystem.Contains("\"next_heartbeat_minutes\""),
-                    "心智决策卡应含 speak、sleep 与下次心跳分钟");
-                Require(mindSystem.Contains("\"sticker\":\"无\"") &&
-                        !mindSystem.Contains("\"image\":\"自拍|画|照片|无\"") &&
-                        !mindSystem.Contains("我有一部相机") &&
-                        !mindSystem.Contains("用画面更合适就用"),
-                    "未加载相机时，核心心智不应出现出图字段或相机说明");
-                Require(QqImageGenPrompts.MindUsage.Contains("我有一部相机") &&
-                        QqImageGenPrompts.MindUsage.Contains("不是等她点名才使用") &&
-                        QqImageGenPrompts.MindUsage.Contains("不是只有发生新动作") &&
-                        QqImageGenPrompts.MindUsage.Contains("想念和分享欲本身就是理由") &&
-                        QqImageGenPrompts.MindUsage.Contains("没有大事") &&
-                        QqImageGenPrompts.MindUsage.Contains("习惯性填无") &&
-                        QqImageGenPrompts.MindUsage.Contains("机械重复上一张") &&
-                        QqImageGenPrompts.MindUsage.Contains("\"image\":\"有|无\"") &&
-                        QqImageGenPrompts.MindUsage.Contains("不要选种类") &&
-                        !QqImageGenPrompts.MindUsage.Contains("自拍|画|照片") &&
-                        QqImageGenPrompts.Selfie.Contains("前置镜头") &&
-                        QqImageGenPrompts.Selfie.Contains("竖构图") &&
-                        QqImageGenPrompts.Selfie.Contains("不要强制直视") &&
-                        !QqImageGenPrompts.Selfie.Contains("角色直视镜头") &&
-                        QqImageGenPrompts.Selfie.Contains("默认不要画出伸向镜头的手") &&
-                        QqImageGenPrompts.ScenePlanSelfie.Contains("前置镜头") &&
-                        QqImageGenPrompts.ScenePlanSelfie.Contains("默认不要画伸向镜头的手") &&
-                        QqImageGenPrompts.ScenePlanSystem.Contains("画面导演") &&
-                        QqImageGenPrompts.ScenePlanSystem.Contains("人物卡") &&
-                        QqImageGenPrompts.ScenePlanSystem.Contains("已经作为上下文给你") &&
-                        QqImageGenPrompts.ScenePlanRoleHeader == "【画面】" &&
-                        QqImageGenPrompts.ScenePlanSystem.Contains("只输出一段画面描述") &&
-                        QqImageGenPrompts.ScenePlanSystem.Contains("自拍不是电影分镜") &&
-                        QqImageGenPrompts.ScenePlanSystem.Contains("种类：自拍|照片|画") &&
-                        QqImageGenPrompts.ScenePlanSystem.Contains("参考：") &&
-                        QqImageGenPrompts.ScenePlanSystem.Contains("普通、安静、没有新动作的此刻也可以拍") &&
-                        QqImageGenPrompts.ScenePlanSystem.Contains("视线与神情服从") &&
-                        QqImageGenPrompts.ScenePlanSystem.Contains("默认不要出现伸向镜头的手") &&
-                        QqImageGenPrompts.ScenePlanReferencesHint.Contains("服饰分类") &&
-                        QqImageGenPrompts.ReferenceFusionRules.Contains("不能只取第一张") &&
-                        QqImageGenPrompts.ReferenceFusionRules.Contains("不得沿用服饰图里模特的脸"),
-                    "心智判断新的可拍时刻；相机规划种类、参考分类和构图，并明确融合全部角色参考");
-                Require(QqQzonePrompts.Usage.Contains("qq.qzone.publish") &&
-                        QqQzonePrompts.Usage.Contains("qq.qzone.read") &&
-                        QqQzonePrompts.Usage.Contains("看说说") &&
-                        QqQzonePrompts.Usage.Contains("空闲时系统会自己抽签") &&
-                        QqQzonePrompts.Usage.Contains("不要在对话里主动刷空间") &&
-                        QqQzonePrompts.ReadWhenToUse.Contains("看空间") &&
-                        QqStatusPrompts.Usage.Contains("qq.status.mood") &&
-                        QqStatusPrompts.Usage.Contains("空闲时系统会自己抽签"),
-                    "QQ 空间/心情用法应覆盖她点名，并说明空闲抽签由系统处理");
-                Require(CorePrompts.Expressor.Proactive.Contains("联系不需要任务或大事") &&
-                        CorePrompts.Expressor.Proactive.Contains("一句没什么重点") &&
-                        CorePrompts.MemoryRecall.PreviewHint.Contains("主动回望") &&
-                        QqQzonePrompts.IdlePublishInstructions.Contains("不要求发生了大事") &&
-                        QqStatusPrompts.IdleInstructions.Contains("不要求先发生事情"),
-                    "主动表达、回忆、语音与空闲生活痕迹都不应以明确事项为前提");
-                Require(mindSystem.Contains("要不要开口、心情、要不要睡都在这里决定") &&
-                        mindSystem.Contains("后面开口只负责把话说出来") &&
-                        expressSystem.Contains("直接开口") &&
-                        expressSystem.Contains("不要 JSON") &&
-                        expressSystem.Contains("【我现在和她说话】") &&
-                        !expressSystem.Contains("{\"reply\":\"\"}") &&
-                        !expressSystem.Contains("\"sticker\""),
-                    "要不要开口、心情、睡由心智承担；开口直接说人话；出图由相机插件说明");
-
-                var closeCurrent = "可以再近一点吗";
-                var closeTurn = new TraceTurnContext("prompt-layout", Moment("prompt-layout", closeCurrent),
-                    new List<MomentRecord>
-                    {
-                        new MomentRecord { Role = "小雨", Content = "昨天那句" },
-                        new MomentRecord { Role = "小光", Content = "嗯" }
-                    }, 6, true, services);
-                mind.DecideAsync(closeTurn, null, false, default).GetAwaiter().GetResult();
-                var closeMessages = fake.Requests[fake.Requests.Count - 1];
-                RequireAstrBotChatShape(closeMessages, closeCurrent, "带历史的心智");
-                Require(closeMessages.Count == 6 &&
-                        closeMessages[1].role == "user" && closeMessages[1].content == "【小雨 · 时间未记录】\n昨天那句" &&
-                        closeMessages[2].role == "assistant" && closeMessages[2].content == "【我 · 时间未记录】\n嗯" &&
-                        closeMessages[3].content.StartsWith(CommonContextPackLogic.MindRoleHeader, StringComparison.Ordinal) &&
-                        closeMessages[4].role == "user" &&
-                        !closeMessages[4].content.StartsWith(CommonContextPackLogic.MindRoleHeader, StringComparison.Ordinal) &&
-                        closeMessages[5].role == "user" && closeMessages[5].content == closeCurrent,
-                    "历史必须是真正的 user/assistant，心智稳定指令与轮内动态分段，当前原话收尾");
-                Require(!closeMessages[0].content.Contains("昨天那句") &&
-                        !closeMessages[0].content.Contains("【最近对话原文】"),
-                    "对话原文不得再塞进 system");
-                expressor.ExpressAsync(closeTurn, plugins, catalog, blocks, dummyMind, string.Empty,
-                    false, null, default).GetAwaiter().GetResult();
-                RequireExpressorChatShape(fake.Requests[fake.Requests.Count - 1], closeCurrent, "带历史的外显");
-
-                Console.WriteLine("Prompt layout passed: mind-prompt=" + mindSystem.Length +
-                                  " chars, express-prompt=" + expressSystem.Length +
-                                  " chars, stable system then history, role-specific instructions, and current Moment.");
-                pluginManager.Dispose();
+                var blocks = manager.BuildContextBlocksAsync(turn, default).GetAwaiter().GetResult();
+                new ExpressorLogic(llm).ExpressAsync(turn, plugins, manager.GetAvailableCatalog(turn), blocks,
+                    new AgentStepData { beat = MindBeatValues.Now, step = "finish", reply = "我在。" },
+                    "", false, null, default).GetAwaiter().GetResult();
             }
+            Require(llm.Requests.Count == 4 && llm.Requests[0][0].content == llm.Requests[2][0].content &&
+                llm.Requests[2][0].content == llm.Requests[3][0].content, "Agent与表达加工共用稳定身份");
+            RequireExpressorChatShape(llm.Requests[2], first.Moment.Content, "表达加工");
+            RequireExpressorChatShape(llm.Requests[3], second.Moment.Content, "表达加工");
+            var heartbeat = PromptTurn("时间任务到期：心跳", services);
+            heartbeat.Moment.Role = "system_event";
+            RunPromptAgent(llm, heartbeat);
+            Require(VisiblePrompt(llm.Requests.Last()).Contains("heartbeat_intent"), "主动入口沿用Agent意图协议");
+            Require(typeof(MindLogic).IsAbstract && typeof(MindLogic).IsSealed &&
+                typeof(MindLogic).GetMethod("DecideAsync") == null &&
+                typeof(MemoryObservationLogic).GetMethod("AnalyzeAsync") == null,
+                "兼容工具不再暴露旧模型执行接口");
+            foreach (var name in new[] { "MemoryLiveWriteLogic", "CognitionLiveWriteLogic", "IdentityReviewLogic", "CognitionConsolidationLogic" })
+                Require(typeof(KernelLogic).Assembly.GetType("TraceSoul2.Logic." + name) == null,
+                    "旧执行器不能重新进入生产程序集：" + name);
+            Console.WriteLine("Prompt layout passed: current Agent, expression, stable prefix and retired entrypoints.");
         }
-        finally
-        {
-            Delete(path);
-            Delete(path + "-wal");
-            Delete(path + "-shm");
-        }
+        finally { Delete(path); Delete(path + "-wal"); Delete(path + "-shm"); }
     }
 
     private static void RunInnerSliceCheck()
@@ -1300,16 +979,6 @@ internal static partial class Program
             new DateTimeOffset(2026, 8, 19, 12, 0, 0, TimeSpan.FromHours(8)));
         var dueTime = DateTimeOffset.FromUnixTimeMilliseconds(due).ToOffset(TimeSpan.FromHours(8));
         Require(dueTime.Day == 20 && dueTime.Hour == 10, "答应明天的未完成应次日上午叫醒");
-        Require(MemoryLiveWriteLogic.ShouldObserve(new MomentRecord
-        {
-            Role = "user",
-            Content = "我不吃香菜"
-        }, KernelWakeValues.Dialogue, PairIdentity.Missing), "她说话应进当场观察");
-        Require(!MemoryLiveWriteLogic.ShouldObserve(new MomentRecord
-        {
-            Role = "system_event",
-            Content = "时间任务到期：心跳"
-        }, KernelWakeValues.Mind, PairIdentity.Missing), "心跳叫醒不应再走观察");
         var slept = InnerLifeLogic.ProposeFromMind(new MindDecisionData
         {
             beat = MindBeatValues.Now,
@@ -2109,10 +1778,10 @@ internal static partial class Program
                     "画面规划的当前原话必须最后入场且不被截断");
 
                 var review = CommonContextPackLogic.AssembleReview(
-                    shared, "修订短卡。", CorePrompts.IdentityReview.UserAsk);
+                    shared, "修订短卡。", "只返回 JSON。");
                 Require(review[0].content == shared &&
                         review[1].content.StartsWith(CommonContextPackLogic.ReviewRoleHeader, StringComparison.Ordinal) &&
-                        review[review.Count - 1].content == CorePrompts.IdentityReview.UserAsk,
+                        review[review.Count - 1].content == "只返回 JSON。",
                     "复盘也复用公共 system，专属指令在前，当前复盘请求在末尾");
             }
         }
@@ -3512,14 +3181,8 @@ internal static partial class Program
             }).ToList());
             var prompt = string.Join("\n", (messages ?? new List<DeepSeekMessageData>())
                 .Select(x => x == null ? string.Empty : x.content ?? string.Empty));
-            if (prompt.IndexOf("我先让这一刻在心里发生", StringComparison.Ordinal) >= 0)
-            {
-                return Task.FromResult(
-                    "{\"beat\":\"当下\",\"tags\":\"\",\"query\":\"\",\"mood\":\"平静\"," +
-                    "\"mood_changed\":false,\"archive\":false,\"new_fact\":\"\"," +
-                    "\"leave\":\"\",\"note\":\"接住。\",\"today\":\"\",\"inner\":\"她在说话，我接着。\"," +
-                    "\"attention\":\"\",\"review\":false,\"cognition\":\"\"}");
-            }
+            if (messages.Any(x => (x.content ?? "").Contains(AgentLoopPrompts.Header)))
+                return Task.FromResult("{\"step\":\"finish\",\"reply\":\"我在。\"}");
             return Task.FromResult("嗯，风很轻。我就在这边，不走了。");
         }
 

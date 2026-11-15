@@ -27,6 +27,7 @@ namespace TraceSoul2.Host
 
         private readonly DeepSeekConfigData config;
         private readonly bool singleAttempt;
+        private readonly bool retryTransientFailures;
         private LlmUsageData lastUsage;
 
         private static readonly string LlmDumpDir =
@@ -47,8 +48,13 @@ namespace TraceSoul2.Host
         public GeminiClientManager(DeepSeekConfigData config) : this(config, false) { }
 
         public GeminiClientManager(DeepSeekConfigData config, bool singleAttempt)
+            : this(config, singleAttempt, false) { }
+
+        // Allow transport backoff without enabling empty-content/semantic retries.
+        public GeminiClientManager(DeepSeekConfigData config, bool singleAttempt, bool retryTransientFailures)
         {
             this.singleAttempt = singleAttempt;
+            this.retryTransientFailures = retryTransientFailures;
             this.config = config ?? throw new ArgumentNullException("config");
             if (string.IsNullOrWhiteSpace(this.config.BaseUrl))
                 this.config.BaseUrl = "https://generativelanguage.googleapis.com/";
@@ -137,7 +143,7 @@ namespace TraceSoul2.Host
                         throw;
                     }
                     catch (Exception exception) when (
-                        !singleAttempt && totalRequests < 3 && transientRetry < Math.Min(2, config.TransientErrorRetries) &&
+                        (!singleAttempt || retryTransientFailures) && totalRequests < 3 && transientRetry < Math.Min(2, config.TransientErrorRetries) &&
                         DeepSeekClientManager.IsRetryableProviderException(exception))
                     {
                         transientRetry++;

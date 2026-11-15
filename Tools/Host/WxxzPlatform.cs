@@ -52,6 +52,9 @@ namespace TraceSoul2.Host
         public string ActiveCallId=>CallId;
         private bool BackgroundBusy => MonitorStatus?.Invoke().active == true;
         private string activeCheckId;
+        private string manualRecordingId;
+        public bool ManualRecording => manualRecordingId != null;
+        private bool manualAudioHeld;
         public string SessionId => session;
         public string ContextConversationId { get; private set; }
         public TracePluginMetadataData Metadata { get; } = new()
@@ -94,12 +97,21 @@ namespace TraceSoul2.Host
         }
         public void Shutdown()
         {
+            var manual=manualRecordingId;manualRecordingId=null;
+            if(manualAudioHeld){manualAudioHeld=false;bodyAudio.Release();}
+            if(manual!=null)_=CancelShutdownManualAsync(manual);
             string pending;
             lock(callSync) {pending=currentCall?.ListenId;currentCall=null;}
             attention.Stop();session=null;captureId=capturedText=capturedRawText=capturedCallId=null;
             displayState.Reset(null);
             voiceprint.ClearPending();requests.Clear();
             if(pending!=null) _=CancelShutdownCaptureAsync(pending);
+        }
+        private async Task CancelShutdownManualAsync(string id)
+        {
+            try {using var bounded=new CancellationTokenSource(TimeSpan.FromSeconds(5));
+                await Request("api/manual/cancel",new {recording_id=id},bounded.Token);}
+            catch {Diagnostics.Add("manual","cancel_unconfirmed","手动录音取消未确认；板端最多录音30秒，不自动发送。");}
         }
         private async Task CancelShutdownCaptureAsync(string listenId)
         {
@@ -115,7 +127,7 @@ namespace TraceSoul2.Host
             privateSession = exclusive, delivery, voice = VoiceDescription, speech = speech?.Public(), input = "板载麦克风听写 / 管理员手动文字",
             voiceprint = voiceprint.Status(), callId = CallId, wake = attention.Configuration(), attention = attention.State(),
             monitor = MonitorStatus?.Invoke(), diagnostics = Diagnostics.Snapshot(), wakeAudio = WakeAudioStatus(), companionDisplay,
-            displayState = DisplayState(), deviceControl=DeviceControlStatus?.Invoke() };
+            displayState = DisplayState(), deviceControl=DeviceControlStatus?.Invoke(), manualRecording = manualRecordingId != null };
         public WxxzDisplay.Snapshot DisplayState()
         {
             bool wake;lock(callSync)wake=currentCall?.WakeMode==true;
@@ -155,6 +167,12 @@ namespace TraceSoul2.Host
         {
             if (CallId != null || BackgroundBusy) throw new InvalidOperationException("请先结束通话再修改调试阈值。");
             voiceprint.ConfigureDiagnostic(settings);
+            return Status();
+        }
+        public object ConfigureVoicePolicy(WxxzVoiceprint.PolicySettings settings)
+        {
+            if (CallId != null || BackgroundBusy) throw new InvalidOperationException("请先结束通话再修改声纹门槛。");
+            voiceprint.ConfigurePolicy(settings);
             return Status();
         }
         public object PreviewAttention(string text, bool focused, string speaker) => attention.Preview(text,focused,speaker);
@@ -198,6 +216,7 @@ namespace TraceSoul2.Host
         private async Task<JsonElement> SpeakAsync(string text, CancellationToken token, bool wake = false, object display = null,
             WxxzDisplay.Ticket displayTicket = null)
         {
+            if(manualRecordingId!=null)throw new InvalidOperationException("请先结束手动录音再播放。");
             var acquired=false;
             try
             {
@@ -247,6 +266,8 @@ namespace TraceSoul2.Host
 
         private async Task<JsonElement> Request(string path, object body, CancellationToken token)
         {
+            if(manualRecordingId!=null && path is "api/listen" or "api/utterance" or "api/voice/sample" or "api/speak")
+                throw new InvalidOperationException("请先结束本次手动录音。");
             using var request = new HttpRequestMessage(HttpMethod.Post, path)
             { Content = new StringContent(JsonSerializer.Serialize(body), Encoding.UTF8, "application/json") };
             if(bridgeKey.Length>0)request.Headers.Authorization=new AuthenticationHeaderValue("Bearer",bridgeKey);
@@ -276,7 +297,7 @@ namespace TraceSoul2.Host
                     receipts.GetArrayLength() == 0 || receipts.EnumerateArray().Any(x => !Valid(x, "done")))
                     throw new InvalidOperationException("WXXZ 未收到完整播放完成回执；未重发。");
             }
-            else if (!json.RootElement.TryGetProperty("receipt", out var receipt) || !Valid(receipt, path is "api/status" or "api/device/control" ? "ready" : "done"))
+            else if (!json.RootElement.TryGetProperty("receipt", out var receipt) || !Valid(receipt, path is "api/status" or "api/device/control" or "api/manual/start" or "api/manual/cancel" ? "ready" : "done"))
                 throw new InvalidOperationException("WXXZ 未收到有效板端回执；未重发。");
             return json.RootElement.Clone();
         }
@@ -302,6 +323,40 @@ namespace TraceSoul2.Host
             if (capturedText.Length > 4000) throw new InvalidOperationException("听写结果超长；未提交。");
             captureId = capturedText.Length > 0 ? Guid.NewGuid().ToString("N") : null;
             return new { text = capturedText, rawText = capturedRawText, corrected = capturedRawText != capturedText, captureId, details = result };
+        }
+        public sealed record ManualCapture(string text, string captureId, int recordedMs);
+        public async Task<object> StartManualAsync(string expectedSession, CancellationToken token)
+        {
+            if(session==null || session!=expectedSession || CallId!=null || BackgroundBusy || manualRecordingId!=null)
+                throw new InvalidOperationException("请先连接会话并结束自动通话，再开始说话。");
+            if(!await bodyAudio.WaitAsync(0,token))throw new InvalidOperationException("设备正在播放或采音，请稍候。");
+            manualAudioHeld=true;manualRecordingId=Guid.NewGuid().ToString("N");
+            // Keep the ID on an unknown acknowledgement so Stop/Cancel can recover.
+            try {await Request("api/manual/start",new {recording_id=manualRecordingId},CancellationToken.None);}
+            finally {manualAudioHeld=false;bodyAudio.Release();}
+            return Status();
+        }
+        public async Task<ManualCapture> StopManualAsync(string expectedSession, bool cancel, CancellationToken token)
+        {
+            if(session==null || session!=expectedSession || manualRecordingId==null)
+                throw new InvalidOperationException("没有本会话的待结束录音，请勿重复发送。");
+            var id=manualRecordingId;
+            try
+            {
+                var result=await Request(cancel?"api/manual/cancel":"api/manual/stop",new {recording_id=id},CancellationToken.None);
+                if(cancel)return new("",null,0);
+                capturedCallId=null;capturedVoiceScore=null;
+                capturedRawText=result.GetProperty("text").GetString()?.Trim()??"";
+                capturedText=attention.Correct(capturedRawText).Text;
+                if(capturedText.Length>4000)throw new InvalidOperationException("听写结果超长，未发送。");
+                captureId=capturedText.Length>0?Guid.NewGuid().ToString("N"):null;
+                return new(capturedText,captureId,result.GetProperty("recorded_ms").GetInt32());
+            }
+            finally
+            {
+                manualRecordingId=null;
+                if(manualAudioHeld){manualAudioHeld=false;bodyAudio.Release();}
+            }
         }
 
         public async Task<object> EnrollAsync(string expectedSession, bool restart, CancellationToken token, int? sampleNumber = null, string requestId = null)
@@ -361,6 +416,7 @@ namespace TraceSoul2.Host
 
         public void ValidateCallStart(string expectedSession, bool wakeMode = false, bool background = false)
         {
+            if(manualRecordingId!=null)throw new InvalidOperationException("请先结束手动录音。");
             if (!background && BackgroundBusy) throw new InvalidOperationException("后台监听尚未结束，请勿重复采音。");
             if (session == null || expectedSession != session) throw new InvalidOperationException("请先连接 WXXZ 会话。");
             if (!voiceprint.IsEnrolled) throw new InvalidOperationException("请先录入本人声纹，再开始自动语音通话。");
@@ -555,7 +611,7 @@ namespace TraceSoul2.Host
 
         public async Task<object> StartAsync(bool privateSession, CancellationToken token)
         {
-            if (CallId != null || BackgroundBusy) throw new InvalidOperationException("请先结束语音通话。");
+            if (CallId != null || BackgroundBusy || manualRecordingId!=null) throw new InvalidOperationException("请先结束语音通话或手动录音。");
             if (services == null) throw new InvalidOperationException("WXXZ 插件未启用。");
             var status=await Request("api/status", new { }, token);
             companionDisplay=status.TryGetProperty("display_version",out var version)&&version.GetInt32()==1;

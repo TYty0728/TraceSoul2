@@ -7,5 +7,8 @@ bool device_control_update(const char *controller,uint32_t ack,bool active,bool 
 void device_control_receipt(char *out,size_t size,uint32_t id);
 DeviceControlState device_control_state();
 bool device_control_start();
+bool device_control_record();
+void device_control_finish();
 void device_control_stop();
 void device_control_tick();
+void device_control_upload(bool active);

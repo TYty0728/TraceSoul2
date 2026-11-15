@@ -41,6 +41,20 @@ class Link:
 
 
 class BridgeChecks(unittest.TestCase):
+    def test_mobile_output_pipelines_bounded_packets_and_checks_every_receipt(self):
+        class WindowLink(Link):
+            maximum = 0
+            def write(self, data):
+                super().write(data)
+                self.maximum = max(self.maximum, sum(r['status']=='chunk' for r in self.replies))
+        board=bridge.Board('unused');board.connection=link=WindowLink()
+        board.wifi=type('Settings',(),{'status':lambda _:{'mode':'relay'}})()
+        payload=b'x'*307200
+        self.assertEqual(board.transact('frame',payload)['status'],'done')
+        self.assertEqual(bytes(link.payload),payload)
+        self.assertEqual(link.maximum,8)
+        self.assertTrue(link.closed)
+
     def test_timeout_split_json_receipt_is_reassembled_without_replaying(self):
         class SplitLink:
             def __init__(self):self.parts=iter([b'{"protocol":1,"id":7,',b'',b'"status":"done","received":20}\\n'])
@@ -48,8 +62,23 @@ class BridgeChecks(unittest.TestCase):
         board=bridge.Board('fake');board.connection=SplitLink()
         self.assertEqual(board._reply(7,'done',20)['received'],20)
 
+    def test_mobile_short_speech_uses_one_whole_buffer_and_still_rejects_bad_receipts(self):
+        pcm=b'\x11\0'*(48000*10)
+        for fail in (False,True):
+            with self.subTest(fail=fail):
+                board=bridge.Board('unused');board.connection=link=Link(fail_at=fail)
+                board.wifi=type('Settings',(),{'status':lambda _:{'mode':'relay'}})()
+                if fail:
+                    with self.assertRaises(RuntimeError):board.transact('audio_stream',pcm)
+                else:
+                    self.assertEqual(board.transact('audio_stream',pcm)['status'],'done')
+                    self.assertEqual(bytes(link.payload),pcm)
+                self.assertEqual(link.header['op'],'audio')
+                self.assertTrue(link.closed)
+
     def test_stream_packets_are_checked_and_one_final_receipt_completes_reply(self):
         class StreamLink(Link):
+            maximum=0
             def write(self, data):
                 if self.header is None:
                     super().write(data)
@@ -58,14 +87,17 @@ class BridgeChecks(unittest.TestCase):
                     block=data[:-4]
                     self_test.assertEqual(struct.unpack('<I',data[-4:])[0],bridge.checksum(block))
                     super().write(block)
+                    self.maximum=max(self.maximum,sum(r['status']=='chunk' for r in self.replies))
         self_test=self
         board=bridge.Board('fake');board.connection=link=StreamLink()
+        board.wifi=type('Settings',(),{'status':lambda _:{'mode':'relay'}})()
         pcm=b'\x11\0'*(48000*11)
         result=board.transact('audio_stream',pcm)
         self.assertEqual(link.header['op'],'audio_stream')
         self.assertEqual(bytes(link.payload),pcm)
         self.assertEqual(result['received'],len(pcm))
         self.assertEqual(result['status'],'done')
+        self.assertEqual(link.maximum,32)
 
     def test_old_firmware_gets_no_stream_payload_and_no_segmented_fallback(self):
         board=bridge.Board('fake');board.connection=link=Link()

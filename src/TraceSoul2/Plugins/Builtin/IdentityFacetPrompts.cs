@@ -1,6 +1,6 @@
 namespace TraceSoul2.Plugins.Builtin
 {
-    /// <summary>身份插件提示词。复盘正文在 CorePrompts.IdentityReview。</summary>
+    /// <summary>身份插件提示词。按需身份演化由 IdentityEvolutionLogic 执行。</summary>
     public static class IdentityFacetPrompts
     {
         public const string ReviewWhenToUse =

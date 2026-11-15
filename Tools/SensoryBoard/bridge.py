@@ -18,6 +18,8 @@ import tempfile
 import threading
 import time
 import wave
+import urllib.request
+import urllib.error
 from http.server import BaseHTTPRequestHandler, ThreadingHTTPServer
 
 from PIL import Image, ImageDraw, ImageFont, ImageOps
@@ -181,10 +183,13 @@ def board_request(method):
         with self.lock:
             try:
                 return method(self, *args, **kwargs)
+            except Exception:
+                self.close()
+                raise
             finally:
                 # One authenticated TLS session owns one complete command/stream.
                 # Idle periods and power-bank reconnects cannot reuse a stale socket.
-                if self.wifi is not None and self.wifi.status()['mode'] == 'wifi':
+                if self.wifi is not None and self.wifi.status()['mode'] in ('wifi', 'relay'):
                     self.close()
     return request
 
@@ -216,7 +221,7 @@ class Board:
 
     def _connect(self):
         if self.connection is None:
-            if self.wifi is not None and self.wifi.status()['mode'] == 'wifi':
+            if self.wifi is not None and self.wifi.status()['mode'] in ('wifi', 'relay'):
                 from wifi_link import WifiLink
                 self.connection = WifiLink(self.wifi.profile)
                 return
@@ -264,6 +269,12 @@ class Board:
             raise ValueError('图片动效标志只用于显示帧')
         with self.lock:
             try:
+                started = time.monotonic()
+                mobile = self.wifi is not None and self.wifi.status()['mode'] == 'relay'
+                # Existing firmware can verify and buffer up to ten seconds before playback.
+                # On mobile links this avoids starving the 1.4-second streaming prefill.
+                if mobile and op == 'audio_stream' and len(payload) <= 48000 * 2 * 10:
+                    op = 'audio'
                 self._connect()
                 command_id = secrets.randbelow(0x7FFFFFFE) + 1
                 header = {'id': command_id, 'op': op, 'size': len(payload), 'checksum': checksum(payload)}
@@ -272,12 +283,21 @@ class Board:
                 result = self._reply(command_id, 'ready')
                 if op == 'audio_stream' and result.get('audio_stream_version') != 1:
                     raise RuntimeError('连续播放需要开发板固件 0.4.7 或更新版本；未发送音频')
-                for offset in range(0, len(payload), CHUNK):
-                    block = payload[offset:offset + CHUNK]
-                    self.connection.write(block + struct.pack('<I', checksum(block)) if op == 'audio_stream' else block)
-                    self._reply(command_id, 'chunk', offset + len(block), timeout=8)
+                window = (32 if op == 'audio_stream' else 8) if mobile else 1
+                for start in range(0, len(payload), CHUNK * window):
+                    offsets = list(range(start, min(len(payload), start + CHUNK * window), CHUNK))
+                    for offset in offsets:
+                        block = payload[offset:offset + CHUNK]
+                        self.connection.write(block + struct.pack('<I', checksum(block)) if op == 'audio_stream' else block)
+                    for offset in offsets:
+                        self._reply(command_id, 'chunk', min(offset + CHUNK, len(payload)), timeout=8)
+                transferred_ms = round((time.monotonic() - started) * 1000)
                 if payload:
                     result = self._reply(command_id, 'done', len(payload), timeout=20)
+                if op in ('audio', 'audio_stream') and payload:
+                    print(json.dumps(dict(event='playback_metrics', mode='relay' if mobile else 'direct',
+                        operation=op, audio_ms=len(payload)//96, transfer_ms=transferred_ms,
+                        elapsed_ms=round((time.monotonic()-started)*1000))), flush=True)
                 return result
             except Exception:
                 self.close()
@@ -321,6 +341,36 @@ class Board:
             except Exception:
                 self.close()
                 raise
+
+    @board_request
+    def manual_record(self, operation, recording_id):
+        if operation not in ('start', 'stop', 'cancel') or not isinstance(recording_id, str) or not re.fullmatch('[0-9a-f]{32}', recording_id):
+            raise ValueError('Invalid manual recording request')
+        self._connect()
+        command_id = secrets.randbelow(0x7FFFFFFE) + 1
+        self.connection.write(json.dumps({'id': command_id, 'op': 'manual_' + operation, 'recording_id': recording_id}).encode() + b'\n')
+        ready = self._reply(command_id, 'ready')
+        if operation != 'stop':
+            return None, ready
+        captured = self._reply(command_id, 'captured', timeout=10)
+        size = captured.get('size')
+        if type(size) is not int or not 0 < size <= 48000 * 2 * 30 or size % 2 or captured.get('sample_rate') != 48000:
+            raise RuntimeError('Manual recording format mismatch')
+        data = bytearray()
+        for offset in range(0, size, CHUNK):
+            expected = min(CHUNK, size - offset)
+            block = bytearray()
+            deadline = time.monotonic() + 8
+            while len(block) < expected and time.monotonic() < deadline:
+                block.extend(self.connection.read(expected - len(block)))
+            if len(block) != expected:
+                raise TimeoutError('完整录音上传失败；未听写或发送')
+            data.extend(block)
+            self.connection.write(json.dumps({'id': command_id, 'ack': len(data)}).encode() + b'\n')
+        receipt = self._reply(command_id, 'done', size)
+        if checksum(data) != captured.get('checksum'):
+            raise RuntimeError('完整录音校验失败；未听写或发送')
+        return bytes(data), receipt
 
     @board_request
     def record(self, duration_ms=8000):
@@ -495,7 +545,38 @@ def make_handler(board, font_path, asr=None, vad=None, speaker=None, listen_coun
             return self.headers.get('Host') in hosts and self.headers.get('Origin') in (
                 None, f'http://127.0.0.1:{port}', f'http://localhost:{port}')
 
+        def proxy_qwen(self, body=None):
+            # Fixed loopback destination, narrow routes, upstream-owned API key.
+            # No caller-supplied URLs, credentials in logs, redirects or proxy env.
+            if board is None:
+                return self.respond(409, {'error': 'preview_only'})
+            authorization = self.headers.get('Authorization', '')
+            if not re.fullmatch(r'Bearer [A-Za-z0-9_-]{32,256}', authorization):
+                return self.respond(401, {'error': 'tts_auth_required'})
+            payload = json.dumps(body).encode() if body is not None else None
+            if payload is not None and len(payload) > 16384:
+                return self.respond(413, {'error': 'tts_request_too_large'})
+            class NoRedirect(urllib.request.HTTPRedirectHandler):
+                def redirect_request(self, *args, **kwargs):
+                    return None
+            request = urllib.request.Request('http://127.0.0.1:5088' + self.path[len('/qwen'):],
+                data=payload, headers={'Authorization': authorization, 'Content-Type': 'application/json'})
+            try:
+                with urllib.request.build_opener(urllib.request.ProxyHandler({}), NoRedirect()).open(request, timeout=180) as response:
+                    data = response.read(24*1024*1024+1)
+                    if len(data) > 24*1024*1024:
+                        return self.respond(502, {'error': 'tts_response_too_large'})
+                    return self.respond(200, data, response.headers.get('Content-Type', 'application/octet-stream'))
+            except urllib.error.HTTPError as error:
+                return self.respond(401 if error.code == 401 else 502, {'error': 'local_tts_rejected'})
+            except (OSError, urllib.error.URLError):
+                return self.respond(502, {'error': 'local_tts_unavailable'})
+
         def do_GET(self):
+            if self.path == '/qwen/v1/models':
+                if not self.allowed():
+                    return self.respond(403, {'error': 'local_only'})
+                return self.proxy_qwen()
             if not self.allowed():
                 return self.respond(403, {'error': '仅允许本机页面访问'})
             if self.path == '/':
@@ -526,6 +607,8 @@ def make_handler(board, font_path, asr=None, vad=None, speaker=None, listen_coun
                 request_read_ms = round((time.monotonic() - request_started) * 1000)
                 if not isinstance(request, dict):
                     raise ValueError('请求应为对象')
+                if self.path == '/qwen/v1/audio/speech':
+                    return self.proxy_qwen(request)
                 if self.path == '/api/display/preview':
                     image, layout = display.render(request)
                     return self.respond(200, {'ok':True, 'preview':preview(image), 'display':layout})
@@ -556,6 +639,18 @@ def make_handler(board, font_path, asr=None, vad=None, speaker=None, listen_coun
                     layout['preview_only'] = False
                 elif self.path == '/api/status':
                     result = board.transact('hello')
+                elif self.path in ('/api/manual/start', '/api/manual/stop', '/api/manual/cancel'):
+                    if asr is None:
+                        raise ValueError('本地听写模型尚未加载')
+                    operation = self.path.rsplit('/', 1)[1]
+                    started = time.monotonic()
+                    pcm, receipt = board.manual_record(operation, request.get('recording_id'))
+                    if operation == 'stop':
+                        result = asr.transcribe(pcm)
+                        print(json.dumps(dict(event='manual_recording_metrics', recorded_ms=len(pcm)//96,
+                            upload_and_asr_ms=round((time.monotonic()-started)*1000))), flush=True)
+                        return self.respond(200, dict(ok=True, receipt=receipt, recorded_ms=len(pcm)//96, **result))
+                    return self.respond(200, dict(ok=True, receipt=receipt))
                 elif self.path == '/api/capture/state':
                     key = request.get('listen_id')
                     if not isinstance(key, str) or not re.fullmatch('[0-9a-f]{32}', key):

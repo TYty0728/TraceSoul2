@@ -59,19 +59,34 @@ def identity():
 
 class WifiLink:
     def __init__(self, profile, port=5443):
-        address = ipaddress.ip_address(profile['host'])
-        if address.version != 4 or not address.is_private or address.is_multicast or address.is_unspecified:
-            raise ValueError('开发板地址必须为本地局域网IPv4地址')
+        mobile = profile.get('mode') == 'relay'
+        if mobile:
+            target = (profile['relay_host'], profile['relay_port'])
+        else:
+            address = ipaddress.ip_address(profile['host'])
+            if address.version != 4 or not address.is_private or address.is_multicast or address.is_unspecified:
+                raise ValueError('开发板地址必须为本地局域网IPv4地址')
+            target = (str(address), port)
         context = ssl.SSLContext(ssl.PROTOCOL_TLS_CLIENT)
         context.minimum_version = ssl.TLSVersion.TLSv1_2
         context.load_verify_locations(cadata=profile['certificate'])
-        raw = socket.create_connection((str(address), port), timeout=8)
+        raw = socket.create_connection(target, timeout=8)
         try:
             raw.setsockopt(socket.IPPROTO_TCP, socket.TCP_NODELAY, 1)
+            if mobile:
+                from mobile_relay import register
+                register(raw, profile['relay_key'], 'controller')
             self.connection = context.wrap_socket(raw, server_hostname=profile['server_name'])
             self.connection.settimeout(0.2)
             self.write(json.dumps(dict(token=profile['token'])).encode() + b'\n')
-            if json.loads(self.read_until(b'\n', 256)).get('authenticated') is not True:
+            # A mobile network may need more than the normal 250 ms read poll.
+            response = bytearray()
+            deadline = time.monotonic() + 8
+            while time.monotonic() < deadline and len(response) < 256:
+                response.extend(self.read(1))
+                if response.endswith(b'\n'):
+                    break
+            if not response.endswith(b'\n') or json.loads(response).get('authenticated') is not True:
                 raise RuntimeError('开发板鉴权失败')
         except Exception:
             raw.close()
@@ -122,8 +137,10 @@ class WifiSettings:
         self.profile = json.loads(self.path.read_text(encoding='utf-8')) if self.path.is_file() else None
 
     def status(self):
+        profile = self.profile or {}
         return dict(mode=(self.profile or {}).get('mode', 'usb'),
-                    paired=self.profile is not None, host=(self.profile or {}).get('host', ''))
+                    paired=self.profile is not None,
+                    host=profile.get('relay_host', '') if profile.get('mode') == 'relay' else profile.get('host', ''))
 
     def setup(self, board, ssid, password):
         if not isinstance(ssid, str) or not 1 <= len(ssid.encode()) <= 32 or '\0' in ssid:
@@ -146,7 +163,7 @@ class WifiSettings:
             return dict(saved=True, message='已保存到开发板并重启。稍候点击检查Wi-Fi状态。')
 
     def switch(self, board, mode):
-        if mode not in ('wifi', 'usb'):
+        if mode not in ('wifi', 'usb', 'relay'):
             raise ValueError('未知连接方式')
         with board.lock:
             if mode == 'usb':
@@ -157,13 +174,25 @@ class WifiSettings:
                 return self.status()
             if not self.profile:
                 raise ValueError('请先通过USB配网')
+            if mode == 'relay':
+                if not all(self.profile.get(k) for k in ('relay_host', 'relay_port', 'relay_key')):
+                    raise ValueError('尚未配置移动网络中继')
+                candidate = dict(self.profile, mode='relay')
+                board.close()
+                link = WifiLink(candidate)
+                link.close()
+                save_private(self.path, candidate)
+                self.profile = candidate
+                return self.status()
             if self.profile.get('mode') == 'usb':
                 state = board.transact('hello')
                 if not state.get('wifi_connected'):
                     raise ValueError('开发板尚未连上Wi-Fi；请稍候，或核对2.4GHz网络和密码')
                 candidate = dict(self.profile, host=state['wifi_ip'], mode='wifi')
-            else:
+            elif self.profile.get('mode') == 'wifi':
                 candidate = dict(self.profile)
+            else:
+                raise ValueError('请先切回USB，再读取开发板局域网地址')
             # Authenticate the new path before committing a transport change.
             board.close()
             link = WifiLink(candidate)

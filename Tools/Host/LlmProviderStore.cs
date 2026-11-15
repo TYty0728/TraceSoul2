@@ -493,10 +493,10 @@ namespace TraceSoul2.Host
                     config.Temperature = data.reviewTemperature ?? 0.2f;
                     config.TimeoutSeconds = 600;
                 }
-                // Review owns one retry allowance; disable provider-level nested retries.
+                // Share provider backoff for routine review; an explicit review attempt owns its outer budget.
                 ILlmClient client = LlmProviderCatalog.IsGeminiNative(item.type)
-                    ? new GeminiClientManager(config, singleAttempt: review)
-                    : new DeepSeekClientManager(config, singleAttempt: review);
+                    ? new GeminiClientManager(config, singleAttempt: review, retryTransientFailures: !reviewAttempt)
+                    : new DeepSeekClientManager(config, singleAttempt: review, retryTransientFailures: !reviewAttempt);
                 if (reviewAttempt) client = new ReviewTransportClient(client);
                 return new ProtectedLlmClient(client, Protection, review);
             }
@@ -525,8 +525,8 @@ namespace TraceSoul2.Host
                     if (!seen.Add(MainRouteKey(item, slot.model))) continue;
                     var config = ToConfig(item, slot.model, null);
                     clients.Add(LlmProviderCatalog.IsGeminiNative(item.type)
-                        ? new GeminiClientManager(config, singleAttempt: true)
-                        : new DeepSeekClientManager(config, singleAttempt: true));
+                        ? new GeminiClientManager(config, singleAttempt: true, retryTransientFailures: true)
+                        : new DeepSeekClientManager(config, singleAttempt: true, retryTransientFailures: true));
                 }
                 // Only an exhausted route becomes a persistent error; a recovered request is successful.
                 return clients.Count == 0 ? null : new ProtectedLlmClient(new MainModelFallbackClient(clients, log), Protection);

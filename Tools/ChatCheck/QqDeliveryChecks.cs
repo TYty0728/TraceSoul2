@@ -104,13 +104,13 @@ internal static partial class Program
 
                     var fake = new CapturingLlm();
                     services.MindTurnPromptAppends.Add(t => CameraSharingContext.Build(t, 6, 6));
-                    var mind = new MindLogic(fake);
-                    mind.DecideAsync(turn, null, false, default).GetAwaiter().GetResult();
+
+                    RunPromptAgent(fake, turn);
                     var request = fake.Requests.Last();
                     Require(VisiblePrompt(request).Contains("【相机此刻】") &&
                             !request[0].content.Contains("【相机此刻】"), "发图反馈只能进入动态提示，不能污染身份 system");
                     services.MindTurnPromptAppends.Clear();
-                    mind.DecideAsync(turn, null, false, default).GetAwaiter().GetResult();
+                    RunPromptAgent(fake, turn);
                     Require(!VisiblePrompt(fake.Requests.Last()).Contains("【相机此刻】") &&
                             request[0].content == fake.Requests.Last()[0].content,
                         "卸载反馈后不残留相机状态，公共身份前缀不变");

@@ -15,6 +15,8 @@ public sealed class WxxzVoiceprint
     private readonly string path;
     private readonly Func<DateTimeOffset> now;
     private long diagnosticUntil;
+    private bool persistentBypass;
+    private string PolicyPath => path == null ? null : path + ".policy.json";
     public sealed record DiagnosticSettings(double threshold = Threshold, int durationSeconds = 300);
     private bool DiagnosticActive => System.Threading.Interlocked.Read(ref diagnosticUntil) > now().ToUnixTimeMilliseconds();
     public void ConfigureDiagnostic(DiagnosticSettings settings)
@@ -23,6 +25,7 @@ public sealed class WxxzVoiceprint
             settings.durationSeconds is < 1 or > 900)
             throw new ArgumentException("调试阈值只支持0或0.65，有效期为1～900秒。");
         if (settings.threshold == 0 && !IsEnrolled) throw new InvalidOperationException("请先录入本人声纹。");
+        if (settings.threshold == Threshold && persistentBypass) ConfigurePolicy(new(Threshold));
         System.Threading.Interlocked.Exchange(ref diagnosticUntil, settings.threshold == 0
             ? now().AddSeconds(settings.durationSeconds).ToUnixTimeMilliseconds() : 0);
     }
@@ -35,7 +38,15 @@ public sealed class WxxzVoiceprint
     }
     private Sample[] pending;
     public WxxzVoiceprint(string path, Func<DateTimeOffset> now = null)
-    { this.path = path; this.now = now ?? (() => DateTimeOffset.UtcNow); }
+    {
+        this.path = path; this.now = now ?? (() => DateTimeOffset.UtcNow);
+        try
+        {
+            if (PolicyPath != null && File.Exists(PolicyPath) && new FileInfo(PolicyPath).Length <= 1024)
+                persistentBypass = JsonSerializer.Deserialize<PolicySettings>(File.ReadAllText(PolicyPath))?.threshold == 0;
+        }
+        catch (Exception e) when (e is IOException or UnauthorizedAccessException or JsonException) { }
+    }
     public object Status()
     {
         var saved = LoadSamples();
@@ -45,11 +56,29 @@ public sealed class WxxzVoiceprint
             legacyProfile = IsEnrolled && saved == null,
             slots = slots.Select((s, i) => new { number = i + 1, accepted = s != null,
                 speechMs = s?.speech_ms ?? 0, text = s?.text ?? "" }).ToArray(),
-            threshold = DiagnosticActive ? 0 : Threshold, diagnosticBypass = DiagnosticActive,
+            threshold = persistentBypass || DiagnosticActive ? 0 : Threshold, diagnosticBypass = DiagnosticActive,
+            persistentBypass,
             diagnosticUntilUnixMs = System.Threading.Interlocked.Read(ref diagnosticUntil),
             decisionBasis = "whole_utterance", calibrated = false };
     }
     public void ClearPending() { pending = null; }
+    public sealed record PolicySettings(double threshold = Threshold);
+    public void ConfigurePolicy(PolicySettings settings)
+    {
+        if (settings == null || (settings.threshold != 0 && settings.threshold != Threshold))
+            throw new ArgumentException("声纹门槛只支持0（放行所有声音）或0.65（核验本人）。");
+        if (PolicyPath == null) throw new InvalidOperationException("声纹设置目录未配置。");
+        Directory.CreateDirectory(Path.GetDirectoryName(PolicyPath));
+        var temporary = PolicyPath + "." + Guid.NewGuid().ToString("N") + ".tmp";
+        try
+        {
+            File.WriteAllText(temporary, JsonSerializer.Serialize(settings));
+            File.Move(temporary, PolicyPath, true);
+        }
+        finally { if (File.Exists(temporary)) File.Delete(temporary); }
+        persistentBypass = settings.threshold == 0;
+        System.Threading.Interlocked.Exchange(ref diagnosticUntil, 0);
+    }
 
     private static double[] Vector(JsonElement json)
     {
@@ -158,6 +187,7 @@ public sealed class WxxzVoiceprint
     }
     public (bool matched, double? score) Match(JsonElement voice)
     {
+        if (persistentBypass) return (true, null);
         var profile = Load();
         if (profile == null) return (false, null);
         var bypass = DiagnosticActive;
@@ -183,7 +213,8 @@ public sealed class WxxzVoiceprint
             return new { profileReady = true, speechMs, wholeScore, windowScores,
                 windowMs = voice.GetProperty("windows").EnumerateArray().Select(w => w.GetProperty("speech_ms").GetInt32()).ToArray(),
                 score = wholeScore, minimumWindowScore = windowScores.Min(), decisionBasis = "whole_utterance",
-                threshold = Threshold, matched = rawWholeScore >= Threshold };
+                threshold = persistentBypass || DiagnosticActive ? 0 : Threshold,
+                matched = persistentBypass || DiagnosticActive || rawWholeScore >= Threshold };
         }
         catch (Exception e) when (e is InvalidOperationException or KeyNotFoundException or FormatException)
         { return new { profileReady = true, reason = "本次有效语音不足或声纹特征不可用，请自然连续说话后再试。" }; }

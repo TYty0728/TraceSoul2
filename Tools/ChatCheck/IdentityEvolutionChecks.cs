@@ -20,7 +20,6 @@ internal static partial class Program
 
     private static async Task RunIdentityEvolutionChecksAsync()
     {
-        await RunCognitionComparisonChecksAsync();
         var directory = Path.Combine(Path.GetTempPath(), "daily-identity-" + Guid.NewGuid().ToString("N"));
         Directory.CreateDirectory(directory); var path = Path.Combine(directory, "brain.db");
         const string root = "tracesoul2", day = "2020-09-01";

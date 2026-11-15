@@ -634,12 +634,25 @@ app.MapPost("/wxxz/speech/test", async (SoulRuntime runtime, WxxzMomentWrite bod
     Results.Json(await runtime.VoiceWxxzAsync("speech_test", body.sessionId, null, false, token)));
 app.MapPost("/wxxz/listen", async (SoulRuntime runtime, WxxzMomentWrite body, CancellationToken token) =>
     Results.Json(await runtime.ListenWxxzAsync(body.sessionId, token)));
+app.MapPost("/wxxz/manual/start", async (SoulRuntime runtime, WxxzMomentWrite body, CancellationToken token) =>
+    Results.Json(await runtime.StartManualWxxzAsync(body.sessionId,token)));
+app.MapPost("/wxxz/manual/stop", async (SoulRuntime runtime, WxxzMomentWrite body, CancellationToken token) =>
+{
+    var capture=await runtime.StopManualWxxzAsync(body.sessionId,false,token);
+    if(capture.captureId==null)return Results.Json(new {text="",recordedMs=capture.recordedMs,turn=(object)null});
+    var turn=await runtime.PostWxxzAsync(capture.text,body.sessionId,body.requestId,token,capture.captureId);
+    return Results.Json(new {capture.text,capture.recordedMs,turn});
+});
+app.MapPost("/wxxz/manual/cancel", async (SoulRuntime runtime, WxxzMomentWrite body, CancellationToken token) =>
+    Results.Json(await runtime.StopManualWxxzAsync(body.sessionId,true,token)));
 app.MapPost("/wxxz/voice/enroll", async (SoulRuntime runtime, WxxzMomentWrite body, CancellationToken token) =>
     Results.Json(await runtime.VoiceWxxzAsync("enroll", body.sessionId, null, body.restart, token, body.requestId, body.sampleNumber)));
 app.MapPost("/wxxz/voice/check", async (SoulRuntime runtime, WxxzMomentWrite body, CancellationToken token) =>
     Results.Json(await runtime.VoiceWxxzAsync("check", body.sessionId, null, false, token, body.requestId)));
 app.MapPut("/wxxz/voice/diagnostic", async (SoulRuntime runtime, WxxzVoiceprint.DiagnosticSettings body, CancellationToken token) =>
     Results.Json(await runtime.ExclusiveAsync(() => runtime.Wxxz.ConfigureVoiceDiagnostic(body), token)));
+app.MapPut("/wxxz/voice/policy", async (SoulRuntime runtime, WxxzVoiceprint.PolicySettings body, CancellationToken token) =>
+    Results.Json(await runtime.ExclusiveAsync(() => runtime.Wxxz.ConfigureVoicePolicy(body), token)));
 // Progress must remain readable while a diagnostic holds the runtime gate.
 app.MapPost("/wxxz/voice/check/state", async (SoulRuntime runtime, WxxzMomentWrite body, CancellationToken token) =>
     Results.Json(await runtime.Wxxz.CheckVoiceStateAsync(body.sessionId, body.requestId, token)));

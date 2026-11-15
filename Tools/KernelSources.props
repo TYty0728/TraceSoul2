@@ -9,7 +9,6 @@
     <Compile Include="$(MSBuildThisFileDirectory)../src/TraceSoul2/Logic/LlmContentRejectionLogic.cs" />
     <Compile Include="$(MSBuildThisFileDirectory)../src/TraceSoul2/Logic/IdentityEvolutionLogic.cs" />
     <Compile Include="$(MSBuildThisFileDirectory)../src/TraceSoul2/Manager/SqliteIdentityEvolution.cs" />
-    <Compile Include="$(MSBuildThisFileDirectory)../src/TraceSoul2/Logic/CognitionConsolidationLogic.cs" />
     <Compile Include="$(MSBuildThisFileDirectory)../src/TraceSoul2/Logic/IdentityReorganizationLogic.cs" />
     <Compile Include="$(MSBuildThisFileDirectory)../src/TraceSoul2/Manager/SqliteIdentityReorganization.cs" />
     <Compile Include="$(MSBuildThisFileDirectory)../src/TraceSoul2/Logic/PuzzleViewLogic.cs" />
@@ -64,12 +63,9 @@
     <Compile Include="$(MSBuildThisFileDirectory)../src/TraceSoul2/Logic/HeartbeatLogic.cs" />
     <Compile Include="$(MSBuildThisFileDirectory)../src/TraceSoul2/Logic/IdleDeedLogic.cs" />
     <Compile Include="$(MSBuildThisFileDirectory)../src/TraceSoul2/Logic/QzonePublishLogic.cs" />
-    <Compile Include="$(MSBuildThisFileDirectory)../src/TraceSoul2/Logic/MemoryLiveWriteLogic.cs" />
     <Compile Include="$(MSBuildThisFileDirectory)../src/TraceSoul2/Logic/MemoryArchivePolicyLogic.cs" />
-    <Compile Include="$(MSBuildThisFileDirectory)../src/TraceSoul2/Logic/CognitionLiveWriteLogic.cs" />
     <Compile Include="$(MSBuildThisFileDirectory)../src/TraceSoul2/Logic/LeaveNerveLogic.cs" />
     <Compile Include="$(MSBuildThisFileDirectory)../src/TraceSoul2/Logic/IdentityCardLogic.cs" />
-    <Compile Include="$(MSBuildThisFileDirectory)../src/TraceSoul2/Logic/IdentityReviewLogic.cs" />
     <Compile Include="$(MSBuildThisFileDirectory)../src/TraceSoul2/Logic/LifeTagVectorLogic.cs" />
     <Compile Include="$(MSBuildThisFileDirectory)../src/TraceSoul2/Logic/DeepSeekStructuredOutputLogic.cs" />
     <Compile Include="$(MSBuildThisFileDirectory)../src/TraceSoul2/Logic/LlmUsageLogic.cs" />

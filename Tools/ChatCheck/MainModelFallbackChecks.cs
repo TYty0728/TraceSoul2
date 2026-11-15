@@ -24,6 +24,7 @@ internal static partial class Program
         Directory.CreateDirectory(root);
         try
         {
+            await CheckSharedBackoffAsync(root);
             await CheckFallbackWireAsync(root);
             await CheckGlmJsonWireAsync(root);
             await CheckDeepSeekJsonBoundaryAsync();
@@ -113,12 +114,38 @@ internal static partial class Program
         var store = new LlmProviderStore(path);
         foreach (var p in providers)
             store.Upsert(new LlmProviderRecord { id = p.Id, baseUrl = p.Url, type = p.Type,
-                model = p.Id + "-model", apiKey = "test", timeout = 5, transientRetries = 2 });
+                model = p.Id + "-model", apiKey = "test", timeout = 5, transientRetries = 0 });
         store.Select(providers[0].Id, providers[0].Id + "-model");
         store.SetMainFallbacks(new MainModelFallbackSettings {
             secondary = providers.Length > 1 ? new LlmSlotRef { providerId = providers[1].Id, model = providers[1].Id + "-model" } : null,
             tertiary = providers.Length > 2 ? new LlmSlotRef { providerId = providers[2].Id, model = providers[2].Id + "-model" } : null });
         return store;
+    }
+
+    private static async Task CheckSharedBackoffAsync(string root)
+    {
+        var messages = new List<DeepSeekMessageData> { new("user", "synthetic") };
+        foreach (var native in new[] { false, true })
+        foreach (var review in new[] { false, true })
+        {
+            var ok = native ? "{\"candidates\":[{\"content\":{\"parts\":[{\"text\":\"ok\"}]},\"finishReason\":\"STOP\"}]}" : FallbackOk;
+            using var primary = new FailureHttpServer(503, "{}", call => (call < 3 ? 503 : 200, call < 3 ? "{}" : ok));
+            using var backup = new FailureHttpServer(200, FallbackOk);
+            var store = MakeFallbackStore(Path.Combine(root, Guid.NewGuid().ToString("N"), "providers.json"),
+                ("primary", primary.Url, native ? LlmProviderCatalog.GoogleGenAi : null), ("backup", backup.Url, null));
+            var record = store.Get("primary"); record.transientRetries = 2; store.Upsert(record);
+            var client = review ? store.CreateReviewClient() : store.CreateCurrentClient();
+            await client.CompleteTextAsync(messages);
+            Require(primary.Calls == 3 && backup.Calls == 0 && store.Protection.List().Count == 0,
+                "两种协议的主动/聊天路由和复盘共享供应商退避，恢复后不切备用或报告失败");
+        }
+        using var failed = new FailureHttpServer(429, "{}");
+        using var success = new FailureHttpServer(200, FallbackOk);
+        var bounded = MakeFallbackStore(Path.Combine(root, "bounded", "providers.json"),
+            ("primary", failed.Url, null), ("backup", success.Url, null));
+        var config = bounded.Get("primary"); config.transientRetries = 2; bounded.Upsert(config);
+        await bounded.CreateCurrentClient().CompleteTextAsync(messages);
+        Require(failed.Calls == 3 && success.Calls == 1, "429退避耗尽后仅切换一次备用，单通道最多三次");
     }
 
     private static async Task CheckGlmJsonWireAsync(string root)

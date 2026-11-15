@@ -11,7 +11,7 @@
 <label for="wifiSsid">Wi-Fi 名称</label><input id="wifiSsid" autocomplete="off" maxlength="32">
 <label for="wifiPassword">Wi-Fi 密码</label><input id="wifiPassword" type="password" autocomplete="off" maxlength="63">
 <p><button id="wifiSetup">保存 Wi-Fi 并重启开发板</button></p>
-<p><button id="wifiCheck">检查 Wi-Fi 状态</button> <button id="wifiUse">切换到 Wi-Fi 控制</button> <button id="wifiUsb">切回 USB</button></p>
+<p><button id="wifiCheck">检查 Wi-Fi 状态</button> <button id="wifiUse">切换到 Wi-Fi 控制</button> <button id="relayUse">切换到移动网络中继</button> <button id="wifiUsb">切回 USB</button></p>
 <div id="wifiStatus" role="status" aria-live="polite">尚未读取连接方式。</div>
 <p>Wi-Fi连接只解决开发板与控制桥通信；目标TraceSoul实例／角色配对尚未接入，不会根据网络自动选择Soul。</p>
 <p><small>先等Wi-Fi连接成功，再切换并测试屏幕／声音，之后换充电宝供电。无线连接校验USB配对的设备证书和密钥，不会降级到明文。连接方式保存在本机，重启桥后沿用。</small></p>
@@ -41,13 +41,14 @@ $('connect').onclick=()=>send('status',{});$('sendText').onclick=()=>send('text'
 async function wifiAction(path,body){
  document.querySelectorAll('button').forEach(b=>b.disabled=true);$('wifiStatus').textContent='正在处理，请等待设备回执…';
  try{const r=await fetch('/api/'+path,{method:'POST',headers:{'Content-Type':'application/json'},body:JSON.stringify(body)});const data=await r.json();if(!r.ok||!data.ok)throw Error(data.error||'未确认完成');
- if(data.wifi){const w=data.wifi;$('wifiStatus').textContent=w.message||`连接方式：${w.mode==='wifi'?'Wi-Fi（TLS加密）':'USB'}；已配对：${w.paired?'是':'否'}${w.host?'；设备地址：'+w.host:''}`;}
+ if(data.wifi){const w=data.wifi;$('wifiStatus').textContent=w.message||`连接方式：${w.mode==='relay'?'移动网络中继（TLS加密）':w.mode==='wifi'?'Wi-Fi（TLS加密）':'USB'}；已配对：${w.paired?'是':'否'}${w.host?'；设备地址：'+w.host:''}`;}
  else{const x=data.receipt;const reasons={2:'认证超时',15:'四次握手超时',200:'信标超时',201:'未找到接入点',202:'认证失败',203:'关联失败',204:'握手超时',210:'没有兼容的安全模式',211:'安全模式未达到要求',212:'信号低于要求'};$('wifiStatus').textContent=`固件：${x.firmware}；Wi-Fi：${x.wifi_connected?'已连接':'尚未连接'}${x.wifi_connected?'；地址：'+x.wifi_ip:''}${x.wifi_stage?'；阶段：'+x.wifi_stage:''}${x.wifi_error?'；初始化错误：'+x.wifi_error:''}${x.wifi_reason?'；断线原因：'+(reasons[x.wifi_reason]||'未知原因')+'（'+x.wifi_reason+'）':''}`;}
  }catch(e){$('wifiStatus').textContent='未确认完成：'+e.message;}finally{document.querySelectorAll('button').forEach(b=>b.disabled=false);}
 }
 $('wifiSetup').onclick=async()=>{try{await wifiAction('wifi/setup',{ssid:$('wifiSsid').value,password:$('wifiPassword').value});}finally{$('wifiPassword').value='';}};
 $('wifiCheck').onclick=()=>wifiAction('status',{});$('wifiUse').onclick=()=>wifiAction('wifi/mode',{mode:'wifi'});$('wifiUsb').onclick=()=>wifiAction('wifi/mode',{mode:'usb'});
-fetch('/api/wifi/state').then(r=>r.json()).then(d=>{if(d.ok){const w=d.wifi;$('wifiStatus').textContent=`当前连接方式：${w.mode==='wifi'?'Wi-Fi（TLS加密）':'USB'}；${w.paired?'已配对':'首次需要通过USB配网'}`;}}).catch(()=>{$('wifiStatus').textContent='连接方式读取失败，请检查服务。';});
+$('relayUse').onclick=()=>wifiAction('wifi/mode',{mode:'relay'});
+fetch('/api/wifi/state').then(r=>r.json()).then(d=>{if(d.ok){const w=d.wifi;$('wifiStatus').textContent=`当前连接方式：${w.mode==='relay'?'移动网络中继（TLS加密）':w.mode==='wifi'?'Wi-Fi（TLS加密）':'USB'}；${w.paired?'已配对':'首次需要通过USB配网'}`;}}).catch(()=>{$('wifiStatus').textContent='连接方式读取失败，请检查服务。';});
 async function touchAction(path){document.querySelectorAll('button').forEach(b=>b.disabled=true);try{const r=await fetch('/api/'+path,{method:'POST',headers:{'Content-Type':'application/json'},body:'{}'});const d=await r.json();if(!r.ok||!d.ok)throw Error(d.error||'未确认完成');const x=d.receipt;$('touchStatus').textContent=`触摸芯片：${x.touch_ready?'可读取':'尚未就绪'}；累计按下：${x.touch_count??'未知'}；最近坐标：${x.touch_x??'?'}，${x.touch_y??'?'}；测试：${x.touch_test?'开启':'关闭'}`;if(d.preview)$('preview').src='data:image/png;base64,'+d.preview;}catch(e){$('touchStatus').textContent='未确认完成：'+e.message;}finally{document.querySelectorAll('button').forEach(b=>b.disabled=false);}}
 $('touchTest').onclick=()=>touchAction('touch/test');$('touchCheck').onclick=()=>touchAction('status');$('touchStop').onclick=()=>touchAction('touch/stop');
 </script></html>
