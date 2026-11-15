@@ -130,7 +130,11 @@ def main():
                     api('/identity/pair', 'PUT', {'username': 'Test user', 'assname': 'Test soul'})
                     result = api('/moments', 'POST', {'content': 'Isolated fallback check'})
                     assert result['reply'] == 'offline fallback ok'
-                    assert [p for p, _ in calls] == ['/default/chat/completions', '/secondary/chat/completions', '/tertiary/chat/completions']
+                    # Each failed provider uses its configured two transient retries
+                    # before advancing; the successful tertiary is called only once.
+                    expected_calls = (['/default/chat/completions'] * 3 +
+                        ['/secondary/chat/completions'] * 3 + ['/tertiary/chat/completions'])
+                    assert [p for p, _ in calls] == expected_calls
                     assert all(body['messages'] == calls[0][1]['messages'] for _, body in calls)
                     assert maintenance_received.wait(5), 'Private turn must schedule its independent state update'
                     assert len(maintenance_calls) == 1, 'State update must not repeat the dialogue fallback chain'
@@ -139,7 +143,7 @@ def main():
                     assert not api('/runtime/failures'), 'Recovered inference must not send a failure notification'
                     api('/providers/main-fallbacks', 'PUT', {'secondary': {}, 'tertiary': {}})
                     assert not api('/providers/main-fallbacks')['secondary']['providerId']
-                    assert len(calls) == 3
+                    assert len(calls) == len(expected_calls)
                     assert len(maintenance_calls) == 1
                     print('Temporary Host fallback checks passed: auth, atomic settings, no save-time calls, three-stage inference, original context and independent state update.')
                 finally:
