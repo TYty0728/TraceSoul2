@@ -418,10 +418,12 @@ internal static partial class Program
         Require(text.Contains("本周\n1. 周1\n") && text.Contains("\n2. 周2") && !text.Contains("周3") && !text.Contains("6. 周") &&
             !text.Contains("更早的一周") && !text.Contains("还没到的一周"),
             "本周用不晚于本周一的最新周榜，注入只取 2 条");
-        Require(text.Contains("本月\n1. 九月留下的事\n") && text.Contains("本年\n1. 这一年的事\n") &&
+        Require(text.Contains("月榜（2026-09）\n1. 九月留下的事\n") && text.Contains("本年\n1. 这一年的事\n") &&
             text.Contains("永久\n1. 永久1\n") && text.Contains("\n2. 永久2") && !text.Contains("永久3") &&
             !text.Contains("这一天的终点") && !text.Contains("关系往前了") && !text.Contains("本周理由") && !text.Contains("一直记得"),
             "本月、本年、永久取当前可见榜，永久注入 2 条，注入不带上榜理由");
+        var fallback = LadderContextLogic.Reading(items.Where(x => x.PeriodKey != "2026-09-28"), now);
+        Require(fallback.Contains("周榜（2026-09-21）") && !fallback.Contains("本周\n"), "旧周榜标明真实周期");
         Console.WriteLine("Ladder context checks passed: page keeps 10/3, injection uses 5/2.");
     }
 

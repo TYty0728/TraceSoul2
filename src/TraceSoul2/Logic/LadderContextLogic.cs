@@ -56,7 +56,10 @@ namespace TraceSoul2.Logic
             foreach (var board in Boards(items, now, InjectCount))
             {
                 if (builder.Length > 0) builder.Append('\n');
-                builder.Append(board.Title).Append('\n');
+                builder.Append(board.Title);
+                if (board.IsPriorPeriod)
+                    builder.Append('（').Append(board.PeriodKey).Append('）');
+                builder.Append('\n');
                 WriteKind(builder, board.Items, "event", string.Empty);
                 WriteKind(builder, board.Items, "cognition", "认知");
             }
@@ -79,7 +82,9 @@ namespace TraceSoul2.Logic
             var chosen = pool.Where(x => x.PeriodKey == key).ToList();
             var rows = TakeKind(chosen, "event", cap).Concat(TakeKind(chosen, "cognition", cap)).ToList();
             if (rows.Count == 0) return;
-            boards.Add(new LadderBoard { Title = title, Tier = tier, PeriodKey = key, Items = rows });
+            if (key != period)
+                title = tier switch { "week" => "周榜", "month" => "月榜", "year" => "年榜", _ => title };
+            boards.Add(new LadderBoard { Title = title, Tier = tier, PeriodKey = key, IsPriorPeriod = key != period, Items = rows });
         }
 
         private static List<LadderItemRecord> TakeKind(List<LadderItemRecord> chosen, string kind, int cap)
@@ -109,6 +114,7 @@ namespace TraceSoul2.Logic
     {
         public string Title { get; set; } = string.Empty;
         public string Tier { get; set; } = string.Empty;
+        public bool IsPriorPeriod { get; set; }
         public string PeriodKey { get; set; } = string.Empty;
         public IReadOnlyList<LadderItemRecord> Items { get; set; } = Array.Empty<LadderItemRecord>();
     }

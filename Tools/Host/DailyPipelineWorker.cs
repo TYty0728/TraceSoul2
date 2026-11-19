@@ -199,7 +199,11 @@ namespace TraceSoul2.Host
                     if (await RunDayBuildAsync(day, token) != 0) { succeeded = false; break; }
                     if (DailyBuildHistory.ReadStates(HistoryPath).Any(x => x.DayKey == day && x.Status != "done")) break;
                 }
-                var pending = DailyBuildHistory.ReadStates(HistoryPath).Count(x => x.Status == "pending" || x.Status == "deferred" || x.Status == "waiting");
+                var states = DailyBuildHistory.ReadStates(HistoryPath);
+                if (succeeded && !buildGate.MaintenanceRequested && states.Any(x => x.DayKey == target && x.Status == "done") &&
+                    !states.Any(x => string.CompareOrdinal(x.DayKey, target) <= 0 && x.Status != "done"))
+                    await RunPeriodReviewsAsync(target, token);
+                var pending = states.Count(x => x.Status == "pending" || x.Status == "deferred" || x.Status == "waiting");
                 runtime.Emit(yieldedForMaintenance ? "当前日进度已保存，剩余日期等待维护结束后继续。" : succeeded ? pending > 0 ? "进度已保存，仍有" + pending + "天未完成；下次从未完成步骤继续。"
                     : "历史待补与目标日构建均已完成。" : "日构建队列已停止；旧日未完成，不会执行后续日期。");
             }
@@ -219,6 +223,45 @@ namespace TraceSoul2.Host
             if (manualRun != null) await manualRun.WaitAsync(cancellationToken);
         }
 
+        private async Task RunPeriodReviewsAsync(string through, CancellationToken token)
+        {
+            const string key = "period-review";
+            var protection = runtime.Providers.Protection;
+            if (protection.IsPaused(key)) return;
+            protection.BeginAttempt(key, "周、月复盘");
+            try
+            {
+                if (await RunMigrationAsync("promote-due", "--through", through, token) != 0)
+                    throw new InvalidOperationException("周、月复盘子进程未完成，已保存的周期将在续跑时跳过。");
+                protection.CompleteAttempt(key);
+            }
+            catch (Exception error)
+            {
+                protection.FailAttempt(key, error);
+                runtime.Emit("周、月复盘已暂停：" + FailureProtection.SafeReason(error));
+                token.ThrowIfCancellationRequested();
+            }
+        }
+
+        private async Task<int> RunMigrationAsync(string command, string option, string day, CancellationToken token)
+        {
+            var start = new ProcessStartInfo { FileName = "dotnet",
+                ArgumentList = { migrateDll, command, option, day }, UseShellExecute = false };
+            start.Environment["TRACESOUL2_DATA"] = runtime.DataDirectory;
+            using var process = Process.Start(start) ?? throw new InvalidOperationException("无法启动复盘进程。");
+            using var stop = CancellationTokenSource.CreateLinkedTokenSource(token, lifetime.Token);
+            try { await process.WaitForExitAsync(stop.Token); }
+            catch
+            {
+                if (!process.HasExited) process.Kill(entireProcessTree: true);
+                await process.WaitForExitAsync(CancellationToken.None);
+                if (command == "build")
+                    DailyBuildHistory.RecoverInterrupted(HistoryPath, "子进程被中断，检查点保留");
+                throw;
+            }
+            return process.ExitCode;
+        }
+
         private async Task<int> RunDayBuildAsync(string dayKey, CancellationToken cancellationToken)
         {
             cancellationToken.ThrowIfCancellationRequested();
@@ -228,29 +271,10 @@ namespace TraceSoul2.Host
             try
             {
                 runtime.Emit("日构建启动：" + dayKey);
-                var startInfo = new ProcessStartInfo
-                {
-                    FileName = "dotnet",
-                    ArgumentList = { migrateDll, "build", "--day", dayKey },
-                    UseShellExecute = false
-                };
-                startInfo.Environment["TRACESOUL2_DATA"] = runtime.DataDirectory;
-                using var process = Process.Start(startInfo);
-                if (process == null) throw new InvalidOperationException("无法启动日构建进程。");
-                using var timeout = CancellationTokenSource.CreateLinkedTokenSource(cancellationToken, lifetime.Token);
-                // Each model request has a deadline and the review has a call limit.
-                // A slow but progressing day must not be killed by a wall-clock cap.
-                try { await process.WaitForExitAsync(timeout.Token); }
-                catch
-                {
-                    if (!process.HasExited) process.Kill(entireProcessTree: true);
-                    await process.WaitForExitAsync(CancellationToken.None);
-                    DailyBuildHistory.RecoverInterrupted(HistoryPath, timeout.IsCancellationRequested ? "任务取消或服务停止，检查点保留" : "子进程被中断，检查点保留");
-                    throw;
-                }
+                var exitCode = await RunMigrationAsync("build", "--day", dayKey, cancellationToken);
                 var state = DailyBuildHistory.ReadStates(HistoryPath).FirstOrDefault(x => x.DayKey == dayKey);
-                runtime.Emit("日构建结束（exit " + process.ExitCode + "）：" + dayKey);
-                if (process.ExitCode != 0 || state == null || (state.Status != "done" && state.Status != "pending" && state.Status != "deferred" && state.Status != "waiting"))
+                runtime.Emit("日构建结束（exit " + exitCode + "）：" + dayKey);
+                if (exitCode != 0 || state == null || (state.Status != "done" && state.Status != "pending" && state.Status != "deferred" && state.Status != "waiting"))
                 {
                     runtime.Providers.Protection.FailAttempt("daily",
                         new InvalidOperationException(state?.Error ?? "子进程未确认完成"));

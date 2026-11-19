@@ -46,12 +46,61 @@ namespace TraceSoul2.Migrate
             return calls;
         }
 
+        private const string PeriodCursor = "closed-ladder-period";
+
+        // through is the last reviewed memory day, inclusive. Weeks belong to their Monday's month.
+        public static async Task PromoteDueAsync(MigrationContext context, DateTime through)
+        {
+            using var lease = ReviewExecutionLease.Acquire(context.Migration.DataDirectory);
+            var end = MemoryDayLogic.StartOf(through.AddDays(1).ToString("yyyy-MM-dd", CultureInfo.InvariantCulture)).ToUnixTimeMilliseconds();
+            if (context.Store.GetUnbuiltMemoryDayKeysBefore(end).Count > 0)
+                throw new InvalidOperationException("周期内仍有未完成日复盘的来源，请先完成日复盘。");
+            var days = context.Migration.GetDoneDayKeys().Concat(context.Migration.GetLadderPeriodKeys("day"));
+            var weeks = days.Select(x => MondayOf(ParseDay(x))).Distinct().OrderBy(x => x).ToList();
+            string Latest(string tier)
+            {
+                var json = context.Store.LoadPluginDocument(PeriodCursor, tier);
+                var saved = string.IsNullOrEmpty(json) ? "" : TraceJson.FromJson<string>(json);
+                var existing = context.Migration.GetLadderPeriodKeys(tier).LastOrDefault();
+                return string.CompareOrdinal(saved, existing) > 0 ? saved : existing;
+            }
+            var weekCursor = Latest("week");
+            foreach (var week in weeks.Where(w => w.AddDays(6) <= through))
+            {
+                var key = week.ToString("yyyy-MM-dd", CultureInfo.InvariantCulture);
+                if (string.CompareOrdinal(key, weekCursor) <= 0) continue;
+                await PromoteWeekAsync(context, context.RequirePair(), context.RequireLlm(), week, PeriodCursor);
+            }
+
+            var monthCursor = Latest("month");
+            var months = context.Migration.GetLadderPeriodKeys("week").Select(x => ParseDay(x.Substring(0, 7) + "-01"))
+                .Distinct().OrderBy(x => x);
+            foreach (var month in months)
+            {
+                var key = month.ToString("yyyy-MM", CultureInfo.InvariantCulture);
+                var lastSunday = MondayOf(month.AddMonths(1).AddDays(-1)).AddDays(6);
+                if (lastSunday > through || string.CompareOrdinal(key, monthCursor) <= 0) continue;
+                await PromoteMonthAsync(context, context.RequirePair(), context.RequireLlm(), key, PeriodCursor);
+            }
+        }
+
         private static async Task<int> PromoteWeekAsync(
             MigrationContext context, PairIdentity pair, ILlmClient llm, DateTime monday, string operation = null)
         {
             var periodKey = monday.ToString("yyyy-MM-dd");
             var dayKeys = DaysOfWeek(monday);
             var lower = context.Migration.GetLadderItems("day", dayKeys);
+            // Modern daily reviews store changed cognition IDs in their checkpoint, outside the event board.
+            var changed = dayKeys.Select(day => context.Store.LoadPluginDocument(DayBuilder.DailyReviewDocuments, day))
+                .Where(json => !string.IsNullOrWhiteSpace(json)).Select(json => TraceJson.FromJson<DayBuilder.DailyReviewState>(json))
+                .Where(state => state.Done).SelectMany(state => state.ChangedCognitions).ToHashSet(StringComparer.Ordinal);
+            if (changed.Count > 0)
+            {
+                var promoted = context.Migration.GetPromotedRefIds();
+                foreach (var node in context.Store.GetCognitionReviewCandidates(MigrationContext.ConversationId, false, true)
+                    .Where(n => changed.Contains(n.Id) && !promoted.Contains(n.Id)))
+                    lower.Add(new LadderItemRecord { ListKind = "cognition", RefKind = "cognition", RefId = node.Id, Label = node.Summary });
+            }
             return await PromoteTierAsync(
                 context, pair, llm, "week", periodKey, "周榜",
                 lower, "day", dayKeys, operation);
@@ -124,6 +173,8 @@ namespace TraceSoul2.Migrate
                 .ToList();
             if (all.Count == 0)
             {
+                if (operation == PeriodCursor)
+                    context.Migration.SaveProgressDocument(PeriodCursor, tier, TraceJson.ToJson(periodKey));
                 Console.WriteLine("  " + tierName + "（" + periodKey + "）：无候选，跳过。");
                 return 0;
             }
@@ -179,6 +230,11 @@ namespace TraceSoul2.Migrate
                     throw new InvalidOperationException("晋升期间来源已修订，未提交旧结果。");
                 context.Migration.ReplaceLadder(tier, periodKey, kept);
                 context.Migration.RemoveFromLadder(lowerTier, lowerScope, promotedRefs);
+                if (operation == PeriodCursor)
+                {
+                    context.Migration.PruneCrossTierLadderDuplicates();
+                    context.Migration.SaveProgressDocument(PeriodCursor, tier, TraceJson.ToJson(periodKey));
+                }
                 if (receiptKey != null) context.Migration.SaveProgressDocument("ladder-receipt-v1", receiptKey,
                     TraceJson.ToJson(new PromotionReceipt { References = sourceRefs, SourceStamp = sourceStamp, InputHash = inputHash }));
             });

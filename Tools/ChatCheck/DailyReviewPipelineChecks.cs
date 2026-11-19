@@ -138,6 +138,37 @@ internal static partial class Program
         catch (TargetInvocationException e) when (e.InnerException is InvalidOperationException) { return true; }
         catch (InvalidOperationException) { return true; }
     }
+    private static void RunPeriodReviewChecks(Assembly assembly)
+    {
+        using var f = new DailyFixture(assembly);
+        f.Seed(2);
+        f.Run(new SelectionProbeLlm { Reply = DailyReply });
+        f.Reopen(); // The Host starts period maintenance in its own migration process.
+        var method = assembly.GetType("TraceSoul2.Migrate.DayLadderLogic", true).GetMethod("PromoteDueAsync");
+        void Run(DateTime through, ILlmClient llm)
+        {
+            f.Context.GetType().GetProperty("Llm").SetValue(f.Context, llm);
+            ((Task)method.Invoke(null, new object[] { f.Context, through })).GetAwaiter().GetResult();
+        }
+        const string winner = "{\"items\":[{\"index_alias\":\"i1\",\"reason\":\"值得记住\"}]}";
+        var empty = new AgentSequenceLlm();
+        Run(new DateTime(2020, 8, 22), empty);
+        Require(empty.Requests.Count == 0, "未结束的周不排名");
+        var week = new AgentSequenceLlm(winner, winner);
+        Run(new DateTime(2020, 8, 31), week);
+        Require(week.Requests.Count == 2, "补齐错过的周，事件和当周形成的认知独立排名；跨月周未结束时不提前结月");
+        f.Reopen();
+        Require(DailyRejects(() => Run(new DateTime(2020, 9, 6), new AgentSequenceLlm())), "月榜失败须暴露以便恢复");
+        var month = new AgentSequenceLlm(winner, winner);
+        Run(new DateTime(2020, 9, 6), month);
+        using var db = new SQLite.SQLiteConnection(f.BrainPath);
+        Require(month.Requests.Count == 2 && db.ExecuteScalar<int>("SELECT count(DISTINCT ListKind) FROM ladder_items WHERE Tier='month' AND PeriodKey='2020-08'") == 2,
+            "月榜从已落盘周榜续做，跳过完成的周");
+        f.Reopen();
+        Run(new DateTime(2020, 9, 7), empty);
+        Require(empty.Requests.Count == 0, "晋升移空了周榜仍不会重复调用模型");
+    }
+
     private static void RunDailyReviewPipelineChecks(Assembly assembly)
     {
         using (var f = new DailyFixture(assembly))
@@ -229,6 +260,7 @@ internal static partial class Program
             f.Reopen(); f.Run(new SelectionProbeLlm { Reply = DailyReply });
             Require(f.Count("event_entries") == 2, "事务失败重试只入库一次");
         }
+        RunPeriodReviewChecks(assembly);
         RunDailyTopicGrowthChecks(assembly);
         RunEventEvidenceReviewChecks(assembly);
         RunSubjectiveReviewChecks(assembly);

@@ -14,6 +14,7 @@ migrate build --day yyyy-MM-dd
 migrate run-all --log <full_log.txt> [--from yyyy-MM-dd] [--to yyyy-MM-dd]
 migrate cards
 migrate embed
+migrate promote-due --through yyyy-MM-dd
 migrate promote-all
 migrate normalize-ladder
 migrate live
@@ -21,7 +22,7 @@ migrate live
 
 `build` 使用已保存的复盘槽及其配置；`TRACESOUL2_MIGRATION_PROVIDER` 和 `TRACESOUL2_MIGRATION_MODEL` 可覆盖本次选择。`run-all` 依次导入、分类、按日构筑；一天失败或预算让出即停止后续日期，重新运行从新检查点继续。它不再自动启动全历史榜单晋升。
 
-`embed` 幂等补齐本地事件向量。`promote-all` 是显式请求模型的独立历史榜单维护；不是每日完成条件。`normalize-ladder` 清理跨层重复指针，不删除原始事件或认知。
+Host 在日队列完成后独立执行 `promote-due`，补齐最近一期榜之后已结束的周、月。周按周一归月，整周结束才结算所属月。周期失败使用单独的错误保护，恢复后从已保存的周期继续。`promote-all` 为显式的全历史榜单维护。`embed` 幂等补齐本地事件向量；`normalize-ladder` 清理跨层重复指针。
 
 完成日没有新来源时零模型调用；迟到消息只追加处理。旧版未完成检查点不导入新流程，原始数据和已入库记忆保留。源码不再提供 `replay`、`observe`、`cognition-backfill` 或 `dedupe-cognitions` 旧入口。
 

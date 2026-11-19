@@ -29,6 +29,13 @@ namespace TraceSoul2.Migrate
                     case "classify": return await RealmClassifier.RunAsync(context, rest);
                     case "build": return await DayBuilder.RunAsync(context, rest);
                     case "run-all": return await FullLoopRunner.RunAsync(context, rest);
+                    case "promote-due":
+                        var through = CliArgs.Value(rest, "--through");
+                        if (!TraceSoul2.Host.DailyBuildPreflight.ValidDay(through) ||
+                            string.CompareOrdinal(through, TraceSoul2.Logic.MemoryDayLogic.ClosedDayKey(DateTimeOffset.Now)) > 0)
+                            throw new ArgumentException("需要已结束的记忆日 --through yyyy-MM-dd。");
+                        await DayLadderLogic.PromoteDueAsync(context, DateTime.ParseExact(through, "yyyy-MM-dd", System.Globalization.CultureInfo.InvariantCulture));
+                        return 0;
                     case "promote-all": return await PromoteAllCommand(context);
                     case "normalize-ladder": return NormalizeLadderCommand(context);
                     case "embed": return EmbedCommand(context);
@@ -77,6 +84,7 @@ namespace TraceSoul2.Migrate
         /// <summary>把日榜数据里出现的所有周/月/年周期全部重建一遍（含永久榜）。</summary>
         private static async Task<int> PromoteAllCommand(MigrationContext context)
         {
+            using var lease = TraceSoul2.Logic.ReviewExecutionLease.Acquire(context.Migration.DataDirectory);
             await DayLadderLogic.PromoteAllAsync(context, context.RequirePair(), context.RequireLlm());
             return 0;
         }
@@ -104,6 +112,7 @@ namespace TraceSoul2.Migrate
             Console.WriteLine("      单天构筑：多维索引 + 条目（细节浸染）→ 日终三卡复盘 + 内心同步 + 日榜");
             Console.WriteLine("  run-all --log <full_log.txt> [--from yyyy-MM-dd] [--to yyyy-MM-dd]");
             Console.WriteLine("      全量自动循环：导入全部 → 分类 → 按记忆日逐天构筑（含空天），进度写入 full_run_report.txt");
+            Console.WriteLine("  promote-due --through <yyyy-MM-dd>");
             Console.WriteLine("  promote-all");
             Console.WriteLine("      把日榜数据里的所有周/月/年周期重建一遍（含永久榜，幂等）");
             Console.WriteLine("  normalize-ladder");
