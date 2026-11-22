@@ -46,6 +46,7 @@ internal static partial class Program
         if(args.Contains("--expressions")){RunExpressionChecksAsync().GetAwaiter().GetResult();return;}
         if(args.Length==4&&args[0]=="--expression-probe"){RunExpressionProbeAsync(args[1],args[2],args[3]).GetAwaiter().GetResult();return;}
         if (args.Contains("--moment-semantics")) { RunMomentSemanticsChecksAsync().GetAwaiter().GetResult(); return; }
+        if (args.Contains("--utterance-retraction")) { RunUtteranceRetractionChecksAsync().GetAwaiter().GetResult(); return; }
         if (args.Contains("--qwen-tts")) { RunQwenTtsChecksAsync().GetAwaiter().GetResult(); return; }
         if (args.Contains("--decisions")) { RunDecisionsChecksAsync().GetAwaiter().GetResult(); return; }
         if (args.Contains("--review-selection")) { RunReviewSelectionChecksAsync().GetAwaiter().GetResult(); return; }
@@ -94,6 +95,7 @@ internal static partial class Program
         RunBackupArchiveChecksAsync().GetAwaiter().GetResult();
         RunRuntimePathRepairChecks();
         RunMomentSemanticsChecksAsync().GetAwaiter().GetResult();
+        RunUtteranceRetractionChecksAsync().GetAwaiter().GetResult();
         RunExpressionChecksAsync().GetAwaiter().GetResult();
         RunDecisionsChecksAsync().GetAwaiter().GetResult();
         RunModelSyncChecksAsync().GetAwaiter().GetResult();
@@ -1088,23 +1090,12 @@ internal static partial class Program
                 var mood = new TraceContributionDescriptorData { Id = "qq.status.mood", IdleDailyCap = 1 };
                 var catalog = new[] { publish, read, mood };
                 var pool = IdleDeedLogic.BuildPool(catalog, store, now);
-                Require(pool.Contains(IdleDeedLogic.RestId) &&
-                        pool.Contains("qq.qzone.publish") &&
-                        pool.Contains("qq.qzone.read") &&
-                        pool.Contains("qq.status.mood") &&
-                        pool.Count == 4,
-                    "空闲池应含歇着和未达上限的生活事");
-                IdleDeedLogic.Remember(store, "qq.qzone.publish", now);
+                Require(pool.SequenceEqual(new[] { IdleDeedLogic.RestId, mood.Id }),
+                    "旧版插件声明日限时空间也应退出旧空闲池");
+                IdleDeedLogic.Remember(store, mood.Id, now);
                 pool = IdleDeedLogic.BuildPool(catalog, store, now);
-                Require(!pool.Contains("qq.qzone.publish") &&
-                        pool.Contains("qq.qzone.read") &&
-                        pool.Contains(IdleDeedLogic.RestId),
-                    "达每日上限后应从随机池拿掉");
-                IdleDeedLogic.Remember(store, "qq.qzone.read", now);
-                IdleDeedLogic.Remember(store, "qq.qzone.read", now);
-                pool = IdleDeedLogic.BuildPool(catalog, store, now);
-                Require(!pool.Contains("qq.qzone.read") && pool.Contains("qq.status.mood"),
-                    "看说说达上限后应出局，未满的仍在池里");
+                Require(pool.SequenceEqual(new[] { IdleDeedLogic.RestId }),
+                    "其它生活活动达日限后仍从随机池拿掉");
                 Require(IdleDeedLogic.BuildPool(new TraceContributionDescriptorData[0], store, now)
                             .SequenceEqual(new[] { IdleDeedLogic.RestId }),
                     "没有可做的事时只剩歇着");
@@ -1502,12 +1493,6 @@ internal static partial class Program
                     "超过 80 字整条丢弃");
                 Require(MindLogic.Normalize(new MindDecisionData { new_fact = exact + "乙" }).new_fact == exact + "乙",
                     "心智不截断超长新识");
-                Require(AgentLoopLogic.ValidationError(new AgentStepData { step = "wait", new_fact = exact + "乙" }, false, false).Contains("$.new_fact") &&
-                    AgentLoopLogic.ValidationError(new AgentStepData { step = "wait", today = new string('今', 61) }, false, false).Contains("$.today") &&
-                    AgentLoopLogic.ValidationError(new AgentStepData { step = "wait", activity = new string('做', 81) }, false, false).Contains("$.activity") &&
-                    AgentLoopLogic.ValidationError(new AgentStepData { step = "wait", activity_detail = new string('补', 161) }, false, false).Contains("$.activity_detail") &&
-                    AgentLoopLogic.ValidationError(new AgentStepData { step = "wait", inner = new string('心', 121) }, false, false).Contains("$.inner"),
-                    "超限的经历、新识、正在做和内心按原篇幅重新生成，不截断也不清空");
                 Require(store.LoadDayTrajectory(newDay) != null && store.LoadDayTrajectory(oldDay) != null,
                     "跨日读取不能在复盘成功前抢先删除旧日本日样本");
 
@@ -2228,6 +2213,10 @@ internal static partial class Program
                 });
 
                 store.SaveDayTrajectory("2026-08-25", "白天讨论了一次意见不同的事，后来才说开。" + new string('记', 450) + "仍然想弄明白分歧的缘由。");
+                store.SaveMoment(new MomentRecord { Id = "day-thought-source", ConversationId = "night-check", Role = "user",
+                    MemoryVisibility = "private", Content = "雨停了", CreatedUnixMs = occurred.ToUnixTimeMilliseconds() });
+                store.AppendRuntimeSlice(new RuntimeSliceRecord { RootConversationId = "night-check", ContextConversationId = "night-check",
+                    MomentId = "day-thought-source", SnapshotJson = "{\"inner\":\"雨停时楼下的水声像一下一下的小鼓\"}" });
                 for (var i = 1; i <= 12; i++)
                     store.SaveEventIndex(new EventIndexRecord
                     {
@@ -2238,8 +2227,10 @@ internal static partial class Program
                 var speak = NightResidueLogic.Evaluate(store, "night-check", "2026-08-25", justAfterFour);
                 Require(speak.ShouldSpeak && speak.Seed != null && speak.Seed.HasWarmth &&
                         speak.Seed.Events[0].Contains("走丢") &&
-                        speak.Seed.FormatForPrompt().Contains("心里还留着"),
-                    "有当天相处和心里余温时应开口");
+                        speak.Seed.FormatForPrompt().Contains("21:00 雨停时楼下的水声像一下一下的小鼓") &&
+                        !speak.Seed.FormatForPrompt().Contains("她把睡眠最后一层交给了我") &&
+                        !speak.Seed.FormatForPrompt().Contains("我是她梦里走丢时想找的人"),
+                    "夜间取当天真实聊天留下的念头，跨日状态和关系总结不上稿");
                 Require(speak.Seed.Events.Count == NightResidueLogic.EventCap &&
                         speak.Seed.Events.Last().Contains("后续事件 12") &&
                         speak.Seed.Events.Last().Contains("完整的感想线索") &&
@@ -2283,10 +2274,10 @@ internal static partial class Program
                     }, default).GetAwaiter().GetResult();
                 Require(spoken.should_express && spoken.reply.Contains("那句话") &&
                         (spoken.expressions == null || spoken.expressions.Count == 0) &&
-                        fake.LastPrompt.Contains("不是早安") &&
-                        fake.LastPrompt.Contains("这一天刚沉下去") &&
-                        fake.LastPrompt.Contains("不要接着刚才的对话") &&
-                        fake.LastPrompt.Contains("从这一天浮起来"),
+                        fake.LastPrompt.Contains("独属于这一天的随想") &&
+                        fake.LastPrompt.Contains("楼下的水声") &&
+                        fake.LastPrompt.Contains("允许念头悬在那里") &&
+                        !fake.LastPrompt.Contains("当时和后来有什么不同的理解"),
                     "有余温时应开口，对着这一天而不是此刻对话");
 
                 var quiet = new ExpressorLogic(new NightResidueLlm("无"));

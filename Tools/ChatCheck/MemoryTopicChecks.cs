@@ -47,11 +47,11 @@ internal static partial class Program
         var kernel=new KernelLogic(store,new AgentSequenceLlm(),plugins);
         var execute=typeof(KernelLogic).GetMethod("ExecuteAgentActionAsync",System.Reflection.BindingFlags.NonPublic|System.Reflection.BindingFlags.Instance);
         var result=await (Task<TraceCapabilityResultData>)execute.Invoke(kernel,new object[]{new BrainCapabilityCallData{
-            capability_id="memory.recall",arguments=new(){new(){name="query",value="我喜欢吃什么"},new(){name="tags",value="[\"口味偏好\"]"}}},turn,CancellationToken.None});
+            capability_id="memory.recall",arguments=new(){new(){name="query",value="我喜欢吃什么"},new(){name="tags",value="[\"口味偏好\"]"}}},turn,false,CancellationToken.None});
         Console.WriteLine("Preference tag, candidate entries sent to search: "+string.Join(",",recall.Calls.Last().Ids));
         Require(result.Payload.Contains("牛肉面") && !result.Payload.Contains("洗头"),"喜好主题选中后确实收窄实际召回");
         await (Task<TraceCapabilityResultData>)execute.Invoke(kernel,new object[]{new BrainCapabilityCallData{
-            capability_id="memory.recall",arguments=new(){new(){name="query",value=question},new(){name="period",value="yesterday"},new(){name="tags",value="[\"日常清洁\"]"}}},turn,CancellationToken.None});
+            capability_id="memory.recall",arguments=new(){new(){name="query",value=question},new(){name="period",value="yesterday"},new(){name="tags",value="[\"日常清洁\"]"}}},turn,false,CancellationToken.None});
         Console.WriteLine("Yesterday query with hygiene tag, candidate entries sent to search: "+string.Join(",",recall.Calls.Last().Ids));
         var catalog=AgentLoopLogic.BuildCatalog(plugins.GetAvailableActionCatalog(turn));
         Console.WriteLine("Agent recall schema: "+catalog.Single(x=>x.Id=="memory.recall").ParametersJsonSchema);
@@ -108,7 +108,7 @@ internal static partial class Program
             var execute = typeof(KernelLogic).GetMethod("ExecuteAgentActionAsync", System.Reflection.BindingFlags.NonPublic | System.Reflection.BindingFlags.Instance);
             async Task<TraceCapabilityResultData> Recall(string tags, string capability = "memory.recall") =>
                 await (Task<TraceCapabilityResultData>)execute.Invoke(kernel, new object[] { new BrainCapabilityCallData {
-                    capability_id=capability, arguments=new(){new(){name="query",value="牛肉面"},new(){name="tags",value=tags}} }, turn, CancellationToken.None });
+                    capability_id=capability, arguments=new(){new(){name="query",value="牛肉面"},new(){name="tags",value=tags}} }, turn, false, CancellationToken.None });
             var food = await Recall("[\"口味偏好\"]");
             Require(food.Status == "success" && food.Payload.Contains("口味细节标记") && food.Payload.Contains("口味认识标记") &&
                 !food.Payload.Contains("数学细节标记") && !food.Payload.Contains("数学认识标记"), "真实Agent动作把选词传给事件与认知召回，同词不同主题隔离");

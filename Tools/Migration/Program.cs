@@ -37,6 +37,13 @@ namespace TraceSoul2.Migrate
                         await DayLadderLogic.PromoteDueAsync(context, DateTime.ParseExact(through, "yyyy-MM-dd", System.Globalization.CultureInfo.InvariantCulture));
                         return 0;
                     case "promote-all": return await PromoteAllCommand(context);
+                    case "compact-ladder":
+                        var day = CliArgs.Value(rest, "--day");
+                        if (day != null && !TraceSoul2.Host.DailyBuildPreflight.ValidDay(day))
+                            throw new ArgumentException("需要有效的 --day yyyy-MM-dd。");
+                        var now = day == null ? DateTimeOffset.Now : TraceSoul2.Logic.MemoryDayLogic.StartOf(day).AddDays(1);
+                        Console.WriteLine("榜单短文已更新 " + await DayLadderLogic.CompactReadingAsync(context, now) + " 条。");
+                        return 0;
                     case "normalize-ladder": return NormalizeLadderCommand(context);
                     case "embed": return EmbedCommand(context);
                     case "cards": return DayBuilder.PrintCardsCommand(context);
@@ -115,6 +122,8 @@ namespace TraceSoul2.Migrate
             Console.WriteLine("  promote-due --through <yyyy-MM-dd>");
             Console.WriteLine("  promote-all");
             Console.WriteLine("      把日榜数据里的所有周/月/年周期重建一遍（含永久榜，幂等）");
+            Console.WriteLine("  compact-ladder [--day yyyy-MM-dd]");
+            Console.WriteLine("      精简首页当前榜单的旧条目，可指定当作昨天的记忆日");
             Console.WriteLine("  normalize-ladder");
             Console.WriteLine("      清理同一 RefId 的跨层重复，只保留最高层级（幂等）");
             Console.WriteLine("  embed");

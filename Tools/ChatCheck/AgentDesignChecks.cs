@@ -37,7 +37,7 @@ internal static partial class Program
                     "工具观察原件完整保存并绑定触发来源/受众，同轮重复调用不重复经历");
                 var next=new AgentSequenceLlm(finish);
                 await new KernelLogic(store,next,plugins).ChatAsync("design","刚才读了什么",historyWindowMax:8);
-                Require(next.Requests[0].Contains("读取内容标记") && next.Requests[0].Contains(source.Id) &&
+                Require(next.Requests[0].Contains("读取内容标记") && !next.Requests[0].Contains(source.Id) &&
                     next.Requests[0].Contains("不是对方发言") && store.GetTodayNewItems("design",0,100).Count==0,
                     "省略new_fact仍能在下一轮读到有来源的材料，不伪造今日事实");
                 var story=new AgentSequenceLlm(finish);
@@ -66,15 +66,17 @@ internal static partial class Program
                 var execute=typeof(KernelLogic).GetMethod("ExecuteAgentActionAsync",System.Reflection.BindingFlags.NonPublic|System.Reflection.BindingFlags.Instance);
                 async Task<TraceCapabilityResultData> Call(string capability,params (string,string)[] args) =>
                     await (Task<TraceCapabilityResultData>)execute.Invoke(kernel,new object[]{new BrainCapabilityCallData {
-                        capability_id=capability,arguments=args.Select(a=>new BrainCallArgumentData{name=a.Item1,value=a.Item2}).ToList()},turn,CancellationToken.None});
+                        capability_id=capability,arguments=args.Select(a=>new BrainCallArgumentData{name=a.Item1,value=a.Item2}).ToList()},turn,false,CancellationToken.None});
                 var recalled=await Call("memory.recall",("query","尾部数学定理"));
-                Require(recalled.Status=="success" && recalled.Payload.Contains("尾部数学定理") && recalled.Payload.Contains(sourceId),
-                    "重开数据库后可从原件尾部召回，未依赖审查快照截取内容");
-                var first=await Call("memory.source",("source_id",sourceId));
-                var second=await Call("memory.source",("source_id",sourceId),("offset","4000"));
+                Require(recalled.Status=="success" && recalled.Payload.Contains("尾部数学定理") &&
+                    !recalled.Payload.Contains(sourceId) && recalled.Payload.Contains("续读编号 1"),
+                    "重开数据库后可从原件尾部召回，正文使用临时续读编号");
+                var first=await Call("memory.source",("source_ref","1"));
+                var second=await Call("memory.source",("source_ref","1"),("offset","4000"));
                 using var a=System.Text.Json.JsonDocument.Parse(first.Payload);
                 using var b=System.Text.Json.JsonDocument.Parse(second.Payload);
-                Require((a.RootElement.GetProperty("content").GetString()+b.RootElement.GetProperty("content").GetString()).EndsWith(full),
+                Require((a.RootElement.GetProperty("content").GetString()+b.RootElement.GetProperty("content").GetString()).EndsWith(full) &&
+                    !first.Payload.Contains("source_id") && first.EvidenceRefs.Count == 1,
                     "memory.source分段读回完整原件");
                 Require((await Call("memory.source",("source_id",sourceId),("offset","-1"))).Status=="failed","拒绝非法分页");
                 turn=new TraceTurnContext("design:environment:room",Moment("design:environment:room","资料"),new(),0,true,services,
@@ -82,7 +84,8 @@ internal static partial class Program
                 Require(!ToolExperienceLogic.RecentContext(turn).Contains("读取内容标记") &&
                     (await Call("memory.source",("source_id",sourceId))).Status=="empty", "公开环境不能读取私密工具原件");
                 turn=new TraceTurnContext("other",Moment("other","资料"),new(),0,true,services);
-                Require((await Call("memory.source",("source_id",sourceId))).Status=="empty","不同主体不能借ID读原件");
+                Require((await Call("memory.source",("source_id",sourceId))).Status=="empty" &&
+                    (await Call("memory.source",("source_ref","1"))).Status=="empty","不同主体不能借原ID或之前的编号读原件");
             }
         }
         finally { foreach(var suffix in new[]{"","-wal","-shm"}) if(File.Exists(path+suffix)) File.Delete(path+suffix); }

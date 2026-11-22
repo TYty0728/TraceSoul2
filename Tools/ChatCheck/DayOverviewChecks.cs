@@ -402,7 +402,8 @@ internal static partial class Program
             items.Add(new LadderItemRecord { Tier = "week", PeriodKey = "2026-09-28", ListKind = "event", Rank = rank + 5, Label = "周" + rank, Reason = "本周理由" });
         items.Add(new LadderItemRecord { Tier = "week", PeriodKey = "2026-09-21", ListKind = "event", Rank = 1, Label = "更早的一周", Reason = "不该出现" });
         items.Add(new LadderItemRecord { Tier = "week", PeriodKey = "2026-10-05", ListKind = "event", Rank = 1, Label = "还没到的一周", Reason = "不该出现" });
-        items.Add(new LadderItemRecord { Tier = "month", PeriodKey = "2026-09", ListKind = "event", Rank = 1, Label = "九月留下的事", Reason = "月榜理由" });
+        items.Add(new LadderItemRecord { Tier = "month", PeriodKey = "2026-09", ListKind = "event", Rank = 1,
+            Label = "九月留下来的一连串事情", ReadingLabel = "九月留下的事", Reason = "月榜理由" });
         items.Add(new LadderItemRecord { Tier = "year", PeriodKey = "2026", ListKind = "event", Rank = 1, Label = "这一年的事", Reason = "年榜理由" });
         for (var rank = 1; rank <= 4; rank++)
             items.Add(new LadderItemRecord { Tier = "forever", PeriodKey = "forever", ListKind = "event", Rank = rank, Label = "永久" + rank, Reason = "一直记得" });
@@ -411,6 +412,8 @@ internal static partial class Program
         Require(yesterday.Items.Count(x => x.ListKind != "cognition") == 10 && yesterday.Items.Any(x => x.Label == "日10") &&
             !yesterday.Items.Any(x => x.Label == "日11"),
             "记忆页仍展示昨天日榜 10 条");
+        Require(page.Single(x => x.Tier == "month").Items.Single().Label == "九月留下来的一连串事情",
+            "记忆页保留完整摘要，简读单独使用榜单短文");
         var text = LadderContextLogic.Reading(items, now).Replace("\r\n", "\n");
         Require(text.StartsWith("昨天\n1. 日1\n") && text.Contains("\n5. 日5\n") && !text.Contains("日6") && !text.Contains("日11") &&
             !text.Contains("更早的一天") && text.Contains("认知\n1. 她把怕的事说出来了\n"),

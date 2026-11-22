@@ -224,6 +224,8 @@ namespace TraceSoul2.Logic
                 .OrderBy(x => x.due_unix_ms)
                 .FirstOrDefault();
             if (item == null) return string.Empty;
+            if (storage is SqliteMemoryManager sql && sql.WasScheduleRetracted(item.id, item.source_moment_id, heartbeat: true))
+                return DefaultNextPlan;
             return ExtractPlan(item.content);
         }
 
@@ -237,6 +239,8 @@ namespace TraceSoul2.Logic
         [Serializable]
         private sealed class ScheduleItem
         {
+            public string id;
+            public string source_moment_id;
             public string conversation_id = string.Empty;
             public string content = string.Empty;
             public long due_unix_ms;

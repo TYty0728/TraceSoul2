@@ -48,6 +48,7 @@ namespace TraceSoul2.Plugins.Builtin
         {
             public string id;
             public string conversation_id;
+            public string source_moment_id;
             public EnvironmentObservationData environment;
             public string content;
             public long due_unix_ms;
@@ -94,7 +95,8 @@ namespace TraceSoul2.Plugins.Builtin
                 if (changed) SaveUnsafe();
             }
 
-            public ScheduleEntry Add(string conversationId, string content, long due, string recurrence, string wake = null, EnvironmentObservationData environment = null)
+            public ScheduleEntry Add(string conversationId, string content, long due, string recurrence, string wake = null,
+                EnvironmentObservationData environment = null, string sourceMomentId = null)
             {
                 lock (gate)
                 {
@@ -102,6 +104,7 @@ namespace TraceSoul2.Plugins.Builtin
                     {
                         id = Guid.NewGuid().ToString("N"),
                         conversation_id = conversationId,
+                        source_moment_id = sourceMomentId,
                         environment = environment,
                         content = Limit(content.Trim(), 500),
                         due_unix_ms = due,
@@ -145,14 +148,18 @@ namespace TraceSoul2.Plugins.Builtin
 
             public List<ScheduleEntry> List()
             {
-                lock (gate) return document.items.Where(x => x.enabled)
-                    .OrderBy(x => x.due_unix_ms).Select(Clone).ToList();
+                lock (gate)
+                {
+                    if (PruneRetractedPlans()) SaveUnsafe();
+                    return document.items.Where(x => x.enabled).OrderBy(x => x.due_unix_ms).Select(Clone).ToList();
+                }
             }
 
             public List<string> UpcomingDescriptions(string conversationId, long nowUnixMs, int take)
             {
                 lock (gate)
                 {
+                    if (PruneRetractedPlans()) SaveUnsafe();
                     return document.items
                         .Where(x => x.enabled &&
                                     string.Equals(x.conversation_id, conversationId, StringComparison.Ordinal) &&
@@ -167,7 +174,8 @@ namespace TraceSoul2.Plugins.Builtin
                 }
             }
 
-            public ScheduleEntry EnsureHeartbeat(string conversationId, long dueUnixMs, string nextPlan, EnvironmentObservationData environment = null)
+            public ScheduleEntry EnsureHeartbeat(string conversationId, long dueUnixMs, string nextPlan,
+                EnvironmentObservationData environment = null, string sourceMomentId = null)
             {
                 lock (gate)
                 {
@@ -182,6 +190,7 @@ namespace TraceSoul2.Plugins.Builtin
                     {
                         id = Guid.NewGuid().ToString("N"),
                         conversation_id = conversationId,
+                        source_moment_id = sourceMomentId,
                         environment = environment,
                         content = HeartbeatLogic.BuildContent(nextPlan),
                         due_unix_ms = dueUnixMs,
@@ -230,6 +239,7 @@ namespace TraceSoul2.Plugins.Builtin
             {
                 lock (gate)
                 {
+                    var pruned = PruneRetractedPlans();
                     var due = document.items.Where(x => x.enabled && x.due_unix_ms <= now)
                         .OrderBy(x => x.due_unix_ms).Take(20).ToList();
                     var events = new List<PluginEventData>();
@@ -247,6 +257,7 @@ namespace TraceSoul2.Plugins.Builtin
                         {
                             PluginId = PluginId,
                             ConversationId = item.conversation_id,
+                            ParentMomentId = item.source_moment_id,
                             Environment = item.environment,
                             ExternalEventId = "schedule:" + item.id + ":" + item.due_unix_ms,
                             Role = "system_event",
@@ -276,7 +287,7 @@ namespace TraceSoul2.Plugins.Builtin
                             while (item.due_unix_ms <= now);
                         }
                     }
-                    if (due.Count > 0) SaveUnsafe();
+                    if (due.Count > 0 || pruned) SaveUnsafe();
                     return events;
                 }
             }
@@ -291,12 +302,33 @@ namespace TraceSoul2.Plugins.Builtin
             storage.SavePluginDocument(PluginId, "schedules", TraceJson.ToJson(document));
             }
 
+            private bool PruneRetractedPlans()
+            {
+                if (storage is not SqliteMemoryManager sql) return false;
+                var changed = false;
+                foreach (var item in document.items.Where(x => x.enabled).ToList())
+                {
+                    var heartbeat = HeartbeatLogic.IsHeartbeatOrLegacyContinue(item.content);
+                    if (!sql.WasScheduleRetracted(item.id, item.source_moment_id, heartbeat)) continue;
+                    if (heartbeat)
+                    {
+                        item.id = Guid.NewGuid().ToString("N");
+                        item.content = HeartbeatLogic.BuildContent(HeartbeatLogic.DefaultNextPlan);
+                        item.source_moment_id = null;
+                    }
+                    else document.items.Remove(item);
+                    changed = true;
+                }
+                return changed;
+            }
+
             private static ScheduleEntry Clone(ScheduleEntry value)
             {
                 return new ScheduleEntry
                 {
                     id = value.id,
                     conversation_id = value.conversation_id,
+                    source_moment_id = value.source_moment_id,
                     environment = value.environment,
                     content = value.content,
                     due_unix_ms = value.due_unix_ms,
@@ -484,7 +516,7 @@ namespace TraceSoul2.Plugins.Builtin
                 if (due <= DateTimeOffset.UtcNow.ToUnixTimeMilliseconds())
                     throw new InvalidOperationException("到期时间必须在未来。");
                 var item = state.Add(context.ConversationId, content, due,
-                    call.GetArgument("recurrence", "none"), call.GetArgument("wake"), EnvironmentLogic.Observation(context.Environment));
+                    call.GetArgument("recurrence", "none"), call.GetArgument("wake"), EnvironmentLogic.Observation(context.Environment), context.Moment?.Id);
                 return Task.FromResult(Success("时间任务已建立。",
                     item.id + " | " + DateTimeOffset.FromUnixTimeMilliseconds(item.due_unix_ms).ToLocalTime().ToString("O") +
                     " | " + item.recurrence + " | " + item.wake + " | " + item.content));
@@ -585,7 +617,7 @@ namespace TraceSoul2.Plugins.Builtin
                 var nextPlan = call.GetArgument("next_plan").Trim();
                 if (nextPlan.Length == 0)
                     nextPlan = HeartbeatLogic.ExtractPlan(call.GetArgument("content"));
-                var item = state.EnsureHeartbeat(context.ConversationId, due, nextPlan, EnvironmentLogic.Observation(context.Environment));
+                var item = state.EnsureHeartbeat(context.ConversationId, due, nextPlan, EnvironmentLogic.Observation(context.Environment), context.Moment?.Id);
                 return Task.FromResult(Success("已排一次心跳。",
                     item.id + " | " + DateTimeOffset.FromUnixTimeMilliseconds(item.due_unix_ms).ToLocalTime().ToString("O") +
                     " | " + item.wake + " | " + item.content));

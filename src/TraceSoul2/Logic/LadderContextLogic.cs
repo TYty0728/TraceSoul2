@@ -35,6 +35,9 @@ namespace TraceSoul2.Logic
         public static IReadOnlyList<LadderBoard> Boards(IEnumerable<LadderItemRecord> items, DateTimeOffset now)
             => Boards(items, now, Capacity);
 
+        public static IReadOnlyList<LadderBoard> ReadingBoards(IEnumerable<LadderItemRecord> items, DateTimeOffset now)
+            => Boards(items, now, InjectCount);
+
         private static IReadOnlyList<LadderBoard> Boards(IEnumerable<LadderItemRecord> items, DateTimeOffset now, Func<string, int> capacity)
         {
             var all = (items ?? Array.Empty<LadderItemRecord>())
@@ -53,7 +56,7 @@ namespace TraceSoul2.Logic
         public static string Reading(IEnumerable<LadderItemRecord> items, DateTimeOffset now)
         {
             var builder = new StringBuilder();
-            foreach (var board in Boards(items, now, InjectCount))
+            foreach (var board in ReadingBoards(items, now))
             {
                 if (builder.Length > 0) builder.Append('\n');
                 builder.Append(board.Title);
@@ -96,8 +99,11 @@ namespace TraceSoul2.Logic
             if (rows.Count == 0) return;
             if (heading.Length > 0) builder.Append(heading).Append('\n');
             for (var i = 0; i < rows.Count; i++)
-                builder.Append(i + 1).Append(". ").Append(rows[i].Label.Trim()).Append('\n');
+                builder.Append(i + 1).Append(". ").Append(ReadingLabel(rows[i])).Append('\n');
         }
+
+        public static string ReadingLabel(LadderItemRecord item)
+            => (string.IsNullOrWhiteSpace(item.ReadingLabel) ? item.Label : item.ReadingLabel)?.Trim() ?? string.Empty;
 
         private static string Kind(LadderItemRecord item)
             => string.IsNullOrWhiteSpace(item.ListKind) || item.ListKind == "event" ? "event" : item.ListKind;

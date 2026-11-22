@@ -32,6 +32,7 @@ namespace TraceSoul2.Logic
             var situations = await MindTemplateLogic.SelectAsync(turn.Moment?.Content,
                 turn.Services.Embedding, MindTemplateLogic.CandidateCap, token);
             var heartbeatTurn = HeartbeatLogic.IsHeartbeatTurn(turn);
+            string qzoneContext = null;
             var history = new List<object>();
             var pendingState = new AgentTurnStateLogic();
             var appliedGoals = new List<AgentGoalUpdateData>();
@@ -48,6 +49,8 @@ namespace TraceSoul2.Logic
                 var dynamic = (catalog.Any(x => x.Id == "web.search" || x.Id == "web.read") ? AgentLoopPrompts.Search + "\n" : "") +
                     AgentPromptContextLogic.Context(turn) + MindTemplateLogic.FormatForAgent(situations) + AgentPromptContextLogic.Catalog(catalog) +
                     AgentPromptContextLogic.Executions(turn);
+                if (heartbeatTurn && catalog.Any(x => x.Id is QzonePublishLogic.PublishCapabilityId or QzonePublishLogic.ReadCapabilityId))
+                    dynamic += qzoneContext ??= QzonePublishLogic.WakeContext(turn);
                 if (history.Count > 0) dynamic += AgentPromptContextLogic.Results(history);
                 dynamic += AgentPromptContextLogic.PendingState(pendingState.Values);
                 dynamic += AgentPromptContextLogic.ExpressionStatus(turn, responded);
@@ -66,6 +69,7 @@ namespace TraceSoul2.Logic
                     value => ValidationError(value.ToRuntime(), !heartbeatTurn && turn.RequiresExpression && !responded, round == MaxActionRounds) ??
                         GoalMemoryLogic.ValidationError(turn, value.goal_updates),
                     (_, fields) => providedFields = fields);
+                providedFields = await AgentTurnStateLogic.FitProseAsync(output, providedFields, llm, turn, token);
                 pendingState.Update(output, providedFields);
                 pendingState.ApplyTo(output);
                 var step = output.ToRuntime();
@@ -75,7 +79,8 @@ namespace TraceSoul2.Logic
                 // 意图通过 pendingState 在同轮检索/行动之间继承，显式清空可撤回。
                 if (heartbeatTurn && string.IsNullOrWhiteSpace(step.heartbeat_intent) &&
                     (step.step == "finish" && !string.IsNullOrWhiteSpace(step.reply) ||
-                     step.actions?.Any(call => catalog.Any(x => x.Id == call.capability_id &&
+                     step.actions?.Any(call => call.capability_id != QzonePublishLogic.PublishCapabilityId &&
+                         catalog.Any(x => x.Id == call.capability_id &&
                          (IsConversationalExpression(x) || x.Kind == TraceContributionKindValues.Effector &&
                              MouthLogic.OrganOf(x) is BodyOrganValues.Qzone or BodyOrganValues.Sticker))) == true))
                 {
@@ -151,8 +156,8 @@ namespace TraceSoul2.Logic
                     IsConversationalExpression(x)).ToList();
             result.RemoveAll(x => x.Id == "memory.recall" || x.Id == "memory.topics" || x.Id == "memory.source" || x.Id == "execution.cancel");
             result.Add(new TraceContributionDescriptorData { Id="memory.source", Kind=TraceContributionKindValues.CallableNerve,
-                Description="按召回提供的原件ID读取证据，每次最多4000字符；next_offset非空时可继续读。",
-                ParametersJsonSchema="{\"required\":[\"source_id\"],\"properties\":{\"source_id\":{\"type\":\"string\"},\"offset\":{\"type\":\"string\"}}}" });
+                Description="按本轮原文节选的续读编号取原文。每次最多4000字符；next_offset非空时，沿用编号并传入该位置。",
+                ParametersJsonSchema="{\"properties\":{\"source_ref\":{\"type\":\"string\"},\"offset\":{\"type\":\"string\"}}}" });
             result.Add(new TraceContributionDescriptorData { Id = "memory.topics", Kind = TraceContributionKindValues.CallableNerve,
                 Description = "按具体问题寻找相近的人生主题，再选择主题读取相关经历和认知。", ParametersJsonSchema = "{\"required\":[\"query\"],\"properties\":{\"query\":{\"type\":\"string\"}}}" });
             result.Add(new TraceContributionDescriptorData { Id = "memory.recall", Kind = TraceContributionKindValues.CallableNerve,
@@ -245,7 +250,7 @@ namespace TraceSoul2.Logic
             }
             if (!string.IsNullOrWhiteSpace(value.tool_call) || value.WantsLeave() || value.WantsMemory())
                 return "旧心智工具字段不能驱动 Agent；请仅通过 actions 请求能力。";
-            return MindLogic.ProseLengthError(value);
+            return null;
         }
 
         internal static string BuildStable(TraceTurnContext turn)

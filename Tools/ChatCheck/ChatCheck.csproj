@@ -90,6 +90,7 @@
     <Compile Include="../Host/QwenTtsProvider.cs" Link="QwenTtsProvider.cs" />
     <Compile Include="QwenTtsChecks.cs" />
     <Compile Include="MomentSemanticsChecks.cs" />
+    <Compile Include="UtteranceRetractionChecks.cs" />
     <Compile Include="WxxzChecks.cs" />
     <Compile Include="WxxzDeviceControlChecks.cs" />
     <Compile Include="WxxzAttentionChecks.cs" />

@@ -55,6 +55,28 @@ namespace TraceSoul2.Logic
             lock (Gates.GetValue(store, _ => new object())) return Load(store, conversation).Items;
         }
 
+        // Called inside the same SQLite transaction as the source removal, with the Soul gate held.
+        internal static void RetractSource(SqliteMemoryManager store, string conversation, string source, bool keepUserChanges)
+        {
+            var doc = Load(store, conversation);
+            var removed = doc.Items.Where(x => x.SourceMomentId == source && (!keepUserChanges || (x.ChangeSource ?? x.Origin) != "user"))
+                .ToDictionary(x => x.Id);
+            if (removed.Count == 0) return;
+            doc.Items.RemoveAll(x => removed.ContainsKey(x.Id));
+            string Previous(string id)
+            {
+                while (!string.IsNullOrEmpty(id) && removed.TryGetValue(id, out var item)) id = item.ReplacesId;
+                return id;
+            }
+            foreach (var item in doc.Items) item.ReplacesId = Previous(item.ReplacesId);
+            foreach (var id in removed.Values.Select(x => Previous(x.ReplacesId)).Where(x => !string.IsNullOrEmpty(x)).Distinct())
+            {
+                var restored = doc.Items.FirstOrDefault(x => x.Id == id);
+                if (restored != null && !doc.Items.Any(x => x.ReplacesId == id)) restored.Status = "active";
+            }
+            store.SavePluginDocument(Owner, conversation, JsonSerializer.Serialize(doc, Json));
+        }
+
         private static bool Live(GoalRecord item, TraceTurnContext turn, long now) => item.Status == "active" &&
             (item.Horizon != "turn" || item.SourceMomentId == turn.Moment?.Id) &&
             (item.ExpiresUnixMs == 0 || item.ExpiresUnixMs > now);

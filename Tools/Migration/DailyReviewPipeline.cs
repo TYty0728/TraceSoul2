@@ -18,7 +18,7 @@ namespace TraceSoul2.Migrate
     // Version 8 keeps the three-stage flow with readable source times and explicit event references.
     public static partial class DayBuilder
     {
-        public const string DailyReviewDocuments = "daily-review";
+        public const string DailyReviewDocuments = SqliteMemoryManager.DailyReviewPlugin;
         private const string ReviewOutputCounting =
             "【输出硬约束】篇幅按JSON解码后的字符串字符数计，不是只数汉字，也不是token数。标点、空格、换行、数字和英文字母都计数；" +
             "普通中文和常用标点各计1，emoji等补充字符通常计2。JSON外层引号和转义写法本身不计入正文。" +
@@ -164,17 +164,7 @@ namespace TraceSoul2.Migrate
 
         private static string Limit(string value, int max) => (value ?? "").Length <= max ? value ?? "" : value.Substring(0, max);
         private static string Digest(object value) => Convert.ToHexString(SHA256.HashData(Encoding.UTF8.GetBytes(TraceJson.ToJson(value))));
-        private static string SourceStamp(MigrationContext context, IEnumerable<string> ids)
-        {
-            var wanted = ids.ToHashSet(StringComparer.Ordinal);
-            var sources = wanted.Chunk(256).SelectMany(context.Store.GetEvidenceMoments).ToList();
-            if (sources.Count != wanted.Count)
-                throw new InvalidOperationException("复盘检查点的原始来源已缺失，不能继续提交。");
-            return Digest(new { Pair = context.RequirePair(), Sources = sources.OrderBy(x => x.Id, StringComparer.Ordinal)
-                .Select(x => new { x.Id, x.ConversationId, x.Content, x.CreatedUnixMs, x.Realm,
-                    x.Role, x.EvidenceType, x.SourcePluginId, x.SourceEventId, x.PayloadJson, x.EnvironmentJson,
-                    x.MemoryVisibility, x.Type, x.SourcePlatform, x.ParentMomentId }) });
-        }
+        private static string SourceStamp(MigrationContext context, IEnumerable<string> ids) => context.Store.DailyReviewSourceStamp(ids);
 
         private static List<MomentRecord> ReviewSources(MigrationContext context, IEnumerable<string> ids)
             => ids.Distinct().Chunk(256).SelectMany(context.Store.GetEvidenceMoments)

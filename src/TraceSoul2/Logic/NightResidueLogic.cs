@@ -143,23 +143,26 @@ namespace TraceSoul2.Logic
                 .Where(x => x.Length > 0)
                 .ToList();
             seed.Trajectory = OneLine(DayTrajectoryLogic.Read(store, conversationId, seed.DayKey)?.Text, 1800);
-            var inner = string.IsNullOrWhiteSpace(conversationId)
-                ? null
-                : store.LoadOrCreateInnerRuntime(conversationId);
-            if (inner != null)
+            if (store is SqliteMemoryManager sqlite && !string.IsNullOrWhiteSpace(conversationId))
             {
-                seed.Narrative = OneLine(inner.Narrative, 600);
-                seed.Mood = OneLine(inner.Mood, 40);
-                seed.Relationship = OneLine(inner.RelationshipLens, 160);
-                seed.Attention = (inner.Attention ?? new List<AttentionItemData>())
-                    .Where(x => x != null && !string.IsNullOrWhiteSpace(x.content))
-                    .Select(x => OneLine(x.content, 80))
-                    .Where(x => x.Length > 0)
-                    .Take(3)
-                    .ToList();
+                var slices = sqlite.GetRuntimeSlices(conversationId, seed.DayKey)
+                    .Where(x => x.ContextConversationId == conversationId && x.MemoryVisibility == "private").ToList();
+                var pair = store.LoadPairIdentity();
+                var dialogue = slices.Select(x => x.MomentId).Chunk(256).SelectMany(sqlite.GetEvidenceMoments)
+                    .Where(x => pair.IsHumanMoment(x.Role)).Select(x => x.Id).ToHashSet();
+                var notes = slices.Where(x => dialogue.Contains(x.MomentId))
+                    .Select(x => new { x.CreatedUnixMs, Text = OneLine(PuzzleViewLogic.Read<DayThought>(x.SnapshotJson)?.Inner, 120) })
+                    .Where(x => x.Text.Length > 0).DistinctBy(x => x.Text).ToList();
+                const int cap = 6;
+                seed.Thoughts = Enumerable.Range(0, Math.Min(cap, notes.Count))
+                    .Select(i => notes.Count <= cap ? notes[i] : notes[i * (notes.Count - 1) / (cap - 1)])
+                    .Select(x => DateTimeOffset.FromUnixTimeMilliseconds(x.CreatedUnixMs).ToOffset(MemoryDayLogic.ChinaOffset)
+                        .ToString("HH:mm") + " " + x.Text).ToList();
             }
             return seed;
         }
+
+        private sealed class DayThought { public string Inner { get; set; } }
 
         public static PluginEventData CreateTrigger(string conversationId, string dayKey, string traceId)
         {
@@ -277,11 +280,8 @@ namespace TraceSoul2.Logic
     public sealed class NightResidueSeed
     {
         public string DayKey;
-        public string Narrative;
-        public string Mood;
-        public string Relationship;
         public string Trajectory;
-        public List<string> Attention = new List<string>();
+        public List<string> Thoughts = new List<string>();
         public List<string> Events = new List<string>();
 
         public bool HasWarmth
@@ -296,25 +296,16 @@ namespace TraceSoul2.Logic
             builder.Append(CorePrompts.NightResidue.DayPrefix).AppendLine(DayKey ?? string.Empty);
             if (!string.IsNullOrWhiteSpace(Trajectory))
                 builder.AppendLine("当天相处的脉络（供回想，不逐项复述）：").AppendLine(Trajectory);
-            var inner = (Narrative ?? string.Empty).Trim();
-            builder.Append(CorePrompts.NightResidue.InnerPrefix)
-                .AppendLine(inner.Length == 0 ? CorePrompts.NightResidue.EmptyInner : inner);
-            if (!string.IsNullOrWhiteSpace(Mood))
-                builder.Append(CorePrompts.NightResidue.MoodPrefix).AppendLine(Mood.Trim());
-            if (!string.IsNullOrWhiteSpace(Relationship))
-                builder.Append(CorePrompts.NightResidue.RelationPrefix).AppendLine(Relationship.Trim());
-            var attention = (Attention ?? new List<string>())
-                .Where(x => !string.IsNullOrWhiteSpace(x)).ToList();
-            if (attention.Count > 0)
-            {
-                builder.Append(CorePrompts.NightResidue.AttentionPrefix);
-                builder.AppendLine(string.Join("；", attention));
-            }
             if (Events != null && Events.Count > 0)
             {
                 builder.AppendLine(CorePrompts.NightResidue.EventsPrefix);
                 foreach (var item in Events)
                     builder.Append("- ").AppendLine(item);
+            }
+            if (Thoughts.Count > 0)
+            {
+                builder.AppendLine("【这一天聊天时我一闪而过的念头】");
+                foreach (var thought in Thoughts) builder.AppendLine(thought);
             }
             return builder.ToString().TrimEnd();
         }

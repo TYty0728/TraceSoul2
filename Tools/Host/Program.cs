@@ -580,6 +580,26 @@ app.MapGet("/turns/last", (SoulRuntime runtime) =>
     return payload == null ? Results.Json(new { }) : Results.Json(payload);
 });
 
+app.MapGet("/gm/last-utterance", (SoulRuntime runtime) =>
+{
+    var moment = runtime.Store.GetLatestPrivateUtterance(runtime.ConversationId);
+    return moment == null ? Results.NoContent() : Results.Json(new
+    {
+        moment.Id, moment.Content, role = runtime.Store.LoadPairIdentity().LabelForRole(moment.Role),
+        platform = MomentTypes.PlatformLabel(moment.SourcePlatform)
+    });
+});
+
+app.MapPost("/gm/retract-last-utterance", async (SoulRuntime runtime, DailyPipelineWorker reviews,
+    RetractUtteranceWrite body, CancellationToken token) =>
+{
+    if (string.IsNullOrWhiteSpace(body?.id)) return Results.BadRequest(new { error = "缺少要撤回的发言 ID。" });
+    using var lease = await reviews.HoldMaintenanceAsync(token);
+    return await runtime.RetractLastUtteranceAsync(body.id, token)
+        ? Results.Json(new { id = body.id })
+        : Results.Conflict(new { error = "最近一条发言已变更，请刷新后再确认。" });
+});
+
 app.MapPost("/moments", async (SoulRuntime runtime, MomentWrite body, CancellationToken token) =>
 {
     var turn = await runtime.PostMomentAsync(body.content, token);
@@ -1518,6 +1538,7 @@ internal sealed class PluginConfigWrite
 }
 internal sealed class UpdateConfigWrite { public string repository { get; set; } }
 internal sealed class MomentWrite { public string content { get; set; } }
+internal sealed class RetractUtteranceWrite { public string id { get; set; } }
 internal sealed class LimitWrite
 {
     public int limit { get; set; }

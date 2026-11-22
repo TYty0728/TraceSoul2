@@ -118,23 +118,6 @@ namespace TraceSoul2.Logic
                    value.Length <= 14;
         }
 
-        /// <summary>原指令已经写明篇幅。超出时让同一次生成重写，不在这里截断或清空。</summary>
-        public static string ProseLengthError(MindDecisionData output)
-        {
-            if (output == null) return null;
-            string Over(string path, string value, int max)
-            {
-                var text = (value ?? string.Empty).Trim();
-                if (text.Length <= max) return null;
-                return path + " 当前" + text.Length + "字，最多" + max + "字。按原篇幅重新写下。上一份太长，不要交回上一份。";
-            }
-            return Over("$.today", output.today, 60)
-                ?? Over("$.new_fact", output.new_fact, TodayNewItemRecord.MaxContentChars)
-                ?? Over("$.inner", output.inner, 120)
-                ?? Over("$.activity", output.activity, 80)
-                ?? Over("$.activity_detail", output.activity_detail, 160);
-        }
-
         private static string Limit(string value, int max)
         {
             value = value ?? string.Empty;

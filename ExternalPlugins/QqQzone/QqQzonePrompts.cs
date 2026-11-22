@@ -7,15 +7,15 @@ namespace TraceSoul2.ExternalPlugins
             "她明确要发说说、发到空间时：把 qq.qzone.publish 作为附加表达调用（content=说说全文），主通道回话确认，不要只口头答应。" +
             "发布前可以自行决定是否配图，想配图就与正文一起发到空间；用户明确要求纯文字时遵守。" +
             "她让我看说说、看空间、看看她或我最近发了什么时：调用 qq.qzone.read（uin 填对方 QQ 号；看我自己填 self；看她且当前是私聊可留空），读完再用自己的话告诉她，不要假装看过。" +
-            "空闲时系统会自己抽签去看或发，不要在对话里主动刷空间，也不要在她没说发的时候发布。";
+            "对话里按她的请求看或发。主动醒来时，如果本轮提供空间能力，由我决定是否看或发。";
 
         public const string PublishDescription = "发布一条 QQ 空间说说；愿意配图时由相机生成，与正文一起发布。";
         public const string PublishBoundary = "QQ说说｜发布一条空间说说（给全文）";
-        public const string ReadDescription = "读取指定 QQ 号空间里最近的说说和评论区摘要。";
+        public const string ReadDescription = "读取 QQ 空间最近的说说和评论区摘要。uin 填 self 看自己的，留空用默认联系人，或填指定 QQ 号。";
         public const string ReadWhenToUse =
-            "她让我看说说、看空间、看看她或我最近发了什么，或评论区里发生了什么。";
+            "她让我看说说、看空间或查评论，或主动醒来时我想看看近况。";
         public const string ReadWhenNotToUse =
-            "她要发说说时用 qq.qzone.publish；对话里不要主动刷空间。空闲抽签由系统处理。";
+            "发说说使用发布能力。平常对话里按对方的请求看空间。";
         public const string ReadBoundary = "QQ说说｜读取最近说说（uin 可空）";
 
         public const string IdlePublishRoleHeader = "【空闲说说】";

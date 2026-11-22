@@ -707,7 +707,9 @@
             <div><label>经历类型</label><select id="momentTypeFilter" onchange="refreshTranscript()"><option value="">全部类型</option></select></div>
             <div><label>来源平台</label><select id="momentPlatformFilter" onchange="refreshTranscript()"><option value="">全部平台</option></select></div>
             <div class="nogrow"><label>&nbsp;</label><button onclick="refreshTranscript()">刷新经历</button></div>
+            <div class="nogrow"><label>&nbsp;</label><button id="retractUtteranceBtn" onclick="retractLastUtterance()">GM · 撤回最近发言</button></div>
           </div>
+          <div id="retractUtteranceState" class="muted" role="status"></div>
           <div class="transcript" id="transcript"></div>
           <h2>发起对话</h2>
           <label>从哪里发言</label>
@@ -2098,11 +2100,32 @@
       div.innerHTML = '<div class="moment-meta"><b>' + esc(m.role || '?') + '</b>' +
         '<span class="moment-badge">' + esc(m.typeLabel || m.type || '发生事件') + '</span>' +
         '<span class="moment-badge">' + esc(m.platformLabel || m.sourcePlatform || '未记录平台') + '</span>' +
-        (m.parentMomentId ? '<span>关联观察</span>' : '') + '<time class="moment-time">' + esc(time) + '</time></div>' +
+        (m.parentMomentId && m.type !== 'expression' ? '<span>关联观察</span>' : '') + '<time class="moment-time">' + esc(time) + '</time></div>' +
         '<div class="moment-body">' + esc(m.content || '') + '</div>';
       box.append(div);
     }
     box.scrollTop = box.scrollHeight;
+  }
+  async function retractLastUtterance() {
+    const button = $("retractUtteranceBtn");
+    const status = $("retractUtteranceState");
+    if (button.disabled) return;
+    button.disabled = true;
+    status.textContent = "";
+    try {
+      const target = await api("/gm/last-utterance");
+      if (!target?.id) { status.textContent = "还没有可撤回的私密发言。"; return; }
+      const preview = target.content.length > 160 ? target.content.slice(0, 160) + "…" : target.content;
+      if (!confirm(`撤回 ${target.role} 在${target.platform}的最近一条私密发言？\n\n${preview}\n\n这条将从 TraceSoul 的对话和后续上下文中移除。`)) return;
+      await api("/gm/retract-last-utterance", "POST", { id: target.id });
+      status.textContent = "已撤回一条发言。";
+      await refreshTranscript();
+      renderTurn(await api("/turns/last"));
+    } catch (e) {
+      status.textContent = e.message;
+    } finally {
+      button.disabled = false;
+    }
   }
   let wxxzSession = null;
   let wxxzCaptureId = null;

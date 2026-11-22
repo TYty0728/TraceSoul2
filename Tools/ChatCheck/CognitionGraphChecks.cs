@@ -135,7 +135,7 @@ internal static partial class Program
                 var services = new TracePluginServices(store, new HierarchicalVectorRouterLogic(new FakeEncoder()));
                 var turn = new TraceTurnContext("puzzle", m1, new List<MomentRecord>(), 0, false, services);
                 var preview = MemoryRecallLogic.Preview(turn, 4);
-                Require(preview.Contains(first.Id) && preview.Contains(second.Id) && preview.Contains("反证") && preview.Contains("他") &&
+                Require(!preview.Contains(first.Id) && !preview.Contains(second.Id) && preview.Contains("反证") && preview.Contains("他") &&
                     preview.Contains("例外") && preview.Contains(first.Summary) && preview.Contains(second.Summary) &&
                     preview.Contains("外部生活/对方自述") && !preview.Contains(m2.Id) && !preview.Contains(m2.Content) &&
                     !preview.Contains("重复场景里的支持性观察") && !preview.Contains("置信="),
@@ -143,12 +143,12 @@ internal static partial class Program
                 var renderedEvidence = new CognitionContextRecallSource(store).Retrieve(new ContextRecallQuery { Text = "青穹杯" })
                     .Single(x => x.Id == first.Id).RenderedText;
                 // 毫秒内落库的支持证据可能同序；检验来源有效及反证保留，不依赖并列项顺序。
-                Require(Enumerable.Range(0, 20).Any(i => renderedEvidence.Contains("依据（支持）原始记录:support-" + i + " ")) &&
-                    renderedEvidence.Contains("依据（反证）原始记录:" + m2.Id) && renderedEvidence.Contains("外部生活/对方自述") &&
+                Require(renderedEvidence.Contains("依据（支持）") && renderedEvidence.Contains("依据（反证）") &&
+                    !renderedEvidence.Contains("support-") && !renderedEvidence.Contains(m2.Id) && renderedEvidence.Contains("外部生活/对方自述") &&
                     !renderedEvidence.Contains("supports") && !renderedEvidence.Contains("challenges") && !renderedEvidence.Contains("user_reported"),
-                    "召回用中文说明依据，仍分别保留支持、反证与可追溯的原始ID");
+                    "召回用中文说明依据，保留支持、反证和来源类别");
                 var explicitRecall = MemoryRecallLogic.Assemble(turn, new MindDecisionData { query = "青穹杯" }, 4, out var found);
-                Require(found && explicitRecall.Contains(first.Id) && explicitRecall.Contains(m2.Id) &&
+                Require(found && !explicitRecall.Contains(first.Id) && !explicitRecall.Contains(m2.Id) &&
                     explicitRecall.Contains(m2.Content) && explicitRecall.Contains("重复场景里的支持性观察"),
                     "主动 memory.recall 保留支持和反证原文的追溯入口");
                 var replacement = Create("喝水先确认温度，青穹杯本身不是限制。", m3.Id);
@@ -173,17 +173,18 @@ internal static partial class Program
                         { attention = "青穹杯的温度", cognition_ids = new List<string> { carriedId, "invented" } } } };
                 var llm = new AgentSequenceLlm(JsonSerializer.Serialize(step, new JsonSerializerOptions { IncludeFields = true }));
                 new KernelLogic(store, llm, manager).ChatAsync("puzzle", "青穹杯", historyWindowMax: 0).GetAwaiter().GetResult();
-                Require(llm.Requests.Count == 1 && llm.Requests[0].Contains(carriedId), "生产Agent在无历史时读取拼图且普通回应仍只需一次生成");
+                Require(llm.Requests.Count == 1 && llm.Requests[0].Contains(replacement.summary) && !llm.Requests[0].Contains(carriedId),
+                    "生产Agent在无历史时读取拼图正文，普通回应仍只需一次生成");
                 var held = store.LoadOrCreateInnerRuntime("puzzle").Attention.Single();
                 Require(held.source_refs.Contains("cognition:" + carriedId) && !held.source_refs.Contains("cognition:invented"),
                     "runtime只保存本轮真实召回的认知引用");
                 var neutral = new TraceTurnContext("puzzle", Evidence("neutral", "xyz"), new List<MomentRecord>(), 0, false, services);
-                Require(MemoryRecallLogic.Preview(neutral, 4).Contains(carriedId), "有效关注应参与下一轮召回");
+                Require(MemoryRecallLogic.Preview(neutral, 4).Contains(replacement.summary), "有效关注应参与下一轮召回");
                 var runtime = store.LoadOrCreateInnerRuntime("puzzle");
                 runtime.Attention[0].UpdatedUnixMs = now - 7L * 60 * 60 * 1000;
                 runtime.Revision++;
                 store.SaveInnerRuntime(runtime);
-                Require(!MemoryRecallLogic.Preview(neutral, 4).Contains(carriedId), "失活注意不能靠旧引用永久续命");
+                Require(!MemoryRecallLogic.Preview(neutral, 4).Contains(replacement.summary), "失活注意不能靠旧引用永久续命");
 
                 var visible = CognitionFormationLogic.SelectEvidence(new[] { m1, m2, m3 });
                 Require(!CognitionFormationLogic.Valid(null, visible, new List<CognitionSliceRecord>(), new List<LifeTagRecord>()),

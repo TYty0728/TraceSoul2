@@ -15,14 +15,18 @@ namespace TraceSoul2.Host
     {
         private readonly string path;
         private readonly string dataDirectory;
+        private readonly Func<string, bool> retracted;
         private readonly object gate = new object();
 
-        public JsonLifeStateStore(string dataDirectory)
+        public JsonLifeStateStore(string dataDirectory) : this(dataDirectory, null) { }
+
+        internal JsonLifeStateStore(string dataDirectory, Func<string, bool> retracted)
         {
             if (string.IsNullOrWhiteSpace(dataDirectory))
                 throw new ArgumentException("dataDirectory 不能为空。", "dataDirectory");
             Directory.CreateDirectory(dataDirectory);
             this.dataDirectory = dataDirectory;
+            this.retracted = retracted;
             path = Path.Combine(dataDirectory, "life-state.json");
         }
 
@@ -39,7 +43,7 @@ namespace TraceSoul2.Host
                     document.states[id] = value;
                     Write(document);
                 }
-                return Clone(value);
+                return WithoutRetractedActivity(Clone(value));
             }
         }
 
@@ -55,6 +59,7 @@ namespace TraceSoul2.Host
                 LifeStateData state;
                 if (!document.states.TryGetValue(id, out state) || state == null)
                     state = NewState(id, MouthLogic.LoadState(dataDirectory).scene);
+                WithoutRetractedActivity(state);
 
                 if (patch.location != null &&
                     CanReplace(state.location_source, source, patch.force))
@@ -86,6 +91,17 @@ namespace TraceSoul2.Host
                 MouthLogic.SetScene(Path.GetDirectoryName(path), state.location);
                 return Clone(state);
             }
+        }
+
+        private LifeStateData WithoutRetractedActivity(LifeStateData state)
+        {
+            if (state.activity_source == LifeStateSourceValues.Mind && retracted?.Invoke(state.activity_source_id) == true)
+            {
+                state.activity = state.activity_detail = state.activity_source_id = string.Empty;
+                state.activity_source = LifeStateSourceValues.System;
+                state.activity_started_unix_ms = state.activity_updated_unix_ms = 0;
+            }
+            return state;
         }
 
         private sealed class Document

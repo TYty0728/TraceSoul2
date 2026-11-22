@@ -105,6 +105,16 @@ namespace TraceSoul2.Manager
         }
 
         [MethodImpl(MethodImplOptions.Synchronized)]
+        internal MomentRecord GetLatestMomentFromPlugin(string conversationId, string pluginId,
+            string evidenceType, string contentPattern)
+        {
+            return connection.Query<MomentRecord>(
+                "SELECT * FROM moments WHERE ConversationId=? AND SourcePluginId=? AND EvidenceType=? " +
+                "AND Content LIKE ? AND IFNULL(MemoryStatus,'')!='operational' ORDER BY CreatedUnixMs DESC,Id LIMIT 1",
+                conversationId, pluginId, evidenceType, contentPattern).FirstOrDefault();
+        }
+
+        [MethodImpl(MethodImplOptions.Synchronized)]
         public int CountDialogueMoments(string conversationId)
         {
             return connection.ExecuteScalar<int>(

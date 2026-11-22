@@ -126,7 +126,7 @@ namespace TraceSoul2.Data
 
     /// <summary>
     /// 时间阶梯条目：比较晋升制榜单中的指针（day/week/month/year/forever）。
-    /// 只存 RefId + 一句原因，内容永远留在事实/认知网中，榜单更新不新增数据。
+    /// Label 保留入榜来源摘要供排序，ReadingLabel 是可选的榜单短文。
     /// </summary>
     [Table("ladder_items")]
     public sealed class LadderItemRecord
@@ -140,6 +140,7 @@ namespace TraceSoul2.Data
         public string RefId { get; set; }
         public string RefKind { get; set; }
         public string Label { get; set; }
+        public string ReadingLabel { get; set; }
         public string Reason { get; set; }
         public long CreatedUnixMs { get; set; }
     }

@@ -17,10 +17,12 @@ namespace TraceSoul2.Logic
     /// <summary>事件入口、Agent 行动循环与执行反馈；复盘仍由独立后台任务触发。</summary>
     public sealed class KernelLogic
     {
+        private const int QzoneWakeChancePercent = 15;
         private readonly IMemoryStore storage;
         private readonly AgentLoopLogic agent;
         private readonly ExpressorLogic expressor;
         private readonly TracePluginManager plugins;
+        private readonly Func<bool> drawQzoneWake;
         private DeferredTurnWork deferredWork;
         private DeferredTurnWork stateMaintenanceWork;
 
@@ -67,11 +69,21 @@ namespace TraceSoul2.Logic
             IMemoryStore storage,
             ILlmClient llm,
             TracePluginManager pluginManager)
+            : this(storage, llm, pluginManager, () => Random.Shared.Next(100) < QzoneWakeChancePercent)
+        {
+        }
+
+        internal KernelLogic(
+            IMemoryStore storage,
+            ILlmClient llm,
+            TracePluginManager pluginManager,
+            Func<bool> drawQzoneWake)
         {
             this.storage = storage ?? throw new ArgumentNullException("storage");
             agent = new AgentLoopLogic(llm);
             expressor = new ExpressorLogic(llm);
             plugins = pluginManager ?? throw new ArgumentNullException("pluginManager");
+            this.drawQzoneWake = drawQzoneWake;
             plugins.Services.Llm = llm;
             if (plugins.Services.ContextPack == null)
                 plugins.Services.ContextPack = new LlmContextAssembler();
@@ -158,6 +170,10 @@ namespace TraceSoul2.Logic
                 historyWindowMax, historyWindowAlign);
 
             var environment = EnvironmentLogic.Resolve(storage, conversationId, source);
+            if (pair.IsHumanMoment(source.Role) && storage is SqliteMemoryManager sqlite &&
+                sqlite.WasInboundUtteranceRetracted(environment.ContextConversationId, source.PluginId, source.ExternalEventId, environment))
+                return new ChatTurnResultData(string.Empty, "wait", "已撤回发言", "忽略已撤回发言的重复投递",
+                    new List<TraceContextBlockData>(), new List<BrainFacetOutputData>(), new List<TraceCapabilityResultData>());
             if (environment.Visibility == "public" && !pair.IsHumanMoment(source.Role))
             {
                 storage.SaveOperationalEvent(new OperationalEventRecord { Id = Guid.NewGuid().ToString("N"),
@@ -470,7 +486,9 @@ namespace TraceSoul2.Logic
             plugins.Services.LogTiming(turn.TraceId, "上下文组装完成", contextTimer.ElapsedMilliseconds,
                 "blocks=" + blocks.Count);
             var pluginList = plugins.GetPlugins().Where(x => x.Enabled).ToList();
-            var expressionCatalog = FilterExpressionCatalog(catalog, turn);
+            // 同一次醒来的多步行动共用一个结果，目录刷新不重新抽签。
+            var heartbeatTurn = HeartbeatLogic.IsHeartbeatTurn(turn);
+            var qzoneWake = heartbeatTurn && !EnvironmentLogic.IsPublic(turn) && drawQzoneWake();
             var recallTopK = turn.Services.Recall != null && turn.Services.Recall.DefaultTopK > 0
                 ? Math.Max(1, Math.Min(10, turn.Services.Recall.DefaultTopK))
                 : 3;
@@ -485,10 +503,11 @@ namespace TraceSoul2.Logic
 
             // 是否表达由 Agent 决定；只有实际选择输出后才通知平台开始表达。
             var decision = await agent.RunAsync(turn, naturallyAwakenedPast,
-                () => FilterExpressionCatalog(plugins.GetAvailableActionCatalog(turn), turn),
-                (call, token) => ExecuteAgentActionAsync(call, turn, token), cancellationToken,
+                () => FilterExpressionCatalog(plugins.GetAvailableActionCatalog(turn), turn, qzoneWake),
+                (call, token) => ExecuteAgentActionAsync(call, turn, qzoneWake, token), cancellationToken,
                 async token => { await plugins.BuildContextBlocksAsync(turn, token); });
-            expressionCatalog = FilterExpressionCatalog(plugins.GetAvailableCatalog(turn), turn);
+            // 主动说说已经由 Agent 行动处理，收尾的私聊表达不再追加一条。
+            var expressionCatalog = FilterExpressionCatalog(plugins.GetAvailableCatalog(turn), turn);
             blocks = turn.Workspace.ContextBlocks.ToList();
             // Agent 已在同一步决定是否说话；不再用旧心智启发式强迫第二次生成。
             TraceCapabilityResultData expression = null;
@@ -560,12 +579,13 @@ namespace TraceSoul2.Logic
         }
 
         private async Task<TraceCapabilityResultData> ExecuteAgentActionAsync(
-            BrainCapabilityCallData call, TraceTurnContext turn, CancellationToken cancellationToken)
+            BrainCapabilityCallData call, TraceTurnContext turn, bool qzoneWake, CancellationToken cancellationToken)
         {
             TraceCapabilityResultData result;
             if (call.capability_id == "memory.source")
             {
-                result = ToolExperienceLogic.ReadSource(turn, call.GetArgument("source_id"), call.GetArgument("offset"));
+                result = ToolExperienceLogic.ReadSource(turn, call.GetArgument("source_id"), call.GetArgument("offset"),
+                    call.GetArgument("source_ref"));
                 result.CallId = call.call_id; result.CapabilityId = call.capability_id;
                 return result;
             }
@@ -582,11 +602,21 @@ namespace TraceSoul2.Logic
                 result = new TraceCapabilityResultData { CallId = call.call_id, CapabilityId = call.capability_id,
                     Status = accepted ? "success" : "failed", Summary = accepted ? "已请求停止，尚待设备确认。" : "未找到本会话可停止的执行。" };
             }
-            else if ((IsQzonePublishCapability(call.capability_id) && !AllowsQzonePublish(turn)) ||
+            else if ((IsQzonePublishCapability(call.capability_id) &&
+                      !(qzoneWake && call.capability_id == QzonePublishLogic.PublishCapabilityId) &&
+                      !AllowsQzonePublish(turn)) ||
+                     (call.capability_id == QzonePublishLogic.ReadCapabilityId &&
+                      !qzoneWake && !EnvironmentLogic.IsHumanInput(turn)) ||
                      (IsQqMoodCapability(call.capability_id) && !AllowsQqMood(turn)))
             {
                 result = new TraceCapabilityResultData { CallId = call.call_id, CapabilityId = call.capability_id,
                     Status = "skipped", Summary = "当前入站未授权该发布或状态修改，未执行。" };
+            }
+            else if (qzoneWake && IsQzonePublishCapability(call.capability_id) &&
+                     turn.Workspace.Results.Any(x => x != null && IsQzonePublishCapability(x.CapabilityId)))
+            {
+                result = new TraceCapabilityResultData { CallId = call.call_id, CapabilityId = call.capability_id,
+                    Status = "skipped", Summary = "本次醒来已有一次发布尝试，请依据回执确认。" };
             }
             else
             {
@@ -597,10 +627,18 @@ namespace TraceSoul2.Logic
                         Status = "failed", Summary = "能力已离线或不可用。" };
                 else
                 {
-                    if (descriptor.Kind == TraceContributionKindValues.Effector)
+                    var autonomousPost = qzoneWake && descriptor.Id == QzonePublishLogic.PublishCapabilityId;
+                    var notifyConversation = descriptor.Kind == TraceContributionKindValues.Effector && !autonomousPost;
+                    if (notifyConversation)
                         await RunExpressionStartingHooksAsync(turn);
                     try
                     {
+                        // 主动说说的配图由 Agent 一起决定，省略即为纯文字。
+                        if (autonomousPost && call.GetArgument("image_prompt", null) == null)
+                        {
+                            call.arguments ??= new();
+                            call.arguments.Add(new BrainCallArgumentData { name = "image_prompt", value = "" });
+                        }
                         result = await ExecuteWithQzoneMediaAsync(call, turn, cancellationToken);
                     }
                     catch (OperationCanceledException) { throw; }
@@ -613,7 +651,7 @@ namespace TraceSoul2.Logic
                         ((result.Status != "running" && result.Status != "accepted") || result.ProducedEvent.IsOperational))
                         PersistPluginEvent(turn.ConversationId, result.ProducedEvent, turn.Environment);
                     // 平台合并发送必须在反馈给 Agent 前提交，避免把仅暂存的语音/文字当作已发送。
-                    if (descriptor.Kind == TraceContributionKindValues.Effector)
+                    if (notifyConversation)
                         await RunTurnCompleteHooksAsync(turn);
                 }
             }
@@ -660,6 +698,7 @@ namespace TraceSoul2.Logic
                 if (expression.Status != "success" || expression.ProducedEvent == null)
                     throw new InvalidOperationException("外部表达器执行失败：" + expression.Summary);
                 turn.Workspace.Results.Add(expression);
+                expression.ProducedEvent.ParentMomentId ??= turn.Moment.Id;
                 PersistPluginEvent(conversationId, expression.ProducedEvent, turn.Environment);
             }
             // console 观察窗：她说的每句话都在 console 留一份运行痕迹；
@@ -798,6 +837,7 @@ namespace TraceSoul2.Logic
                 {
                     try
                     {
+                        if (storage is SqliteMemoryManager sql && sql.WasUtteranceTurnRetracted(turn.Moment.Id)) return;
                         foreach (var item in prepared)
                             await SendPreparedImageAsync(item, turn, conversationId, sendCt);
                     }
@@ -927,13 +967,15 @@ namespace TraceSoul2.Logic
 
         private static List<TraceContributionDescriptorData> FilterExpressionCatalog(
             IEnumerable<TraceContributionDescriptorData> catalog,
-            TraceTurnContext turn)
+            TraceTurnContext turn, bool qzoneWake = false)
         {
-            var items = (catalog ?? Enumerable.Empty<TraceContributionDescriptorData>()).ToList();
-            if (AllowsQzonePublish(turn) && AllowsQqMood(turn)) return items;
-            return items.Where(x => x == null ||
-                                    (!IsQzonePublish(x) || AllowsQzonePublish(turn)) &&
-                                    (!IsQqMood(x) || AllowsQqMood(turn))).ToList();
+            var publish = AllowsQzonePublish(turn);
+            var read = qzoneWake || EnvironmentLogic.IsHumanInput(turn);
+            var mood = AllowsQqMood(turn);
+            return (catalog ?? Enumerable.Empty<TraceContributionDescriptorData>()).Where(x => x == null ||
+                (!IsQzonePublish(x) || publish || (qzoneWake && x.Id == QzonePublishLogic.PublishCapabilityId)) &&
+                (x.Id != QzonePublishLogic.ReadCapabilityId || read) &&
+                (!IsQqMood(x) || mood)).ToList();
         }
 
         private static bool IsQzonePublish(TraceContributionDescriptorData item)
@@ -986,8 +1028,7 @@ namespace TraceSoul2.Logic
         }
 
         /// <summary>
-        /// 空间发布是不可逆的外部副作用，只接受当前消息中的明确发布指令。
-        /// 宁可漏触发并让用户再说清楚，也不能因为模型自由发挥而误发。
+        /// 对话中的空间发布来自当前消息中的明确指令。主动醒来的权限由该轮抽签提供。
         /// </summary>
         private static bool HasQzoneTarget(string text)
         {
@@ -1000,9 +1041,8 @@ namespace TraceSoul2.Logic
 
         private static bool AllowsQzonePublish(TraceTurnContext turn)
         {
-            var text = turn == null || turn.Moment == null
-                ? string.Empty
-                : (turn.Moment.Content ?? string.Empty).Trim();
+            if (!EnvironmentLogic.IsHumanInput(turn)) return false;
+            var text = (turn.Moment.Content ?? string.Empty).Trim();
             if (text.Length == 0) return false;
             if (!HasQzoneTarget(text)) return false;
 
@@ -1117,9 +1157,9 @@ namespace TraceSoul2.Logic
         private async Task<TraceCapabilityResultData> ExecuteWithQzoneMediaAsync(
             BrainCapabilityCallData call, TraceTurnContext turn, CancellationToken cancellationToken)
         {
-            var result = call.capability_id != "qq.qzone.publish"
+            var result = call.capability_id != QzonePublishLogic.PublishCapabilityId
                 ? await plugins.ExecuteAsync(call, turn, cancellationToken)
-                : await QzonePublishLogic.ExecuteAsync(call, turn, plugins.GetAvailableCatalog(turn),
+                : await QzonePublishLogic.ExecuteAsync(call, turn, plugins.GetAvailableActionCatalog(turn),
                     (step, token) => plugins.ExecuteAsync(step, turn, token), cancellationToken);
             ToolExperienceLogic.Prepare(plugins.GetAvailableActionCatalog(turn).FirstOrDefault(x => x.Id == call.capability_id),
                 call, result, turn);

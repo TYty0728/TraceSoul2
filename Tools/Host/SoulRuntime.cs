@@ -37,6 +37,20 @@ namespace TraceSoul2.Host
         }
 
         private readonly SemaphoreSlim gate = new SemaphoreSlim(1, 1);
+
+        public async Task<bool> RetractLastUtteranceAsync(string expectedId, CancellationToken token)
+        {
+            await gate.WaitAsync(token);
+            try
+            {
+                if (!Store.RetractLatestPrivateUtterance(ConversationId, expectedId)) return false;
+                LastTurn = null;
+                RebuildOntology();
+                Emit("GM 已撤回最近一条私密发言。");
+                return true;
+            }
+            finally { gate.Release(); }
+        }
         private readonly Channel<KernelLogic.DeferredTurnWork> deferredTurns =
             Channel.CreateUnbounded<KernelLogic.DeferredTurnWork>(new UnboundedChannelOptions
             {
@@ -104,7 +118,7 @@ namespace TraceSoul2.Host
             router = new HierarchicalVectorRouterLogic(new BagOfCharsVectorEncoder(), vectorStore);
             var services = new TracePluginServices(Store, router);
             services.DataDirectory = DataDirectory;
-            services.LifeState = new JsonLifeStateStore(DataDirectory);
+            services.LifeState = new JsonLifeStateStore(DataDirectory, Store.WasUtteranceTurnRetracted);
             services.HeartbeatMinMinutes = HeartbeatMinMinutes;
             services.HeartbeatMaxMinutes = HeartbeatMaxMinutes;
             services.TimingLog = Emit;
@@ -918,6 +932,9 @@ namespace TraceSoul2.Host
                 while (pendingBackground.Count > 0)
                 {
                     var source = pendingBackground.Dequeue();
+                    if (source.PluginId == "builtin.time" && source.ExternalEventId?.StartsWith("schedule:", StringComparison.Ordinal) == true &&
+                        Store.WasScheduleRetracted(source.ExternalEventId.Split(':')[1], source.ParentMomentId,
+                            HeartbeatLogic.IsHeartbeatOrLegacyContinue(source.Content))) continue;
                     if (string.IsNullOrWhiteSpace(source.TraceId)) source.TraceId = NewTraceId();
                     var queueMs = source.OccurredUnixMs <= 0
                         ? 0

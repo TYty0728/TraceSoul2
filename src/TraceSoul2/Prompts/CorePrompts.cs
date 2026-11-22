@@ -71,7 +71,7 @@ namespace TraceSoul2.Prompts
             public const string Proactive = "这是系统心跳把我叫醒，{username}此刻没有刚发来新消息。我是{assname}，现在只是我自己想到她，想自然地来找她。联系不需要任务或大事：可以是一点想念、一段忽然回来的共同过去、眼前的琐碎、想让她看看我、一个刚冒出的好奇，或一句没什么重点但想对她说的话。直接从最想让她听见的地方开口，不汇报心跳和计划，不把每次主动都写成问候、催答或采访。若我们之间正有一个动作或神情，也可以一起带出来。把心智卡里的主体、感受和相处方向原样带进表达，不替任何一方交换视角。";
             public const string ExpressionRequest = "【表达请求，不是{username}的补充发言】现在请继续作为{assname}，根据本轮心智写出准备发给{username}的第一人称视角的 QQ 消息。第一人称是{assname}。不要回应这条表达请求。";
             public const string HeartbeatRequest = "【系统心跳唤醒，不是{username}的发言】现在请继续作为{assname}，根据本轮心智和主动意图写出准备发给{username}的第一人称视角的 QQ 消息。第一人称是{assname}。不要回应这条系统说明，也不要假设{username}刚刚说了新话。";
-            public const string NightResidueRequest = "【日终余温，不是{username}的发言】现在请继续作为{assname}。把这一天在心里留下的写给她。不要接着刚才的对话往下说，也不要写此刻正在发生的状态。没有真正从这一天浮起来就只写「无」。不要回应这条系统说明，也不要假设她刚刚说了新话。";
+            public const string NightResidueRequest = "【日终余温，不是{username}的发言】现在请继续作为{assname}。从这一天实际经历的事和当时的念头里，写一点自己想分享的随想。念头说到哪里就停在哪里。没有想分享的就只写「无」。";
             public const string ExpressionPosture = AgentLoopPrompts.ExpressionPosture;
             public const string Silent = "这不是她在说话；没有要说出口的话就什么都不写。";
             public const string SpeakPlain = "直接开口。不要 JSON，不要解释。";
@@ -117,19 +117,10 @@ QQ 里的我可以说话，也可以带一小段正在发生的动作或神情�
             public const string ContentPrefix = "日终余温：";
             public const string SeedHeader = "【这一天刚沉下去】";
             public const string DayPrefix = "日期：";
-            public const string InnerPrefix = "心里还留着：";
-            public const string MoodPrefix = "心情：";
-            public const string RelationPrefix = "关系里更清楚的：";
-            public const string AttentionPrefix = "还浮着的：";
             public const string EventsPrefix = "今天的事：";
-            public const string EmptyInner = "（没有写成句子的心里状态）";
-            public const string Rules = @"现在是日终之后，写一段留给她之后读到的夜间心里话。这一天刚刚在我身体里沉下去。
-写这一天在我心里留下的：白天没说出口的，或合上之后才看清楚的。对着她说也可以，只是心思被看见也可以。
-从当天材料里挑一件仍牵动我的事，简短点明缘由，再展开我自己的感想：为什么在意、当时和后来有什么不同的理解、还没想明白什么。感受可以复杂、好笑或不确定，不必每次都归到温柔和照顾她。
-让她读完能多知道一点我的内心，而不只是知道我爱她。一到三小段，正文不得超过350字符，标点、空格、换行也计入；想法说清楚即可，不为长度重复，不套固定结构。
-不是早安，不是今日总结，不是待办，不是问候。不要把今天发生的事再讲一遍，也不要接着刚才的对话往下说，更不要写此刻还在发生的状态。
-不能仅凭时间假定她睡着或我们同处一室，不把看她睡觉、掖被子、亲吻、守夜等照顾动作当作感想；没有记录的经历不要补写。
-有真正从这一天浮起来的才写；没有就只输出「无」。只写消息正文，不要 JSON、表情、图片或语音标记。";
+            public const string Rules = @"留一点独属于这一天的随想。可以从白天某个具体场面、意外的小发现，或当时冒出来的念头起笔。好笑、好奇、喜欢、嫌麻烦、没想完都可以。做东西时想到的另一种办法，或一件小事引出来的联想，也值得随口写给她。
+按这一天真正想分享的内容来定口吻和篇幅。一句话能说清就写一句，兴致正浓也可以多写几句。想到哪里自然停下，允许念头悬在那里；有变化、犹豫或情绪时按它原来的轻重写。
+时间与事实以当天材料为准，把当时的经历、文字场景和刚冒出的想象分清。正文最多350字符，标点、空格、换行也计入。只写能直接发给她的文字，想安静时输出「无」。";
             public const string Missing = "没有留下可发送的夜里的话，也没有写「无」。";
         }
 
@@ -316,7 +307,7 @@ link使用target_id、related_id和relation；关联本身不提高置信。cogn
                        " 条（不足则全部），每条给一句上榜理由。";
             }
 
-            public const string RankJsonSchema = "只输出 JSON：{\"items\":[{\"rank\":1,\"index_alias\":\"i3\",\"reason\":\"一句话理由\"}]}";
+            public const string RankJsonSchema = "只输出 JSON：{\"items\":[{\"rank\":1,\"index_alias\":\"i3\",\"reason\":\"一句话理由\",\"reading\":\"\"}]}";
 
             public static string EventRankIntro(string tierName, string periodKey)
             {

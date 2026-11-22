@@ -167,6 +167,21 @@ internal static partial class Program
         f.Reopen();
         Run(new DateTime(2020, 9, 7), empty);
         Require(empty.Requests.Count == 0, "晋升移空了周榜仍不会重复调用模型");
+
+        var compact = assembly.GetType("TraceSoul2.Migrate.DayLadderLogic", true).GetMethod("CompactReadingAsync");
+        var now = MemoryDayLogic.StartOf("2020-09-07");
+        int Compact(ILlmClient llm)
+        {
+            f.Context.GetType().GetProperty("Llm").SetValue(f.Context, llm);
+            return ((Task<int>)compact.Invoke(null, new object[] { f.Context, now })).GetAwaiter().GetResult();
+        }
+        Require(Compact(new AgentSequenceLlm("{\"items\":[{\"index\":1,\"summary\":\"想吃面包\"}]}")) == 1,
+            "旧榜精简只提交有新短文的条目正文");
+        var rows = f.Store.GetAllLadderItems().Where(x => x.Tier == "month").ToList();
+        Require(rows.Single(x => x.ListKind == "event").Label == "早餐想吃面包" &&
+            LadderContextLogic.Reading(rows, now).Contains("1. 想吃面包\n"),
+            "榜单短文持久生效，原摘要、条目类型和对应来源保留");
+        Require(Compact(empty) == 0 && empty.Requests.Count == 0, "已检查的榜单精简幂等");
     }
 
     private static void RunDailyReviewPipelineChecks(Assembly assembly)

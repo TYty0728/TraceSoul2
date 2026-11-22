@@ -112,7 +112,7 @@ namespace TraceSoul2.Logic
                     foreach (var item in recent)
                     {
                         var content = (item.Content ?? "").Replace('\r', ' ').Replace('\n', ' ');
-                        if (content.Length > 500) content = "（本条原文较长，记录ID：" + item.Id + "）";
+                        if (content.Length > 500) content = "（长原文，" + ToolExperienceLogic.SourceReference(turn, item.Id) + "）";
                         var line = Timestamp(item.CreatedUnixMs) + "｜" + MomentTypes.PlatformLabel(item.SourcePlatform) + "｜" +
                             (pair.IsHumanMoment(item.Role) ? "本人说：" : "我已回复：") + content;
                         if (line.Length > budget) continue;

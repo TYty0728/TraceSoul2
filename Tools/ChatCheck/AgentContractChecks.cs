@@ -74,7 +74,27 @@ internal static partial class Program
             "遗留 speak 字符串不再导致纠正，开口值由正文推导并供旧消费者读取");
         await CheckAgentSemanticRepairAsync(inbound);
         await CheckProgramOwnedFieldsAsync(services);
+        await CheckAgentProseRepairAsync(services);
         Console.WriteLine("Agent contract checks passed: independent DTO/schema, retired fields, typed repairs, nested arguments, heartbeat and legacy protocol isolation.");
+    }
+
+    private static async Task CheckAgentProseRepairAsync(TracePluginServices services)
+    {
+        var draft = TraceJson.ToJson(new { step = "finish", reply = "原本准备发的话", heartbeat_intent = "分享一件小事",
+            today = new string('今', 65), inner = new string('心', 122), next_heartbeat_minutes = 75 });
+        var shortPatch = TraceJson.ToJson(new { today = "她提起白天的安排。", inner = "我还记着那件事。", reply = "不能覆盖回复" });
+        var partial = TraceJson.ToJson(new { today = "她提起白天的安排。", inner = new string('心', 122) });
+        foreach (var (json, expectedInner) in new[] { (shortPatch, "我还记着那件事。"), (partial, "") })
+        {
+            var turn = new TraceTurnContext("contract", Moment("contract", HeartbeatLogic.HeartbeatContent), new(), 0, false, services);
+            var llm = new AgentSequenceLlm(draft, json);
+            var decision = await new AgentLoopLogic(llm).RunAsync(turn, "", () => new(), (_, _) => throw new Exception("不应执行"), default);
+            Require(llm.Requests.Count == 2 && llm.Requests[1].Contains("today") && llm.Requests[1].Contains("inner") &&
+                !llm.Requests[1].Contains("原本准备发的话") && decision.reply == "原本准备发的话" &&
+                decision.next_heartbeat_minutes == 75 && decision.today == "她提起白天的安排。" &&
+                (decision.inner ?? "") == expectedInner && decision.HasStateField("inner") == (expectedInner.Length > 0),
+                "65字 today 和122字 inner 应同批局部纠正，仍超限的状态沿用原值，正文和调度照常返回");
+        }
     }
 
     private static async Task CheckProgramOwnedFieldsAsync(TracePluginServices services)

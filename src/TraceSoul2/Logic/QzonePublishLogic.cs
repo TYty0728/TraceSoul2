@@ -5,13 +5,33 @@ using System.Text.Json;
 using System.Threading;
 using System.Threading.Tasks;
 using TraceSoul2.Data;
+using TraceSoul2.Manager;
 using TraceSoul2.Plugins;
+using TraceSoul2.Prompts;
 
 namespace TraceSoul2.Logic
 {
     // 中枢编排器官：空间决定正文/分享意图，相机负责画面，空间将图文一次发布。
     public static class QzonePublishLogic
     {
+        public const string PublishCapabilityId = "qq.qzone.publish";
+        public const string ReadCapabilityId = "qq.qzone.read";
+        private const string PostPrefix = "[QQ 空间说说] ";
+
+        internal static string WakeContext(TraceTurnContext turn)
+        {
+            var context = "\n" + AgentLoopPrompts.QzoneWake + "\n";
+            var post = (turn.Services.Storage as SqliteMemoryManager)?.GetLatestMomentFromPlugin(
+                turn.ConversationId, "qq.qzone", EvidenceTypeValues.AssPerformed, PostPrefix + "%");
+            if (post == null || post.CreatedUnixMs <= 0) return context;
+
+            var time = DateTimeOffset.FromUnixTimeMilliseconds(post.CreatedUnixMs).ToOffset(MemoryDayLogic.ChinaOffset);
+            var content = post.Content.Substring(PostPrefix.Length).Trim();
+            if (content.Length > 240) content = content.Substring(0, 240) + "…";
+            return context + "【我最近一次向空间投稿的记录】" + time.ToString("yyyy-MM-dd HH:mm") +
+                "\n" + content + "\n";
+        }
+
         public static async Task<TraceCapabilityResultData> ExecuteAsync(
             BrainCapabilityCallData source, TraceTurnContext turn,
             IEnumerable<TraceContributionDescriptorData> catalog,

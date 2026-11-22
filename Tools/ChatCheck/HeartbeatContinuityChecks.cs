@@ -55,9 +55,111 @@ internal static partial class Program
         await Sync(heartbeat, new MindDecisionData { next_heartbeat_minutes = 30 });
         Require(!HeartbeatLogic.NextDueUnixMs(store, heartbeat.ConversationId).HasValue, "用户关闭心跳后不能被模型重新打开");
         await RunAgentHeartbeatDeliveryCheckAsync();
+        await RunQzoneWakeChecksAsync();
         RunHeartbeatDispatchRecoveryCheck();
         await RunHeartbeatFreshnessCheckAsync();
         await RunHeartbeatEntryChecksAsync();
+    }
+
+    private static async Task RunQzoneWakeChecksAsync()
+    {
+        using var store = new SqliteMemoryManager(":memory:");
+        const string conversation = "heartbeat-qzone";
+        store.SavePairIdentity("小雨", "小光", "雨雨");
+        store.SaveMoment(new MomentRecord
+        {
+            Id = "last-qzone-post", ConversationId = conversation, Role = "小光", SourcePluginId = "qq.qzone",
+            EvidenceType = EvidenceTypeValues.AssPerformed, Content = "[QQ 空间说说] 上次发的动态",
+            CreatedUnixMs = DateTimeOffset.UtcNow.AddDays(-1).ToUnixTimeMilliseconds()
+        });
+        var services = new TracePluginServices(store, new HierarchicalVectorRouterLogic(new FakeEncoder()))
+            { HeartbeatMinMinutes = 10, HeartbeatMaxMinutes = 10 };
+        using var manager = new TracePluginManager(store, services);
+        manager.RegisterExternal(new DialogueTracePlugin());
+        manager.RegisterExternal(new TimeSchedulerPlugin());
+        var space = new QzoneWakeTestPlugin("test.qzone-wake");
+        manager.RegisterExternal(space);
+        var llm = new AgentSequenceLlm(
+            """{"step":"continue","actions":[{"capability_id":"qq.qzone.read"},{"capability_id":"qq.qzone.publish","arguments":[{"name":"content","value":"手动说说"}]}]}""",
+            """{"step":"finish","reply":"已处理。"}""",
+            """{"step":"continue","actions":[{"capability_id":"qq.qzone.read"},{"capability_id":"qq.qzone.publish","arguments":[{"name":"content","value":"这次不能发"}]}]}""",
+            """{"step":"wait","next_heartbeat_minutes":240}""",
+            """{"step":"continue","actions":[{"capability_id":"qq.qzone.read"}]}""",
+            """{"step":"continue","actions":[{"capability_id":"qq.qzone.publish","arguments":[{"name":"content","value":"今天想分享的事"}]}]}""",
+            """{"step":"continue","actions":[{"capability_id":"qq.qzone.publish","arguments":[{"name":"content","value":"再试一次的说说"}]}]}""",
+            """{"step":"wait","next_heartbeat_minutes":45}""",
+            """{"step":"wait","next_heartbeat_minutes":35}""");
+        var draws = 0;
+        var kernel = new KernelLogic(store, llm, manager, () => ++draws > 1);
+        async Task Wake()
+        {
+            var due = HeartbeatLogic.NextDueUnixMs(store, conversation);
+            Require(due.HasValue, "清醒后仍有下次醒来计划");
+            var source = manager.PollBackgroundServices(due.Value + 1).Single(x =>
+                x.PluginId == "builtin.time" && HeartbeatLogic.IsHeartbeatContent(x.Content));
+            await kernel.ProcessPluginEventAsync(conversation, source);
+        }
+
+        await kernel.ChatAsync(conversation, "帮我发一条说说，再看看空间。");
+        Require(draws == 0 && space.Calls.Count == 2, "明确请求看或发空间不抽签");
+        space.Calls.Clear();
+        var typingStarts = 0;
+        services.ExpressionStartingHooks.Add(_ => { typingStarts++; return Task.CompletedTask; });
+        var privateMessages = store.GetRecentDialogueMoments(conversation, 20).Count;
+
+        await Wake();
+        Require(draws == 1 && space.Calls.Count == 0 &&
+            !llm.Requests[2].Contains("- qq.qzone.") && !llm.Requests[3].Contains("- qq.qzone."),
+            "抽不中整轮隐藏两个工具，模型尝试调用和进入旧空闲都不会访问空间");
+
+        await Wake();
+        Require(draws == 2 && space.Calls.Select(x => x.capability_id).SequenceEqual(
+                new[] { QzonePublishLogic.ReadCapabilityId, QzonePublishLogic.PublishCapabilityId }) &&
+            space.Calls[1].GetArgument("image_prompt", null) == "" &&
+            llm.Requests[4].Contains("上次发的动态") && llm.Requests[5].Contains("- qq.qzone.publish") &&
+            typingStarts == 0 && store.GetRecentDialogueMoments(conversation, 20).Count == privateMessages &&
+            Math.Abs((HeartbeatLogic.NextDueUnixMs(store, conversation).Value -
+                DateTimeOffset.UtcNow.ToUnixTimeMilliseconds()) / 60000.0 - 45) < .1,
+            "抽中后可先看再独立发，无私聊输入提示，重试不会重复投稿，短间隔仍正常排心跳");
+
+        await Wake();
+        Require(draws == 3 && space.Calls.Count == 2 && llm.Requests.Count == 9,
+            "抽中也可不使用空间，等待不增加模型请求或空间操作");
+    }
+
+    private sealed class QzoneWakeTestPlugin : ITracePlugin
+    {
+        public TracePluginMetadataData Metadata { get; }
+        public List<BrainCapabilityCallData> Calls { get; } = new();
+        public QzoneWakeTestPlugin(string id)
+        {
+            Metadata = new() { Id = id, DisplayName = "模拟空间", Version = "1.0.0" };
+        }
+
+        public void Register(TracePluginContext context)
+        {
+            context.AddCallable(new SpaceAction(this, QzonePublishLogic.ReadCapabilityId, TraceContributionKindValues.CallableNerve));
+            context.AddCallable(new SpaceAction(this, QzonePublishLogic.PublishCapabilityId, TraceContributionKindValues.Effector));
+        }
+        public void Shutdown() { }
+
+        private sealed class SpaceAction : ITraceCallableContribution
+        {
+            private readonly QzoneWakeTestPlugin plugin;
+            public TraceContributionDescriptorData Descriptor { get; }
+            public SpaceAction(QzoneWakeTestPlugin plugin, string id, string kind)
+            {
+                this.plugin = plugin;
+                Descriptor = new() { Id = id, Kind = kind, Organ = BodyOrganValues.Qzone,
+                    IdleDailyCap = 1, HasExternalSideEffect = id == QzonePublishLogic.PublishCapabilityId };
+            }
+            public bool IsAvailable(TraceTurnContext context) => true;
+            public Task<TraceCapabilityResultData> ExecuteAsync(BrainCapabilityCallData call, TraceTurnContext context, CancellationToken token)
+            {
+                plugin.Calls.Add(call);
+                return Task.FromResult(new TraceCapabilityResultData { Status = "success", Summary = "模拟空间回执" });
+            }
+        }
     }
 
     private static async Task RunHeartbeatFreshnessCheckAsync()

@@ -25,8 +25,6 @@ namespace TraceSoul2.ExternalPlugins
         private static readonly Regex JsonpPrefix = new Regex(
             @"^[a-zA-Z_]\w*\(", RegexOptions.Compiled);
         private string herUin = string.Empty;
-        private int publishDailyCap = 1;
-        private int readDailyCap = 2;
         private readonly Func<HttpClient> httpFactory;
 
         public QqQzonePlugin() { }
@@ -66,8 +64,6 @@ namespace TraceSoul2.ExternalPlugins
             {
                 var value = ReadString(doc.RootElement, "her_uin");
                 if (!string.IsNullOrWhiteSpace(value)) herUin = value.Trim();
-                publishDailyCap = ReadCap(doc.RootElement, "publish_daily_cap", publishDailyCap);
-                readDailyCap = ReadCap(doc.RootElement, "read_daily_cap", readDailyCap);
             }
         }
 
@@ -638,24 +634,6 @@ namespace TraceSoul2.ExternalPlugins
             return value.GetString();
         }
 
-        private static int ReadCap(JsonElement root, string name, int fallback)
-        {
-            if (root.ValueKind != JsonValueKind.Object || !root.TryGetProperty(name, out var value))
-                return fallback;
-            int parsed;
-            if (value.ValueKind == JsonValueKind.Number && value.TryGetInt32(out parsed))
-                return ClampCap(parsed);
-            if (value.ValueKind == JsonValueKind.String && int.TryParse(value.GetString(), out parsed))
-                return ClampCap(parsed);
-            return fallback;
-        }
-
-        private static int ClampCap(int value)
-        {
-            if (value < 0) return 0;
-            return value > 20 ? 20 : value;
-        }
-
         private static bool IsIdleCall(BrainCapabilityCallData call)
         {
             var raw = call == null ? string.Empty : (call.GetArgument("idle") ?? string.Empty).Trim();
@@ -826,8 +804,7 @@ namespace TraceSoul2.ExternalPlugins
                     BodyTier = BodyTierValues.Chat,
                     Organ = BodyOrganValues.Qzone,
                     ParametersJsonSchema = "{content:string,image_prompt?:string,dispatch?:prepare|publish}",
-                    HasExternalSideEffect = true,
-                    IdleDailyCap = owner.publishDailyCap
+                    HasExternalSideEffect = true
                 };
             }
 
@@ -861,9 +838,8 @@ namespace TraceSoul2.ExternalPlugins
                     Boundary = QqQzonePrompts.ReadBoundary,
                     BodyId = BodyIds.Qq,
                     BodyTier = BodyTierValues.Chat,
-                    ParametersJsonSchema = "{uin:string,pos:number,num:number}",
-                    HasExternalSideEffect = false,
-                    IdleDailyCap = owner.readDailyCap
+                    ParametersJsonSchema = "{uin?:string,pos?:number,num?:number}",
+                    HasExternalSideEffect = false
                 };
             }
 

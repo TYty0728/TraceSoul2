@@ -13,7 +13,7 @@ using TraceSoul2.Util;
 namespace TraceSoul2.Logic
 {
     /// <summary>
-    /// 进入空闲时抽一件生活事：发说说、看说说、改心情等。
+    /// 进入空闲时抽一件生活事，例如改心情。
     /// 系统按均匀随机抽，模型不选活动；每日每项有次数上限，满了就出池。
     /// 「歇着」始终在池里，所以也可以什么都不做。
     /// </summary>
@@ -39,6 +39,9 @@ namespace TraceSoul2.Logic
             {
                 if (item == null || item.IdleDailyCap <= 0) continue;
                 var id = (item.Id ?? string.Empty).Trim();
+                // 旧版空间插件仍可能声明日限，空间已改走独立的醒来机会。
+                if (string.Equals(id, QzonePublishLogic.PublishCapabilityId, StringComparison.OrdinalIgnoreCase) ||
+                    string.Equals(id, QzonePublishLogic.ReadCapabilityId, StringComparison.OrdinalIgnoreCase)) continue;
                 if (id.Length == 0 || !seen.Add(id)) continue;
                 if (Count(store, id, now) >= item.IdleDailyCap) continue;
                 pool.Add(id);

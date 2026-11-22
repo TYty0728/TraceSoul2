@@ -168,6 +168,22 @@ namespace TraceSoul2.Migrate
                 .ToList();
         }
 
+        public void SaveLadderReadings(IReadOnlyList<LadderItemRecord> sources, IReadOnlyDictionary<int, string> summaries)
+        {
+            lock (brainWriteGate)
+                brain.RunInTransaction(() =>
+                {
+                    for (var i = 0; i < sources.Count; i++)
+                    {
+                        var source = sources[i];
+                        var reading = summaries.TryGetValue(i + 1, out var summary) ? summary : source.Label.Trim();
+                        if (brain.Execute("UPDATE ladder_items SET ReadingLabel=? WHERE Id=? AND RefId=? AND Label=? " +
+                            "AND (ReadingLabel IS NULL OR trim(ReadingLabel)='')", reading, source.Id, source.RefId, source.Label) != 1)
+                            throw new InvalidOperationException("精简榜单期间条目已更新，请按当前榜单重试。");
+                    }
+                });
+        }
+
         public List<LadderItemRecord> GetLadderAll(string tier)
         {
             return brain.Table<LadderItemRecord>()
@@ -442,7 +458,7 @@ namespace TraceSoul2.Migrate
                     brain.Execute("UPDATE cognition_cues SET CognitionId=? WHERE CognitionId=?", keptId, duplicateId);
                     brain.Execute("UPDATE cognition_edges SET FromCognitionId=? WHERE FromCognitionId=?", keptId, duplicateId);
                     brain.Execute("UPDATE cognition_edges SET ToCognitionId=? WHERE ToCognitionId=?", keptId, duplicateId);
-                    brain.Execute("UPDATE ladder_items SET RefId=?, Label=? WHERE RefId=? AND RefKind='cognition'", keptId, keptSummary, duplicateId);
+                    brain.Execute("UPDATE ladder_items SET RefId=?, Label=?, ReadingLabel=NULL WHERE RefId=? AND RefKind='cognition'", keptId, keptSummary, duplicateId);
                     dup.Status = "inactive";
                     dup.UpdatedUnixMs = DateTimeOffset.UtcNow.ToUnixTimeMilliseconds();
                     brain.Update(dup);

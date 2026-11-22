@@ -125,21 +125,21 @@ namespace TraceSoul2.Logic
                 {
                     var c = byId[x.Key];
                     var refs = evidence.Where(e => e.CognitionId == c.Id).ToList();
-                    var text = "[认知:" + c.Id + "｜" + PuzzleDomains.Label(c.Domains) + "] 我目前理解：" + c.Summary;
+                    var text = "[" + PuzzleDomains.Label(c.Domains) + "] 我目前理解：" + c.Summary;
                     if (!string.IsNullOrWhiteSpace(c.Scope)) text += "；适用范围：" + c.Scope;
                     if (!string.IsNullOrWhiteSpace(c.Exceptions)) text += "；例外：" + c.Exceptions;
                     if (c.Status == "weakened") text += "；已有反证，理解已削弱";
                     if (conflicts.Contains(c.Id)) text += "；与相关理解有冲突，需对照判断";
                     var connected = edges.Where(e => e.FromCognitionId == c.Id || e.ToCognitionId == c.Id).Take(4).ToList();
-                    if (query.IncludeOriginalEvidence)
-                        foreach (var e in connected) text += "；关联 " + RelationLabel(e.Relation) + ":" + (e.FromCognitionId == c.Id ? e.ToCognitionId : e.FromCognitionId);
+                    if (query.IncludeOriginalEvidence && connected.Count > 0)
+                        text += "；关联性质：" + string.Join("、", connected.Select(e => RelationLabel(e.Relation)).Distinct());
                     // 两条摘要优先分别保留反证和支持，关联依据不能冒充内容被证明。
                     var shownEvidence = refs.Where(e => e.Relation == "challenges").Take(1)
                         .Concat(refs.Where(e => e.Relation == "supports").Take(1)).ToList();
                     if (shownEvidence.Count == 0) shownEvidence.AddRange(refs.Take(2));
                     foreach (var e in query.IncludeOriginalEvidence ? shownEvidence : new List<CognitionEvidenceRecord>())
                     {
-                        text += "；依据（" + RelationLabel(e.Relation) + "）原始记录:" + e.MomentId;
+                        text += "；依据（" + RelationLabel(e.Relation) + "）";
                         if (moments.TryGetValue(e.MomentId ?? "", out var m))
                             text += " [" + RealmLabel(m.Realm) + "/" + EvidenceLabel(m.EvidenceType) + "] " + Clip(m.Content, 100);
                         else text += "（原始来源当前不可读取，不能当作已核实）";
@@ -160,7 +160,7 @@ namespace TraceSoul2.Logic
             if ((value ?? "").StartsWith("link:", StringComparison.Ordinal))
             {
                 var parts = value.Split(new[] { ':' }, 3);
-                if (parts.Length == 3) return "关联依据：" + RelationLabel(parts[1]) + "至" + parts[2];
+                if (parts.Length == 3) return "关联依据：" + RelationLabel(parts[1]);
             }
             return value switch
             {
