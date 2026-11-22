@@ -8,6 +8,10 @@
 - 控制台新增 GM 撤回最近一条私密发言，联动后续对话和附属记忆来源。榜单首页与上下文可读短文，已有条目可以通过 `compact-ladder` 补写。
 - 主动轮可自主浏览和发布 QQ 空间，使用近期成功发布记录冷却；空间发布与私聊联系分别判断。同步供应商接入及排障记录。
 
+2026-11-23 发布确认。源码 `b037b6f` 已推送，604 文件通过发布安全检查，本地 Host、Migration、ChatCheck 构建及完整 ChatCheck 和提示布局通过。两个合成记忆日用 deepseek-flash 经夜间表达入口生成了不同主题的随想。65 字 `today` 与 122 字 `inner` 通过同批纠正回放，也验证了只纠正其中一项时仍能返回原回复与调度。
+
+发布 CI、Docker 升级和复盘恢复均成功。匿名 latest 指向 v0.1.99，三平台完整包、0.1.98 增量包、文件清单及 9 份 SHA-256 公开可访问，摘要与 GitHub 资产 digest 一致，SDK 1.19.0 可用。线上实例待应用更新。见[发布页](https://github.com/TYty0728/TraceSoul2/releases/tag/v0.1.99)、[发布 CI](https://github.com/TYty0728/TraceSoul2/actions/runs/45040766647)、[升级验证](https://github.com/TYty0728/TraceSoul2/actions/runs/45040766981)与[复盘恢复](https://github.com/TYty0728/TraceSoul2/actions/runs/45040766932)。
+
 ## 0.1.98（2026-11-19）
 
 - 恢复自动周榜、月榜。日复盘队列成功后，从最近一期向后补齐已结束的周期，事件和认知分别排名。跨月的一周按周一归月，整周结束后才结算该月。
