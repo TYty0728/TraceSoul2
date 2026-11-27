@@ -26,8 +26,8 @@ class Upstream(BaseHTTPRequestHandler):
 
     def do_POST(self):
         body = json.loads(self.rfile.read(int(self.headers['Content-Length'])))
-        # The private turn now also schedules an independent, bounded state update.
-        # Keep it observable without counting it as another dialogue fallback attempt.
+        # A private turn schedules one bounded state update only when its reply requests it.
+        # Keep that call observable without counting it as another dialogue fallback attempt.
         maintenance = any(m.get('role') == 'system' and
             m.get('content', '').startswith('整理本轮之后仍然相关的关注和共同文字场景。')
             for m in body.get('messages', []))
@@ -37,7 +37,9 @@ class Upstream(BaseHTTPRequestHandler):
         else:
             calls.append((self.path, body))
         success = maintenance or self.path.startswith('/tertiary/')
-        content = {'attention': [], 'scene': None} if maintenance else {'step': 'finish', 'reply': 'offline fallback ok'}
+        content = {'attention': [], 'scene': None} if maintenance else {
+            'step': 'finish', 'reply': 'offline fallback ok',
+            'maintenance_reason': '对话已有结果，整理仍相关的关注'}
         result = {'choices': [{'message': {'content': json.dumps(content)},
                                'finish_reason': 'stop'}]} if success else {'error': {'message': 'private-upstream-detail'}}
         raw = json.dumps(result).encode()
@@ -136,7 +138,7 @@ def main():
                         ['/secondary/chat/completions'] * 3 + ['/tertiary/chat/completions'])
                     assert [p for p, _ in calls] == expected_calls
                     assert all(body['messages'] == calls[0][1]['messages'] for _, body in calls)
-                    assert maintenance_received.wait(5), 'Private turn must schedule its independent state update'
+                    assert maintenance_received.wait(5), 'Requested private-turn state update must run independently'
                     assert len(maintenance_calls) == 1, 'State update must not repeat the dialogue fallback chain'
                     assert maintenance_calls[0][1]['messages'] != calls[0][1]['messages']
                     assert api('/providers/slots')['chat']['providerId'] == 'default'
