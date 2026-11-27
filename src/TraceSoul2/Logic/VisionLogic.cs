@@ -24,7 +24,7 @@ namespace TraceSoul2.Logic
     {
         public const int MaxImages = 4;
         public const int MaxBytes = 12 * 1024 * 1024;
-        public const int MaxSeenChars = 400;
+        public const int MaxSeenCharsPerImage = 500;
         public static readonly TimeSpan SeeTimeout = TimeSpan.FromSeconds(45);
 
         private static readonly HttpClient Http = CreateHttp();
@@ -110,7 +110,8 @@ namespace TraceSoul2.Logic
                     "｜images=" + images.Count + "｜bytes=" + images.Sum(x => (long)x.bytes.Length) + "｜types=" +
                     string.Join(",", images.Select(x => x.ResolveMime())));
 
-            var ask = CorePrompts.Vision.UserAsk(source.Content);
+            var maxSeenChars = MaxSeenCharsPerImage * images.Count;
+            var ask = CorePrompts.Vision.UserAsk(source.Content, maxSeenChars);
             var messages = new List<DeepSeekMessageData>
             {
                 new DeepSeekMessageData("system", CorePrompts.Vision.System),
@@ -122,13 +123,13 @@ namespace TraceSoul2.Logic
                 {
                     timeout.CancelAfter(SeeTimeout);
                     var raw = await client.CompleteTextAsync(messages, timeout.Token);
-                    raw = OneLine(raw);
+                    raw = NormalizeObservation(raw);
                     if (raw.Length == 0)
                     {
                         services?.LogTiming(source == null ? null : source.TraceId, "识图模型空回复");
                         return CorePrompts.Vision.LoadFailed;
                     }
-                    return Limit(raw, MaxSeenChars);
+                    return Limit(raw, maxSeenChars);
                 }
             }
             catch (OperationCanceledException) when (cancellationToken.IsCancellationRequested) { throw; }
@@ -405,7 +406,7 @@ namespace TraceSoul2.Logic
             return new LlmImagePartData { bytes = bytes, mime = mime };
         }
 
-        private static string OneLine(string value)
+        private static string NormalizeObservation(string value)
         {
             value = (value ?? string.Empty).Replace("\r\n", "\n").Trim();
             while (value.IndexOf("\n\n", StringComparison.Ordinal) >= 0)

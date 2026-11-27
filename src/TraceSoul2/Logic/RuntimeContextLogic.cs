@@ -129,11 +129,10 @@ namespace TraceSoul2.Logic
                     : storage.GetTodayNewItems(turn.ConversationId, MemoryDayLogic.CurrentStart(now).ToUnixTimeMilliseconds(), 20);
                 if (storage is TraceSoul2.Manager.SqliteMemoryManager timeline)
                 {
-                    var trajectoryReading = LifeReadingBudgetLogic.TrajectoryReading(timeline, turn.ConversationId, day);
                     var entries = DayTrajectoryOverviewLogic.Read(timeline, turn.ConversationId, day);
-                    if (trajectoryReading != null) daily.AppendLine("今日事件与新进展：").AppendLine(trajectoryReading);
-                    else if (entries.Count > 0) daily.AppendLine("今日事件与新进展：")
-                        .AppendLine(DayTrajectoryLogic.FormatGroups(DayTrajectoryLogic.OverviewGroups(entries, now)));
+                    var reading = LifeReadingBudgetLogic.TrajectoryReading(timeline, turn.ConversationId, day, entries) ?? entries;
+                    if (reading.Count > 0) daily.AppendLine("今日事件与新进展：")
+                        .AppendLine(DayTrajectoryLogic.FormatGroups(DayTrajectoryLogic.OverviewGroups(reading, now)));
                 }
                 else
                 {
@@ -141,13 +140,13 @@ namespace TraceSoul2.Logic
                     if (!string.IsNullOrWhiteSpace(trajectory?.Text))
                         daily.AppendLine("经历记录（原有摘要）：").AppendLine(trajectory.Text.Trim());
                 }
-                var todayReading = storage is TraceSoul2.Manager.SqliteMemoryManager todayStore
-                    ? LifeReadingBudgetLogic.TodayNewReading(todayStore, turn.ConversationId, day) : null;
-                if (todayReading != null) daily.AppendLine("新得知的事：").AppendLine(todayReading);
-                else if (items?.Count > 0)
+                if (items?.Count > 0)
                 {
+                    var reading = storage is TraceSoul2.Manager.SqliteMemoryManager todayStore
+                        ? LifeReadingBudgetLogic.TodayNewReading(todayStore, turn.ConversationId, day, items) : null;
+                    var notes = reading?.Select(x => (x.Content, x.CreatedUnixMs)) ?? items.Select(x => (x.Content, x.CreatedUnixMs));
                     daily.AppendLine("新得知的事：");
-                    foreach (var item in items) daily.Append('[').Append(Timestamp(item.CreatedUnixMs)).Append("] ").AppendLine(item.Content);
+                    foreach (var note in notes) daily.Append('[').Append(Timestamp(note.CreatedUnixMs)).Append("] ").AppendLine(note.Content);
                 }
                 if (daily.Length > 0)
                 {

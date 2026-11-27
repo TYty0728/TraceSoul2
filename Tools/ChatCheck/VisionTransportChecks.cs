@@ -55,11 +55,12 @@ internal static partial class Program
             await errorPage.Request;
         }
 
+        var observation = "画面是一张设备状态截图。\n" + new string('细', 410) + "底部读得清的编号是 ZX-7419，重量是 0.74 kg。";
         foreach (var native in new[] { true, false })
         {
             var reply = native
-                ? "{\"candidates\":[{\"content\":{\"parts\":[{\"text\":\"测试画面\"}]},\"finishReason\":\"STOP\"}]}"
-                : "{\"choices\":[{\"message\":{\"content\":\"测试画面\"},\"finish_reason\":\"stop\"}]}";
+                ? JsonSerializer.Serialize(new { candidates = new[] { new { content = new { parts = new[] { new { text = observation } } }, finishReason = "STOP" } } })
+                : JsonSerializer.Serialize(new { choices = new[] { new { message = new { content = observation }, finish_reason = "stop" } } });
             using var api = new VisionHttpFixture(Encoding.UTF8.GetBytes(reply), "application/json");
             using var cdn = new VisionHttpFixture(png, "application/octet-stream");
             using var originalCdn = new VisionHttpFixture(png, "image/jpeg");
@@ -79,7 +80,7 @@ internal static partial class Program
             Require(VisionLogic.ReadInboundImageLocations(inbound.PayloadJson).Count == 2,
                 "复现 QQ 一张图片同时给缓存名和 URL 的双来源载荷");
             var seen = await VisionLogic.SeeInboundAsync(inbound, services, deadline.Token);
-            Require(seen == "测试画面", "跨容器文件不可读时，应通过 CDN 完成模型识图");
+            Require(seen == observation, "跨容器应通过 CDN 完成识图，保留旧 400 字上限后的文字、数值和单位");
             using var request = JsonDocument.Parse(await api.Request);
             await cdn.Request;
             await originalCdn.Request;
@@ -99,7 +100,27 @@ internal static partial class Program
                 var image = request.RootElement.GetProperty("messages")[1].GetProperty("content")[1].GetProperty("image_url");
                 Require(image.GetProperty("url").GetString() == "data:image/png;base64," + Convert.ToBase64String(png),
                     "OpenAI 兼容请求应包含准确的图片 Data URI");
+                var system = request.RootElement.GetProperty("messages")[0].GetProperty("content").GetString();
+                Require(system.Contains("关键文字、数值和单位") && system.Contains("确实可见的人物动作") &&
+                    system.Contains("不必判断发图的人本人在做什么") && !system.Contains("是否能判断她在吃"),
+                    "视觉提示优先保留看得见的细节和原文，活动只有画面可见时才记录");
             }
+        }
+
+        var twoPictures = "图 1：设备状态。" + new string('甲', 380) + "\n图 2：货物标签。" + new string('乙', 380) + "\n编号 ZX-7419。";
+        var twoPictureReply = JsonSerializer.Serialize(new { choices = new[] { new { message = new { content = twoPictures }, finish_reason = "stop" } } });
+        using (var api = new VisionHttpFixture(Encoding.UTF8.GetBytes(twoPictureReply), "application/json"))
+        {
+            var seen = await VisionLogic.SeeInboundAsync(new PluginEventData
+            {
+                Content = "原消息中的附文", TraceId = "vision-multiple",
+                PayloadJson = TraceJson.ToJson(new { image_urls = new[] { inline, inline, "base64://" + Convert.ToBase64String(otherPng) } })
+            }, VisionServices(store, api.Url, false), deadline.Token);
+            using var request = JsonDocument.Parse(await api.Request);
+            var content = request.RootElement.GetProperty("messages")[1].GetProperty("content");
+            Require(seen == twoPictures && content.GetArrayLength() == 3 &&
+                content[0].GetProperty("text").GetString().Contains("最多 1000 字"),
+                "按实际送入的图片数量给描写空间，逐图观察及末尾细节全部保留");
         }
 
         foreach (var native in new[] { true, false })

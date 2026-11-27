@@ -277,8 +277,8 @@
     .live-field .value.empty { color: #b4bac8; }
     .live-period-group + .live-period-group { margin-top: 10px; }
     .live-period-title { color: var(--muted); font-size: 12px; font-weight: 600; }
-    .live-period-group ul { margin: 3px 0 0; padding-left: 18px; }
-    .live-period-group li + li { margin-top: 3px; }
+    .live-items { margin: 3px 0 0; padding-left: 18px; }
+    .live-items li + li { margin-top: 3px; }
     .live-tags { display: flex; flex-wrap: wrap; gap: 6px; }
     .live-tag { display: inline-flex; align-items: center; border-radius: 999px; padding: 3px 9px;
       background: var(--accent-soft); color: #4454c7; font-size: 11px; }
@@ -3394,6 +3394,9 @@
     const html = raw.split(/\r?\n/).map(line => esc(line)).join("<br>");
     return liveFieldHtml("榜单", html || "—", !raw);
   }
+  function liveItemList(items) {
+    return items.length ? `<ul class="live-items">${items.map(item => `<li>${esc(item)}</li>`).join("")}</ul>` : "";
+  }
   function liveEventGroups(key, groups) {
     const byTime = new Map();
     for (const group of groups || []) {
@@ -3402,7 +3405,7 @@
       for (const event of group.events || []) if (event) byTime.get(time).add(event);
     }
     const html = [...byTime].filter(([, events]) => events.size).map(([time, events]) =>
-      `<div class="live-period-group"><div class="live-period-title">${esc(time)}</div><ul>${[...events].map(event => `<li>${esc(event)}</li>`).join("")}</ul></div>`).join("");
+      `<div class="live-period-group"><div class="live-period-title">${esc(time)}</div>${liveItemList([...events])}</div>`).join("");
     return liveFieldHtml(key, html || "—", !html);
   }
   function liveTags(values, cls) {
@@ -3426,6 +3429,8 @@
   }
   function renderLive(d) {
     const r = d.runtime || {}, h = d.heartbeat || {}, c = d.context || {};
+    const trajectoryGroups = c.trajectoryReadingGroups ?? c.trajectoryGroups;
+    const todayNewList = liveItemList((c.todayNewReadingItems ?? c.todayNewItems ?? []).map(x => x.content));
     const life = d.lifeState || {};
     const decision = d.decision || (d.latestTurn && d.latestTurn.mindDecision) || {};
     const asleep = !!r.asleep;
@@ -3481,8 +3486,8 @@
     $("liveContext").innerHTML =
       liveField("记忆日", c.day) +
       liveField("正在做", doingText || "空闲") +
-      (c.trajectoryReading ? liveField("今日轨迹", c.trajectoryReading) : (c.trajectoryGroups ? liveEventGroups("今日轨迹", c.trajectoryGroups) : liveField("今日轨迹", c.trajectory))) +
-      (c.todayNewReading ? liveField("今日新识", c.todayNewReading) : `<div class="live-field"><div class="key">今日新识</div><div class="value">${c.todayNewItems && c.todayNewItems.length ? c.todayNewItems.map(x => esc(x.content)).join("；") : "—"}</div></div>`) +
+      (trajectoryGroups ? liveEventGroups("今日轨迹", trajectoryGroups) : liveField("今日轨迹", c.trajectory)) +
+      liveFieldHtml("今日新识", todayNewList || "—", !todayNewList) +
       liveLadder(c.ladderReading);
     $("liveHeartbeatBox").innerHTML =
       liveField("当前状态", asleep ? "睡着后停止自醒" : (idle ? (h.enabled ? "空闲生活中，保留下一次醒来" : "空闲，当前没有心跳任务") : (h.enabled ? "等待下一次醒来" : "当前没有心跳任务"))) +

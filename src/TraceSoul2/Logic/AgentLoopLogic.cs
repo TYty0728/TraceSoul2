@@ -36,6 +36,7 @@ namespace TraceSoul2.Logic
             var history = new List<object>();
             var pendingState = new AgentTurnStateLogic();
             var appliedGoals = new List<AgentGoalUpdateData>();
+            string maintenanceReason = null;
             var callIds = new Dictionary<string, string>(StringComparer.Ordinal);
             var executed = new Dictionary<string, TraceCapabilityResultData>(StringComparer.Ordinal);
             var groups = new Dictionary<string, string>(StringComparer.Ordinal);
@@ -53,6 +54,7 @@ namespace TraceSoul2.Logic
                     dynamic += qzoneContext ??= QzonePublishLogic.WakeContext(turn);
                 if (history.Count > 0) dynamic += AgentPromptContextLogic.Results(history);
                 dynamic += AgentPromptContextLogic.PendingState(pendingState.Values);
+                if (!string.IsNullOrEmpty(maintenanceReason)) dynamic += "\n已安排轮后整理：" + maintenanceReason + "\n";
                 dynamic += AgentPromptContextLogic.ExpressionStatus(turn, responded);
                 if (!EnvironmentLogic.IsHumanInput(turn))
                     dynamic += (MomentTypes.IsPerception(turn.Moment?.Type)
@@ -72,7 +74,10 @@ namespace TraceSoul2.Logic
                 providedFields = await AgentTurnStateLogic.FitProseAsync(output, providedFields, llm, turn, token);
                 pendingState.Update(output, providedFields);
                 pendingState.ApplyTo(output);
+                if (providedFields.Contains(nameof(AgentOutputData.maintenance_reason), StringComparer.OrdinalIgnoreCase))
+                    maintenanceReason = Limit(output.maintenance_reason?.Trim(), 240);
                 var step = output.ToRuntime();
+                step.maintenance_reason = maintenanceReason;
                 step.state_fields = pendingState.Values.Keys.ToList();
                 MindLogic.Normalize(step);
                 // 主动表达必须来自本轮形成的意图。缺失时不追加审核/纠正调用，也不先执行媒体副作用。
@@ -161,7 +166,7 @@ namespace TraceSoul2.Logic
             result.Add(new TraceContributionDescriptorData { Id = "memory.topics", Kind = TraceContributionKindValues.CallableNerve,
                 Description = "按具体问题寻找相近的人生主题，再选择主题读取相关经历和认知。", ParametersJsonSchema = "{\"required\":[\"query\"],\"properties\":{\"query\":{\"type\":\"string\"}}}" });
             result.Add(new TraceContributionDescriptorData { Id = "memory.recall", Kind = TraceContributionKindValues.CallableNerve,
-                Description = "先确定范围再读记忆：kind=events查经历及同期原文、cognitions查当前认知、sources查原文、auto兼容综合查询。tags为0～3个主题名JSON数组字符串；明确日期必须填period或date_start/date_end。period可用today/yesterday/day_before_yesterday/this_week/last_week/this_month/last_month/this_year/last_year；日期格式yyyy-MM-dd，起止日都包含，单日填相同值。day_basis默认calendar自然日，明确归档记忆日才填memory（04:00切日）。日期与主题取交集，空结果不跨范围兜底；日期不能与cognitions组合。", ParametersJsonSchema = "{\"required\":[\"query\"],\"properties\":{\"query\":{\"type\":\"string\"},\"tags\":{\"type\":\"string\"},\"kind\":{\"type\":\"string\"},\"period\":{\"type\":\"string\"},\"date_start\":{\"type\":\"string\"},\"date_end\":{\"type\":\"string\"},\"day_basis\":{\"type\":\"string\"}}}" });
+                Description = "先确定范围再读记忆：kind=events查经历及同期原文、cognitions查当前认知、sources查原文、goals查已保存的偏好和约定（可按返回的offset继续）、auto兼容综合查询。tags为0～3个主题名JSON数组字符串；明确日期必须填period或date_start/date_end。period可用today/yesterday/day_before_yesterday/this_week/last_week/this_month/last_month/this_year/last_year；日期格式yyyy-MM-dd，起止日都包含，单日填相同值。day_basis默认calendar自然日，明确归档记忆日才填memory（04:00切日）。日期与主题取交集，空结果不跨范围兜底；日期不能与cognitions组合。", ParametersJsonSchema = "{\"required\":[\"query\"],\"properties\":{\"query\":{\"type\":\"string\"},\"tags\":{\"type\":\"string\"},\"kind\":{\"type\":\"string\"},\"period\":{\"type\":\"string\"},\"date_start\":{\"type\":\"string\"},\"date_end\":{\"type\":\"string\"},\"day_basis\":{\"type\":\"string\"},\"offset\":{\"type\":\"string\"}}}" });
             result.Add(new TraceContributionDescriptorData { Id = "execution.cancel", Kind = TraceContributionKindValues.CallableNerve,
                 Description = "请求停止当前会话中的持续语音或动作；必须等待设备确认停止。", ParametersJsonSchema = "{\"required\":[\"execution_id\"],\"properties\":{\"execution_id\":{\"type\":\"string\"}}}" });
             return result.GroupBy(x => x.Id, StringComparer.Ordinal).Select(x => x.First()).ToList();

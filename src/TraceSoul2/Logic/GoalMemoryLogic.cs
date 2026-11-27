@@ -30,6 +30,8 @@ namespace TraceSoul2.Logic
             public string Id, Kind, Content, AppliesWhen, Horizon, Origin, Status;
             public string SourceMomentId, EvidenceQuote, ReplacesId, ChangeSource;
             public long StartsUnixMs, ExpiresUnixMs, UpdatedUnixMs;
+            public List<string> TagIds;
+            public bool Standing;
         }
         public sealed class GoalDocument
         {
@@ -77,32 +79,12 @@ namespace TraceSoul2.Logic
             store.SavePluginDocument(Owner, conversation, JsonSerializer.Serialize(doc, Json));
         }
 
-        private static bool Live(GoalRecord item, TraceTurnContext turn, long now) => item.Status == "active" &&
+        internal static bool Live(GoalRecord item, TraceTurnContext turn, long now) => item.Status == "active" &&
             (item.Horizon != "turn" || item.SourceMomentId == turn.Moment?.Id) &&
             (item.ExpiresUnixMs == 0 || item.ExpiresUnixMs > now);
 
         public static string BuildContext(TraceTurnContext turn, long? nowUnixMs = null)
-        {
-            var now = nowUnixMs ?? DateTimeOffset.UtcNow.ToUnixTimeMilliseconds();
-            var items = Read(turn.Services.Storage, turn.ConversationId).Where(x => Live(x, turn, now)).ToList();
-            if (items.Count == 0) return string.Empty;
-            var rows = items.Select(x =>
-            {
-                var row = new Dictionary<string, object>
-                {
-                    ["id"] = x.Id, ["kind"] = x.Kind, ["content"] = x.Content,
-                    ["applies_when"] = x.AppliesWhen, ["horizon"] = x.Horizon, ["origin"] = x.Origin
-                };
-                row["recorded_at"] = Iso(x.UpdatedUnixMs);
-                if (x.StartsUnixMs > 0) { row["starts_at"] = Iso(x.StartsUnixMs); row["timing"] = x.StartsUnixMs > now ? "future" : "current"; }
-                if (x.ExpiresUnixMs > 0) row["expires_at"] = Iso(x.ExpiresUnixMs);
-                if (!string.IsNullOrWhiteSpace(x.EvidenceQuote)) row["evidence_quote"] = x.EvidenceQuote;
-                return JsonSerializer.Serialize(row, Json);
-            });
-            return "\n【当下与未来：有效偏好和目标】\n按适用范围执行；future 尚未开始。相对日期以recorded_at为锚，不自动滚动到今天；日期未知时不猜。新要求优先，改口时修订或撤回；记录的意向不证明已完成。\n" +
-                string.Join("\n", rows) + "\n";
-
-        }
+            => GoalContextLogic.Build(turn, nowUnixMs ?? MemoryReadScope.ReferenceTime(turn).ToUnixTimeMilliseconds());
 
         public sealed class NightSelection { public List<int> selected_refs; }
 
@@ -180,7 +162,10 @@ namespace TraceSoul2.Logic
                 Check(change.operation is "create" or "revise" or "complete" or "cancel", path + ".operation 必须为 create/revise/complete/cancel。");
                 Check((change.id?.Length ?? 0) <= 80, path + ".id 最多80字符。");
                 Check((change.evidence_quote?.Length ?? 0) <= 240, path + ".evidence_quote 最多240字符。");
-                var key = Convert.ToHexString(SHA256.HashData(Encoding.UTF8.GetBytes(turn.Moment.Id + "\n" + JsonSerializer.Serialize(change, Json))));
+                // Keep the existing idempotency key independent of optional routing metadata.
+                var action = new { change.operation, change.id, change.kind, change.content, change.applies_when,
+                    change.horizon, change.starts_at, change.expires_at, change.source, change.evidence_quote };
+                var key = Convert.ToHexString(SHA256.HashData(Encoding.UTF8.GetBytes(turn.Moment.Id + "\n" + JsonSerializer.Serialize(action, Json))));
                 if (doc.Applied.Contains(key)) continue;
                 var previous = string.IsNullOrEmpty(change.id) ? null : doc.Items.FirstOrDefault(x => x.Id == change.id && x.Status == "active");
                 Check(change.operation == "create" ? string.IsNullOrEmpty(change.id) : previous != null,
@@ -219,6 +204,9 @@ namespace TraceSoul2.Logic
                         path + ".expires_at：until 时必须晚于现在及 starts_at，其他 horizon 留空。");
                     Check(change.horizon != "turn" || starts == 0, path + ".starts_at：turn 仅本轮有效，不能指定开始时间。");
                     var content = change.content.Trim(); var scope = change.applies_when.Trim();
+                    var tags = change.tags == null && previous?.AppliesWhen == scope ? previous.TagIds :
+                        GoalContextLogic.ResolveTags(turn, change.tags);
+                    var standing = change.standing && change.kind == "preference" && change.horizon != "turn";
                     if (change.operation == "create" && doc.Items.Any(x => x.Status == "active" &&
                         x.Kind == change.kind && x.Content == content && x.AppliesWhen == scope &&
                         x.Horizon == change.horizon && x.Origin == change.source && x.StartsUnixMs == starts && x.ExpiresUnixMs == expires))
@@ -227,7 +215,8 @@ namespace TraceSoul2.Logic
                     doc.Items.Add(new GoalRecord { Id = Guid.NewGuid().ToString("N"), Kind = change.kind,
                         Content = content, AppliesWhen = scope, Horizon = change.horizon, Origin = change.source,
                         ChangeSource = change.source, Status = "active", StartsUnixMs = starts, ExpiresUnixMs = expires,
-                        SourceMomentId = turn.Moment.Id, EvidenceQuote = quote, ReplacesId = previous?.Id, UpdatedUnixMs = now });
+                        SourceMomentId = turn.Moment.Id, EvidenceQuote = quote, ReplacesId = previous?.Id, UpdatedUnixMs = now,
+                        TagIds = tags, Standing = standing });
                 }
                 else
                 {
@@ -236,6 +225,8 @@ namespace TraceSoul2.Logic
                     // 终止也保留单独证据，原记录的提出依据不被覆盖。
                     doc.Items.Add(new GoalRecord { Id = Guid.NewGuid().ToString("N"), Kind = previous.Kind,
                         Content = previous.Content, Origin = previous.Origin, Status = previous.Status,
+                        AppliesWhen = previous.AppliesWhen, Horizon = previous.Horizon, TagIds = previous.TagIds,
+                        StartsUnixMs = previous.StartsUnixMs, ExpiresUnixMs = previous.ExpiresUnixMs,
                         SourceMomentId = turn.Moment.Id, EvidenceQuote = quote, ChangeSource = change.source,
                         ReplacesId = previous.Id, UpdatedUnixMs = now });
                 }

@@ -16,12 +16,17 @@ namespace TraceSoul2.Logic
         public static string TopicCandidates(TraceTurnContext turn, string query = null)
         {
             if (EnvironmentLogic.IsPublic(turn)) return string.Empty;
-            var tags = RankByMoment(turn.Services.Router, query ?? turn.Moment?.Content,
-                turn.Services.Storage.GetActiveLifeTags(), 12);
+            var tags = query == null ? CurrentTopics(turn) :
+                RankByMoment(turn.Services.Router, query, turn.Services.Storage.GetActiveLifeTags(), 12);
             return "【可选记忆主题】\n" + (tags.Count == 0 ? "没有相近主题；可用 memory.topics 换一个具体问题查找，或不选主题直接查证。" :
                 string.Join("\n", tags.Select(t => "- " + t.Label + "：" + t.Definition))) +
                 "\n需要回忆时，从候选原样选择0～3个主题，用 memory.recall 的 tags 参数传JSON字符串数组；query说明具体想找什么。主题可多选，不把同词不同含义硬归一类。";
         }
+
+        internal static List<LifeTagRecord> CurrentTopics(TraceTurnContext turn) => EnvironmentLogic.IsPublic(turn)
+            ? new List<LifeTagRecord>()
+            : turn.Workspace.GetOrCreateState("kernel.memory.topics", () =>
+                RankByMoment(turn.Services.Router, turn.Moment?.Content, turn.Services.Storage.GetActiveLifeTags(), 12));
 
         public static List<string> ParseTopicSelection(TraceTurnContext turn, string tagsJson)
         {

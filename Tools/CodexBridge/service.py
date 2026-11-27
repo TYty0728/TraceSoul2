@@ -14,6 +14,22 @@ def main():
     args = parser.parse_args()
     config = json.loads(args.config.read_text(encoding='utf-8-sig'))
     state = Path(config['state_dir'])
+    env = dict(os.environ, TRACESOUL_CODEX_BRIDGE_TOKEN=config['token'])
+    if config.get('python_path'):
+        env['PYTHONPATH'] = config['python_path']
+    folder = Path(__file__).resolve().parent
+    bridge_command = [sys.executable, '-u', str(folder / 'bridge.py'),
+                      '--port', str(config['port']), '--model', config['model'],
+                      '--state-dir', str(state), '--codex', config['codex'],
+                      '--concurrency', str(config.get('concurrency', 1))]
+    tunnel_command = [sys.executable, '-u', str(folder / 'tunnel.py'),
+                      '--connection-config', config['ssh_config'],
+                      '--local-port', str(config['port']), '--remote-port', str(config['port']),
+                      '--state-file', str(state / 'tunnel-state.json'), '--stop-file', str(state / 'stop')]
+    supervise(state, bridge_command, tunnel_command, env)
+
+
+def supervise(state, bridge_command, tunnel_command, env):
     state.mkdir(parents=True, exist_ok=True)
     stop = state / 'stop'
     # A second launch (for example at login) must not create a second tunnel.
@@ -25,18 +41,6 @@ def main():
         else:
             import fcntl
             fcntl.flock(lease, fcntl.LOCK_EX | fcntl.LOCK_NB)
-        env = dict(os.environ, TRACESOUL_CODEX_BRIDGE_TOKEN=config['token'])
-        if config.get('python_path'):
-            env['PYTHONPATH'] = config['python_path']
-        folder = Path(__file__).resolve().parent
-        bridge_command = [sys.executable, '-u', str(folder / 'bridge.py'),
-                          '--port', str(config['port']), '--model', config['model'],
-                          '--state-dir', str(state), '--codex', config['codex'],
-                          '--concurrency', str(config.get('concurrency', 1))]
-        tunnel_command = [sys.executable, '-u', str(folder / 'tunnel.py'),
-                          '--connection-config', config['ssh_config'],
-                          '--local-port', str(config['port']), '--remote-port', str(config['port']),
-                          '--state-file', str(state / 'tunnel-state.json'), '--stop-file', str(stop)]
         processes = {}
         try:
             while not stop.exists():

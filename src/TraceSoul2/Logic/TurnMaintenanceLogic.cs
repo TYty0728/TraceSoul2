@@ -27,9 +27,9 @@ namespace TraceSoul2.Logic
             public string content { get; set; }
         }
 
-        public static KernelLogic.DeferredTurnWork Prepare(TraceTurnContext turn, AgentStepData decision)
+        public static KernelLogic.DeferredTurnWork Prepare(TraceTurnContext turn, AgentStepData decision, string deliveredReply = null)
         {
-            if (decision == null || turn.Environment == null || EnvironmentLogic.IsPublic(turn) ||
+            if (string.IsNullOrWhiteSpace(decision?.maintenance_reason) || turn.Environment == null || EnvironmentLogic.IsPublic(turn) ||
                 turn.Services.Storage is not SqliteMemoryManager store) return null;
             var llm = turn.Services.ReviewLlm ?? turn.Services.Llm;
             if (llm == null) return null;
@@ -43,13 +43,16 @@ namespace TraceSoul2.Logic
             var moments = turn.RecentMoments.Append(turn.Moment).Where(x => x != null)
                 .GroupBy(x => x.Id).Select(x => x.Last()).TakeLast(8).ToList();
             while (moments.Count > 1 && moments.Sum(x => x.Content?.Length ?? 0) > 16000) moments.RemoveAt(0);
-            if (moments.Sum(x => x.Content?.Length ?? 0) + (decision.reply?.Length ?? 0) > 20000) return null;
+            if (moments.Sum(x => x.Content?.Length ?? 0) + ((deliveredReply ?? decision.reply)?.Length ?? 0) > 20000) return null;
             var evidence = JsonSerializer.Serialize(new {
                 at = DateTimeOffset.FromUnixTimeMilliseconds(now),
+                requested_change = decision.maintenance_reason.Trim(),
+                related_goals = GoalContextLogic.Build(turn, now, decision.maintenance_reason),
                 attention = InnerLifeLogic.LiveAttention(runtime, now).Select(x => new { x.kind, x.content, x.UpdatedUnixMs }),
                 scene = new { text = runtime.OngoingActivity, at = subject.Scene?.UpdatedUnixMs },
                 moments = moments.Select(x => new { x.Role, x.Type, x.Content, x.CreatedUnixMs }),
-                proposed_reply = decision.reply,
+                proposed_reply = deliveredReply == null ? decision.reply : null,
+                delivered_reply = deliveredReply,
                 results = turn.Workspace.Results.Where(x => x != null).TakeLast(8).Select(x => new { x.CapabilityId, x.Status, x.Summary })
             }, Json);
             if (evidence.Length > 28000) return null;

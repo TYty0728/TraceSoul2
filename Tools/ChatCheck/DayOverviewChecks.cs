@@ -338,50 +338,104 @@ internal static partial class Program
         {
             using var store = new SqliteMemoryManager(path);
             const string context = "reading-budget";
-            var now = MemoryDayLogic.CurrentStart(DateTimeOffset.Now).AddHours(8);
+            var now = MemoryDayLogic.CurrentStart(DateTimeOffset.Now).AddHours(6);
             var day = MemoryDayLogic.CurrentDayKey(now);
             var services = new TracePluginServices(store, new HierarchicalVectorRouterLogic(new FakeEncoder()));
             var turn = new TraceTurnContext(context, new MomentRecord { Id = "reading-trigger", ConversationId = context }, new(), 0, true, services,
                 environment: new EnvironmentSnapshotData { ContextConversationId = context, RootConversationId = context, Visibility = "private" });
+            const string importantTrajectory = "预约周六十点去市图书馆看展，记得带证件，从东门入场。";
+            const string mergedTrajectory = "户外市集因下雨改到周日，摊位移到一楼西门，原预约有效。";
             void AddTrajectory(int from, int count)
             {
                 for (var i = from; i < from + count; i++)
                 {
                     var id = "reading-" + i;
-                    store.SaveMoment(new MomentRecord { Id = id, ConversationId = context, Role = "user", Content = "原件", CreatedUnixMs = now.AddMinutes(i).ToUnixTimeMilliseconds() });
-                    store.AppendDayTrajectory(context, id, "第" + i + "件仍在发生的事。" + new string('记', 70));
+                    store.SaveMoment(new MomentRecord { Id = id, ConversationId = context, Role = "user", Content = "原件", CreatedUnixMs = now.AddMinutes(i * 15).ToUnixTimeMilliseconds() });
+                    var text = i switch
+                    {
+                        0 => importantTrajectory,
+                        5 => "户外市集因下雨改到周日，原预约有效。",
+                        18 => "市集组织者确认，摊位移到一楼西门。",
+                        _ => "第" + i + "件次要的事。" + new string('记', 70)
+                    };
+                    store.AppendDayTrajectory(context, id, text);
                 }
             }
             AddTrajectory(0, 3);
             Require(LifeReadingBudgetLogic.Prepare(turn) == null, "不到一千字不筛选");
             AddTrajectory(3, 17);
             var originals = store.GetDayTrajectoryEntries(context, day).Select(x => x.Text).ToList();
-            var kept = "留下远足改期和书店这两件。";
-            var llm = new AgentSequenceLlm("{\"text\":\"" + new string('长', 1001) + "\"}", "{\"text\":\"" + kept + "\"}");
+            var entries = DayTrajectoryOverviewLogic.Read(store, context, day);
+            store.SavePluginDocument("runtime.reading-budget", context + ":" + day + ":trajectory",
+                System.Text.Json.JsonSerializer.Serialize(new { marker = string.Join("\n", originals), text = "旧版把全部轨迹写成一段。" }));
+            Require(LifeReadingBudgetLogic.TrajectoryReading(store, context, day, entries) == null, "旧版整段阅读稿回退至正常分组");
+            var llm = new AgentSequenceLlm("{\"items\":[{\"numbers\":[1],\"text\":\"" + new string('长', 1001) + "\"}]}",
+                System.Text.Json.JsonSerializer.Serialize(new { items = new object[]
+                {
+                    new { numbers = new[] { 19, 6 }, text = mergedTrajectory }, new { numbers = new[] { 1 } }
+                } }));
             services.Llm = llm;
             var work = LifeReadingBudgetLogic.Prepare(turn);
             Require(work != null, "超过一千字安排一次筛选");
             await (await work.AnalyzeAsync(default))(default);
-            Require(llm.Requests.Count == 2 && llm.Requests[0].Contains("筛掉不重要的") && llm.Requests[0].Contains("最多1000字") &&
-                llm.Requests[1].Contains("重新写成") && llm.Requests[1].Contains("不要交回上一份") &&
-                !llm.Requests[1].Contains(new string('长', 1001)) &&
-                LifeReadingBudgetLogic.TrajectoryReading(store, context, day) == kept &&
+            var reading = LifeReadingBudgetLogic.TrajectoryReading(store, context, day, entries);
+            Require(llm.Requests.Count == 2 && llm.Requests[0].Contains("优先删掉次要条目") && llm.Requests[0].Contains("重要条目尽量照录") &&
+                llm.Requests[0].Contains("[19] 市集组织者确认") && llm.Requests[1].Contains("条目与换行共1001字") &&
+                !llm.Requests[1].Contains(new string('长', 1001)), "准备带编号输入，超长按原条目纠正");
+            Require(reading != null && reading.Select(x => x.Text).SequenceEqual(new[] { importantTrajectory, mergedTrajectory }) &&
+                reading[0].Start == entries[0].Start && reading[1].Start == entries[5].Start && reading[1].End == entries[18].End &&
                 store.GetDayTrajectoryEntries(context, day).Select(x => x.Text).SequenceEqual(originals),
-                "超长阅读筛掉不重要的并精简留下的，原件不截断不删除");
+                "重要轨迹可照录，合并轨迹保留跨时段范围，按来源顺序复读，全量原件可取");
+            var state = RuntimeContextLogic.State(turn, now);
+            Require(state.Contains("上午\n· " + importantTrajectory) && state.Contains("上午至下午\n· " + mergedTrajectory) &&
+                !state.Contains("第1件次要的事"), "主 Agent 按来源时段读取保留和合并后的轨迹");
             Require(LifeReadingBudgetLogic.Prepare(turn) == null, "同一批内容只筛选一次");
+            const string importantFact = "借阅证办理时间是周二至周日的九点到十七点，带本人身份证，可在一楼服务台现场办理。";
+            const string mergedFact = "图书馆二楼自习室周六九点开放，进门需预约，预约结果保存在馆方小程序。";
             for (var i = 0; i < 16; i++)
-                store.AddTodayNewItems(context, new[] { "新识" + i + new string('知', 70) }, "reading-" + i, day, now.AddMinutes(i).ToUnixTimeMilliseconds());
-            var facts = store.GetTodayNewItemsByDay(context, day).Select(x => x.Content).ToList();
-            services.Llm = new AgentSequenceLlm("{\"text\":\"" + new string('超', 1200) + "\"}", "{\"text\":\"" + new string('超', 1200) + "\"}");
+            {
+                var text = i switch
+                {
+                    0 => importantFact,
+                    1 => "图书馆二楼自习室周六九点开放，进门需预约。",
+                    2 => "二楼自习室的预约结果保存在馆方小程序。",
+                    _ => "新识" + i + new string('知', 70)
+                };
+                store.AddTodayNewItems(context, new[] { text }, "reading-" + i, day, now.AddMinutes(i).ToUnixTimeMilliseconds());
+            }
+            var facts = store.GetTodayNewItemsByDay(context, day);
+            services.Llm = new AgentSequenceLlm("{\"text\":\"全部新识合成一段。\"}",
+                "{\"items\":[{\"numbers\":[1,2],\"text\":\"合并后重复编号\"},{\"numbers\":[1]}]}");
             work = LifeReadingBudgetLogic.Prepare(turn);
             await (await work.AnalyzeAsync(default))(default);
-            Require(LifeReadingBudgetLogic.TodayNewReading(store, context, day) == null &&
-                store.GetTodayNewItemsByDay(context, day).Select(x => x.Content).SequenceEqual(facts) &&
+            Require(LifeReadingBudgetLogic.TodayNewReading(store, context, day, facts) == null &&
+                store.GetTodayNewItemsByDay(context, day).Select(x => x.Content).SequenceEqual(facts.Select(x => x.Content)) &&
                 LifeReadingBudgetLogic.Prepare(turn) == null,
-                "筛选两次仍超限就不保存精简文，原件还在，也不反复调用");
+                "拒绝整段和重复编号，原件还在，同一输入不反复调用");
+            store.AddTodayNewItems(context, new[] { "下一次新得知的事" }, "reading-16", day, now.AddMinutes(16).ToUnixTimeMilliseconds());
+            var refinedFacts = System.Text.Json.JsonSerializer.Serialize(new { items = new object[]
+            {
+                new { numbers = new[] { 3, 2 }, text = mergedFact }, new { numbers = new[] { 1 } }
+            } });
+            services.Llm = new AgentSequenceLlm(refinedFacts, refinedFacts);
+            var lateCommit = await LifeReadingBudgetLogic.Prepare(turn).AnalyzeAsync(default);
+            store.AddTodayNewItems(context, new[] { "等精简时新增的事" }, "reading-17", day, now.AddMinutes(17).ToUnixTimeMilliseconds());
+            await lateCommit(default);
+            var currentFacts = store.GetTodayNewItemsByDay(context, day);
+            Require(LifeReadingBudgetLogic.TodayNewReading(store, context, day, currentFacts) == null && currentFacts.Count == 18,
+                "新识发生变化时不提交旧精简稿");
+            await (await LifeReadingBudgetLogic.Prepare(turn).AnalyzeAsync(default))(default);
+            var factReading = LifeReadingBudgetLogic.TodayNewReading(store, context, day, currentFacts);
+            Require(factReading?.Count == 2 && factReading[0].Content == importantFact && factReading[1].Content == mergedFact &&
+                factReading[1].SourceMomentIds.SequenceEqual(currentFacts.Skip(1).Take(2).Select(x => x.SourceMomentId)) &&
+                factReading[1].CreatedUnixMs == currentFacts[1].CreatedUnixMs,
+                "新识保留重要原文和合并细节，保留全部来源和最早时间");
+            state = RuntimeContextLogic.State(turn, now);
+            Require(state.Contains(importantFact) && state.Contains(mergedFact) && !state.Contains("新识3知"),
+                "主 Agent 逐条读取保留和合并后的新识");
         }
         finally { foreach (var suffix in new[] { "", "-wal", "-shm" }) if (File.Exists(path + suffix)) File.Delete(path + suffix); }
-        Console.WriteLine("Life reading budget checks passed: one selection under 1000, originals kept, no repeat.");
+        Console.WriteLine("Life reading budget checks passed: source-linked selections, grouped trajectory, facts, legacy and stale results.");
     }
 
     private static void RunLadderContextChecks()

@@ -1,4 +1,5 @@
 using System.Collections.Generic;
+using System.Text.Json.Serialization;
 
 namespace TraceSoul2.Data
 {
@@ -15,6 +16,7 @@ namespace TraceSoul2.Data
         public string step;
         public string reply;
         public bool refine;
+        public string maintenance_reason;
         public string affect;
         public List<AgentGoalUpdateData> goal_updates = new List<AgentGoalUpdateData>();
         public List<AgentAttentionLinkData> attention_links = new List<AgentAttentionLinkData>();
@@ -34,6 +36,10 @@ namespace TraceSoul2.Data
         public string expires_at; // until 必填
         public string source; // user / self / feedback
         public string evidence_quote;
+        [JsonIgnore(Condition = JsonIgnoreCondition.WhenWritingDefault)]
+        public List<string> tags;
+        [JsonIgnore(Condition = JsonIgnoreCondition.WhenWritingDefault)]
+        public bool standing;
     }
 
     public sealed class AgentAttentionLinkData

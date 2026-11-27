@@ -41,6 +41,18 @@ assert.doesNotMatch(nodes.liveContext.innerHTML, /活跃事件/);
 assert.match(nodes.liveContext.innerHTML, /<li>买了新书<\/li>.*<li>约好周末读书<\/li>/s);
 assert.match(nodes.liveContext.innerHTML, /&lt;script&gt;/);
 assert.doesNotMatch(nodes.liveContext.innerHTML, /<script>/);
+assert.match(nodes.liveContext.innerHTML, /<li>青苔喜欢潮湿<\/li>/);
+state.context.trajectoryReading = '旧版把轨迹写成一段';
+state.context.todayNewReading = '旧版把新识写成一段';
+sandbox.renderLive(state);
+assert.match(nodes.liveContext.innerHTML, /<li>买了新书<\/li>/);
+assert.doesNotMatch(nodes.liveContext.innerHTML, /旧版把/);
+state.context.trajectoryReadingGroups = [{ time: '上午', events: ['买书'] }, { time: '下午', events: ['回家'] }];
+state.context.todayNewReadingItems = [{ content: '青苔喜湿' }, { content: '树下有青苔' }];
+sandbox.renderLive(state);
+assert.match(nodes.liveContext.innerHTML, /上午<\/div>.*<li>买书<\/li>.*下午<\/div>.*<li>回家<\/li>/s);
+assert.match(nodes.liveContext.innerHTML, /<li>青苔喜湿<\/li><li>树下有青苔<\/li>/);
+assert.doesNotMatch(nodes.liveContext.innerHTML, /买了新书|约好周末读书|青苔喜欢潮湿|旧版把/);
 // Restart uses the persisted latestTurn decision; older snapshots remain renderable.
 state.latestTurn.mindDecision = state.decision;
 delete state.decision;

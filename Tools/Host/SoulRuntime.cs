@@ -548,9 +548,12 @@ namespace TraceSoul2.Host
                     x.MemoryStatus,
                     x.CreatedUnixMs
                 }).ToList();
-            var trajectory = DayTrajectoryLogic.ReadOverview(Store, ConversationId, dayKey, now);
-            var today = Store.GetTodayNewItemsByDay(ConversationId, dayKey)
-                .Select(x => new { x.Content, x.SourceMomentId, x.CreatedUnixMs }).ToList();
+            var entries = DayTrajectoryOverviewLogic.Read(Store, ConversationId, dayKey);
+            var trajectoryGroups = DayTrajectoryLogic.OverviewGroups(entries, now);
+            var trajectoryReading = LifeReadingBudgetLogic.TrajectoryReading(Store, ConversationId, dayKey, entries);
+            var trajectoryReadingGroups = trajectoryReading == null ? null : DayTrajectoryLogic.OverviewGroups(trajectoryReading, now);
+            var today = Store.GetTodayNewItemsByDay(ConversationId, dayKey);
+            var todayReading = LifeReadingBudgetLogic.TodayNewReading(Store, ConversationId, dayKey, today);
             var latest = LastTurnPayload();
             return new
             {
@@ -608,12 +611,16 @@ namespace TraceSoul2.Host
                 context = new
                 {
                     day = dayKey,
-                    trajectory = trajectory == null ? string.Empty : trajectory.Text ?? string.Empty,
-                    trajectoryGroups = DayTrajectoryLogic.OverviewGroups(DayTrajectoryOverviewLogic.Read(Store, ConversationId, dayKey), now)
-                        .Select(x => new { time = x.Time, events = x.Events }).ToList(),
-                    trajectoryReading = LifeReadingBudgetLogic.TrajectoryReading(Store, ConversationId, dayKey),
-                    todayNewItems = today,
-                    todayNewReading = LifeReadingBudgetLogic.TodayNewReading(Store, ConversationId, dayKey),
+                    trajectory = DayTrajectoryLogic.FormatGroups(trajectoryGroups),
+                    trajectoryGroups,
+                    trajectoryReadingGroups,
+                    trajectoryReading = trajectoryReadingGroups == null ? null : DayTrajectoryLogic.FormatGroups(trajectoryReadingGroups),
+                    todayNewItems = today.Select(x => new { x.Content, x.SourceMomentId, x.CreatedUnixMs }).ToList(),
+                    todayNewReadingItems = todayReading?.Select(x => new
+                    {
+                        x.Content, SourceMomentId = x.SourceMomentIds.FirstOrDefault(), x.SourceMomentIds, x.CreatedUnixMs
+                    }).ToList(),
+                    todayNewReading = todayReading == null ? null : string.Join("\n", todayReading.Select(x => x.Content)),
                     ladderReading = LadderContextLogic.Reading(Store.GetAllLadderItems(), now),
                     recentMoments = lastMoments
                 }

@@ -43,13 +43,16 @@ namespace TraceSoul2.Prompts
             public const string LoadFailed =
                 "图发过来了，但我没看清画面。不要编造图里有什么。";
             public const string System =
-                "你只负责看图。只写实际看见的主体、关键细节，以及是否能判断她在吃、喝、做什么。看不清就直说看不清。不要根据对话约定猜测这是早餐、奶咖或任何事先说过的东西。不要 JSON，不要称呼，不要编故事，不要写没出现在画面里的内容。控制在 80 到 200 字。";
+                "写给主对话模型的视觉观察。先写画面主体和场景，再记能帮助理解这张图的具体细节，例如物品的样子、位置和相互关系，以及画面里确实可见的人物动作。" +
+                "截图、菜单或票据优先保留读得清的关键文字、数值和单位，直接引用原文。附文只用来确定该留意哪里，附文里说的事不能当成画面证据。" +
+                "不必判断发图的人本人在做什么。只在某个相关细节确实模糊、被挡住或出画时，指出那个细节，不要例行写一条无法判断的结论。" +
+                "有多张图时按收到的顺序分段描述。用普通文字，保留有用细节，简单的图可以只写一两句。";
 
-            public static string UserAsk(string momentText)
+            public static string UserAsk(string momentText, int maxChars)
             {
                 var text = (momentText ?? string.Empty).Trim();
                 if (text.Length == 0) text = "[图片]";
-                return "她刚刚发来这些图。消息原文是：\n" + text + "\n请只写你看见的画面。";
+                return "请记录图中可见的内容，总共最多 " + maxChars + " 字。下面是原消息：\n" + text;
             }
         }
 

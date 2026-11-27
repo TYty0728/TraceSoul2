@@ -355,7 +355,7 @@ namespace TraceSoul2.Logic
                 CreatedUnixMs = DateTimeOffset.UtcNow.ToUnixTimeMilliseconds()
             });
             plugins.Services.LogDiagnostic(turn.TraceId, "轮次审查落库完成", reviewTimer.ElapsedMilliseconds);
-            try { stateMaintenanceWork = TurnMaintenanceLogic.Prepare(turn, mindDecision as AgentStepData); }
+            try { stateMaintenanceWork = TurnMaintenanceLogic.Prepare(turn, mindDecision as AgentStepData, expression?.ProducedEvent?.Content); }
             catch (Exception error) { plugins.Services.LogTiming(turn.TraceId, "轮后关注整理未安排", detail: error.GetType().Name); }
             // 图片优先；整理概览留给没有其他轮后工作的轮次，避免拖延已准备的图片发送。
             if (deferredWork == null)

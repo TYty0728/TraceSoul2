@@ -24,7 +24,15 @@ public static class ScopedMemoryReadLogic
             var ids=storage.GetActiveLifeTags().Where(x=>labels.Contains(x.Label)).Select(x=>x.Id).ToList();
             var header="【本次限定读取】\n"+scope.Description+"；主题："+(labels.Count==0 ? "未限定" : string.Join("、",labels))+"\n";
             TraceCapabilityResultData result;
-            if (scope.Kind=="cognitions")
+            if (scope.Kind=="goals")
+            {
+                var rawOffset = call.GetArgument("offset");
+                var offset = 0;
+                if (!string.IsNullOrWhiteSpace(rawOffset) && (!int.TryParse(rawOffset, out offset) || offset < 0))
+                    throw new ArgumentException("offset须为非负整数。");
+                result=GoalContextLogic.Recall(turn,scope,labels,query,offset);
+            }
+            else if (scope.Kind=="cognitions")
             {
                 var text=MemoryRecallLogic.RecallPuzzle(turn,query,6,selectedTagIds:labels.Count==0 ? null : ids,includeRuntimeReview:false);
                 result=Result(text.Length>0,header,text);

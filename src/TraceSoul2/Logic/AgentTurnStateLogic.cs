@@ -15,7 +15,7 @@ namespace TraceSoul2.Logic
     public sealed class AgentTurnStateLogic
     {
         private static readonly System.Reflection.FieldInfo[] Fields = typeof(AgentOutputData).GetFields()
-            .Where(x => x.Name is not ("step" or "reply" or "refine" or "actions" or "goal_updates")).ToArray();
+            .Where(x => x.Name is not ("step" or "reply" or "refine" or "actions" or "goal_updates" or "maintenance_reason")).ToArray();
         private static readonly Dictionary<string, int> ProseLimits = new(StringComparer.Ordinal)
         {
             [nameof(AgentOutputData.today)] = 60,

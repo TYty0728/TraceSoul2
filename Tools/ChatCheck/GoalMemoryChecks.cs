@@ -101,7 +101,7 @@ internal static partial class Program
                 var future = Create("周末整理照片", "self", "goal");
                 future.starts_at = DateTimeOffset.UtcNow.AddDays(2).ToString("o");
                 GoalMemoryLogic.Apply(turn, new() { future });
-                Require(GoalMemoryLogic.BuildContext(turn).Contains("\"timing\":\"future\"") &&
+                Require(GoalMemoryLogic.BuildContext(turn).Contains("未开始，起于") &&
                     GoalMemoryLogic.BuildContext(turn).Contains(future.content), "未来目标持续可见并明确未到开始时间");
                 var futureId = GoalMemoryLogic.Read(store, conversation).Single(x => x.Content == future.content).Id;
                 var complete = new AgentGoalUpdateData { operation = "complete", id = futureId, source = "self" };
@@ -164,6 +164,7 @@ internal static partial class Program
                 await new KernelLogic(store, repair, manager).ChatAsync("goal-repair", quote);
                 Require(repair.Requests.Count == 2 && GoalMemoryLogic.Read(store, "goal-repair").Count == 1,
                     "目标字段校验进入现有一次纠正，不执行无效写入");
+                await CheckGoalReadingViewAsync(store, services, manager);
                 store.SavePluginDocument("kernel.goals", "broken-goals", "{}");
                 try { GoalMemoryLogic.Read(store, "broken-goals"); throw new Exception("损坏文档应报错"); }
                 catch (JsonException) { }
@@ -172,5 +173,116 @@ internal static partial class Program
         }
         finally { Delete(path); Delete(path + "-wal"); Delete(path + "-shm"); }
         Console.WriteLine("Goal memory checks passed: immediate persistence, silence, restart, context, scope, dates, revision, cancellation, evidence, atomicity, replay and capacity.");
+    }
+
+    private static async Task CheckGoalReadingViewAsync(SqliteMemoryManager store, TracePluginServices services, TracePluginManager manager)
+    {
+        const string conversation = "goal-scoped-view";
+        const string preference = "固定点藤椒饭，小份刚好";
+        const string originalEvidence = "原话：平日订餐时吃藤椒饭那份";
+        var topic = new VectorIndexNode("concept.goal.lunch", VectorNodeLevel.Concept, "工作日午餐",
+            "午餐外卖和选餐", null, null, null, null, null);
+        store.SeedLifeTags(new[] { topic });
+        services.SetRouter(new GoalTopicProbe(topic));
+        TraceTurnContext Turn(string text, string channel = conversation)
+        {
+            var moment = Moment(channel, text);
+            moment.Role = "小雨";
+            store.SaveMoment(moment);
+            return new TraceTurnContext(channel, moment, new(), 0, true, services);
+        }
+        var first = Turn(originalEvidence);
+        GoalMemoryLogic.Apply(first, new() { new() {
+            operation = "create", kind = "preference", content = preference, source = "user",
+            evidence_quote = originalEvidence, horizon = "ongoing", applies_when = "平日订餐",
+            tags = new() { topic.Label, "不存在的主题" }
+        } });
+        var item = GoalMemoryLogic.Read(store, conversation).Single();
+        Require(item.TagIds.SequenceEqual(new[] { topic.Id }), "主题引用可选，仅保存已有主题，无效标签不妨碍保存");
+        var originalDoc = store.LoadPluginDocument("kernel.goals", conversation);
+        var initial = new AgentSequenceLlm("{\"step\":\"finish\",\"reply\":\"我来看看这个函数。\"}");
+        await new KernelLogic(store, initial, manager).ChatAsync(conversation, "帮我看看函数", historyWindowMax: 0);
+        Require(!initial.Requests.Single().Contains(preference) && !initial.Requests.Single().Contains(originalEvidence) &&
+            store.LoadPluginDocument("kernel.goals", conversation) == originalDoc,
+            "无关首轮不注入，完整记录和依据仍原样保存");
+
+        var tagged = new AgentSequenceLlm("{\"step\":\"finish\",\"reply\":\"这顿可以点小份。\"}");
+        await new KernelLogic(store, tagged, manager).ChatAsync(conversation, "附近外卖怎么选", historyWindowMax: 0);
+        Require(tagged.Requests.Single().Contains(preference) && !tagged.Requests.Single().Contains(originalEvidence),
+            "后续同主题首轮能通过已有LifeTag激活完整条件，无须原话或独立选择请求");
+
+        var recall = new AgentSequenceLlm(
+            "{\"step\":\"continue\",\"actions\":[{\"capability_id\":\"memory.recall\",\"arguments\":[{\"name\":\"kind\",\"value\":\"goals\"},{\"name\":\"query\",\"value\":\"藤椒饭\"}]}]}",
+            "{\"step\":\"finish\",\"reply\":\"记得那条偏好。\"}");
+        var result = await new KernelLogic(store, recall, manager).ChatAsync(conversation, "还记得那条偏好吗", historyWindowMax: 0);
+        var evidence = result.ContributionResults.Single(x => x.CapabilityId == "memory.recall");
+        Require(!recall.Requests[0].Contains(preference) && recall.Requests[1].Contains(preference) &&
+            evidence.Payload.Contains(item.Id) && evidence.EvidenceRefs.Contains("moment:" + first.Moment.Id) &&
+            store.LoadPluginDocument("kernel.goals", conversation) == originalDoc,
+            "真实Agent按需查到之前未注入的记录和来源，查询不改变原记录");
+
+        var next = Turn("午饭换清汤面吧");
+        GoalMemoryLogic.Apply(next, new() { new() {
+            operation = "revise", id = item.Id, kind = "preference", content = "清汤面",
+            applies_when = "平日订餐", horizon = "ongoing", source = "user", evidence_quote = next.Moment.Content
+        } });
+        var query = new BrainCapabilityCallData { capability_id = "memory.recall", arguments = new() {
+            new() { name = "kind", value = "goals" }, new() { name = "query", value = item.Id }
+        } };
+        var previous = ScopedMemoryReadLogic.Read(next, query);
+        var other = Turn("另一条私密目标", "other-goals");
+        GoalMemoryLogic.Apply(other, new() { new() {
+            operation = "create", kind = "goal", content = other.Moment.Content, applies_when = "其他场景",
+            horizon = "ongoing", source = "user", evidence_quote = other.Moment.Content
+        } });
+        Require(previous.Status == "success" && previous.Payload.Contains("已修订") && previous.Payload.Contains(preference) &&
+            ScopedMemoryReadLogic.Read(other, query).Status == "empty",
+            "修订后仍能查旧版本，原ID不能跨会话读取");
+        var revision = GoalMemoryLogic.Read(store, conversation).Single(x => x.Status == "active");
+        Require(revision.Content == "清汤面" && revision.ReplacesId == item.Id && revision.TagIds.SequenceEqual(item.TagIds),
+            "查回的ID可沿原有写入链修订，同范围省略标签时延续已保存关联");
+
+        var dated = Turn("这周去取相机");
+        var now = DateTimeOffset.UtcNow;
+        GoalMemoryLogic.Apply(dated, new() { new() {
+            operation = "create", kind = "goal", content = "去取相机", source = "user", evidence_quote = dated.Moment.Content,
+            applies_when = "这周", horizon = "until", starts_at = now.AddMinutes(20).ToString("o"), expires_at = now.AddHours(2).ToString("o")
+        } });
+        var reading = GoalMemoryLogic.BuildContext(Turn("待会怎么安排"));
+        Require(reading.Contains("近期安排") && reading.Contains("未开始，起于") && reading.Contains("去取相机") &&
+            !GoalMemoryLogic.BuildContext(Turn("今天已经结束"), now.AddHours(3).ToUnixTimeMilliseconds()).Contains("去取相机") &&
+            GoalMemoryLogic.Read(store, conversation).Any(x => x.Content == "去取相机"),
+            "时间窗独立激活，过期仅退出默认读取，保留记录");
+        var plannedDay = now.AddMinutes(20).ToOffset(MemoryDayLogic.ChinaOffset).ToString("yyyy-MM-dd");
+        query.arguments = new() { new() { name = "kind", value = "goals" }, new() { name = "query", value = "当天安排" },
+            new() { name = "date_start", value = plannedDay }, new() { name = "date_end", value = plannedDay } };
+        Require(ScopedMemoryReadLogic.Read(next, query).Payload.Contains("去取相机"), "明确日期可按计划时间窗查回条目");
+
+        var album = Turn("今天聊整理相册");
+        for (var index = 0; index < 16; index++)
+            GoalMemoryLogic.Apply(album, new() { new() {
+                operation = "create", kind = "goal", content = $"相册待整理素材 {index}：" + new string('照', 190),
+                applies_when = "整理相册时", horizon = "ongoing", source = "self"
+            } });
+        var albumDoc = store.LoadPluginDocument("kernel.goals", conversation);
+        var preview = GoalMemoryLogic.BuildContext(album);
+        Require(preview.Length < 2400 && preview.Contains("相册待整理素材") &&
+            store.LoadPluginDocument("kernel.goals", conversation) == albumDoc, "注入预算只限视图，满额仍保留完整文档");
+        query.arguments = new() { new() { name = "kind", value = "goals" }, new() { name = "query", value = "相册" } };
+        var firstPage = ScopedMemoryReadLogic.Read(album, query);
+        query.arguments.Add(new() { name = "offset", value = "6" });
+        var secondPage = ScopedMemoryReadLogic.Read(album, query);
+        Require(firstPage.Payload.Contains("offset=6") && secondPage.Status == "success" &&
+            !firstPage.EvidenceRefs.Any(x => x != "moment:" + album.Moment.Id) &&
+            !secondPage.Payload.Contains(firstPage.Payload.Split('\n').First(x => x.Contains("相册待整理素材"))),
+            "相关记录多时可继续分段读取，读取视图不吞掉预算外条目");
+    }
+
+    private sealed class GoalTopicProbe(VectorIndexNode topic) : IHierarchicalVectorRouter
+    {
+        public VectorRouteResult Route(string query, VectorRouteSettings settings = null) => new(query, null, null, RankConcepts(query));
+        public IReadOnlyList<VectorRouteHit> RankConcepts(string query, VectorRouteSettings settings = null) =>
+            query.Contains("外卖", StringComparison.Ordinal) ? new[] { new VectorRouteHit(topic, 0.8f, 0.8f, 0, 0) } :
+                Array.Empty<VectorRouteHit>();
     }
 }

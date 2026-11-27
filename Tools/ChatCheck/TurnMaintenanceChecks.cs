@@ -32,7 +32,10 @@ internal static partial class Program
         }, "old", now - 600000);
         store.SaveInnerRuntime(initial);
         var turn = Turn("one");
-        var work = TurnMaintenanceLogic.Prepare(turn, new AgentStepData { step = "finish", reply = "好，回去吧。" });
+        Require(TurnMaintenanceLogic.Prepare(turn, new AgentStepData { step = "finish", reply = "好，回去吧。" }) == null,
+            "主轮省略整理请求时，不例行调用整理模型");
+        var requested = new AgentStepData { step = "finish", reply = "好，回去吧。", maintenance_reason = "散步已经结束" };
+        var work = TurnMaintenanceLogic.Prepare(turn, requested);
         Require(work != null && work.Maintenance && llm.Calls == 0, "快照准备不调用模型、不阻塞前台回复");
         llm.Response = "{\"attention\":[],\"scene\":\"\"}";
         var commit = await work.AnalyzeAsync(default);
@@ -44,10 +47,11 @@ internal static partial class Program
         await commit(default);
         Require(store.LoadOrCreateInnerRuntime(root).Revision == cleared.Revision, "同一整理结果不能重复提交");
         Require(llm.Messages.Count == 2 && !llm.Messages[0].content.Contains("【Agent 当下】") &&
-            llm.Messages[1].content.Contains("proposed_reply"), "整理仅用有界证据，不复制完整Agent前缀或伪造送达");
+            llm.Messages[1].content.Contains("proposed_reply") && llm.Messages[1].content.Contains("散步已经结束"),
+            "整理使用主模型指出的转折及有界证据，不复制完整Agent前缀或伪造送达");
 
         // 模拟上一轮请求尚未完成，另一平台已提交新的一拍。
-        var stale = TurnMaintenanceLogic.Prepare(Turn("old-running"), new AgentStepData { step = "wait" });
+        var stale = TurnMaintenanceLogic.Prepare(Turn("old-running"), requested);
         llm.Pending = new TaskCompletionSource<string>(TaskCreationOptions.RunContinuationsAsynchronously);
         var analysis = stale.AnalyzeAsync(default);
         var newer = Turn("newer", "wxxz");
@@ -70,20 +74,20 @@ internal static partial class Program
             attention = new() { new() { kind = "topic", content = "相机接口的问题" } }
         }, "expired", now + 7 * 3600000L);
         Require(expired.Attention.Count == 0, "已经自然过期的关注不能靠重复输出复活");
-        Require(TurnMaintenanceLogic.Prepare(Turn("public", publicInput: true), new AgentStepData()) == null,
+        Require(TurnMaintenanceLogic.Prepare(Turn("public", publicInput: true), requested) == null,
             "公开输入不读取私人关注进入后台整理");
         var beforeInvalid = SubjectRuntimeLogic.Read(store, root).Revision;
         foreach (var invalid in new[] { "{}", "not json", "{\"attention\":[{\"kind\":\"topic\",\"content\":\"" + new string('字', 161) + "\"}]}" })
         {
             llm.Response = invalid;
             var calls = llm.Calls;
-            var invalidWork = TurnMaintenanceLogic.Prepare(Turn("invalid"), new AgentStepData());
+            var invalidWork = TurnMaintenanceLogic.Prepare(Turn("invalid"), requested);
             Require(await invalidWork.AnalyzeAsync(default) == null && llm.Calls == calls + 1 &&
                 SubjectRuntimeLogic.Read(store, root).Revision == beforeInvalid, "格式失败只做一次整理请求，保留状态");
         }
         using var cancelled = new CancellationTokenSource();
         cancelled.Cancel();
-        var cancelledWork = TurnMaintenanceLogic.Prepare(Turn("cancelled"), new AgentStepData());
+        var cancelledWork = TurnMaintenanceLogic.Prepare(Turn("cancelled"), requested);
         try { await cancelledWork.AnalyzeAsync(cancelled.Token); throw new Exception("取消必须传播"); }
         catch (OperationCanceledException) { }
 
@@ -91,12 +95,33 @@ internal static partial class Program
         using var manager = new TracePluginManager(store, services);
         manager.RegisterExternal(new InnerLifePlugin());
         manager.RegisterExternal(new DialogueTracePlugin());
-        var main = new AgentSequenceLlm("{\"step\":\"finish\",\"reply\":\"听见了。\"}");
+        var main = new AgentSequenceLlm("{\"step\":\"finish\",\"reply\":\"听见了。\"}",
+            "{\"step\":\"finish\",\"reply\":\"那就告一段落。\",\"maintenance_reason\":\"收到事情结束的确认\"}");
         var kernel = new KernelLogic(store, main, manager);
         var callsBefore = llm.Calls;
+        await kernel.ChatAsync(root, "早安。", "dialogue.receive", 8);
+        Require(main.Requests.Count == 1 && llm.Calls == callsBefore && kernel.TakeStateMaintenanceWork() == null,
+            "真实普通回复无整理请求时只生成一次");
         await kernel.ChatAsync(root, "这件事已经解决啦。", "dialogue.receive", 8);
-        Require(main.Requests.Count == 1 && llm.Calls == callsBefore && kernel.TakeStateMaintenanceWork() != null &&
-            kernel.TakeStateMaintenanceWork() == null, "真实主对话一次回复后独立移交状态整理，不进入行动循环");
+        var requestedWork = kernel.TakeStateMaintenanceWork();
+        Require(main.Requests.Count == 2 && llm.Calls == callsBefore && requestedWork != null &&
+            kernel.TakeStateMaintenanceWork() == null, "真实主对话回复后独立移交一次状态整理，不进入行动循环");
+        llm.Response = "{\"attention\":[]}";
+        Require(await requestedWork.AnalyzeAsync(default) != null && llm.Calls == callsBefore + 1 &&
+            llm.Messages[1].content.Contains("收到事情结束的确认"), "轮后才向整理模型发送真实转折");
+
+        var beforeAction = "{\"step\":\"continue\",\"maintenance_reason\":\"要重新考虑旧安排\",\"actions\":[{\"capability_id\":\"memory.recall\",\"arguments\":[{\"name\":\"query\",\"value\":\"旧安排\"}]}]}";
+        foreach (var withdraw in new[] { false, true })
+        {
+            var afterAction = withdraw ? "{\"step\":\"finish\",\"reply\":\"情况已经清楚。\",\"maintenance_reason\":\"\"}" :
+                "{\"step\":\"finish\",\"reply\":\"情况已经清楚。\"}";
+            var continued = new AgentSequenceLlm(beforeAction, afterAction);
+            var actionKernel = new KernelLogic(store, continued, manager);
+            await actionKernel.ChatAsync(root, "看看先前的安排。", "dialogue.receive", 8);
+            Require(continued.Requests.Count == 2 && continued.Requests[1].Contains("已安排轮后整理：要重新考虑旧安排") &&
+                (actionKernel.TakeStateMaintenanceWork() == null) == withdraw && llm.Calls == callsBefore + 1,
+                "同轮整理意图可跨行动保留或显式撤回，始终独立于前台");
+        }
         Console.WriteLine("Turn maintenance checks passed: independent snapshot, closure, repeated age, stale cross-platform result, failure and cancellation.");
         await RunCameraPlatformBoundaryChecksAsync();
     }

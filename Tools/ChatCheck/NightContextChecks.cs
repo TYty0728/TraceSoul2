@@ -54,10 +54,10 @@ internal static partial class Program
                 !prompt.Contains("历史长回复") && !prompt.Contains("不应自动追加到梦话的旧认知") && prompt.Contains("recorded_at") &&
                 llm.JsonPrompts[0].Contains("2026-10-30") && llm.JsonPrompts[0].Contains("候选计划31") &&
                 !llm.JsonPrompts[0].Contains("原始私密依据"), "夜间选择覆盖完整目录，表达仅带选中项及日期，不带管理证据和近期长回复");
-            Require(GoalMemoryLogic.BuildContext(turn).Contains("候选计划31") &&
-                GoalMemoryLogic.BuildContext(turn).Contains("recorded_at") &&
+            Require(!GoalMemoryLogic.BuildContext(turn).Contains("候选计划31") &&
+                GoalMemoryLogic.Read(store, turn.ConversationId).Count == 32 &&
                 store.LoadPluginDocument("kernel.goals", turn.ConversationId) == saved,
-                "夜间读取不得改变目标状态，普通Agent仍读取完整有效目录和时间锚");
+                "未注入普通视图的记录仍在完整目录，夜间和普通读取均不得改变存储");
 
             var all = new NightProjectionLlm(new[] { JsonSerializer.Serialize(new { selected_refs = Enumerable.Range(1, 32) }) });
             var allContext = await GoalMemoryLogic.BuildNightContextAsync(turn, "当日材料", all, default);

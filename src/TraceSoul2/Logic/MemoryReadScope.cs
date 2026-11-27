@@ -25,8 +25,8 @@ public sealed class MemoryReadScope
     {
         string Arg(string name) => (call.GetArgument(name) ?? "").Trim();
         var kind=Arg("kind"); if (kind.Length==0) kind="auto";
-        if (kind is not ("auto" or "events" or "cognitions" or "sources"))
-            throw new ArgumentException("kind须为auto/events/cognitions/sources。");
+        if (kind is not ("auto" or "events" or "cognitions" or "sources" or "goals"))
+            throw new ArgumentException("kind须为auto/events/cognitions/sources/goals。");
         var basis=Arg("day_basis"); if (basis.Length==0) basis="calendar";
         if (basis is not ("calendar" or "memory")) throw new ArgumentException("day_basis须为calendar或memory。");
         var period=Arg("period"); var from=Arg("date_start"); var to=Arg("date_end");
@@ -76,7 +76,7 @@ public sealed class MemoryReadScope
         return scope;
     }
 
-    public string Description => "读取类型：" + (Kind switch {"events"=>"事件与同期原文","sources"=>"原始记录","cognitions"=>"当前认知",_=>"综合"}) + "；" + (HasDate
+    public string Description => "读取类型：" + (Kind switch {"events"=>"事件与同期原文","sources"=>"原始记录","cognitions"=>"当前认知","goals"=>"偏好与约定",_=>"综合"}) + "；" + (HasDate
         ? "范围：["+Start.Value.ToString("yyyy-MM-dd HH:mm zzz")+", "+End.Value.ToString("yyyy-MM-dd HH:mm zzz")+")；"+
           (DayBasis=="memory" ? "记忆日（04:00切日）" : "自然日（00:00切日）")
         : "未限定日期");
@@ -86,6 +86,7 @@ public sealed class MemoryReadScope
         "具体哪天发生什么：kind=events，填写period或date_start/date_end；昨天用period=yesterday，query写要找的事情如洗头。"+
         "日常日期默认北京时间自然日；明确问归档的记忆日才用day_basis=memory。含糊日期先澄清，不猜日期。\n"+
         "稳定喜好或认识：先从主题候选或memory.topics选择如口味偏好的主题，kind=cognitions并传tags，不必限定日期。"+
+        "已保存的明确偏好、约定或待办：kind=goals，按事情或主题查，问哪周的计划可限制日期。需要修订时用返回的有效记录ID。"+
         "日期和主题可组合，按交集读取；要查原话可用kind=sources。空结果不等于没发生，不擅自放宽范围。"+
         "上下文中的榜单、当前状态、近期观察只是背景，不能替代所问日期的查证；若已有明确原话足够回答可直接引用。\n";
 }
